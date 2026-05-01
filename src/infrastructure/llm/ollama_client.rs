@@ -1,5 +1,8 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+
+use crate::domain::llm::{ChatMessage, LlmClient};
 
 /// Minimal Ollama/OpenAI-compatible chat completion client.
 #[derive(Clone)]
@@ -17,16 +20,6 @@ struct ChatRequest {
     top_p: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,22 +47,6 @@ impl OllamaClient {
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("reqwest client should build"),
-        }
-    }
-
-    /// Simple chat completion returning text only.
-    pub async fn chat(&self, messages: &[ChatMessage]) -> String {
-        match self.chat_raw(messages, None).await {
-            Ok(response) => response
-                .choices
-                .first()
-                .and_then(|c| c.message.content.as_deref())
-                .unwrap_or("")
-                .to_string(),
-            Err(e) => {
-                warn!(error = %e, "Ollama unavailable, using fallback");
-                "你好呀，我在这里呢。请问有什么可以帮你的吗？".to_string()
-            }
         }
     }
 
@@ -114,6 +91,24 @@ impl OllamaClient {
             warn!(body = %body_text, "failed to parse Ollama response: {e}");
             format!("parse response: {e}")
         })
+    }
+}
+
+#[async_trait]
+impl LlmClient for OllamaClient {
+    async fn chat(&self, messages: &[ChatMessage]) -> String {
+        match self.chat_raw(messages, None).await {
+            Ok(response) => response
+                .choices
+                .first()
+                .and_then(|c| c.message.content.as_deref())
+                .unwrap_or("")
+                .to_string(),
+            Err(e) => {
+                warn!(error = %e, "Ollama unavailable, using fallback");
+                "你好呀，我在这里呢。请问有什么可以帮你的吗？".to_string()
+            }
+        }
     }
 }
 

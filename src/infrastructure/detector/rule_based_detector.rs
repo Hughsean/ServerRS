@@ -1,6 +1,7 @@
 use crate::domain::risk::detection_types::{
     DetectionResult, IntentLabel, Polarity, RiskLevel, TargetLabel,
 };
+use crate::domain::risk::risk_detector::RiskDetector;
 
 fn add_evidence(evidences: &mut Vec<String>, item: &str) {
     if evidences.len() < MAX_EVIDENCE && !evidences.iter().any(|e| e == item) {
@@ -26,8 +27,10 @@ impl RuleBasedRiskDetector {
     pub fn new() -> Self {
         Self
     }
+}
 
-    pub fn evaluate(&self, text: &str) -> DetectionResult {
+impl RiskDetector for RuleBasedRiskDetector {
+    fn evaluate(&self, text: &str) -> DetectionResult {
         let original = text.trim();
         if original.is_empty() || !has_chinese(original) {
             return DetectionResult {

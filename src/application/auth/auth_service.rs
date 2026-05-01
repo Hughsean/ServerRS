@@ -1,13 +1,10 @@
 use std::sync::Arc;
 use tracing::warn;
 
-use crate::domain::auth::password_hasher::PasswordHasher;
-use crate::domain::auth::password_verifier::PasswordVerifier;
-use crate::domain::auth::refresh_token_issuer::RefreshTokenIssuer;
+use crate::domain::auth::password_service::PasswordService;
 use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use crate::domain::auth::refresh_token_verifier::RefreshTokenVerifier;
-use crate::domain::auth::token_issuer::TokenIssuer;
-use crate::domain::auth::token_verifier::TokenVerifier;
+use crate::domain::auth::refresh_token_service::RefreshTokenService;
+use crate::domain::auth::token_service::TokenService;
 use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
 };
@@ -20,12 +17,9 @@ use crate::shared::error::AppError;
 /// RefreshTokenUseCase, and VerifyAccessTokenUseCase.
 pub struct AuthService {
     user_repo: Arc<dyn UserRepository>,
-    password_hasher: Arc<dyn PasswordHasher>,
-    password_verifier: Arc<dyn PasswordVerifier>,
-    token_issuer: Arc<dyn TokenIssuer>,
-    token_verifier: Arc<dyn TokenVerifier>,
-    refresh_token_issuer: Arc<dyn RefreshTokenIssuer>,
-    refresh_token_verifier: Arc<dyn RefreshTokenVerifier>,
+    password_service: Arc<dyn PasswordService>,
+    token_service: Arc<dyn TokenService>,
+    refresh_token_service: Arc<dyn RefreshTokenService>,
     revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
     task_publisher: Arc<dyn TaskPublisher>,
 }
@@ -53,23 +47,17 @@ pub struct AuthTokenPair {
 impl AuthService {
     pub fn new(
         user_repo: Arc<dyn UserRepository>,
-        password_hasher: Arc<dyn PasswordHasher>,
-        password_verifier: Arc<dyn PasswordVerifier>,
-        token_issuer: Arc<dyn TokenIssuer>,
-        token_verifier: Arc<dyn TokenVerifier>,
-        refresh_token_issuer: Arc<dyn RefreshTokenIssuer>,
-        refresh_token_verifier: Arc<dyn RefreshTokenVerifier>,
+        password_service: Arc<dyn PasswordService>,
+        token_service: Arc<dyn TokenService>,
+        refresh_token_service: Arc<dyn RefreshTokenService>,
         revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
         task_publisher: Arc<dyn TaskPublisher>,
     ) -> Self {
         Self {
             user_repo,
-            password_hasher,
-            password_verifier,
-            token_issuer,
-            token_verifier,
-            refresh_token_issuer,
-            refresh_token_verifier,
+            password_service,
+            token_service,
+            refresh_token_service,
             revocation_repo,
             task_publisher,
         }
@@ -97,7 +85,7 @@ impl AuthService {
         }
 
         if !self
-            .password_verifier
+            .password_service
             .verify(&input.password, &user.password_hash)?
         {
             let _ = self
@@ -111,10 +99,8 @@ impl AuthService {
             return Err(AppError::Unauthorized);
         }
 
-        let access_token = self.token_issuer.issue(user.id, &user.username)?;
-        let refresh_token = self
-            .refresh_token_issuer
-            .issue_refresh(user.id, &user.username)?;
+        let access_token = self.token_service.issue(user.id, &user.username)?;
+        let refresh_token = self.refresh_token_service.issue(user.id, &user.username)?;
 
         if let Err(e) = self.user_repo.update_last_login(user.id).await {
             warn!(error = %e, user_id = user.id, "failed to update last login");
@@ -147,16 +133,14 @@ impl AuthService {
             return Err(AppError::Conflict("username already exists".into()));
         }
 
-        let hash = self.password_hasher.hash(&password)?;
+        let hash = self.password_service.hash(&password)?;
         let user = self
             .user_repo
             .save(NewUser::new(username.clone(), hash, UserStatus::Active))
             .await?;
 
-        let access_token = self.token_issuer.issue(user.id, &user.username)?;
-        let refresh_token = self
-            .refresh_token_issuer
-            .issue_refresh(user.id, &user.username)?;
+        let access_token = self.token_service.issue(user.id, &user.username)?;
+        let refresh_token = self.refresh_token_service.issue(user.id, &user.username)?;
 
         let _ = self
             .task_publisher
@@ -181,7 +165,7 @@ impl AuthService {
         refresh_token: &str,
         reason: Option<String>,
     ) -> Result<bool, AppError> {
-        let claims = self.refresh_token_verifier.verify_refresh(refresh_token)?;
+        let claims = self.refresh_token_service.verify(refresh_token)?;
 
         self.revocation_repo
             .revoke(claims.token_id.clone(), claims.expires_at)
@@ -207,7 +191,7 @@ impl AuthService {
         refresh_token: &str,
         device_id: Option<String>,
     ) -> Result<AuthTokenPair, AppError> {
-        let claims = self.refresh_token_verifier.verify_refresh(refresh_token)?;
+        let claims = self.refresh_token_service.verify(refresh_token)?;
 
         if self.revocation_repo.is_revoked(&claims.token_id).await? {
             return Err(AppError::Unauthorized);
@@ -217,10 +201,10 @@ impl AuthService {
             .revoke(claims.token_id.clone(), claims.expires_at)
             .await?;
 
-        let access_token = self.token_issuer.issue(claims.user_id, &claims.username)?;
+        let access_token = self.token_service.issue(claims.user_id, &claims.username)?;
         let new_refresh = self
-            .refresh_token_issuer
-            .issue_refresh(claims.user_id, &claims.username)?;
+            .refresh_token_service
+            .issue(claims.user_id, &claims.username)?;
 
         let _ = self
             .task_publisher
@@ -242,7 +226,7 @@ impl AuthService {
     // ── Verify access token (sync) ──
 
     pub fn verify(&self, token: &str) -> Result<AuthenticatedUser, AppError> {
-        let claims = self.token_verifier.verify(token)?;
+        let claims = self.token_service.verify(token)?;
         Ok(AuthenticatedUser {
             user_id: claims.user_id,
             username: claims.username,

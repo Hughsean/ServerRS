@@ -146,9 +146,18 @@ pub async fn list_risk_detections(
             .map(|r| RiskDetectionResponse {
                 id: r.id,
                 conversation_id: r.conversation_id,
-                risk_level: r.risk_level,
-                polarity: r.polarity,
-                intent: r.intent,
+                risk_level: serde_json::to_string(&r.risk_level)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string(),
+                polarity: serde_json::to_string(&r.polarity)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string(),
+                intent: serde_json::to_string(&r.intent)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string(),
                 reason: r.reason,
                 confidence: r.confidence,
                 created_at: r.created_at.to_rfc3339(),

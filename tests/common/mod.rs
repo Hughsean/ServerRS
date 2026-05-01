@@ -8,23 +8,24 @@ use tower::util::ServiceExt;
 
 use ServerRS::api;
 use ServerRS::application::auth::auth_service::AuthService;
+use ServerRS::application::session::conversation_orchestrator::ConversationOrchestrator;
 use ServerRS::application::session::risk_detection_service::RiskDetectionService;
 use ServerRS::application::session::session_manager::SessionManager;
 use ServerRS::application::session::session_service::SessionService;
 use ServerRS::application::user::user_service::UserService;
-use ServerRS::domain::auth::password_hasher::PasswordHasher;
-use ServerRS::domain::auth::password_verifier::PasswordVerifier;
-use ServerRS::domain::auth::refresh_token_issuer::RefreshTokenIssuer;
+use ServerRS::domain::auth::password_service::PasswordService;
 use ServerRS::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use ServerRS::domain::auth::refresh_token_verifier::RefreshTokenVerifier;
-use ServerRS::domain::auth::token_issuer::TokenIssuer;
-use ServerRS::domain::auth::token_verifier::TokenVerifier;
+use ServerRS::domain::auth::refresh_token_service::RefreshTokenService;
+use ServerRS::domain::auth::token_service::TokenService;
 use ServerRS::domain::conversation::conversation::{Conversation, NewConversation};
 use ServerRS::domain::conversation::conversation_message::{
     ConversationMessage, NewConversationMessage,
 };
 use ServerRS::domain::conversation::conversation_repository::ConversationRepository;
+use ServerRS::domain::llm::{ChatMessage, LlmClient, PromptProvider};
+use ServerRS::domain::risk::detection_types::DetectionResult;
 use ServerRS::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
+use ServerRS::domain::risk::risk_detector::RiskDetector;
 use ServerRS::domain::risk::risk_repository::RiskRepository;
 use ServerRS::domain::tasks::task_publisher::TaskPublisher;
 use ServerRS::domain::user::user::{NewUser, User, UserStatus, UserUpdate};
@@ -32,13 +33,8 @@ use ServerRS::domain::user::user_profile::{NewUserProfile, UserProfile, UserProf
 use ServerRS::domain::user::user_profile_repository::UserProfileRepository;
 use ServerRS::domain::user::user_repository::UserRepository;
 use ServerRS::infrastructure::auth::bcrypt_password_hasher::BcryptPasswordHasher;
-use ServerRS::infrastructure::auth::bcrypt_password_verifier::BcryptPasswordVerifier;
 use ServerRS::infrastructure::auth::jwt_token_service::JwtTokenService;
-use ServerRS::infrastructure::llm::ollama_client::OllamaClient;
-use ServerRS::infrastructure::llm::prompt_provider::PromptProvider;
-use ServerRS::infrastructure::tasks::in_memory_task_flow::{
-    ResilientTaskPublisher, new_task_channel,
-};
+use ServerRS::infrastructure::tasks::in_memory_task_flow::{LoggingHandler, new_task_channel};
 use ServerRS::shared::error::AppError;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -286,10 +282,10 @@ impl RiskRepository for MockRiskRepo {
             user_id: 0,
             message_id: None,
             conversation_id: None,
-            risk_level: "None".into(),
-            polarity: "Neutral".into(),
-            intent: "Narrative".into(),
-            target: "Unknown".into(),
+            risk_level: ServerRS::domain::risk::detection_types::RiskLevel::None,
+            polarity: ServerRS::domain::risk::detection_types::Polarity::Neutral,
+            intent: ServerRS::domain::risk::detection_types::IntentLabel::Narrative,
+            target: ServerRS::domain::risk::detection_types::TargetLabel::Unknown,
             confidence: 0.5,
             evidence: "[]".into(),
             reason: None,
@@ -332,6 +328,34 @@ impl RefreshTokenRevocationRepository for MockRevokeRepo {
     }
 }
 
+// ── Mock LLM client ──
+struct MockLlmClient;
+
+#[async_trait]
+impl LlmClient for MockLlmClient {
+    async fn chat(&self, _messages: &[ChatMessage]) -> String {
+        "你好，我是小美，有什么可以帮你的？".to_string()
+    }
+}
+
+// ── Mock prompt provider ──
+struct MockPromptProvider;
+
+impl PromptProvider for MockPromptProvider {
+    fn get_prompt(&self, _date_time: &str) -> String {
+        "你是一名心理陪伴师。".to_string()
+    }
+}
+
+// ── Mock risk detector ──
+struct MockRiskDetector;
+
+impl RiskDetector for MockRiskDetector {
+    fn evaluate(&self, _text: &str) -> DetectionResult {
+        DetectionResult::unknown()
+    }
+}
+
 // ── App builder ──
 
 pub async fn test_app() -> Router {
@@ -342,26 +366,22 @@ pub async fn test_app() -> Router {
     let conv_repo: Arc<dyn ConversationRepository> = Arc::new(MockConvRepo);
     let risk_repo: Arc<dyn RiskRepository> = Arc::new(MockRiskRepo);
 
-    let pw_hash: Arc<dyn PasswordHasher> = Arc::new(BcryptPasswordHasher::default());
-    let pw_verify: Arc<dyn PasswordVerifier> = Arc::new(BcryptPasswordVerifier);
+    let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
     let revoke_repo: Arc<dyn RefreshTokenRevocationRepository> = Arc::new(MockRevokeRepo);
-    let jwt = Arc::new(JwtTokenService::new(
+    let jwt: Arc<JwtTokenService> = Arc::new(JwtTokenService::new(
         "test-secret-key-for-integration-tests",
         86400,
     ));
 
     let (tp, tw) = new_task_channel(256);
-    tokio::spawn(tw.run());
+    tokio::spawn(tw.with_handler(Arc::new(LoggingHandler)).run());
     let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
 
     let auth: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(&user_repo),
-        pw_hash,
-        pw_verify,
-        Arc::clone(&jwt) as Arc<dyn TokenIssuer>,
-        Arc::clone(&jwt) as Arc<dyn TokenVerifier>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenIssuer>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenVerifier>,
+        Arc::clone(&password_service) as Arc<dyn PasswordService>,
+        Arc::clone(&jwt) as Arc<dyn TokenService>,
+        Arc::clone(&jwt) as Arc<dyn RefreshTokenService>,
         Arc::clone(&revoke_repo),
         Arc::clone(&task_publisher),
     ));
@@ -373,20 +393,28 @@ pub async fn test_app() -> Router {
         Arc::clone(&conv_repo),
         Arc::clone(&risk_repo),
     ));
+
+    let risk_detector: Arc<dyn RiskDetector> = Arc::new(MockRiskDetector);
     let risk_detect: Arc<RiskDetectionService> = Arc::new(RiskDetectionService::new(
         Arc::clone(&risk_repo),
         Arc::clone(&task_publisher),
+        Arc::clone(&risk_detector),
     ));
 
-    // Use a dummy Ollama that always returns fallback (no real server needed)
-    let ollama = OllamaClient::new("http://127.0.0.1:1/v1".into(), "test-model".into());
+    let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+    let prompt_provider: Arc<dyn PromptProvider> = Arc::new(MockPromptProvider);
+    let orchestrator: Arc<ConversationOrchestrator> = Arc::new(ConversationOrchestrator::new(
+        Arc::clone(&task_publisher),
+        Arc::clone(&llm),
+        Arc::clone(&prompt_provider),
+        Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+        Arc::clone(&profile_repo),
+    ));
+
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
         risk_detect,
-        ollama,
-        PromptProvider::new(None),
-        Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
-        Arc::clone(&profile_repo),
+        Arc::clone(&orchestrator),
         120,
     ));
     tokio::spawn({

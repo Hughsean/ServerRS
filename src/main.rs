@@ -8,34 +8,37 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use application::auth::auth_service::AuthService;
+use application::session::conversation_orchestrator::ConversationOrchestrator;
 use application::session::risk_detection_service::RiskDetectionService;
 use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
 use application::user::user_service::UserService;
-use domain::auth::password_hasher::PasswordHasher;
-use domain::auth::password_verifier::PasswordVerifier;
-use domain::auth::refresh_token_issuer::RefreshTokenIssuer;
+use domain::auth::password_service::PasswordService;
 use domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use domain::auth::refresh_token_verifier::RefreshTokenVerifier;
-use domain::auth::token_issuer::TokenIssuer;
-use domain::auth::token_verifier::TokenVerifier;
+use domain::auth::refresh_token_service::RefreshTokenService;
+use domain::auth::token_service::TokenService;
 use domain::conversation::conversation_repository::ConversationRepository;
+use domain::llm::{LlmClient, PromptProvider};
+use domain::risk::risk_detector::RiskDetector;
 use domain::risk::risk_repository::RiskRepository;
+use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
 use domain::user::user_profile_repository::UserProfileRepository;
 use domain::user::user_repository::UserRepository;
 use infrastructure::auth::bcrypt_password_hasher::BcryptPasswordHasher;
-use infrastructure::auth::bcrypt_password_verifier::BcryptPasswordVerifier;
 use infrastructure::auth::in_memory_refresh_token_revocation_repository::InMemoryRefreshTokenRevocationRepository;
 use infrastructure::auth::jwt_token_service::JwtTokenService;
+use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
 use infrastructure::llm::ollama_client::OllamaClient;
-use infrastructure::llm::prompt_provider::PromptProvider;
+use infrastructure::llm::prompt_provider::PromptProvider as InfraPromptProvider;
 use infrastructure::persistence::database::init_db;
 use infrastructure::persistence::seaorm_conversation_repository::SeaOrmConversationRepository;
 use infrastructure::persistence::seaorm_risk_repository::SeaOrmRiskRepository;
 use infrastructure::persistence::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
 use infrastructure::persistence::seaorm_user_repository::SeaOrmUserRepository;
-use infrastructure::tasks::in_memory_task_flow::new_task_channel;
+use infrastructure::tasks::alert_handler::{AlertConfig, AlertHandler};
+use infrastructure::tasks::in_memory_task_flow::{LoggingHandler, new_task_channel};
+use infrastructure::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 
 use shared::config::AppConfig;
 use tracing::info;
@@ -52,11 +55,6 @@ async fn run() -> Result<(), std::io::Error> {
     let config = AppConfig::load();
     let db = init_db(&config.database.url).await.expect("db init");
 
-    // ── Tasks ──
-    let (tp, tw) = new_task_channel(256);
-    let tw_handle = tokio::spawn(tw.run());
-    let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
-
     // ── Repositories ──
     let user_repo: Arc<dyn UserRepository> = Arc::new(SeaOrmUserRepository::new(db.clone()));
     let profile_repo: Arc<dyn UserProfileRepository> =
@@ -65,19 +63,56 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::new(SeaOrmConversationRepository::new(db.clone()));
     let risk_repo: Arc<dyn RiskRepository> = Arc::new(SeaOrmRiskRepository::new(db.clone()));
 
+    // ── Tasks ──
+    let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));
+    let rate_limit_handler = Arc::new(RateLimitHandler::new(
+        RateLimitConfig::default(),
+        Arc::clone(&user_repo),
+    ));
+
+    let (tp, tw) = new_task_channel(256);
+    let tw_handle = tokio::spawn(
+        tw.with_handler(Arc::new(LoggingHandler))
+            .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
+            .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>)
+            .run(),
+    );
+    let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
+
+    // Periodic cleanup for stateful handlers
+    let alert_cleanup = {
+        let h = Arc::clone(&alert_handler);
+        tokio::spawn(async move {
+            let mut i = tokio::time::interval(tokio::time::Duration::from_secs(300));
+            loop {
+                i.tick().await;
+                h.cleanup().await;
+            }
+        })
+    };
+    let rl_cleanup = {
+        let h = Arc::clone(&rate_limit_handler);
+        tokio::spawn(async move {
+            let mut i = tokio::time::interval(tokio::time::Duration::from_secs(120));
+            loop {
+                i.tick().await;
+                h.cleanup().await;
+            }
+        })
+    };
+
     // ── Auth infra ──
-    let pw_hash: Arc<dyn PasswordHasher> = Arc::new(BcryptPasswordHasher::default());
-    let pw_verify: Arc<dyn PasswordVerifier> = Arc::new(BcryptPasswordVerifier);
+    let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
     let revoke_repo: Arc<dyn RefreshTokenRevocationRepository> =
         Arc::new(InMemoryRefreshTokenRevocationRepository::new());
     let revoke_cleanup = tokio::spawn(periodic_revocation(Arc::clone(&revoke_repo)));
-    let jwt = Arc::new(JwtTokenService::new(
+    let jwt: Arc<JwtTokenService> = Arc::new(JwtTokenService::new(
         &config.jwt.secret,
         config.jwt.expiration_secs,
     ));
 
-    // ── LLM ──
-    let ollama = OllamaClient::new(
+    // ── LLM (infrastructure → domain trait) ──
+    let ollama: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(
         config
             .ollama
             .as_ref()
@@ -86,39 +121,47 @@ async fn run() -> Result<(), std::io::Error> {
             .ollama
             .as_ref()
             .map_or("qwen2.5:14b".into(), |o| o.model.clone()),
-    );
+    ));
+    let prompt_provider: Arc<dyn PromptProvider> = Arc::new(InfraPromptProvider::new(None));
+
+    // ── Risk detector ──
+    let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
 
     // ── Services ──
-    let auth = Arc::new(AuthService::new(
+    let auth: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(&user_repo),
-        pw_hash,
-        pw_verify,
-        Arc::clone(&jwt) as Arc<dyn TokenIssuer>,
-        Arc::clone(&jwt) as Arc<dyn TokenVerifier>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenIssuer>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenVerifier>,
+        Arc::clone(&password_service) as Arc<dyn PasswordService>,
+        Arc::clone(&jwt) as Arc<dyn TokenService>,
+        Arc::clone(&jwt) as Arc<dyn RefreshTokenService>,
         Arc::clone(&revoke_repo),
         Arc::clone(&task_publisher),
     ));
-    let user = Arc::new(UserService::new(
+    let user: Arc<UserService> = Arc::new(UserService::new(
         Arc::clone(&user_repo),
         Arc::clone(&profile_repo),
     ));
-    let query = Arc::new(SessionService::new(
+    let query: Arc<SessionService> = Arc::new(SessionService::new(
         Arc::clone(&conv_repo),
         Arc::clone(&risk_repo),
     ));
-    let risk_detect = Arc::new(RiskDetectionService::new(
+    let risk_detect: Arc<RiskDetectionService> = Arc::new(RiskDetectionService::new(
         Arc::clone(&risk_repo),
         Arc::clone(&task_publisher),
+        Arc::clone(&risk_detector),
     ));
-    let session = Arc::new(SessionManager::new(
+
+    let orchestrator: Arc<ConversationOrchestrator> = Arc::new(ConversationOrchestrator::new(
         Arc::clone(&task_publisher),
-        Arc::clone(&risk_detect),
-        ollama,
-        PromptProvider::new(None),
+        Arc::clone(&ollama),
+        Arc::clone(&prompt_provider),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&profile_repo),
+    ));
+
+    let session: Arc<SessionManager> = Arc::new(SessionManager::new(
+        Arc::clone(&task_publisher),
+        Arc::clone(&risk_detect),
+        Arc::clone(&orchestrator),
         config.session.as_ref().map_or(120, |s| s.timeout_seconds),
     ));
     let sess_cleanup = {
@@ -151,6 +194,8 @@ async fn run() -> Result<(), std::io::Error> {
     tw_handle.abort();
     revoke_cleanup.abort();
     sess_cleanup.abort();
+    alert_cleanup.abort();
+    rl_cleanup.abort();
     r
 }
 

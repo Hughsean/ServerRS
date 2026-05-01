@@ -13,15 +13,11 @@ use crate::shared::error::AppError;
 #[derive(Clone)]
 pub struct ResilientTaskPublisher {
     sender: mpsc::Sender<TaskEvent>,
-    overflow_limit: usize,
 }
 
 impl ResilientTaskPublisher {
-    fn new(sender: mpsc::Sender<TaskEvent>, overflow_limit: usize) -> Self {
-        Self {
-            sender,
-            overflow_limit,
-        }
+    fn new(sender: mpsc::Sender<TaskEvent>) -> Self {
+        Self { sender }
     }
 }
 
@@ -94,17 +90,18 @@ pub struct TaskWorker {
     handlers: Vec<Arc<dyn TaskHandler>>,
 }
 
+/// Creates a channel pair. The worker starts with **no handlers** —
+/// use `TaskWorker::with_handler` to inject `LoggingHandler` or custom handlers.
 pub fn new_task_channel(buffer: usize) -> (ResilientTaskPublisher, TaskWorker) {
     let (tx, rx) = mpsc::channel(buffer);
     let worker = TaskWorker {
         receiver: rx,
-        handlers: vec![Arc::new(LoggingHandler)],
+        handlers: Vec::new(),
     };
-    (ResilientTaskPublisher::new(tx, buffer), worker)
+    (ResilientTaskPublisher::new(tx), worker)
 }
 
 impl TaskWorker {
-    #[allow(dead_code)]
     pub fn with_handler(mut self, handler: Arc<dyn TaskHandler>) -> Self {
         self.handlers.push(handler);
         self

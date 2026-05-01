@@ -10,6 +10,20 @@ use crate::shared::error::AppError;
 
 use super::entities::risk_detection_result;
 
+// ── Enum ↔ String helpers (serde-based, matches SCREAMING_SNAKE_CASE) ──
+
+fn enum_to_str<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_string(v)
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string()
+}
+
+fn str_to_enum<T: serde::de::DeserializeOwned>(s: &str) -> T {
+    serde_json::from_str(&format!("\"{}\"", s))
+        .unwrap_or_else(|_| serde_json::from_str("\"UNKNOWN\"").unwrap())
+}
+
 pub struct SeaOrmRiskRepository {
     db: DatabaseConnection,
 }
@@ -26,10 +40,10 @@ fn map(m: risk_detection_result::Model) -> RiskDetectionResult {
         user_id: m.user_id,
         message_id: m.message_id,
         conversation_id: m.conversation_id,
-        risk_level: m.risk_level,
-        polarity: m.polarity,
-        intent: m.intent,
-        target: m.target,
+        risk_level: str_to_enum(&m.risk_level),
+        polarity: str_to_enum(&m.polarity),
+        intent: str_to_enum(&m.intent),
+        target: str_to_enum(&m.target),
         confidence: m.confidence,
         evidence: m.evidence,
         reason: m.reason,
@@ -54,10 +68,10 @@ impl RiskRepository for SeaOrmRiskRepository {
             user_id: Set(r.user_id),
             message_id: Set(r.message_id),
             conversation_id: Set(r.conversation_id),
-            risk_level: Set(r.risk_level),
-            polarity: Set(r.polarity),
-            intent: Set(r.intent),
-            target: Set(r.target),
+            risk_level: Set(enum_to_str(&r.risk_level)),
+            polarity: Set(enum_to_str(&r.polarity)),
+            intent: Set(enum_to_str(&r.intent)),
+            target: Set(enum_to_str(&r.target)),
             confidence: Set(r.confidence),
             evidence: Set(r.evidence),
             reason: Set(r.reason),

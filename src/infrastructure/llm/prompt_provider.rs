@@ -1,3 +1,5 @@
+use crate::domain::llm::PromptProvider as PromptProviderTrait;
+
 /// Provides the system prompt template for LLM conversations.
 #[derive(Clone)]
 pub struct PromptProvider {
@@ -11,8 +13,10 @@ impl PromptProvider {
             .unwrap_or_else(|| builtin_prompt());
         Self { template }
     }
+}
 
-    pub fn get_prompt(&self, date_time: &str) -> String {
+impl PromptProviderTrait for PromptProvider {
+    fn get_prompt(&self, date_time: &str) -> String {
         self.template.replace("{date_time}", date_time)
     }
 }

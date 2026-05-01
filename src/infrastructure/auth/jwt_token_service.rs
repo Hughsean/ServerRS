@@ -4,10 +4,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::auth::refresh_token_issuer::RefreshTokenIssuer;
-use crate::domain::auth::refresh_token_verifier::{RefreshTokenClaims, RefreshTokenVerifier};
-use crate::domain::auth::token_issuer::TokenIssuer;
-use crate::domain::auth::token_verifier::{AccessTokenClaims, TokenVerifier};
+use crate::domain::auth::refresh_token_service::{RefreshTokenClaims, RefreshTokenService};
+use crate::domain::auth::token_service::{AccessTokenClaims, TokenService};
 use crate::shared::error::AppError;
 
 const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
@@ -86,7 +84,7 @@ impl JwtTokenService {
     }
 }
 
-impl TokenIssuer for JwtTokenService {
+impl TokenService for JwtTokenService {
     fn issue(&self, user_id: u64, username: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
@@ -101,9 +99,7 @@ impl TokenIssuer for JwtTokenService {
         encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)
             .map_err(|err| AppError::internal(format!("failed to issue access token: {err}")))
     }
-}
 
-impl TokenVerifier for JwtTokenService {
     fn verify(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
         let claims = self.decode_claims(token)?;
 
@@ -123,8 +119,8 @@ impl TokenVerifier for JwtTokenService {
     }
 }
 
-impl RefreshTokenIssuer for JwtTokenService {
-    fn issue_refresh(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+impl RefreshTokenService for JwtTokenService {
+    fn issue(&self, user_id: u64, username: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
             sub: user_id.to_string(),
@@ -138,10 +134,8 @@ impl RefreshTokenIssuer for JwtTokenService {
         encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)
             .map_err(|err| AppError::internal(format!("failed to issue refresh token: {err}")))
     }
-}
 
-impl RefreshTokenVerifier for JwtTokenService {
-    fn verify_refresh(&self, refresh_token: &str) -> Result<RefreshTokenClaims, AppError> {
+    fn verify(&self, refresh_token: &str) -> Result<RefreshTokenClaims, AppError> {
         let claims = self.decode_claims(refresh_token)?;
 
         if claims.token_type != TOKEN_TYPE_REFRESH {
