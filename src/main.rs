@@ -37,7 +37,8 @@ use infrastructure::persistence::seaorm_risk_repository::SeaOrmRiskRepository;
 use infrastructure::persistence::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
 use infrastructure::persistence::seaorm_user_repository::SeaOrmUserRepository;
 use infrastructure::tasks::alert_handler::{AlertConfig, AlertHandler};
-use infrastructure::tasks::in_memory_task_flow::{LoggingHandler, new_task_channel};
+use infrastructure::tasks::in_memory_task_flow::new_task_channel;
+use infrastructure::tasks::logging_handler::LoggingHandler;
 use infrastructure::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 
 use shared::config::AppConfig;
