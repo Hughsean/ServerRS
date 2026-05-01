@@ -1,0 +1,32 @@
+# ServerRS Configuration — mirrors Java's application.yml
+# All fields have defaults; this file is optional.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+# MySQL connection (aligns with Java's datasource.url)
+url = "mysql://root:passwd@127.0.0.1:3306/digital_companion"
+max_connections = 10
+
+[jwt]
+# Must match Java's jwt.secret for token compatibility
+secret = "change-me-in-production-use-a-long-random-string"
+# Token expiration in seconds (default: 24h)
+expiration_secs = 86400
+
+# ── LLM / Ollama (used in Phase 3) ──
+# [ollama]
+# base_url = "http://10.13.19.91:11434/v1"
+# model = "qwen2.5:14b"
+
+# ── Risk Detector (used in Phase 4) ──
+# [detector]
+# context_window_size = 4
+# confidence_threshold = 0.5
+
+# ── Session Management (used in Phase 3) ──
+# [session]
+# timeout_seconds = 120
+# cleanup_interval_ms = 20000

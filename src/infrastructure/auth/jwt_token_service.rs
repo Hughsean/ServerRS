@@ -1,0 +1,164 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::domain::auth::refresh_token_issuer::RefreshTokenIssuer;
+use crate::domain::auth::refresh_token_verifier::{RefreshTokenClaims, RefreshTokenVerifier};
+use crate::domain::auth::token_issuer::TokenIssuer;
+use crate::domain::auth::token_verifier::{AccessTokenClaims, TokenVerifier};
+use crate::shared::error::AppError;
+
+const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
+const DEFAULT_ACCESS_TTL_SECONDS: u64 = 15 * 60;
+const DEFAULT_REFRESH_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+const TOKEN_TYPE_ACCESS: &str = "access";
+const TOKEN_TYPE_REFRESH: &str = "refresh";
+
+#[derive(Debug, Clone)]
+pub struct JwtTokenService {
+    encoding_key: EncodingKey,
+    decoding_key: DecodingKey,
+    access_ttl_seconds: u64,
+    refresh_ttl_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JwtClaims {
+    sub: String,
+    username: String,
+    token_type: String,
+    jti: Option<String>,
+    iat: u64,
+    exp: u64,
+}
+
+impl JwtTokenService {
+    pub fn new(secret: &str, access_ttl_seconds: u64) -> Self {
+        let refresh_ttl_seconds = access_ttl_seconds * 7; // refresh lives 7x longer
+        Self {
+            encoding_key: EncodingKey::from_secret(secret.as_bytes()),
+            decoding_key: DecodingKey::from_secret(secret.as_bytes()),
+            access_ttl_seconds,
+            refresh_ttl_seconds,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let secret = std::env::var("APP_JWT_SECRET")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_JWT_SECRET.to_string());
+
+        let access_ttl_seconds = std::env::var("APP_JWT_ACCESS_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_ACCESS_TTL_SECONDS);
+
+        let refresh_ttl_seconds = std::env::var("APP_JWT_REFRESH_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_REFRESH_TTL_SECONDS);
+
+        Self {
+            encoding_key: EncodingKey::from_secret(secret.as_bytes()),
+            decoding_key: DecodingKey::from_secret(secret.as_bytes()),
+            access_ttl_seconds,
+            refresh_ttl_seconds,
+        }
+    }
+
+    fn now_seconds() -> Result<u64, AppError> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|err| AppError::internal(format!("system clock error: {err}")))
+    }
+
+    fn decode_claims(&self, token: &str) -> Result<JwtClaims, AppError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = true;
+
+        let token_data = decode::<JwtClaims>(token, &self.decoding_key, &validation)
+            .map_err(|_| AppError::Unauthorized)?;
+        Ok(token_data.claims)
+    }
+}
+
+impl TokenIssuer for JwtTokenService {
+    fn issue(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+        let now = Self::now_seconds()?;
+        let claims = JwtClaims {
+            sub: user_id.to_string(),
+            username: username.to_string(),
+            token_type: TOKEN_TYPE_ACCESS.to_string(),
+            jti: None,
+            iat: now,
+            exp: now.saturating_add(self.access_ttl_seconds),
+        };
+
+        encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)
+            .map_err(|err| AppError::internal(format!("failed to issue access token: {err}")))
+    }
+}
+
+impl TokenVerifier for JwtTokenService {
+    fn verify(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
+        let claims = self.decode_claims(token)?;
+
+        if claims.token_type != TOKEN_TYPE_ACCESS {
+            return Err(AppError::Unauthorized);
+        }
+
+        let user_id = claims
+            .sub
+            .parse::<u64>()
+            .map_err(|_| AppError::Unauthorized)?;
+
+        Ok(AccessTokenClaims {
+            user_id,
+            username: claims.username,
+        })
+    }
+}
+
+impl RefreshTokenIssuer for JwtTokenService {
+    fn issue_refresh(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+        let now = Self::now_seconds()?;
+        let claims = JwtClaims {
+            sub: user_id.to_string(),
+            username: username.to_string(),
+            token_type: TOKEN_TYPE_REFRESH.to_string(),
+            jti: Some(Uuid::new_v4().to_string()),
+            iat: now,
+            exp: now.saturating_add(self.refresh_ttl_seconds),
+        };
+
+        encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)
+            .map_err(|err| AppError::internal(format!("failed to issue refresh token: {err}")))
+    }
+}
+
+impl RefreshTokenVerifier for JwtTokenService {
+    fn verify_refresh(&self, refresh_token: &str) -> Result<RefreshTokenClaims, AppError> {
+        let claims = self.decode_claims(refresh_token)?;
+
+        if claims.token_type != TOKEN_TYPE_REFRESH {
+            return Err(AppError::Unauthorized);
+        }
+
+        let token_id = claims.jti.ok_or(AppError::Unauthorized)?;
+        let user_id = claims
+            .sub
+            .parse::<u64>()
+            .map_err(|_| AppError::Unauthorized)?;
+
+        Ok(RefreshTokenClaims {
+            user_id,
+            username: claims.username,
+            token_id,
+            expires_at: claims.exp,
+        })
+    }
+}
