@@ -8,7 +8,6 @@ use crate::api::dto::session_dto::{
     ConversationMessageResponse, ConversationResponse, MessageRequest, MessageResponse,
     SessionCreateRequest, SessionCreateResponse, SessionStatusResponse,
 };
-use crate::api::response::ApiResponse;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
@@ -16,7 +15,7 @@ pub async fn create_session(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<SessionCreateRequest>,
-) -> Result<Json<ApiResponse<SessionCreateResponse>>, AppError> {
+) -> Result<Json<SessionCreateResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
     let sess = state
         .session
@@ -26,63 +25,63 @@ pub async fn create_session(
             payload.location.as_ref(),
         )
         .await?;
-    Ok(Json(ApiResponse::ok(SessionCreateResponse {
+    Ok(Json(SessionCreateResponse {
         session_id: sess.id,
         prompt: sess.prompt,
         location: payload.location,
         user_profile: None,
         timeout_seconds: 120,
         dialogue_id: sess.dialogue_id,
-    })))
+    }))
 }
 
 pub async fn post_message(
     State(state): State<ApiState>,
     Path(session_id): Path<String>,
     Json(payload): Json<MessageRequest>,
-) -> Result<Json<ApiResponse<MessageResponse>>, AppError> {
+) -> Result<Json<MessageResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
     let result = state
         .session
         .process_message(&session_id, &payload.text, payload.emotion.as_deref())
         .await?
         .ok_or(AppError::NotFound("session not found or expired".into()))?;
-    Ok(Json(ApiResponse::ok(MessageResponse {
+    Ok(Json(MessageResponse {
         session_id,
         reply: result.reply,
         session_closed: result.session_closed,
         dialogue_id: result.dialogue_id,
         title: result.title,
-    })))
+    }))
 }
 
 pub async fn get_session_status(
     State(state): State<ApiState>,
     Path(session_id): Path<String>,
-) -> Result<Json<ApiResponse<SessionStatusResponse>>, AppError> {
+) -> Result<Json<SessionStatusResponse>, AppError> {
     let status = state
         .session
         .status(&session_id)
         .await
         .ok_or(AppError::NotFound("session not found or expired".into()))?;
-    Ok(Json(ApiResponse::ok(SessionStatusResponse {
+    Ok(Json(SessionStatusResponse {
         session_id: status["sessionId"].as_str().unwrap_or("").into(),
         user_id: status["userId"].as_u64().unwrap_or(0),
         dialogue_id: status["dialogueId"].as_u64(),
         timeout_seconds: status["timeoutSeconds"].as_u64().unwrap_or(120),
-    })))
+    }))
 }
 
 pub async fn list_conversations(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
-) -> Result<Json<ApiResponse<Vec<ConversationResponse>>>, AppError> {
+) -> Result<Json<Vec<ConversationResponse>>, AppError> {
     if auth_user.user_id != user_id {
         return Err(AppError::Forbidden("not your conversations".into()));
     }
     let convs = state.query.list_conversations(user_id).await?;
-    Ok(Json(ApiResponse::ok(
+    Ok(Json(
         convs
             .into_iter()
             .map(|c| ConversationResponse {
@@ -95,19 +94,19 @@ pub async fn list_conversations(
                 created_at: c.created_at.to_rfc3339(),
             })
             .collect(),
-    )))
+    ))
 }
 
 pub async fn list_conversation_messages(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path((_user_id, conv_id)): Path<(u64, u64)>,
-) -> Result<Json<ApiResponse<Vec<ConversationMessageResponse>>>, AppError> {
+) -> Result<Json<Vec<ConversationMessageResponse>>, AppError> {
     let msgs = state
         .query
         .list_messages(conv_id, auth_user.user_id)
         .await?;
-    Ok(Json(ApiResponse::ok(
+    Ok(Json(
         msgs.into_iter()
             .map(|m| ConversationMessageResponse {
                 id: m.id,
@@ -120,7 +119,7 @@ pub async fn list_conversation_messages(
                 created_at: m.created_at.to_rfc3339(),
             })
             .collect(),
-    )))
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,14 +132,14 @@ pub async fn list_risk_detections(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<RiskListQuery>,
-) -> Result<Json<ApiResponse<RiskDetectionPage>>, AppError> {
+) -> Result<Json<RiskDetectionPage>, AppError> {
     let page = query.page.unwrap_or(1).max(1);
     let size = query.size.unwrap_or(10).min(100);
     let (items, total) = state
         .query
         .list_risk_detections(auth_user.user_id, page, size)
         .await?;
-    Ok(Json(ApiResponse::ok(RiskDetectionPage {
+    Ok(Json(RiskDetectionPage {
         items: items
             .into_iter()
             .map(|r| RiskDetectionResponse {
@@ -166,5 +165,5 @@ pub async fn list_risk_detections(
         total,
         page,
         size,
-    })))
+    }))
 }

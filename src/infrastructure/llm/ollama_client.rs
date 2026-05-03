@@ -1,14 +1,16 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tracing::{debug, warn};
 
-use crate::domain::llm::{ChatMessage, LlmClient};
+use crate::domain::llm::{ChatMessage, ChatResponse, LlmClient};
 
 /// Minimal Ollama/OpenAI-compatible chat completion client.
 #[derive(Clone)]
 pub struct OllamaClient {
     base_url: String,
     model: String,
+    temperature: f64,
+    top_p: f64,
     client: reqwest::Client,
 }
 
@@ -22,27 +24,13 @@ struct ChatRequest {
     tools: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChatResponse {
-    pub choices: Vec<Choice>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Choice {
-    pub message: ChoiceMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChoiceMessage {
-    pub content: Option<String>,
-    pub tool_calls: Option<serde_json::Value>,
-}
-
 impl OllamaClient {
-    pub fn new(base_url: String, model: String) -> Self {
+    pub fn new(base_url: String, model: String, temperature: f64, top_p: f64) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model,
+            temperature,
+            top_p,
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
@@ -61,8 +49,8 @@ impl OllamaClient {
         let body = ChatRequest {
             model: self.model.clone(),
             messages: messages.to_vec(),
-            temperature: 0.5,
-            top_p: 0.9,
+            temperature: self.temperature,
+            top_p: self.top_p,
             tools: tools.map(|t| t.to_vec()),
         };
 
@@ -109,6 +97,14 @@ impl LlmClient for OllamaClient {
                 "你好呀，我在这里呢。请问有什么可以帮你的吗？".to_string()
             }
         }
+    }
+
+    async fn chat_raw(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[serde_json::Value]>,
+    ) -> Result<ChatResponse, String> {
+        OllamaClient::chat_raw(self, messages, tools).await
     }
 }
 

@@ -90,6 +90,10 @@ impl RateLimitHandler {
 
 #[async_trait]
 impl TaskHandler for RateLimitHandler {
+    fn name(&self) -> &str {
+        "RateLimitHandler"
+    }
+
     async fn handle(&self, event: &TaskEvent) {
         match event {
             TaskEvent::LoginAudit(t) if !t.success => {

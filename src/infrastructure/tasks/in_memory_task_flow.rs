@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
@@ -62,8 +62,13 @@ impl TaskWorker {
     }
 
     pub async fn run(mut self) {
+        info!(
+            handlers = ?self.handlers.iter().map(|h| h.name()).collect::<Vec<_>>(),
+            "task worker starting"
+        );
         while let Some(event) = self.receiver.recv().await {
             for h in &self.handlers {
+                debug!(handler = h.name(), event = ?event, "dispatching");
                 h.handle(&event).await;
             }
         }

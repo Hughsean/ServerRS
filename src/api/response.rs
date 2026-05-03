@@ -2,7 +2,7 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {
-    pub code: &'static str,
+    pub code: u8,
     pub message: &'static str,
     pub data: T,
 }
@@ -10,9 +10,16 @@ pub struct ApiResponse<T> {
 impl<T> ApiResponse<T> {
     pub fn ok(data: T) -> Self {
         Self {
-            code: "OK",
+            code: 1,
             message: "success",
             data,
         }
     }
+    // pub fn err() -> Self {
+    //     Self {
+    //         code: 0,
+    //         message: "error",
+    //         data: ,
+    //     }
+    // }
 }

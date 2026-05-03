@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
 
@@ -103,39 +104,53 @@ impl AlertHandler {
     }
 }
 
+/// Human-readable label for a RiskLevel.
+fn risk_level_label(level: RiskLevel) -> &'static str {
+    match level {
+        RiskLevel::Crisis => "Crisis",
+        RiskLevel::High => "High",
+        RiskLevel::Medium => "Medium",
+        RiskLevel::Low => "Low",
+        RiskLevel::None => "None",
+        RiskLevel::Unknown => "Unknown",
+    }
+}
+
 #[async_trait]
 impl TaskHandler for AlertHandler {
+    fn name(&self) -> &str {
+        "AlertHandler"
+    }
+
     async fn handle(&self, event: &TaskEvent) {
         match event {
             TaskEvent::RiskDetected(t) => {
-                let level = &t.risk_level;
-                if level != "Crisis" && level != "High" {
+                if t.risk_level != RiskLevel::Crisis && t.risk_level != RiskLevel::High {
                     return;
                 }
 
-                let key = format!("risk:{}:{}", t.user_id, level);
+                let level_label = risk_level_label(t.risk_level);
+                let key = format!("risk:{}:{:?}", t.user_id, t.risk_level);
                 if self.should_throttle(&key).await {
                     return;
                 }
                 self.record_alert(key.clone()).await;
 
-                let title = format!(
-                    "{} 风险预警",
-                    if level == "Crisis" {
-                        "🚨 危机"
-                    } else {
-                        "⚠️ 高危"
-                    }
-                );
+                let emoji = if t.risk_level == RiskLevel::Crisis {
+                    "🚨 危机"
+                } else {
+                    "⚠️ 高危"
+                };
+                let title = format!("{emoji} 风险预警");
                 let body = format!(
                     "用户ID: {}\n风险等级: {}\n置信度: {:.0}%\n对话ID: {:?}",
                     t.user_id,
-                    level,
+                    level_label,
                     t.confidence * 100.0,
                     t.conversation_id
                 );
 
-                warn!(user_id = t.user_id, risk_level = %level, confidence = t.confidence, "ALERT: {title}");
+                warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "ALERT: {title}");
                 self.send_webhook(&title, &body).await;
             }
 

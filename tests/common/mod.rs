@@ -12,6 +12,7 @@ use ServerRS::application::session::conversation_orchestrator::ConversationOrche
 use ServerRS::application::session::risk_detection_service::RiskDetectionService;
 use ServerRS::application::session::session_manager::SessionManager;
 use ServerRS::application::session::session_service::SessionService;
+use ServerRS::application::session::tool_calling::{ToolCallService, ToolRegistry};
 use ServerRS::application::user::user_service::UserService;
 use ServerRS::domain::auth::password_service::PasswordService;
 use ServerRS::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
@@ -337,6 +338,24 @@ impl LlmClient for MockLlmClient {
     async fn chat(&self, _messages: &[ChatMessage]) -> String {
         "你好，我是小美，有什么可以帮你的？".to_string()
     }
+
+    async fn chat_raw(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: Option<&[serde_json::Value]>,
+    ) -> Result<ServerRS::domain::llm::ChatResponse, String> {
+        let response: ServerRS::domain::llm::ChatResponse =
+            serde_json::from_value(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": "你好，我是小美，有什么可以帮你的？",
+                        "tool_calls": null
+                    }
+                }]
+            }))
+            .map_err(|e| e.to_string())?;
+        Ok(response)
+    }
 }
 
 // ── Mock prompt provider ──
@@ -412,10 +431,19 @@ pub async fn test_app() -> Router {
         Arc::clone(&profile_repo),
     ));
 
+    let tool_registry = ToolRegistry::new(Vec::new());
+    let tool_service: Arc<ToolCallService> = Arc::new(ToolCallService::new(
+        Arc::clone(&llm),
+        tool_registry,
+        3,
+        std::time::Duration::from_millis(5000),
+    ));
+
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
         risk_detect,
         Arc::clone(&orchestrator),
+        Arc::clone(&tool_service),
         120,
     ));
     tokio::spawn({

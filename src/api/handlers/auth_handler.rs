@@ -6,18 +6,17 @@ use crate::api::dto::auth_dto::{
     HealthResponse, LoginRequest, LoginResponse, LogoutRequest, LogoutResponse,
     RefreshTokenRequest, RefreshTokenResponse, RegisterRequest, RegisterResponse,
 };
-use crate::api::response::ApiResponse;
 use crate::application::auth::auth_service::LoginInput;
 use crate::shared::error::AppError;
 
-pub async fn health() -> Json<ApiResponse<HealthResponse>> {
-    Json(ApiResponse::ok(HealthResponse { status: "up" }))
+pub async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "up" })
 }
 
 pub async fn login(
     State(state): State<ApiState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<LoginResponse>>, AppError> {
+) -> Result<Json<LoginResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
 
     let result = state
@@ -29,17 +28,17 @@ pub async fn login(
         })
         .await?;
 
-    Ok(Json(ApiResponse::ok(LoginResponse {
+    Ok(Json(LoginResponse {
         user_id: result.user_id,
         access_token: result.access_token,
         refresh_token: result.refresh_token,
-    })))
+    }))
 }
 
 pub async fn register(
     State(state): State<ApiState>,
     Json(payload): Json<RegisterRequest>,
-) -> Result<Json<ApiResponse<RegisterResponse>>, AppError> {
+) -> Result<Json<RegisterResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
 
     let result = state
@@ -47,17 +46,17 @@ pub async fn register(
         .register(payload.username, payload.password, payload.device_id)
         .await?;
 
-    Ok(Json(ApiResponse::ok(RegisterResponse {
+    Ok(Json(RegisterResponse {
         user_id: result.user_id,
         access_token: result.access_token,
         refresh_token: result.refresh_token,
-    })))
+    }))
 }
 
 pub async fn refresh_token(
     State(state): State<ApiState>,
     Json(payload): Json<RefreshTokenRequest>,
-) -> Result<Json<ApiResponse<RefreshTokenResponse>>, AppError> {
+) -> Result<Json<RefreshTokenResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
 
     let result = state
@@ -65,16 +64,16 @@ pub async fn refresh_token(
         .refresh(&payload.refresh_token, payload.device_id)
         .await?;
 
-    Ok(Json(ApiResponse::ok(RefreshTokenResponse {
+    Ok(Json(RefreshTokenResponse {
         access_token: result.access_token,
         refresh_token: result.refresh_token,
-    })))
+    }))
 }
 
 pub async fn logout(
     State(state): State<ApiState>,
     Json(payload): Json<LogoutRequest>,
-) -> Result<Json<ApiResponse<LogoutResponse>>, AppError> {
+) -> Result<Json<LogoutResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
 
     let result = state
@@ -82,5 +81,5 @@ pub async fn logout(
         .logout(&payload.refresh_token, payload.reason)
         .await?;
 
-    Ok(Json(ApiResponse::ok(LogoutResponse { success: result })))
+    Ok(Json(LogoutResponse { success: result }))
 }

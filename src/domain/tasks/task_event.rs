@@ -1,3 +1,5 @@
+use crate::domain::risk::detection_types::RiskLevel;
+
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
     // ── Auth audit ──
@@ -93,6 +95,6 @@ pub struct ConversationLifecycleTask {
 pub struct RiskDetectedTask {
     pub user_id: u64,
     pub conversation_id: Option<u64>,
-    pub risk_level: String,
+    pub risk_level: RiskLevel,
     pub confidence: f64,
 }

@@ -45,6 +45,10 @@ pub struct OllamaConfig {
     pub base_url: String,
     #[serde(default = "default_ollama_model")]
     pub model: String,
+    #[serde(default = "default_ollama_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_ollama_top_p")]
+    pub top_p: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,6 +92,12 @@ fn default_ollama_url() -> String {
 }
 fn default_ollama_model() -> String {
     "qwen2.5:14b".into()
+}
+fn default_ollama_temperature() -> f64 {
+    0.5
+}
+fn default_ollama_top_p() -> f64 {
+    0.9
 }
 fn default_context_window() -> usize {
     4
@@ -145,6 +155,8 @@ impl Default for AppConfig {
             ollama: Some(OllamaConfig {
                 base_url: default_ollama_url(),
                 model: default_ollama_model(),
+                temperature: default_ollama_temperature(),
+                top_p: default_ollama_top_p(),
             }),
             detector: Some(DetectorConfig {
                 context_window_size: default_context_window(),

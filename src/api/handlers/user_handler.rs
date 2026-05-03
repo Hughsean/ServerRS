@@ -6,7 +6,6 @@ use crate::api::dto::user_dto::{
     DeleteUserResponse, UpdateUserRequest, UpsertUserProfileRequest, UserProfileResponse,
     UserResponse,
 };
-use crate::api::response::ApiResponse;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::domain::user::user::UserStatus;
 use crate::shared::error::AppError;
@@ -17,7 +16,7 @@ pub async fn get_user_profile(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
-) -> Result<Json<ApiResponse<UserProfileResponse>>, AppError> {
+) -> Result<Json<UserProfileResponse>, AppError> {
     if auth_user.user_id != user_id {
         return Err(AppError::Forbidden(format!(
             "user {} is not allowed to access user {}",
@@ -27,7 +26,7 @@ pub async fn get_user_profile(
 
     let result = state.user.get_profile(user_id).await?;
 
-    Ok(Json(ApiResponse::ok(UserProfileResponse {
+    Ok(Json(UserProfileResponse {
         id: result.id,
         user_id: result.user_id,
         interests: result.interests,
@@ -37,7 +36,7 @@ pub async fn get_user_profile(
         learning_records: result.learning_records,
         created_at: result.created_at.to_rfc3339(),
         updated_at: result.updated_at.to_rfc3339(),
-    })))
+    }))
 }
 
 // ── PUT /api/v1/users/:user_id ──
@@ -47,7 +46,7 @@ pub async fn update_user(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
     Json(payload): Json<UpdateUserRequest>,
-) -> Result<Json<ApiResponse<UserResponse>>, AppError> {
+) -> Result<Json<UserResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
 
     let status = payload
@@ -66,7 +65,7 @@ pub async fn update_user(
         )
         .await?;
 
-    Ok(Json(ApiResponse::ok(user_to_response(user))))
+    Ok(Json(user_to_response(user)))
 }
 
 // ── DELETE /api/v1/users/:user_id ──
@@ -75,20 +74,20 @@ pub async fn delete_user(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
-) -> Result<Json<ApiResponse<DeleteUserResponse>>, AppError> {
+) -> Result<Json<DeleteUserResponse>, AppError> {
     let deleted = state.user.delete_user(auth_user.user_id, user_id).await?;
 
-    Ok(Json(ApiResponse::ok(DeleteUserResponse { deleted })))
+    Ok(Json(DeleteUserResponse { deleted }))
 }
 
 // ── GET /api/v1/users ──
 
 pub async fn list_users(
     State(state): State<ApiState>,
-) -> Result<Json<ApiResponse<Vec<UserResponse>>>, AppError> {
+) -> Result<Json<Vec<UserResponse>>, AppError> {
     let users = state.user.list_users().await?;
     let response: Vec<UserResponse> = users.into_iter().map(user_to_response).collect();
-    Ok(Json(ApiResponse::ok(response)))
+    Ok(Json(response))
 }
 
 // ── PUT /api/v1/users/:user_id/profile ──
@@ -98,7 +97,7 @@ pub async fn upsert_user_profile(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
     Json(payload): Json<UpsertUserProfileRequest>,
-) -> Result<Json<ApiResponse<UserProfileResponse>>, AppError> {
+) -> Result<Json<UserProfileResponse>, AppError> {
     if auth_user.user_id != user_id {
         return Err(AppError::Forbidden(format!(
             "user {} is not allowed to modify user {}'s profile",
@@ -118,7 +117,7 @@ pub async fn upsert_user_profile(
         )
         .await?;
 
-    Ok(Json(ApiResponse::ok(UserProfileResponse {
+    Ok(Json(UserProfileResponse {
         id: result.id,
         user_id: result.user_id,
         interests: result.interests,
@@ -128,7 +127,7 @@ pub async fn upsert_user_profile(
         learning_records: result.learning_records,
         created_at: result.created_at.to_rfc3339(),
         updated_at: result.updated_at.to_rfc3339(),
-    })))
+    }))
 }
 
 // ── Helpers ──

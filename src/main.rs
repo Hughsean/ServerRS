@@ -12,12 +12,14 @@ use application::session::conversation_orchestrator::ConversationOrchestrator;
 use application::session::risk_detection_service::RiskDetectionService;
 use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
+use application::session::tool_calling::{ToolCallService, ToolRegistry};
 use application::user::user_service::UserService;
 use domain::auth::password_service::PasswordService;
 use domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
 use domain::auth::refresh_token_service::RefreshTokenService;
 use domain::auth::token_service::TokenService;
 use domain::conversation::conversation_repository::ConversationRepository;
+use domain::llm::tools::LlmTool;
 use domain::llm::{LlmClient, PromptProvider};
 use domain::risk::risk_detector::RiskDetector;
 use domain::risk::risk_repository::RiskRepository;
@@ -30,6 +32,7 @@ use infrastructure::auth::in_memory_refresh_token_revocation_repository::InMemor
 use infrastructure::auth::jwt_token_service::JwtTokenService;
 use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
 use infrastructure::llm::ollama_client::OllamaClient;
+use infrastructure::llm::plugins::{GetTimeTool, HandleExitIntentTool};
 use infrastructure::llm::prompt_provider::PromptProvider as InfraPromptProvider;
 use infrastructure::persistence::database::init_db;
 use infrastructure::persistence::seaorm_conversation_repository::SeaOrmConversationRepository;
@@ -122,6 +125,8 @@ async fn run() -> Result<(), std::io::Error> {
             .ollama
             .as_ref()
             .map_or("qwen2.5:14b".into(), |o| o.model.clone()),
+        config.ollama.as_ref().map_or(0.5, |o| o.temperature),
+        config.ollama.as_ref().map_or(0.9, |o| o.top_p),
     ));
     let prompt_provider: Arc<dyn PromptProvider> = Arc::new(InfraPromptProvider::new(None));
 
@@ -159,10 +164,22 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&profile_repo),
     ));
 
+    let tool_registry = ToolRegistry::new(vec![
+        Arc::new(GetTimeTool::new()) as Arc<dyn LlmTool>,
+        Arc::new(HandleExitIntentTool::new()) as Arc<dyn LlmTool>,
+    ]);
+    let tool_service: Arc<ToolCallService> = Arc::new(ToolCallService::new(
+        Arc::clone(&ollama),
+        tool_registry,
+        3,
+        std::time::Duration::from_millis(5000),
+    ));
+
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
         Arc::clone(&risk_detect),
         Arc::clone(&orchestrator),
+        Arc::clone(&tool_service),
         config.session.as_ref().map_or(120, |s| s.timeout_seconds),
     ));
     let sess_cleanup = {

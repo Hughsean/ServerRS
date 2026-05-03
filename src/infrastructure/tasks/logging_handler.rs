@@ -1,14 +1,18 @@
 use async_trait::async_trait;
 use tracing::{info, warn};
 
+use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
-
 
 pub struct LoggingHandler;
 
 #[async_trait]
 impl TaskHandler for LoggingHandler {
+    fn name(&self) -> &str {
+        "LoggingHandler"
+    }
+
     async fn handle(&self, event: &TaskEvent) {
         match event {
             TaskEvent::LoginAudit(t) => {
@@ -39,10 +43,10 @@ impl TaskHandler for LoggingHandler {
                 "conversation created"
             ),
             TaskEvent::RiskDetected(t) => {
-                if t.risk_level == "Crisis" || t.risk_level == "High" {
-                    warn!(user_id = t.user_id, risk_level = %t.risk_level, confidence = t.confidence, "HIGH RISK");
+                if t.risk_level == RiskLevel::Crisis || t.risk_level == RiskLevel::High {
+                    warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "HIGH RISK");
                 } else {
-                    info!(user_id = t.user_id, risk_level = %t.risk_level, confidence = t.confidence, "risk detected");
+                    info!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "risk detected");
                 }
             }
         }

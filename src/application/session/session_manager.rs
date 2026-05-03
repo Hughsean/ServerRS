@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use super::conversation_orchestrator::{ConversationOrchestrator, MessageResult};
 use super::risk_detection_service::RiskDetectionService;
+use super::tool_calling::ToolCallService;
 use crate::domain::llm::ChatMessage;
+use crate::domain::llm::tools::ToolExecutionContext;
 use crate::domain::tasks::task_event::{SessionLifecycleTask, TaskEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::shared::error::AppError;
@@ -20,6 +22,7 @@ pub struct SessionManager {
     task_publisher: Arc<dyn TaskPublisher>,
     risk_detection: Arc<RiskDetectionService>,
     orchestrator: Arc<ConversationOrchestrator>,
+    tool_service: Arc<ToolCallService>,
     sessions: RwLock<HashMap<String, SessionState>>,
     timeout_seconds: u64,
 }
@@ -32,6 +35,7 @@ pub struct SessionState {
     pub user_id: u64,
     pub dialogue_id: Option<u64>,
     pub last_active: Instant,
+    pub tool_context: ToolExecutionContext,
 }
 
 impl SessionState {
@@ -45,12 +49,14 @@ impl SessionManager {
         task_publisher: Arc<dyn TaskPublisher>,
         risk_detection: Arc<RiskDetectionService>,
         orchestrator: Arc<ConversationOrchestrator>,
+        tool_service: Arc<ToolCallService>,
         timeout_seconds: u64,
     ) -> Self {
         Self {
             risk_detection,
             task_publisher,
             orchestrator,
+            tool_service,
             sessions: RwLock::new(HashMap::new()),
             timeout_seconds,
         }
@@ -91,6 +97,7 @@ impl SessionManager {
             user_id,
             dialogue_id,
             last_active: Instant::now(),
+            tool_context: ToolExecutionContext::default(),
         };
 
         self.sessions
@@ -169,8 +176,13 @@ impl SessionManager {
             None
         };
 
-        // LLM chat
-        let reply = self.orchestrator.chat(&state.messages).await;
+        // LLM chat with tool calls
+        let tool_result = self
+            .tool_service
+            .chat_with_tools(&mut state.messages, &mut state.tool_context)
+            .await;
+        let reply = tool_result.reply;
+        let session_closed = tool_result.exit_requested;
 
         if !reply.is_empty() {
             state.messages.push(ChatMessage {
@@ -190,7 +202,7 @@ impl SessionManager {
 
         Ok(Some(MessageResult {
             reply,
-            session_closed: false,
+            session_closed,
             dialogue_id: Some(conv_id),
             title,
         }))

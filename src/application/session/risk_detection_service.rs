@@ -54,13 +54,12 @@ impl RiskDetectionService {
         }
 
         // Publish event through unified task system
-        let risk_level_str = format!("{:?}", result.risk_level);
         let _ = self
             .task_publisher
             .publish(TaskEvent::RiskDetected(RiskDetectedTask {
                 user_id,
                 conversation_id,
-                risk_level: risk_level_str,
+                risk_level: result.risk_level,
                 confidence: result.confidence,
             }))
             .await;

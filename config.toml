@@ -20,6 +20,8 @@ expiration_secs = 86400
 # [ollama]
 # base_url = "http://10.13.19.91:11434/v1"
 # model = "qwen2.5:14b"
+# temperature = 0.5
+# top_p = 0.9
 
 # ── Risk Detector (used in Phase 4) ──
 # [detector]
