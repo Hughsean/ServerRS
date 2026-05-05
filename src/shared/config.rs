@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub detector: Option<DetectorConfig>,
     #[serde(default)]
     pub session: Option<SessionConfig>,
+    #[serde(default)]
+    pub plugins: Option<PluginsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +59,21 @@ pub struct DetectorConfig {
     pub context_window_size: usize,
     #[serde(default = "default_confidence_threshold")]
     pub confidence_threshold: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginsConfig {
+    /// API key for newsapi.org (or compatible service).
+    /// Falls back to NEWS_API_KEY env var if not set.
+    #[serde(default)]
+    pub news_api_key: Option<String>,
+    /// Base URL for the news API.
+    #[serde(default = "default_news_api_url")]
+    pub news_api_url: String,
+}
+
+fn default_news_api_url() -> String {
+    "https://newsapi.org/v2".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +182,10 @@ impl Default for AppConfig {
             session: Some(SessionConfig {
                 timeout_seconds: default_session_timeout(),
                 cleanup_interval_ms: default_cleanup_interval(),
+            }),
+            plugins: Some(PluginsConfig {
+                news_api_key: None,
+                news_api_url: default_news_api_url(),
             }),
         }
     }

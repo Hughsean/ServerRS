@@ -32,3 +32,8 @@ expiration_secs = 86400
 # [session]
 # timeout_seconds = 120
 # cleanup_interval_ms = 20000
+
+# ── Plugins (weather, news, etc.) ──
+# [plugins]
+# news_api_key = "your-newsapi-org-key"
+# news_api_url = "https://newsapi.org/v2"

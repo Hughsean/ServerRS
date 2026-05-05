@@ -31,7 +31,9 @@ use infrastructure::auth::in_memory_refresh_token_revocation_repository::InMemor
 use infrastructure::auth::jwt_token_service::JwtTokenService;
 use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
 use infrastructure::llm::ollama_client::OllamaClient;
-use infrastructure::llm::plugins::{GetTimeTool, HandleExitIntentTool};
+use infrastructure::llm::plugins::{
+    GetNewsTool, GetTimeTool, GetWeatherTool, HandleExitIntentTool,
+};
 use infrastructure::llm::prompt_provider::PromptProvider as InfraPromptProvider;
 use infrastructure::persistence::implementations::seaorm_conversation_repository::SeaOrmConversationRepository;
 use infrastructure::persistence::implementations::seaorm_risk_repository::SeaOrmRiskRepository;
@@ -161,9 +163,23 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&profile_repo),
     ));
+    // ── Plugins config ──
+    let news_api_key = config
+        .plugins
+        .as_ref()
+        .and_then(|p| p.news_api_key.clone())
+        .or_else(|| std::env::var("NEWS_API_KEY").ok());
+    let news_api_url = config
+        .plugins
+        .as_ref()
+        .map(|p| p.news_api_url.clone())
+        .unwrap_or_else(|| "https://newsapi.org/v2".into());
+
 
     let tool_registry = ToolRegistry::new(vec![
         Arc::new(GetTimeTool::new()) as Arc<dyn LlmTool>,
+        Arc::new(GetWeatherTool::new()) as Arc<dyn LlmTool>,
+        Arc::new(GetNewsTool::new(news_api_key, news_api_url)) as Arc<dyn LlmTool>,
         Arc::new(HandleExitIntentTool::new()) as Arc<dyn LlmTool>,
     ]);
     let tool_service: Arc<ToolCallService> = Arc::new(ToolCallService::new(
