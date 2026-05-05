@@ -5,7 +5,7 @@ use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfile
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
 
-use super::entities::user_profile;
+use super::entities::user_profiles as user_profile;
 
 pub struct SeaOrmUserProfileRepository {
     db: DatabaseConnection,
@@ -19,13 +19,14 @@ impl SeaOrmUserProfileRepository {
 
 // ── JSON helpers ──
 
-fn parse_json_array(s: &Option<String>) -> Option<Vec<String>> {
-    s.as_ref()
-        .and_then(|j| serde_json::from_str::<Vec<String>>(j).ok())
+fn parse_json_array(v: &Option<serde_json::Value>) -> Option<Vec<String>> {
+    v.as_ref()
+        .and_then(|j| serde_json::from_value::<Vec<String>>(j.clone()).ok())
 }
 
-fn to_json_array(v: &Option<Vec<String>>) -> Option<String> {
-    v.as_ref().and_then(|arr| serde_json::to_string(arr).ok())
+fn to_json_array(v: &Option<Vec<String>>) -> Option<serde_json::Value> {
+    v.as_ref()
+        .map(|arr| serde_json::to_value(arr).unwrap_or(serde_json::Value::Null))
 }
 
 // ── Mapping ──

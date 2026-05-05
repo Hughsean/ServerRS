@@ -11,7 +11,9 @@ use crate::domain::conversation::conversation_message::{
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::shared::error::AppError;
 
-use super::entities::{conversation, conversation_message};
+use super::entities::{
+    conversation_messages as conversation_message, conversations as conversation,
+};
 
 pub struct SeaOrmConversationRepository {
     db: DatabaseConnection,
@@ -28,9 +30,9 @@ fn map_conv(m: conversation::Model) -> Conversation {
         id: m.id,
         user_id: m.user_id,
         title: m.title,
-        is_title_generated: m.is_title_generated,
+        is_title_generated: m.is_title_generated != 0,
         last_message_at: m.last_message_at,
-        message_count: m.message_count,
+        message_count: m.message_count as i32,
         created_at: m.created_at,
     }
 }
@@ -42,8 +44,8 @@ fn map_msg(m: conversation_message::Model) -> ConversationMessage {
         sender_role: m.sender_role,
         sender_user_id: m.sender_user_id,
         message_type: m.message_type,
-        content: m.content,
-        token_count: m.token_count,
+        content: serde_json::to_string(&m.content).unwrap_or_default(),
+        token_count: m.token_count.map(|v| v as i32),
         created_at: m.created_at,
     }
 }
@@ -75,8 +77,8 @@ impl ConversationRepository for SeaOrmConversationRepository {
         let am = conversation::ActiveModel {
             user_id: Set(c.user_id),
             title: Set(c.title),
-            is_title_generated: Set(false),
-            message_count: Set(0),
+            is_title_generated: Set(0_i8),
+            message_count: Set(0_u32),
             created_at: Set(now),
             ..Default::default()
         };
@@ -90,17 +92,21 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .ok_or(AppError::NotFound("conversation not found".into()))?;
         let mut am: conversation::ActiveModel = existing.into();
         am.title = Set(Some(title.to_string()));
-        am.is_title_generated = Set(true);
+        am.is_title_generated = Set(1_i8);
         am.update(&self.db).await.map_err(map_err)?;
         Ok(())
     }
     async fn touch_and_incr(&self, id: u64, inc: i32) -> Result<(), AppError> {
-        let stmt = sea_orm::Statement::from_sql_and_values(
-            sea_orm::DatabaseBackend::MySql,
-            "UPDATE conversations SET last_message_at = NOW(), message_count = message_count + ? WHERE id = ?",
-            [inc.into(), (id as i64).into()],
-        );
-        self.db.execute(stmt).await.map_err(map_err)?;
+        self.db
+            .execute_raw(
+                sea_orm::Statement::from_sql_and_values(
+                    sea_orm::DbBackend::MySql,
+                    "UPDATE conversations SET last_message_at = NOW(), message_count = message_count + ? WHERE id = ?",
+                    [inc.into(), (id as i64).into()],
+                ),
+            )
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError> {
@@ -121,8 +127,8 @@ impl ConversationRepository for SeaOrmConversationRepository {
             sender_role: Set(msg.sender_role),
             sender_user_id: Set(msg.sender_user_id),
             message_type: Set(msg.message_type),
-            content: Set(msg.content),
-            token_count: Set(msg.token_count),
+            content: Set(serde_json::from_str(&msg.content).unwrap_or(serde_json::Value::Null)),
+            token_count: Set(msg.token_count.map(|v| v as u32)),
             created_at: Set(now),
             ..Default::default()
         };

@@ -5,7 +5,7 @@ use crate::domain::user::user::{NewUser, User, UserStatus, UserUpdate};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
-use super::entities::user;
+use super::entities::users as user;
 
 pub struct SeaOrmUserRepository {
     db: DatabaseConnection,
@@ -27,7 +27,7 @@ fn model_to_domain(m: user::Model) -> User {
         email: m.email,
         phone: m.phone,
         nickname: m.nickname,
-        status: UserStatus::from_i32(m.status).unwrap_or(UserStatus::Disabled),
+        status: UserStatus::from_i32(m.status as i32).unwrap_or(UserStatus::Disabled),
         created_at: m.created_at,
         updated_at: m.updated_at,
         last_login_at: m.last_login_at,
@@ -106,7 +106,7 @@ impl UserRepository for SeaOrmUserRepository {
             email: Set(new_user.email),
             phone: Set(new_user.phone),
             nickname: Set(new_user.nickname),
-            status: Set(new_user.status.to_i32()),
+            status: Set(new_user.status.to_i32() as i8),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
@@ -136,7 +136,7 @@ impl UserRepository for SeaOrmUserRepository {
             active.nickname = Set(nickname);
         }
         if let Some(status) = update.status {
-            active.status = Set(status.to_i32());
+            active.status = Set(status.to_i32() as i8);
         }
         active.updated_at = Set(chrono::Utc::now());
 
