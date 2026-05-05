@@ -1,78 +1,65 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolAction {
-    None,
-    Response,
-    Requeue,
-}
+// ── Tool outcome ──
 
+/// The result of invoking a tool — a sum type that makes illegal states unrepresentable.
 #[derive(Debug, Clone)]
-pub struct ToolResponse {
-    pub action: ToolAction,
-    pub response: Option<String>,
-    pub result: Option<String>,
+pub enum ToolOutcome {
+    /// Return text directly to the user and stop the tool-calling loop.
+    Reply {
+        text: String,
+        /// Whether the session should be closed after this reply.
+        end_session: bool,
+    },
+    /// Feed this output back to the LLM as a tool result for further processing.
+    Continue(String),
 }
 
-impl ToolResponse {
-    pub fn none() -> Self {
-        Self {
-            action: ToolAction::None,
-            response: None,
-            result: None,
+impl ToolOutcome {
+    /// Reply to the user without ending the session.
+    pub fn reply(text: impl Into<String>) -> Self {
+        Self::Reply {
+            text: text.into(),
+            end_session: false,
         }
     }
 
-    pub fn respond(message: impl Into<String>) -> Self {
-        Self {
-            action: ToolAction::Response,
-            response: Some(message.into()),
-            result: None,
+    /// Reply to the user and signal that the session should end.
+    pub fn reply_and_end(text: impl Into<String>) -> Self {
+        Self::Reply {
+            text: text.into(),
+            end_session: true,
         }
     }
 
-    pub fn requeue(payload: impl Into<String>) -> Self {
-        Self {
-            action: ToolAction::Requeue,
-            response: None,
-            result: Some(payload.into()),
-        }
+    /// Feed output back to the LLM for further tool calls or final response.
+    pub fn continue_(output: impl Into<String>) -> Self {
+        Self::Continue(output.into())
     }
 }
 
+// ── Execution context (placeholder for future extension) ──
+
+/// Mutable state carried through a tool-calling loop.
+/// Currently a placeholder; tools that need cross-invocation state can
+/// extend this struct without changing trait signatures.
 #[derive(Debug, Clone, Default)]
-pub struct ToolExecutionContext {
-    attributes: HashMap<String, Value>,
-    exit_requested: bool,
-}
+pub struct ToolExecutionContext;
 
-impl ToolExecutionContext {
-    pub fn is_exit_requested(&self) -> bool {
-        self.exit_requested
-    }
+// ── Tool trait ──
 
-    pub fn mark_exit_requested(&mut self) {
-        self.exit_requested = true;
-    }
-
-    pub fn set_attribute(&mut self, key: impl Into<String>, value: Value) {
-        self.attributes.insert(key.into(), value);
-    }
-
-    pub fn get_attribute(&self, key: &str) -> Option<&Value> {
-        self.attributes.get(key)
-    }
-
-    pub fn attributes_snapshot(&self) -> HashMap<String, Value> {
-        self.attributes.clone()
-    }
-}
-
+/// A callable tool registered with the LLM via function-calling.
 #[async_trait]
 pub trait LlmTool: Send + Sync {
+    /// Unique name used for registry lookup.
     fn name(&self) -> &str;
+
+    /// OpenAI-compatible function definition (JSON schema).
     fn tool_definition(&self) -> Value;
-    async fn invoke(&self, context: &mut ToolExecutionContext, arguments: &Value) -> ToolResponse;
+
+    /// Execute the tool with the given arguments.
+    ///
+    /// `context` is reserved for future cross-invocation state.
+    async fn invoke(&self, context: &mut ToolExecutionContext, arguments: &Value) -> ToolOutcome;
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Local;
 use serde_json::{Value, json};
 
-use crate::domain::llm::tools::{LlmTool, ToolExecutionContext, ToolResponse};
+use crate::domain::llm::tools::{LlmTool, ToolExecutionContext, ToolOutcome};
 
 pub struct GetTimeTool;
 
@@ -33,12 +33,8 @@ impl LlmTool for GetTimeTool {
         })
     }
 
-    async fn invoke(
-        &self,
-        _context: &mut ToolExecutionContext,
-        _arguments: &Value,
-    ) -> ToolResponse {
+    async fn invoke(&self, _context: &mut ToolExecutionContext, _arguments: &Value) -> ToolOutcome {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        ToolResponse::requeue(format!("Current date/time is: {now}"))
+        ToolOutcome::continue_(format!("Current date/time is: {now}"))
     }
 }

@@ -182,7 +182,7 @@ impl SessionManager {
             .chat_with_tools(&mut state.messages, &mut state.tool_context)
             .await;
         let reply = tool_result.reply;
-        let session_closed = tool_result.exit_requested;
+        let session_closed = tool_result.end_session;
 
         if !reply.is_empty() {
             state.messages.push(ChatMessage {

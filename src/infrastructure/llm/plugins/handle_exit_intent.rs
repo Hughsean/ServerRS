@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::domain::llm::tools::{LlmTool, ToolExecutionContext, ToolResponse};
+use crate::domain::llm::tools::{LlmTool, ToolExecutionContext, ToolOutcome};
 
 pub struct HandleExitIntentTool;
 
@@ -37,13 +37,12 @@ impl LlmTool for HandleExitIntentTool {
         })
     }
 
-    async fn invoke(&self, context: &mut ToolExecutionContext, arguments: &Value) -> ToolResponse {
+    async fn invoke(&self, _context: &mut ToolExecutionContext, arguments: &Value) -> ToolOutcome {
         let goodbye = arguments
             .get("say_goodbye")
             .and_then(|v| v.as_str())
             .unwrap_or("Okay, talk next time.")
             .to_string();
-        context.mark_exit_requested();
-        ToolResponse::respond(goodbye)
+        ToolOutcome::reply_and_end(goodbye)
     }
 }

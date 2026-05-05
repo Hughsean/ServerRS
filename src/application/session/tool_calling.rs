@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
-use crate::domain::llm::tools::{LlmTool, ToolAction, ToolExecutionContext, ToolResponse};
+use crate::domain::llm::tools::{LlmTool, ToolExecutionContext, ToolOutcome};
 use crate::domain::llm::{ChatMessage, LlmClient};
 
 pub struct ToolRegistry {
@@ -38,10 +38,10 @@ impl ToolRegistry {
         name: &str,
         context: &mut ToolExecutionContext,
         arguments: &Value,
-    ) -> ToolResponse {
+    ) -> ToolOutcome {
         match self.tools.get(name) {
             Some(tool) => tool.invoke(context, arguments).await,
-            None => ToolResponse::respond(format!("No tool found named {name}.")),
+            None => ToolOutcome::reply(format!("No tool found named {name}.")),
         }
     }
 }
@@ -56,7 +56,8 @@ pub struct ToolCallService {
 pub struct ToolCallResult {
     pub reply: String,
     pub tool_invoked: bool,
-    pub exit_requested: bool,
+    /// Whether the tool outcome requests ending the session.
+    pub end_session: bool,
 }
 
 impl ToolCallService {
@@ -93,7 +94,7 @@ impl ToolCallService {
                 return ToolCallResult {
                     reply: "Tool call depth limit exceeded.".to_string(),
                     tool_invoked: true,
-                    exit_requested: context.is_exit_requested(),
+                    end_session: false,
                 };
             }
 
@@ -105,7 +106,7 @@ impl ToolCallService {
                     return ToolCallResult {
                         reply,
                         tool_invoked,
-                        exit_requested: context.is_exit_requested(),
+                        end_session: false,
                     };
                 }
             };
@@ -116,7 +117,7 @@ impl ToolCallService {
                     return ToolCallResult {
                         reply: String::new(),
                         tool_invoked,
-                        exit_requested: context.is_exit_requested(),
+                        end_session: false,
                     };
                 }
             };
@@ -127,7 +128,7 @@ impl ToolCallService {
                     return ToolCallResult {
                         reply: message.content.clone().unwrap_or_default(),
                         tool_invoked,
-                        exit_requested: context.is_exit_requested(),
+                        end_session: false,
                     };
                 }
             };
@@ -137,7 +138,7 @@ impl ToolCallService {
                 return ToolCallResult {
                     reply: message.content.clone().unwrap_or_default(),
                     tool_invoked,
-                    exit_requested: context.is_exit_requested(),
+                    end_session: false,
                 };
             }
 
@@ -147,26 +148,25 @@ impl ToolCallService {
 
             for call in parsed_calls {
                 debug!(tool = %call.name, "invoking tool");
-                let response = self.invoke_tool(&call.name, context, &call.arguments).await;
+                let outcome = self.invoke_tool(&call.name, context, &call.arguments).await;
 
-                match response.action {
-                    ToolAction::Response => {
+                match outcome {
+                    ToolOutcome::Reply { text, end_session } => {
                         return ToolCallResult {
-                            reply: response.response.unwrap_or_default(),
+                            reply: text,
                             tool_invoked: true,
-                            exit_requested: context.is_exit_requested(),
+                            end_session,
                         };
                     }
-                    ToolAction::Requeue => {
+                    ToolOutcome::Continue(output) => {
                         assistant_tool_calls.push(call.raw);
                         tool_outputs.push(ChatMessage {
                             role: "tool".into(),
-                            content: response.result.unwrap_or_default(),
+                            content: output,
                             tool_calls: None,
                             tool_call_id: Some(call.id),
                         });
                     }
-                    ToolAction::None => {}
                 }
             }
 
@@ -174,7 +174,7 @@ impl ToolCallService {
                 return ToolCallResult {
                     reply: String::new(),
                     tool_invoked: true,
-                    exit_requested: context.is_exit_requested(),
+                    end_session: false,
                 };
             }
 
@@ -194,15 +194,15 @@ impl ToolCallService {
         name: &str,
         context: &mut ToolExecutionContext,
         arguments: &Value,
-    ) -> ToolResponse {
+    ) -> ToolOutcome {
         match timeout(
             self.tool_timeout,
             self.registry.invoke(name, context, arguments),
         )
         .await
         {
-            Ok(resp) => resp,
-            Err(_) => ToolResponse::respond(
+            Ok(outcome) => outcome,
+            Err(_) => ToolOutcome::reply(
                 "Sorry, the tool timed out. Please try again later or simplify the request.",
             ),
         }

@@ -16,8 +16,7 @@ async fn health_check_works() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = common::read_body(response).await;
-    assert_eq!(body["code"], "OK");
-    assert_eq!(body["data"]["status"], "up");
+    assert_eq!(body["status"], "up");
 }
 
 #[tokio::test]
@@ -46,11 +45,10 @@ async fn register_and_login_flow() {
         }),
     )
     .await;
-    println!("{}", resp);
+    assert!(resp["access_token"].as_str().unwrap().len() > 10);
 
     let resp = common::get_auth(&app, "/api/v1/users", &token).await;
     assert!(resp.is_array());
-    println!("{}", resp)
 }
 
 #[tokio::test]
@@ -94,24 +92,25 @@ async fn user_profile_crud_flow() {
         }),
     )
     .await;
-    let token = resp["data"]["access_token"].as_str().unwrap().to_string();
-    let user_id = resp["data"]["user_id"].as_u64().unwrap();
+    let token = resp["access_token"].as_str().unwrap().to_string();
+    let user_id = resp["user_id"].as_u64().unwrap();
 
+    // Upsert profile
     let resp = common::put_auth(
         &app,
         &format!("/api/v1/users/{user_id}/profile"),
         &json!({
-            "interests": ["reading", "music"],
-            "personality_traits": ["calm"]
+            "interests": ["music", "reading"],
+            "personality_traits": ["calm", "thoughtful"]
         }),
         &token,
     )
     .await;
-    assert_eq!(resp["code"], "OK");
-    assert_eq!(resp["data"]["user_id"].as_u64().unwrap(), user_id);
+    assert_eq!(resp["user_id"].as_u64().unwrap(), user_id);
 
+    // Get profile
     let resp = common::get_auth(&app, &format!("/api/v1/users/{user_id}"), &token).await;
-    assert_eq!(resp["code"], "OK");
+    assert_eq!(resp["user_id"].as_u64().unwrap(), user_id);
 }
 
 #[tokio::test]
@@ -127,18 +126,19 @@ async fn update_user_info_flow() {
         }),
     )
     .await;
-    let token = resp["data"]["access_token"].as_str().unwrap().to_string();
-    let user_id = resp["data"]["user_id"].as_u64().unwrap();
+    let token = resp["access_token"].as_str().unwrap().to_string();
+    let user_id = resp["user_id"].as_u64().unwrap();
 
     let resp = common::put_auth(
         &app,
         &format!("/api/v1/users/{user_id}"),
-        &json!({ "nickname": "New Name" }),
+        &json!({
+            "nickname": "UpdatedName"
+        }),
         &token,
     )
     .await;
-    assert_eq!(resp["code"], "OK");
-    assert_eq!(resp["data"]["nickname"].as_str().unwrap(), "New Name");
+    assert_eq!(resp["nickname"], "UpdatedName");
 }
 
 #[tokio::test]
