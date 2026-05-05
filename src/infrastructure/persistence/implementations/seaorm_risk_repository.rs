@@ -8,7 +8,7 @@ use crate::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDet
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
 
-use super::entities::risk_detection_results;
+use super::super::entities::risk_detection_results;
 
 // ── Enum ↔ String helpers (serde-based, matches SCREAMING_SNAKE_CASE) ──
 

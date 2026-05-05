@@ -5,7 +5,7 @@ use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfile
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
 
-use super::entities::user_profiles;
+use super::super::entities::user_profiles;
 
 pub struct SeaOrmUserProfileRepository {
     db: DatabaseConnection,

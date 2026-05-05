@@ -5,7 +5,7 @@ use crate::domain::user::user::{NewUser, User, UserStatus, UserUpdate};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
-use super::entities::users;
+use super::super::entities::users;
 
 pub struct SeaOrmUserRepository {
     db: DatabaseConnection,

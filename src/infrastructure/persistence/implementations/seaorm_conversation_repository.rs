@@ -10,7 +10,7 @@ use crate::domain::conversation::conversation_message::{
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::shared::error::AppError;
 
-use super::entities::{conversation_messages, conversations};
+use super::super::entities::{conversation_messages, conversations};
 
 pub struct SeaOrmConversationRepository {
     db: DatabaseConnection,
