@@ -1,3 +1,6 @@
+#![deprecated]
+#![allow(dead_code, deprecated)]
+
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

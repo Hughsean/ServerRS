@@ -16,7 +16,6 @@ use application::session::tool_calling::{ToolCallService, ToolRegistry};
 use application::user::user_service::UserService;
 use domain::auth::password_service::PasswordService;
 use domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use domain::auth::refresh_token_service::RefreshTokenService;
 use domain::auth::token_service::TokenService;
 use domain::conversation::conversation_repository::ConversationRepository;
 use domain::llm::tools::LlmTool;
@@ -138,7 +137,6 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&user_repo),
         Arc::clone(&password_service) as Arc<dyn PasswordService>,
         Arc::clone(&jwt) as Arc<dyn TokenService>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenService>,
         Arc::clone(&revoke_repo),
         Arc::clone(&task_publisher),
     ));

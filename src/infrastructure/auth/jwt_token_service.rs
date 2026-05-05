@@ -4,8 +4,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::auth::refresh_token_service::{RefreshTokenClaims, RefreshTokenService};
-use crate::domain::auth::token_service::{AccessTokenClaims, TokenService};
+use crate::domain::auth::token_service::{AccessTokenClaims, RefreshTokenClaims, TokenService};
 use crate::shared::error::AppError;
 
 const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
@@ -85,7 +84,7 @@ impl JwtTokenService {
 }
 
 impl TokenService for JwtTokenService {
-    fn issue(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+    fn issue_access(&self, user_id: u64, username: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
             sub: user_id.to_string(),
@@ -100,7 +99,7 @@ impl TokenService for JwtTokenService {
             .map_err(|err| AppError::internal(format!("failed to issue access token: {err}")))
     }
 
-    fn verify(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
+    fn verify_access(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
         let claims = self.decode_claims(token)?;
 
         if claims.token_type != TOKEN_TYPE_ACCESS {
@@ -117,10 +116,8 @@ impl TokenService for JwtTokenService {
             username: claims.username,
         })
     }
-}
 
-impl RefreshTokenService for JwtTokenService {
-    fn issue(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+    fn issue_refresh(&self, user_id: u64, username: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
             sub: user_id.to_string(),
@@ -135,7 +132,7 @@ impl RefreshTokenService for JwtTokenService {
             .map_err(|err| AppError::internal(format!("failed to issue refresh token: {err}")))
     }
 
-    fn verify(&self, refresh_token: &str) -> Result<RefreshTokenClaims, AppError> {
+    fn verify_refresh(&self, refresh_token: &str) -> Result<RefreshTokenClaims, AppError> {
         let claims = self.decode_claims(refresh_token)?;
 
         if claims.token_type != TOKEN_TYPE_REFRESH {

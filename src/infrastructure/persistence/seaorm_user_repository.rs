@@ -5,7 +5,7 @@ use crate::domain::user::user::{NewUser, User, UserStatus, UserUpdate};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
-use super::entities::users as user;
+use super::entities::users;
 
 pub struct SeaOrmUserRepository {
     db: DatabaseConnection,
@@ -19,7 +19,7 @@ impl SeaOrmUserRepository {
 
 // ── Mapping helpers ──
 
-fn model_to_domain(m: user::Model) -> User {
+fn model_to_domain(m: users::Model) -> User {
     User {
         id: m.id,
         username: m.username,
@@ -56,7 +56,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 #[async_trait]
 impl UserRepository for SeaOrmUserRepository {
     async fn find_by_id(&self, id: u64) -> Result<Option<User>, AppError> {
-        user::Entity::find_by_id(id)
+        users::Entity::find_by_id(id)
             .one(&self.db)
             .await
             .map_err(map_db_err)
@@ -64,8 +64,8 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, AppError> {
-        user::Entity::find()
-            .filter(user::Column::Username.eq(username))
+        users::Entity::find()
+            .filter(users::Column::Username.eq(username))
             .one(&self.db)
             .await
             .map_err(map_db_err)
@@ -73,8 +73,8 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError> {
-        user::Entity::find()
-            .filter(user::Column::Email.eq(email))
+        users::Entity::find()
+            .filter(users::Column::Email.eq(email))
             .one(&self.db)
             .await
             .map_err(map_db_err)
@@ -82,8 +82,8 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_by_phone(&self, phone: &str) -> Result<Option<User>, AppError> {
-        user::Entity::find()
-            .filter(user::Column::Phone.eq(phone))
+        users::Entity::find()
+            .filter(users::Column::Phone.eq(phone))
             .one(&self.db)
             .await
             .map_err(map_db_err)
@@ -91,7 +91,7 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_all(&self) -> Result<Vec<User>, AppError> {
-        user::Entity::find()
+        users::Entity::find()
             .all(&self.db)
             .await
             .map_err(map_db_err)
@@ -100,7 +100,7 @@ impl UserRepository for SeaOrmUserRepository {
 
     async fn save(&self, new_user: NewUser) -> Result<User, AppError> {
         let now = chrono::Utc::now();
-        let model = user::ActiveModel {
+        let model = users::ActiveModel {
             username: Set(new_user.username),
             password: Set(new_user.password_hash),
             email: Set(new_user.email),
@@ -118,13 +118,13 @@ impl UserRepository for SeaOrmUserRepository {
 
     async fn update(&self, id: u64, update: UserUpdate) -> Result<User, AppError> {
         // Fetch existing
-        let existing = user::Entity::find_by_id(id)
+        let existing = users::Entity::find_by_id(id)
             .one(&self.db)
             .await
             .map_err(map_db_err)?
-            .ok_or(AppError::NotFound("user not found".into()))?;
+            .ok_or(AppError::NotFound("users not found".into()))?;
 
-        let mut active: user::ActiveModel = existing.into();
+        let mut active: users::ActiveModel = existing.into();
 
         if let Some(email) = update.email {
             active.email = Set(email);
@@ -145,7 +145,7 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError> {
-        let result = user::Entity::delete_by_id(id)
+        let result = users::Entity::delete_by_id(id)
             .exec(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -153,13 +153,13 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn update_last_login(&self, id: u64) -> Result<(), AppError> {
-        let existing = user::Entity::find_by_id(id)
+        let existing = users::Entity::find_by_id(id)
             .one(&self.db)
             .await
             .map_err(map_db_err)?
-            .ok_or(AppError::NotFound("user not found".into()))?;
+            .ok_or(AppError::NotFound("users not found".into()))?;
 
-        let mut active: user::ActiveModel = existing.into();
+        let mut active: users::ActiveModel = existing.into();
         active.last_login_at = Set(Some(chrono::Utc::now()));
         active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())

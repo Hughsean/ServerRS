@@ -5,7 +5,7 @@ use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfile
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
 
-use super::entities::user_profiles as user_profile;
+use super::entities::user_profiles;
 
 pub struct SeaOrmUserProfileRepository {
     db: DatabaseConnection,
@@ -31,7 +31,7 @@ fn to_json_array(v: &Option<Vec<String>>) -> Option<serde_json::Value> {
 
 // ── Mapping ──
 
-fn model_to_domain(m: user_profile::Model) -> UserProfile {
+fn model_to_domain(m: user_profiles::Model) -> UserProfile {
     UserProfile {
         id: m.id,
         user_id: m.user_id,
@@ -59,8 +59,8 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 #[async_trait]
 impl UserProfileRepository for SeaOrmUserProfileRepository {
     async fn find_by_user_id(&self, user_id: u64) -> Result<Option<UserProfile>, AppError> {
-        user_profile::Entity::find()
-            .filter(user_profile::Column::UserId.eq(user_id))
+        user_profiles::Entity::find()
+            .filter(user_profiles::Column::UserId.eq(user_id))
             .one(&self.db)
             .await
             .map_err(map_db_err)
@@ -69,7 +69,7 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
 
     async fn save(&self, profile: NewUserProfile) -> Result<UserProfile, AppError> {
         let now = chrono::Utc::now();
-        let model = user_profile::ActiveModel {
+        let model = user_profiles::ActiveModel {
             user_id: Set(profile.user_id),
             interests: Set(to_json_array(&profile.interests)),
             personality_traits: Set(to_json_array(&profile.personality_traits)),
@@ -90,14 +90,14 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
         user_id: u64,
         update: UserProfileUpdate,
     ) -> Result<UserProfile, AppError> {
-        let existing = user_profile::Entity::find()
-            .filter(user_profile::Column::UserId.eq(user_id))
+        let existing = user_profiles::Entity::find()
+            .filter(user_profiles::Column::UserId.eq(user_id))
             .one(&self.db)
             .await
             .map_err(map_db_err)?
             .ok_or(AppError::NotFound("user profile not found".into()))?;
 
-        let mut active: user_profile::ActiveModel = existing.into();
+        let mut active: user_profiles::ActiveModel = existing.into();
 
         if let Some(interests) = update.interests {
             active.interests = Set(to_json_array(&interests));
@@ -121,8 +121,8 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
     }
 
     async fn delete_by_user_id(&self, user_id: u64) -> Result<bool, AppError> {
-        let result = user_profile::Entity::delete_many()
-            .filter(user_profile::Column::UserId.eq(user_id))
+        let result = user_profiles::Entity::delete_many()
+            .filter(user_profiles::Column::UserId.eq(user_id))
             .exec(&self.db)
             .await
             .map_err(map_db_err)?;

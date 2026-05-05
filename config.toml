@@ -12,7 +12,7 @@ max_connections = 10
 
 [jwt]
 # Must match Java's jwt.secret for token compatibility
-secret = "change-me-in-production-use-a-long-random-string"
+secret = "xNbA/ysbmriMqzBp7UIOxU7RgGQlUIJw7yyvQZaUwfw="
 # Token expiration in seconds (default: 24h)
 expiration_secs = 86400
 

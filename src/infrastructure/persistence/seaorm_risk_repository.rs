@@ -8,7 +8,7 @@ use crate::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDet
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
 
-use super::entities::risk_detection_results as risk_detection_result;
+use super::entities::risk_detection_results;
 
 // ── Enum ↔ String helpers (serde-based, matches SCREAMING_SNAKE_CASE) ──
 
@@ -34,7 +34,7 @@ impl SeaOrmRiskRepository {
     }
 }
 
-fn map(m: risk_detection_result::Model) -> RiskDetectionResult {
+fn map(m: risk_detection_results::Model) -> RiskDetectionResult {
     RiskDetectionResult {
         id: m.id,
         user_id: m.user_id,
@@ -82,7 +82,7 @@ impl RiskRepository for SeaOrmRiskRepository {
             s.parse::<sea_orm::prelude::Decimal>()
                 .unwrap_or(sea_orm::prelude::Decimal::ZERO)
         };
-        let am = risk_detection_result::ActiveModel {
+        let am = risk_detection_results::ActiveModel {
             user_id: Set(r.user_id),
             message_id: Set(r.message_id.unwrap_or(0)),
             conversation_id: Set(r.conversation_id.unwrap_or(0)),
@@ -111,9 +111,9 @@ impl RiskRepository for SeaOrmRiskRepository {
         limit: u64,
         offset: u64,
     ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
-        let paginator = risk_detection_result::Entity::find()
-            .filter(risk_detection_result::Column::UserId.eq(user_id))
-            .order_by_desc(risk_detection_result::Column::CreatedAt)
+        let paginator = risk_detection_results::Entity::find()
+            .filter(risk_detection_results::Column::UserId.eq(user_id))
+            .order_by_desc(risk_detection_results::Column::CreatedAt)
             .paginate(&self.db, limit);
         let count = paginator.num_items().await.map_err(map_err)?;
         let page_num = offset / limit;
@@ -125,9 +125,9 @@ impl RiskRepository for SeaOrmRiskRepository {
         &self,
         cid: u64,
     ) -> Result<Vec<RiskDetectionResult>, AppError> {
-        risk_detection_result::Entity::find()
-            .filter(risk_detection_result::Column::ConversationId.eq(cid))
-            .order_by_asc(risk_detection_result::Column::CreatedAt)
+        risk_detection_results::Entity::find()
+            .filter(risk_detection_results::Column::ConversationId.eq(cid))
+            .order_by_asc(risk_detection_results::Column::CreatedAt)
             .all(&self.db)
             .await
             .map_err(map_err)
@@ -135,8 +135,8 @@ impl RiskRepository for SeaOrmRiskRepository {
     }
 
     async fn delete_by_conversation_id(&self, cid: u64) -> Result<u64, AppError> {
-        let r = risk_detection_result::Entity::delete_many()
-            .filter(risk_detection_result::Column::ConversationId.eq(cid))
+        let r = risk_detection_results::Entity::delete_many()
+            .filter(risk_detection_results::Column::ConversationId.eq(cid))
             .exec(&self.db)
             .await
             .map_err(map_err)?;

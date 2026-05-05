@@ -3,7 +3,6 @@ use tracing::warn;
 
 use crate::domain::auth::password_service::PasswordService;
 use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use crate::domain::auth::refresh_token_service::RefreshTokenService;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
@@ -19,7 +18,6 @@ pub struct AuthService {
     user_repo: Arc<dyn UserRepository>,
     password_service: Arc<dyn PasswordService>,
     token_service: Arc<dyn TokenService>,
-    refresh_token_service: Arc<dyn RefreshTokenService>,
     revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
     task_publisher: Arc<dyn TaskPublisher>,
 }
@@ -49,7 +47,6 @@ impl AuthService {
         user_repo: Arc<dyn UserRepository>,
         password_service: Arc<dyn PasswordService>,
         token_service: Arc<dyn TokenService>,
-        refresh_token_service: Arc<dyn RefreshTokenService>,
         revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
         task_publisher: Arc<dyn TaskPublisher>,
     ) -> Self {
@@ -57,7 +54,6 @@ impl AuthService {
             user_repo,
             password_service,
             token_service,
-            refresh_token_service,
             revocation_repo,
             task_publisher,
         }
@@ -99,8 +95,8 @@ impl AuthService {
             return Err(AppError::Unauthorized);
         }
 
-        let access_token = self.token_service.issue(user.id, &user.username)?;
-        let refresh_token = self.refresh_token_service.issue(user.id, &user.username)?;
+        let access_token = self.token_service.issue_access(user.id, &user.username)?;
+        let refresh_token = self.token_service.issue_refresh(user.id, &user.username)?;
 
         if let Err(e) = self.user_repo.update_last_login(user.id).await {
             warn!(error = %e, user_id = user.id, "failed to update last login");
@@ -139,8 +135,8 @@ impl AuthService {
             .save(NewUser::new(username.clone(), hash, UserStatus::Active))
             .await?;
 
-        let access_token = self.token_service.issue(user.id, &user.username)?;
-        let refresh_token = self.refresh_token_service.issue(user.id, &user.username)?;
+        let access_token = self.token_service.issue_access(user.id, &user.username)?;
+        let refresh_token = self.token_service.issue_refresh(user.id, &user.username)?;
 
         let _ = self
             .task_publisher
@@ -165,7 +161,7 @@ impl AuthService {
         refresh_token: &str,
         reason: Option<String>,
     ) -> Result<bool, AppError> {
-        let claims = self.refresh_token_service.verify(refresh_token)?;
+        let claims = self.token_service.verify_refresh(refresh_token)?;
 
         self.revocation_repo
             .revoke(claims.token_id.clone(), claims.expires_at)
@@ -191,7 +187,7 @@ impl AuthService {
         refresh_token: &str,
         device_id: Option<String>,
     ) -> Result<AuthTokenPair, AppError> {
-        let claims = self.refresh_token_service.verify(refresh_token)?;
+        let claims = self.token_service.verify_refresh(refresh_token)?;
 
         if self.revocation_repo.is_revoked(&claims.token_id).await? {
             return Err(AppError::Unauthorized);
@@ -201,10 +197,12 @@ impl AuthService {
             .revoke(claims.token_id.clone(), claims.expires_at)
             .await?;
 
-        let access_token = self.token_service.issue(claims.user_id, &claims.username)?;
+        let access_token = self
+            .token_service
+            .issue_access(claims.user_id, &claims.username)?;
         let new_refresh = self
-            .refresh_token_service
-            .issue(claims.user_id, &claims.username)?;
+            .token_service
+            .issue_refresh(claims.user_id, &claims.username)?;
 
         let _ = self
             .task_publisher
@@ -226,7 +224,7 @@ impl AuthService {
     // ── Verify access token (sync) ──
 
     pub fn verify(&self, token: &str) -> Result<AuthenticatedUser, AppError> {
-        let claims = self.token_service.verify(token)?;
+        let claims = self.token_service.verify_access(token)?;
         Ok(AuthenticatedUser {
             user_id: claims.user_id,
             username: claims.username,

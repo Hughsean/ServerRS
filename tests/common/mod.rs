@@ -16,7 +16,6 @@ use ServerRS::application::session::tool_calling::{ToolCallService, ToolRegistry
 use ServerRS::application::user::user_service::UserService;
 use ServerRS::domain::auth::password_service::PasswordService;
 use ServerRS::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use ServerRS::domain::auth::refresh_token_service::RefreshTokenService;
 use ServerRS::domain::auth::token_service::TokenService;
 use ServerRS::domain::conversation::conversation::{Conversation, NewConversation};
 use ServerRS::domain::conversation::conversation_message::{
@@ -401,7 +400,6 @@ pub async fn test_app() -> Router {
         Arc::clone(&user_repo),
         Arc::clone(&password_service) as Arc<dyn PasswordService>,
         Arc::clone(&jwt) as Arc<dyn TokenService>,
-        Arc::clone(&jwt) as Arc<dyn RefreshTokenService>,
         Arc::clone(&revoke_repo),
         Arc::clone(&task_publisher),
     ));
