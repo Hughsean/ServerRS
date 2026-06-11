@@ -1,6 +1,16 @@
+pub mod agent;
 pub mod auth;
+pub mod community;
 pub mod conversation;
+pub mod depression;
+pub mod diary;
+pub mod like;
 pub mod llm;
+pub mod memory;
+pub mod music;
+pub mod psychology;
+pub mod rag;
 pub mod risk;
+pub mod storage;
 pub mod tasks;
 pub mod user;

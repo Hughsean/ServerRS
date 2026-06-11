@@ -1,4 +1,13 @@
+pub mod seaorm_agent_repository;
+pub mod seaorm_community_repository;
 pub mod seaorm_conversation_repository;
+pub mod seaorm_depression_repository;
+pub mod seaorm_diary_repository;
+pub mod seaorm_like_repository;
+pub mod seaorm_music_repository;
+pub mod seaorm_psychology_repository;
+pub mod seaorm_refresh_token_store;
 pub mod seaorm_risk_repository;
 pub mod seaorm_user_profile_repository;
 pub mod seaorm_user_repository;
+pub mod stub_repositories;

@@ -2,20 +2,29 @@
 
 pub mod prelude;
 
+pub mod agent_events;
 pub mod community_comments;
 pub mod community_post_media;
 pub mod community_posts;
+pub mod content_likes;
 pub mod conversation_messages;
+pub mod conversation_summaries;
 pub mod conversations;
 pub mod depression_assessments;
 pub mod depression_scales;
+pub mod knowledge_chunks;
+pub mod knowledge_documents;
+pub mod knowledge_embeddings;
 pub mod music;
 pub mod psychology_articles;
 pub mod psychology_categories;
 pub mod psychology_qna;
 pub mod psychology_resources;
+pub mod refresh_tokens;
 pub mod risk_detection_results;
 pub mod user_diaries;
 pub mod user_knowledge_favorites;
+pub mod user_memories;
+pub mod user_memory_embeddings;
 pub mod user_profiles;
 pub mod users;

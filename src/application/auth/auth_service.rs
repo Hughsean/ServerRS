@@ -1,8 +1,12 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use dashmap::DashMap;
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::domain::auth::password_service::PasswordService;
-use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
@@ -12,20 +16,56 @@ use crate::domain::user::user::{NewUser, UserStatus};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
-/// Unified auth service — replaces LoginUseCase, RegisterUseCase, LogoutUseCase,
-/// RefreshTokenUseCase, and VerifyAccessTokenUseCase.
-pub struct AuthService {
-    user_repo: Arc<dyn UserRepository>,
-    password_service: Arc<dyn PasswordService>,
-    token_service: Arc<dyn TokenService>,
-    revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
-    task_publisher: Arc<dyn TaskPublisher>,
+// ── RefreshTokenStore trait ──────────────────────────────────────────────────
+
+#[async_trait]
+pub trait RefreshTokenStore: Send + Sync {
+    /// Persist a hashed refresh token for `user_id`.
+    async fn store(&self, user_id: u64, token_hash: String) -> Result<(), AppError>;
+    /// Check whether the hash is revoked / unknown.
+    async fn is_revoked(&self, token_hash: &str) -> Result<bool, AppError>;
+    /// Revoke (remove) a token hash.
+    async fn revoke(&self, token_hash: &str) -> Result<(), AppError>;
+    /// Clean up expired entries (returns number of removed rows).
+    async fn cleanup_expired(&self, now_seconds: u64) -> Result<usize, AppError>;
+}
+
+// ── Supporting types ─────────────────────────────────────────────────────────
+
+pub struct LoginAttemptRecord {
+    pub failures: u32,
+    pub locked_until: Option<Instant>,
+}
+
+#[derive(Clone)]
+pub struct AuthConfig {
+    pub max_attempts: u32,
+    pub lockout_secs: u64,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 5,
+            lockout_secs: 300,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub user_id: u64,
     pub username: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthTokenPair {
+    pub user_id: u64,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+    pub token_type: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -35,11 +75,23 @@ pub struct LoginInput {
     pub device_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct AuthTokenPair {
-    pub user_id: u64,
-    pub access_token: String,
-    pub refresh_token: String,
+// ── AuthService ──────────────────────────────────────────────────────────────
+
+pub struct AuthService {
+    user_repo: Arc<dyn UserRepository>,
+    password_service: Arc<dyn PasswordService>,
+    token_service: Arc<dyn TokenService>,
+    refresh_token_store: Arc<dyn RefreshTokenStore>,
+    task_publisher: Arc<dyn TaskPublisher>,
+    login_attempts: Arc<DashMap<String, LoginAttemptRecord>>,
+    config: AuthConfig,
+}
+
+fn sha256_hex(s: &str) -> String {
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 impl AuthService {
@@ -47,32 +99,75 @@ impl AuthService {
         user_repo: Arc<dyn UserRepository>,
         password_service: Arc<dyn PasswordService>,
         token_service: Arc<dyn TokenService>,
-        revocation_repo: Arc<dyn RefreshTokenRevocationRepository>,
+        refresh_token_store: Arc<dyn RefreshTokenStore>,
         task_publisher: Arc<dyn TaskPublisher>,
+        config: AuthConfig,
     ) -> Self {
         Self {
             user_repo,
             password_service,
             token_service,
-            revocation_repo,
+            refresh_token_store,
             task_publisher,
+            login_attempts: Arc::new(DashMap::new()),
+            config,
         }
     }
 
-    // ── Login ──
+    fn issue_pair(&self, user_id: u64, username: &str, role: &str) -> Result<(String, String, u64), AppError> {
+        let access = self.token_service.issue_access(user_id, username, role)?;
+        let refresh = self.token_service.issue_refresh(user_id, username)?;
+        Ok((access, refresh, 15 * 60))
+    }
+
+    fn check_lockout(&self, username: &str) -> Result<(), AppError> {
+        if let Some(rec) = self.login_attempts.get(username) {
+            if let Some(until) = rec.locked_until {
+                if Instant::now() < until {
+                    return Err(AppError::Forbidden("account temporarily locked".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record_failure(&self, username: &str) {
+        let mut rec = self
+            .login_attempts
+            .entry(username.to_string())
+            .or_insert_with(|| LoginAttemptRecord {
+                failures: 0,
+                locked_until: None,
+            });
+        rec.failures += 1;
+        if rec.failures >= self.config.max_attempts {
+            rec.locked_until = Some(Instant::now() + Duration::from_secs(self.config.lockout_secs));
+        }
+    }
+
+    fn clear_failures(&self, username: &str) {
+        self.login_attempts.remove(username);
+    }
+
+    // ── login ────────────────────────────────────────────────────────────────
 
     pub async fn login(&self, input: LoginInput) -> Result<AuthTokenPair, AppError> {
+        self.check_lockout(&input.username)?;
+
         let user = self
             .user_repo
             .find_by_username(&input.username)
             .await?
-            .ok_or(AppError::Unauthorized)?;
+            .ok_or_else(|| {
+                self.record_failure(&input.username);
+                AppError::Unauthorized
+            })?;
 
         if !user.is_active() {
             let _ = self
                 .task_publisher
                 .publish(TaskEvent::LoginAudit(LoginAuditTask::failed(
-                    input.username,
+                    input.username.clone(),
                     input.device_id,
                     "user is disabled",
                 )))
@@ -84,6 +179,7 @@ impl AuthService {
             .password_service
             .verify(&input.password, &user.password_hash)?
         {
+            self.record_failure(&input.username);
             let _ = self
                 .task_publisher
                 .publish(TaskEvent::LoginAudit(LoginAuditTask::failed(
@@ -95,8 +191,12 @@ impl AuthService {
             return Err(AppError::Unauthorized);
         }
 
-        let access_token = self.token_service.issue_access(user.id, &user.username)?;
-        let refresh_token = self.token_service.issue_refresh(user.id, &user.username)?;
+        self.clear_failures(&input.username);
+
+        let (access_token, refresh_token, expires_in) = self.issue_pair(user.id, &user.username, user.role.as_str())?;
+
+        let token_hash = sha256_hex(&refresh_token);
+        self.refresh_token_store.store(user.id, token_hash).await?;
 
         if let Err(e) = self.user_repo.update_last_login(user.id).await {
             warn!(error = %e, user_id = user.id, "failed to update last login");
@@ -114,10 +214,12 @@ impl AuthService {
             user_id: user.id,
             access_token,
             refresh_token,
+            expires_in,
+            token_type: "Bearer",
         })
     }
 
-    // ── Register ──
+    // ── register ─────────────────────────────────────────────────────────────
 
     pub async fn register(
         &self,
@@ -135,8 +237,10 @@ impl AuthService {
             .save(NewUser::new(username.clone(), hash, UserStatus::Active))
             .await?;
 
-        let access_token = self.token_service.issue_access(user.id, &user.username)?;
-        let refresh_token = self.token_service.issue_refresh(user.id, &user.username)?;
+        let (access_token, refresh_token, expires_in) = self.issue_pair(user.id, &user.username, user.role.as_str())?;
+
+        let token_hash = sha256_hex(&refresh_token);
+        self.refresh_token_store.store(user.id, token_hash).await?;
 
         let _ = self
             .task_publisher
@@ -151,21 +255,17 @@ impl AuthService {
             user_id: user.id,
             access_token,
             refresh_token,
+            expires_in,
+            token_type: "Bearer",
         })
     }
 
-    // ── Logout ──
+    // ── logout ───────────────────────────────────────────────────────────────
 
-    pub async fn logout(
-        &self,
-        refresh_token: &str,
-        reason: Option<String>,
-    ) -> Result<bool, AppError> {
-        let claims = self.token_service.verify_refresh(refresh_token)?;
-
-        self.revocation_repo
-            .revoke(claims.token_id.clone(), claims.expires_at)
-            .await?;
+    pub async fn logout(&self, refresh_token_str: &str) -> Result<(), AppError> {
+        let claims = self.token_service.verify_refresh(refresh_token_str)?;
+        let token_hash = sha256_hex(refresh_token_str);
+        self.refresh_token_store.revoke(&token_hash).await?;
 
         let _ = self
             .task_publisher
@@ -173,36 +273,35 @@ impl AuthService {
                 user_id: claims.user_id,
                 username: claims.username,
                 token_id: claims.token_id,
-                reason,
+                reason: None,
             }))
             .await;
 
-        Ok(true)
+        Ok(())
     }
 
-    // ── Refresh token ──
+    // ── refresh ──────────────────────────────────────────────────────────────
 
-    pub async fn refresh(
-        &self,
-        refresh_token: &str,
-        device_id: Option<String>,
-    ) -> Result<AuthTokenPair, AppError> {
-        let claims = self.token_service.verify_refresh(refresh_token)?;
+    pub async fn refresh(&self, refresh_token_str: &str) -> Result<AuthTokenPair, AppError> {
+        let claims = self.token_service.verify_refresh(refresh_token_str)?;
+        let old_hash = sha256_hex(refresh_token_str);
 
-        if self.revocation_repo.is_revoked(&claims.token_id).await? {
+        if self.refresh_token_store.is_revoked(&old_hash).await? {
             return Err(AppError::Unauthorized);
         }
 
-        self.revocation_repo
-            .revoke(claims.token_id.clone(), claims.expires_at)
-            .await?;
+        self.refresh_token_store.revoke(&old_hash).await?;
 
-        let access_token = self
-            .token_service
-            .issue_access(claims.user_id, &claims.username)?;
-        let new_refresh = self
-            .token_service
-            .issue_refresh(claims.user_id, &claims.username)?;
+        let user = self.user_repo.find_by_id(claims.user_id).await?.ok_or(AppError::Unauthorized)?;
+        if !user.is_active() { return Err(AppError::Forbidden("user is disabled".into())); }
+
+        let (access_token, new_refresh, expires_in) =
+            self.issue_pair(claims.user_id, &claims.username, user.role.as_str())?;
+
+        let new_hash = sha256_hex(&new_refresh);
+        self.refresh_token_store
+            .store(claims.user_id, new_hash)
+            .await?;
 
         let _ = self
             .task_publisher
@@ -210,7 +309,7 @@ impl AuthService {
                 user_id: claims.user_id,
                 username: claims.username,
                 old_token_id: claims.token_id,
-                device_id,
+                device_id: None,
             }))
             .await;
 
@@ -218,16 +317,19 @@ impl AuthService {
             user_id: claims.user_id,
             access_token,
             refresh_token: new_refresh,
+            expires_in,
+            token_type: "Bearer",
         })
     }
 
-    // ── Verify access token (sync) ──
+    // ── verify ───────────────────────────────────────────────────────────────
 
     pub fn verify(&self, token: &str) -> Result<AuthenticatedUser, AppError> {
         let claims = self.token_service.verify_access(token)?;
         Ok(AuthenticatedUser {
             user_id: claims.user_id,
             username: claims.username,
+            role: claims.role,
         })
     }
 }

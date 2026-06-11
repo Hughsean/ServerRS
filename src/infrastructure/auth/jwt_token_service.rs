@@ -25,6 +25,7 @@ pub struct JwtTokenService {
 struct JwtClaims {
     sub: String,
     username: String,
+    role: String,
     token_type: String,
     jti: Option<String>,
     iat: u64,
@@ -84,11 +85,12 @@ impl JwtTokenService {
 }
 
 impl TokenService for JwtTokenService {
-    fn issue_access(&self, user_id: u64, username: &str) -> Result<String, AppError> {
+    fn issue_access(&self, user_id: u64, username: &str, role: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
             sub: user_id.to_string(),
             username: username.to_string(),
+            role: role.to_string(),
             token_type: TOKEN_TYPE_ACCESS.to_string(),
             jti: None,
             iat: now,
@@ -114,6 +116,7 @@ impl TokenService for JwtTokenService {
         Ok(AccessTokenClaims {
             user_id,
             username: claims.username,
+            role: claims.role,
         })
     }
 
@@ -122,6 +125,7 @@ impl TokenService for JwtTokenService {
         let claims = JwtClaims {
             sub: user_id.to_string(),
             username: username.to_string(),
+            role: String::new(), // not needed for refresh tokens
             token_type: TOKEN_TYPE_REFRESH.to_string(),
             jti: Some(Uuid::new_v4().to_string()),
             iat: now,

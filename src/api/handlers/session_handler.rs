@@ -1,4 +1,5 @@
-use axum::{Extension, Json, extract::Path, extract::Query, extract::State};
+use std::sync::Arc;
+use axum::{Extension, Json, extract::Path, extract::Query};
 use serde::Deserialize;
 use validator::Validate;
 
@@ -12,7 +13,7 @@ use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 pub async fn create_session(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<SessionCreateRequest>,
 ) -> Result<Json<SessionCreateResponse>, AppError> {
@@ -36,7 +37,7 @@ pub async fn create_session(
 }
 
 pub async fn post_message(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Path(session_id): Path<String>,
     Json(payload): Json<MessageRequest>,
 ) -> Result<Json<MessageResponse>, AppError> {
@@ -56,7 +57,7 @@ pub async fn post_message(
 }
 
 pub async fn get_session_status(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionStatusResponse>, AppError> {
     let status = state
@@ -73,7 +74,7 @@ pub async fn get_session_status(
 }
 
 pub async fn list_conversations(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
 ) -> Result<Json<Vec<ConversationResponse>>, AppError> {
@@ -98,7 +99,7 @@ pub async fn list_conversations(
 }
 
 pub async fn list_conversation_messages(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path((_user_id, conv_id)): Path<(u64, u64)>,
 ) -> Result<Json<Vec<ConversationMessageResponse>>, AppError> {
@@ -129,7 +130,7 @@ pub struct RiskListQuery {
 }
 
 pub async fn list_risk_detections(
-    State(state): State<ApiState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<RiskListQuery>,
 ) -> Result<Json<RiskDetectionPage>, AppError> {
@@ -167,3 +168,4 @@ pub async fn list_risk_detections(
         size,
     }))
 }
+

@@ -3,7 +3,7 @@ use crate::shared::error::AppError;
 /// Unified token trait — issues and verifies both access and refresh tokens.
 pub trait TokenService: Send + Sync {
     // ── Access token ──
-    fn issue_access(&self, user_id: u64, username: &str) -> Result<String, AppError>;
+    fn issue_access(&self, user_id: u64, username: &str, role: &str) -> Result<String, AppError>;
     fn verify_access(&self, token: &str) -> Result<AccessTokenClaims, AppError>;
 
     // ── Refresh token ──
@@ -15,6 +15,7 @@ pub trait TokenService: Send + Sync {
 pub struct AccessTokenClaims {
     pub user_id: u64,
     pub username: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone)]

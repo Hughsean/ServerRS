@@ -1,0 +1,9 @@
+pub mod admin_routes;
+pub mod auth_routes;
+pub mod community_routes;
+pub mod depression_routes;
+pub mod diary_routes;
+pub mod music_routes;
+pub mod object_routes;
+pub mod psychology_routes;
+pub mod user_routes;

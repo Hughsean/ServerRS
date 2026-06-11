@@ -5,19 +5,27 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
-axum = { version = "0.8.9", features = ["macros"] }
+axum = { version = "0.8.9", features = ["macros", "multipart"] }
+base64 = "0.22.1"
 bcrypt = "0.19.0"
 chrono = { version = "0.4.42", features = ["serde"] }
+dashmap = "6.2.1"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+mime = "0.3.17"
+quick-xml = "0.40.1"
 regex = "1.12.3"
 reqwest = { version = "0.13.3", features = ["json"] }
+rss = "2.0.13"
+scraper = "0.27.0"
 sea-orm = { version = "2.0.0-rc.38", features = ["sqlx-sqlite", "runtime-tokio", "sqlx-mysql"] }
-sea-orm-migration = { version = "2.0.0-rc.38", features = ["sqlx-sqlite", "runtime-tokio", "sqlx-mysql"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.11.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 toml = "1.1.2"
+tower-http = { version = "0.6.11", features = ["cors", "trace", "timeout", "compression-br"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 uuid = { version = "1.23.1", features = ["v4"] }

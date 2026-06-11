@@ -5,10 +5,14 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::api::ApiState;
+use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
+/// NOTE: Uses State<ApiState>, NOT State<Arc<ApiState>>.
+/// Called via `from_fn_with_state(state: ApiState, require_bearer_auth)`.
 pub async fn require_bearer_auth(
     State(state): State<ApiState>,
+    _req_method: axum::http::Method, // dummy second extractor for Axum 0.8 compat
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -25,14 +29,38 @@ pub async fn require_bearer_auth(
     Ok(next.run(request).await)
 }
 
+/// Middleware that checks the authenticated user has Admin or SuperAdmin role.
+/// Must be placed after `require_bearer_auth` (or equivalent) so that
+/// the `AuthenticatedUser` extension is present in the request.
+///
+/// Called via `from_fn_with_state(state: ApiState, require_admin_role)`
+/// on a sub-router layered on top of the bearer-auth-protected routes.
+pub async fn require_admin_role(
+    State(_state): State<ApiState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, AppError> {
+    let user = request
+        .extensions()
+        .get::<AuthenticatedUser>()
+        .ok_or(AppError::Unauthorized)?;
+
+    if user.role != "ADMIN" && user.role != "SUPER_ADMIN" {
+        return Err(AppError::Forbidden(format!(
+            "role '{}' is not permitted for this action",
+            user.role
+        )));
+    }
+
+    Ok(next.run(request).await)
+}
+
 fn extract_bearer_token(auth_header: &str) -> Option<&str> {
     let mut parts = auth_header.split_whitespace();
     let schema = parts.next()?;
     let token = parts.next()?;
-
     if !schema.eq_ignore_ascii_case("Bearer") || token.is_empty() {
         return None;
     }
-
     Some(token)
 }

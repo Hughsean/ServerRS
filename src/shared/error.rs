@@ -5,7 +5,7 @@ use serde::Serialize;
 use thiserror::Error;
 use validator::ValidationErrors;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum AppError {
     #[error("request validation failed: {0}")]
     Validation(String),

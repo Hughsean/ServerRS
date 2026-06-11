@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::risk::risk_detection_result::RiskDetectionResult;
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
@@ -60,5 +61,67 @@ impl SessionService {
         self.risk_repo
             .find_by_user_id_paginated(user_id, size, offset)
             .await
+    }
+
+    // ── Admin methods ──
+
+    pub async fn admin_list_risk_conversations(
+        &self,
+        page: u64,
+        page_size: u64,
+        _risk_level: Option<RiskLevel>,
+    ) -> Result<(Vec<Conversation>, u64), AppError> {
+        // List all risk detections, collect unique conversation IDs
+        let (detections, _total) = self.risk_repo.find_by_user_id_paginated(0, 1000, 0).await?;
+        let mut conv_ids: Vec<u64> = detections
+            .iter()
+            .filter_map(|d| d.conversation_id)
+            .collect();
+        conv_ids.sort();
+        conv_ids.dedup();
+
+        // Paginate over unique conversation IDs
+        let total = conv_ids.len() as u64;
+        let start = ((page.saturating_sub(1)) * page_size) as usize;
+        let end = start.saturating_add(page_size as usize).min(conv_ids.len());
+        let mut convs = Vec::new();
+        for &cid in &conv_ids[start..end] {
+            if let Some(c) = self.conv_repo.find_by_id(cid).await? {
+                convs.push(c);
+            }
+        }
+        Ok((convs, total))
+    }
+
+    pub async fn admin_get_conversation(&self, id: u64) -> Result<Option<Conversation>, AppError> {
+        self.conv_repo.find_by_id(id).await
+    }
+
+    pub async fn admin_get_conversation_messages(
+        &self,
+        id: u64,
+    ) -> Result<Vec<ConversationMessage>, AppError> {
+        self.conv_repo.find_messages_by_conversation_id(id).await
+    }
+
+    pub async fn admin_get_conversation_risk_detections(
+        &self,
+        conversation_id: u64,
+    ) -> Result<Vec<RiskDetectionResult>, AppError> {
+        self.risk_repo
+            .find_by_conversation_id(conversation_id)
+            .await
+    }
+
+    pub async fn admin_process_risk_detection(
+        &self,
+        _id: u64,
+        _admin_user_id: u64,
+        _notes: Option<String>,
+    ) -> Result<RiskDetectionResult, AppError> {
+        // TODO: Implement real processing via RiskRepository update
+        Err(AppError::NotFound(
+            "risk detection processing not yet implemented".into(),
+        ))
     }
 }

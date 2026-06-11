@@ -49,6 +49,7 @@ impl UserService {
             phone,
             nickname,
             status,
+            role: None,
         };
 
         if !update.has_any() {
@@ -60,6 +61,23 @@ impl UserService {
         }
 
         self.user_repo.update(user_id, update).await
+    }
+
+    pub async fn admin_get_user(&self, user_id: u64) -> Result<Option<User>, AppError> {
+        self.user_repo.find_by_id(user_id).await
+    }
+
+    pub async fn admin_update_user(
+        &self,
+        user_id: u64,
+        update: UserUpdate,
+    ) -> Result<User, AppError> {
+        self.user_repo.update(user_id, update).await
+    }
+
+    pub async fn admin_delete_user(&self, user_id: u64) -> Result<(), AppError> {
+        let _ = self.user_repo.delete_by_id(user_id).await?;
+        Ok(())
     }
 
     pub async fn delete_user(&self, actor_user_id: u64, user_id: u64) -> Result<bool, AppError> {

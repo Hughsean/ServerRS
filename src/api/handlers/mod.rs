@@ -1,3 +1,10 @@
+pub mod admin_handler;
 pub mod auth_handler;
+pub mod community_handler;
+pub mod depression_handler;
+pub mod diary_handler;
+pub mod music_handler;
+pub mod object_handler;
+pub mod psychology_handler;
 pub mod session_handler;
 pub mod user_handler;

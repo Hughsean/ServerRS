@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +33,39 @@ impl UserStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UserRole {
+    User,
+    Admin,
+    SuperAdmin,
+}
+
+impl UserRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "USER",
+            Self::Admin => "ADMIN",
+            Self::SuperAdmin => "SUPER_ADMIN",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "USER" => Some(Self::User),
+            "ADMIN" => Some(Self::Admin),
+            "SUPER_ADMIN" => Some(Self::SuperAdmin),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for UserRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewUser {
     pub username: String,
@@ -40,6 +74,7 @@ pub struct NewUser {
     pub phone: Option<String>,
     pub nickname: Option<String>,
     pub status: UserStatus,
+    pub role: UserRole,
 }
 
 impl NewUser {
@@ -55,6 +90,7 @@ impl NewUser {
             phone: None,
             nickname: None,
             status,
+            role: UserRole::User,
         }
     }
 
@@ -84,6 +120,7 @@ pub struct User {
     pub phone: Option<String>,
     pub nickname: Option<String>,
     pub status: UserStatus,
+    pub role: UserRole,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
@@ -106,6 +143,7 @@ pub struct UserUpdate {
     pub phone: Option<Option<String>>,
     pub nickname: Option<Option<String>>,
     pub status: Option<UserStatus>,
+    pub role: Option<UserRole>,
 }
 
 impl UserUpdate {
@@ -114,5 +152,6 @@ impl UserUpdate {
             || self.phone.is_some()
             || self.nickname.is_some()
             || self.status.is_some()
+            || self.role.is_some()
     }
 }

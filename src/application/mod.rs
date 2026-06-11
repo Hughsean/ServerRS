@@ -1,3 +1,12 @@
+pub mod agent;
 pub mod auth;
+pub mod community;
+pub mod depression;
+pub mod diary;
+pub mod memory;
+pub mod music;
+pub mod psychology;
+pub mod rag;
 pub mod session;
+pub mod storage;
 pub mod user;

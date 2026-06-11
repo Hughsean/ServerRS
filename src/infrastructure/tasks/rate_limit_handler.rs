@@ -150,6 +150,7 @@ impl TaskHandler for RateLimitHandler {
                                 phone: None,
                                 nickname: None,
                                 status: Some(UserStatus::Disabled),
+                                role: None,
                             },
                         )
                         .await;

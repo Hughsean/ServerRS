@@ -1,4 +1,6 @@
-use axum::{Extension, Json, extract::Path, extract::State};
+use std::sync::Arc;
+use axum::{Extension, Json, extract::{Path, State}, http::StatusCode};
+use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 use crate::api::ApiState;
@@ -10,7 +12,123 @@ use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::domain::user::user::UserStatus;
 use crate::shared::error::AppError;
 
-// ── GET /api/v1/users/:user_id (profile) ──
+// ── /me DTOs ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserDto {
+    pub id: u64,
+    pub username: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub nickname: Option<String>,
+    pub role: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchMeRequest {
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub nickname: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileDto {
+    pub user_id: u64,
+    pub nickname: Option<String>,
+    pub interests: Option<Vec<String>>,
+    pub personality_traits: Option<Vec<String>>,
+    pub interaction_preferences: Option<Vec<String>>,
+    pub emotional_tendency: Option<Vec<String>>,
+    pub learning_records: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertProfileRequest {
+    pub nickname: Option<String>,
+    pub interests: Option<Vec<String>>,
+    pub personality_traits: Option<Vec<String>>,
+    pub interaction_preferences: Option<Vec<String>>,
+    pub emotional_tendency: Option<Vec<String>>,
+    pub learning_records: Option<Vec<String>>,
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
+pub async fn get_me(
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    State(state): State<ApiState>,
+) -> Result<Json<UserDto>, AppError> {
+    let user = state
+        .user
+        .update_user(auth_user.user_id, auth_user.user_id, None, None, None, None)
+        .await?;
+    Ok(Json(to_user_dto(user, &auth_user.role)))
+}
+
+pub async fn patch_me(
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    State(state): State<ApiState>,
+    Json(payload): Json<PatchMeRequest>,
+) -> Result<Json<UserDto>, AppError> {
+    let user = state
+        .user
+        .update_user(
+            auth_user.user_id,
+            auth_user.user_id,
+            payload.email.map(Some),
+            payload.phone.map(Some),
+            payload.nickname.map(Some),
+            None,
+        )
+        .await?;
+    Ok(Json(to_user_dto(user, &auth_user.role)))
+}
+
+pub async fn delete_me(
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    State(state): State<ApiState>,
+) -> Result<StatusCode, AppError> {
+    state
+        .user
+        .delete_user(auth_user.user_id, auth_user.user_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_profile(
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    State(state): State<ApiState>,
+) -> Result<Json<UserProfileDto>, AppError> {
+    let profile = state.user.get_profile(auth_user.user_id).await?;
+    Ok(Json(to_profile_dto(profile, None)))
+}
+
+pub async fn put_profile(
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    State(state): State<ApiState>,
+    Json(payload): Json<UpsertProfileRequest>,
+) -> Result<Json<UserProfileDto>, AppError> {
+    let profile = state
+        .user
+        .upsert_profile(
+            auth_user.user_id,
+            payload.interests,
+            payload.personality_traits,
+            payload.interaction_preferences,
+            payload.emotional_tendency,
+            payload.learning_records,
+        )
+        .await?;
+    Ok(Json(to_profile_dto(profile, payload.nickname)))
+}
+
+// ── Legacy handlers (kept for existing router.rs routes) ─────────────────────
 
 pub async fn get_user_profile(
     State(state): State<ApiState>,
@@ -23,9 +141,7 @@ pub async fn get_user_profile(
             auth_user.username, user_id
         )));
     }
-
     let result = state.user.get_profile(user_id).await?;
-
     Ok(Json(UserProfileResponse {
         id: result.id,
         user_id: result.user_id,
@@ -39,8 +155,6 @@ pub async fn get_user_profile(
     }))
 }
 
-// ── PUT /api/v1/users/:user_id ──
-
 pub async fn update_user(
     State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
@@ -48,11 +162,9 @@ pub async fn update_user(
     Json(payload): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
-
     let status = payload
         .status
         .map(|s| UserStatus::from_i32(s).unwrap_or(UserStatus::Disabled));
-
     let user = state
         .user
         .update_user(
@@ -64,11 +176,8 @@ pub async fn update_user(
             status,
         )
         .await?;
-
     Ok(Json(user_to_response(user)))
 }
-
-// ── DELETE /api/v1/users/:user_id ──
 
 pub async fn delete_user(
     State(state): State<ApiState>,
@@ -76,21 +185,15 @@ pub async fn delete_user(
     Path(user_id): Path<u64>,
 ) -> Result<Json<DeleteUserResponse>, AppError> {
     let deleted = state.user.delete_user(auth_user.user_id, user_id).await?;
-
     Ok(Json(DeleteUserResponse { deleted }))
 }
-
-// ── GET /api/v1/users ──
 
 pub async fn list_users(
     State(state): State<ApiState>,
 ) -> Result<Json<Vec<UserResponse>>, AppError> {
     let users = state.user.list_users().await?;
-    let response: Vec<UserResponse> = users.into_iter().map(user_to_response).collect();
-    Ok(Json(response))
+    Ok(Json(users.into_iter().map(user_to_response).collect()))
 }
-
-// ── PUT /api/v1/users/:user_id/profile ──
 
 pub async fn upsert_user_profile(
     State(state): State<ApiState>,
@@ -104,7 +207,6 @@ pub async fn upsert_user_profile(
             auth_user.username, user_id
         )));
     }
-
     let result = state
         .user
         .upsert_profile(
@@ -116,7 +218,6 @@ pub async fn upsert_user_profile(
             payload.learning_records,
         )
         .await?;
-
     Ok(Json(UserProfileResponse {
         id: result.id,
         user_id: result.user_id,
@@ -130,7 +231,35 @@ pub async fn upsert_user_profile(
     }))
 }
 
-// ── Helpers ──
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn to_user_dto(u: crate::domain::user::user::User, role: &str) -> UserDto {
+    UserDto {
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        phone: u.phone,
+        nickname: u.nickname,
+        role: role.to_string(),
+        status: u.status.as_str().to_string(),
+        created_at: u.created_at.to_rfc3339(),
+    }
+}
+
+fn to_profile_dto(
+    p: crate::domain::user::user_profile::UserProfile,
+    nickname: Option<String>,
+) -> UserProfileDto {
+    UserProfileDto {
+        user_id: p.user_id,
+        nickname,
+        interests: p.interests,
+        personality_traits: p.personality_traits,
+        interaction_preferences: p.interaction_preferences,
+        emotional_tendency: p.emotional_tendency,
+        learning_records: p.learning_records,
+    }
+}
 
 fn user_to_response(u: crate::domain::user::user::User) -> UserResponse {
     UserResponse {
@@ -145,3 +274,4 @@ fn user_to_response(u: crate::domain::user::user::User) -> UserResponse {
         last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
     }
 }
+
