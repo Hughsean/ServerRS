@@ -1568,7 +1568,6 @@ fn build_test_state() -> api::ApiState {
     // ── Mock repos (in-memory, no stub_repositories) ──
     // These must be constructed BEFORE SessionManager since SessionManager now needs AgentRuntime
     use ServerRS::application::agent::agent_context::AgentContextBuilder;
-    use ServerRS::domain::summary::SummaryRepository;
     use ServerRS::application::agent::agent_runtime::AgentRuntime;
     use ServerRS::application::memory::memory_extractor::MemoryExtractor;
     use ServerRS::application::memory::memory_service::MemoryService;
@@ -1578,6 +1577,7 @@ fn build_test_state() -> api::ApiState {
     use ServerRS::domain::agent::AgentEventRepository;
     use ServerRS::domain::memory::MemoryRepository;
     use ServerRS::domain::rag::RAGRepository;
+    use ServerRS::domain::summary::SummaryRepository;
 
     struct MockRAGRepo;
     #[async_trait::async_trait]
@@ -1661,9 +1661,31 @@ fn build_test_state() -> api::ApiState {
             Ok(None)
         }
 
-        async fn update_chunk_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
-        async fn mark_chunk_unindexed(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn list_indexable_chunks(&self, _: u64) -> Result<Vec<(ServerRS::domain::rag::KnowledgeChunk, ServerRS::domain::rag::KnowledgeDocument)>, AppError> { Ok(vec![]) }
+        async fn update_chunk_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn mark_chunk_unindexed(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn list_indexable_chunks(
+            &self,
+            _: u64,
+        ) -> Result<
+            Vec<(
+                ServerRS::domain::rag::KnowledgeChunk,
+                ServerRS::domain::rag::KnowledgeDocument,
+            )>,
+            AppError,
+        > {
+            Ok(vec![])
+        }
     }
 
     struct MockMemRepo;
@@ -1710,22 +1732,81 @@ fn build_test_state() -> api::ApiState {
         async fn delete_memory(&self, _id: u64) -> Result<bool, AppError> {
             Ok(true)
         }
-        async fn find_memories_by_conversation(&self, _: u64) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> { Ok(vec![]) }
-        async fn update_memory_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
-        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn find_by_memory_key(&self, _: u64, _: &str) -> Result<Option<ServerRS::domain::memory::UserMemory>, AppError> { Ok(None) }
-        async fn list_indexable_memories(&self, _: Option<u64>, _: u64) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> { Ok(vec![]) }
+        async fn find_memories_by_conversation(
+            &self,
+            _: u64,
+        ) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(vec![])
+        }
+        async fn update_memory_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn find_by_memory_key(
+            &self,
+            _: u64,
+            _: &str,
+        ) -> Result<Option<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(None)
+        }
+        async fn list_indexable_memories(
+            &self,
+            _: Option<u64>,
+            _: u64,
+        ) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(vec![])
+        }
     }
 
     struct MockSumRepo;
     #[async_trait::async_trait]
     impl ServerRS::domain::summary::SummaryRepository for MockSumRepo {
-        async fn find_latest_by_conversation(&self, _: u64) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(None) }
-        async fn save_summary(&self, _: ServerRS::domain::memory::NewSummary) -> Result<ServerRS::domain::memory::ConversationSummary, AppError> { Err(AppError::Internal("mock".into())) }
-        async fn find_by_id(&self, _: u64) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(None) }
-        async fn disable_summary(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn list_indexable_summaries(&self, _: u64) -> Result<Vec<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(vec![]) }
-        async fn update_summary_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
+        async fn find_latest_by_conversation(
+            &self,
+            _: u64,
+        ) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> {
+            Ok(None)
+        }
+        async fn save_summary(
+            &self,
+            _: ServerRS::domain::memory::NewSummary,
+        ) -> Result<ServerRS::domain::memory::ConversationSummary, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn find_by_id(
+            &self,
+            _: u64,
+        ) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> {
+            Ok(None)
+        }
+        async fn disable_summary(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn list_indexable_summaries(
+            &self,
+            _: u64,
+        ) -> Result<Vec<ServerRS::domain::memory::ConversationSummary>, AppError> {
+            Ok(vec![])
+        }
+        async fn update_summary_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
     }
 
     struct MockAgentEventRepo;
@@ -1765,10 +1846,17 @@ fn build_test_state() -> api::ApiState {
         memory_extractor,
     ));
 
+    let summary_service: Arc<ServerRS::application::summary::summary_service::SummaryService> =
+        Arc::new(
+            ServerRS::application::summary::summary_service::SummaryService::new(
+                Arc::clone(&summary_repo),
+                None,
+            ),
+        );
     let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
         Arc::clone(&memory_svc),
         Arc::clone(&retrieval),
-        Arc::clone(&summary_repo),
+        Arc::clone(&summary_service),
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
     ));
@@ -1781,7 +1869,7 @@ fn build_test_state() -> api::ApiState {
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&agent_llm),
         Arc::clone(&rag_repo),
-        Arc::clone(&memory_repo),
+        Arc::clone(&memory_svc),
         Arc::clone(&agent_risk_detector),
         Arc::clone(&risk_repo),
         Arc::clone(&agent_event_repo),

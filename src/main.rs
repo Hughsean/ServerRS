@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use application::agent::agent_context::AgentContextBuilder;
-use domain::summary::SummaryRepository;
 use application::agent::agent_runtime::{AgentRuntime, AgentTool};
 use application::auth::auth_service::AuthService;
 use application::community::community_service::CommunityService;
@@ -46,6 +45,7 @@ use domain::rag::RAGRepository;
 use domain::risk::risk_detector::RiskDetector;
 use domain::risk::risk_repository::RiskRepository;
 use domain::storage::ObjectStorage;
+use domain::summary::SummaryRepository;
 use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
 use domain::user::user_profile_repository::UserProfileRepository;
@@ -214,7 +214,10 @@ async fn run() -> Result<(), std::io::Error> {
             )
             .await
             .map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("Qdrant init failed: {e}"))
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Qdrant init failed: {e}"),
+                )
             })?;
             Some(Arc::new(qdrant) as Arc<dyn VectorStore>)
         }
@@ -252,6 +255,16 @@ async fn run() -> Result<(), std::io::Error> {
             },
         ))
     });
+
+    // ── Ensure vector collections exist (only when Qdrant is enabled) ──
+    if let Some(ref vi) = vector_index {
+        vi.ensure_collections().await.map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("ensure_collections failed: {e}"),
+            )
+        })?;
+    }
 
     // ── Risk detector ──
     let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
@@ -307,29 +320,52 @@ async fn run() -> Result<(), std::io::Error> {
     ));
 
     // ── RAG & Memory services (constructed early — needed by AgentContextBuilder) ──
-    let retrieval: Arc<RetrievalService> = Arc::new(RetrievalService::new(
-        Arc::clone(&rag_repo),
-        Some(Arc::clone(&embedding_provider)),
-    ));
+    let mut retrieval_svc =
+        RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&embedding_provider)));
+    if let Some(ref vs) = vector_store {
+        retrieval_svc =
+            retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
+    }
+    let retrieval: Arc<RetrievalService> = Arc::new(retrieval_svc);
+
     let chunking = ChunkingService::new();
-    let ingestion: Arc<IngestionService> = Arc::new(IngestionService::new(
+    let mut ingestion_svc = IngestionService::new(
         Arc::clone(&rag_repo),
         chunking,
         Some(Arc::clone(&embedding_provider)),
-    ));
+    );
+    if let Some(ref vi) = vector_index {
+        ingestion_svc = ingestion_svc.with_vector_index(Arc::clone(vi));
+    }
+    let ingestion: Arc<IngestionService> = Arc::new(ingestion_svc);
 
     let memory_extractor: Arc<MemoryExtractor> =
         Arc::new(MemoryExtractor::new(Arc::clone(&ollama_provider)));
-    let memory_svc: Arc<MemoryService> = Arc::new(MemoryService::new(
-        Arc::clone(&memory_repo),
-        memory_extractor,
+    let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor);
+    if let Some(ref vs) = vector_store {
+        memory_svc = memory_svc.with_vector_search(
+            Arc::clone(vs),
+            Arc::clone(&embedding_provider),
+            config.qdrant.memory_collection.clone(),
+        );
+    }
+    if let Some(ref vi) = vector_index {
+        memory_svc = memory_svc.with_vector_index(Arc::clone(vi));
+    }
+    let memory_svc: Arc<MemoryService> = Arc::new(memory_svc);
+
+    // ── SummaryService ──
+    use application::summary::summary_service::SummaryService;
+    let summary_service: Arc<SummaryService> = Arc::new(SummaryService::new(
+        Arc::clone(&summary_repo),
+        vector_index.clone(),
     ));
 
     // ── Agent Runtime (constructed before SessionManager so it can be injected) ──
     let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
         Arc::clone(&memory_svc),
         Arc::clone(&retrieval),
-        Arc::clone(&summary_repo),
+        Arc::clone(&summary_service),
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
     ));
@@ -347,7 +383,7 @@ async fn run() -> Result<(), std::io::Error> {
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&ollama_provider),
         Arc::clone(&rag_repo),
-        Arc::clone(&memory_repo),
+        Arc::clone(&memory_svc),
         Arc::clone(&risk_detector),
         Arc::clone(&risk_repo),
         Arc::clone(&agent_event_repo),
@@ -469,6 +505,10 @@ fn init_tracing() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(f)
+        .with_target(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
         .compact()
         .init();
 }

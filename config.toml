@@ -17,21 +17,21 @@ secret = "xNbA/ysbmriMqzBp7UIOxU7RgGQlUIJw7yyvQZaUwfw="
 expiration_secs = 86400
 
 # ── LLM / Ollama (used in Phase 3) ──
-# [ollama]
-# base_url = "http://10.13.19.91:11434/v1"
-# model = "qwen2.5:14b"
-# temperature = 0.5
-# top_p = 0.9
+[ollama]
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen2.5:14b"
+temperature = 0.5
+top_p = 0.9
 
 # ── Risk Detector (used in Phase 4) ──
-# [detector]
-# context_window_size = 4
-# confidence_threshold = 0.5
+[detector]
+context_window_size = 4
+confidence_threshold = 0.5
 
 # ── Session Management (used in Phase 3) ──
-# [session]
-# timeout_seconds = 120
-# cleanup_interval_ms = 20000
+[session]
+timeout_seconds = 120
+cleanup_interval_ms = 20000
 
 # ── Plugins (weather, news, etc.) ──
 # [plugins]
@@ -42,7 +42,7 @@ expiration_secs = 86400
 # Separate from the chat LLM — embedding uses its own model.
 [embedding]
 provider = "ollama"
-base_url = "http://127.0.0.1:11434"
+base_url = "http://127.0.0.1:11434/v1"
 model = "nomic-embed-text"
 dimension = 768
 
@@ -50,8 +50,8 @@ dimension = 768
 # Qdrant is an optional vector index for RAG / Memory / Summary search.
 # When disabled (default), vector search falls back to MySQL keyword search.
 [qdrant]
-enabled = false
-# url = "http://127.0.0.1:6333"
+enabled = true
+url = "http://127.0.0.1:6334"
 # api_key = ""
 rag_collection = "rag_chunks"
 memory_collection = "user_memories"

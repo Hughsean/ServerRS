@@ -20,6 +20,7 @@ pub struct MemoryService {
     extractor: Arc<MemoryExtractor>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_store: Option<Arc<dyn VectorStore>>,
+    vector_index: Option<Arc<crate::application::rag::vector_index_service::VectorIndexService>>,
     memory_collection: String,
 }
 
@@ -30,6 +31,7 @@ impl MemoryService {
             extractor,
             embedding: None,
             vector_store: None,
+            vector_index: None,
             memory_collection: "user_memories".into(),
         }
     }
@@ -44,6 +46,14 @@ impl MemoryService {
         self.vector_store = Some(vs);
         self.embedding = Some(ep);
         self.memory_collection = collection;
+        self
+    }
+
+    pub fn with_vector_index(
+        mut self,
+        vi: Arc<crate::application::rag::vector_index_service::VectorIndexService>,
+    ) -> Self {
+        self.vector_index = Some(vi);
         self
     }
 
@@ -253,7 +263,15 @@ impl MemoryService {
             ));
         }
 
-        self.repo.disable_memory(id).await
+        self.repo.disable_memory(id).await?;
+
+        // Sync delete from Qdrant index (non-fatal)
+        if let Some(ref vi) = self.vector_index {
+            if let Err(e) = vi.delete_memory_index(id).await {
+                tracing::warn!(memory_id = id, error = %e, "failed to delete memory index during disable");
+            }
+        }
+        Ok(())
     }
 
     /// Permanently delete a memory. Verifies ownership.
@@ -271,6 +289,13 @@ impl MemoryService {
         }
 
         self.repo.delete_memory(id).await?;
+
+        // Sync delete from Qdrant index (non-fatal)
+        if let Some(ref vi) = self.vector_index {
+            if let Err(e) = vi.delete_memory_index(id).await {
+                tracing::warn!(memory_id = id, error = %e, "failed to delete memory index during delete");
+            }
+        }
         Ok(())
     }
 }
@@ -384,11 +409,36 @@ mod tests {
         async fn delete_memory(&self, _memory_id: u64) -> Result<bool, AppError> {
             Ok(true)
         }
-        async fn find_memories_by_conversation(&self, _: u64) -> Result<Vec<UserMemory>, AppError> { Ok(vec![]) }
-        async fn update_memory_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
-        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn find_by_memory_key(&self, _: u64, _: &str) -> Result<Option<UserMemory>, AppError> { Ok(None) }
-        async fn list_indexable_memories(&self, _: Option<u64>, _: u64) -> Result<Vec<UserMemory>, AppError> { Ok(vec![]) }
+        async fn find_memories_by_conversation(&self, _: u64) -> Result<Vec<UserMemory>, AppError> {
+            Ok(vec![])
+        }
+        async fn update_memory_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn find_by_memory_key(
+            &self,
+            _: u64,
+            _: &str,
+        ) -> Result<Option<UserMemory>, AppError> {
+            Ok(None)
+        }
+        async fn list_indexable_memories(
+            &self,
+            _: Option<u64>,
+            _: u64,
+        ) -> Result<Vec<UserMemory>, AppError> {
+            Ok(vec![])
+        }
     }
 
     fn make_service() -> MemoryService {

@@ -93,9 +93,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
             active.payload = Set(record.payload.into());
             active.index_status = Set(record.index_status);
             active.updated_at = Set(now);
-            let saved = active.update(&self.db).await.map_err(|e| {
-                AppError::internal(format!("update vector_index_record: {e}"))
-            })?;
+            let saved = active
+                .update(&self.db)
+                .await
+                .map_err(|e| AppError::internal(format!("update vector_index_record: {e}")))?;
             Ok(map_record(saved))
         } else {
             let active = vector_index_records::ActiveModel {
@@ -118,9 +119,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
                 created_at: Set(now),
                 updated_at: Set(now),
             };
-            let saved = active.insert(&self.db).await.map_err(|e| {
-                AppError::internal(format!("insert vector_index_record: {e}"))
-            })?;
+            let saved = active
+                .insert(&self.db)
+                .await
+                .map_err(|e| AppError::internal(format!("insert vector_index_record: {e}")))?;
             Ok(map_record(saved))
         }
     }
@@ -147,9 +149,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
         active.error_message = Set(None);
         active.failed_at = Set(None);
         active.updated_at = Set(Utc::now().naive_utc());
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("mark_indexed {vector_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("mark_indexed {vector_id}: {e}")))?;
         Ok(())
     }
 
@@ -167,9 +170,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
                 active.failed_at = Set(Some(now));
                 active.error_message = Set(Some(error_message));
                 active.updated_at = Set(now);
-                active.update(&self.db).await.map_err(|e| {
-                    AppError::internal(format!("mark_failed {vector_id}: {e}"))
-                })?;
+                active
+                    .update(&self.db)
+                    .await
+                    .map_err(|e| AppError::internal(format!("mark_failed {vector_id}: {e}")))?;
             }
             None => {
                 // Create a failed record even if none existed
@@ -212,9 +216,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
                 let mut active: vector_index_records::ActiveModel = m.into();
                 active.index_status = Set("deleted".to_string());
                 active.updated_at = Set(Utc::now().naive_utc());
-                active.update(&self.db).await.map_err(|e| {
-                    AppError::internal(format!("mark_deleted {vector_id}: {e}"))
-                })?;
+                active
+                    .update(&self.db)
+                    .await
+                    .map_err(|e| AppError::internal(format!("mark_deleted {vector_id}: {e}")))?;
             }
             None => {
                 debug!(vector_id, "mark_deleted: record not found, skipping");
@@ -270,9 +275,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
             created_at: Set(now),
             updated_at: Set(now),
         };
-        let saved = active.insert(&self.db).await.map_err(|e| {
-            AppError::internal(format!("enqueue_job: {e}"))
-        })?;
+        let saved = active
+            .insert(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("enqueue_job: {e}")))?;
         Ok(map_job(saved))
     }
 
@@ -302,9 +308,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
             active.locked_at = Set(Some(now));
             active.locked_by = Set(Some(worker_id.to_string()));
             active.attempts = Set(row.attempts + 1);
-            let saved = active.update(&self.db).await.map_err(|e| {
-                AppError::internal(format!("lock job {}: {e}", row.job_id))
-            })?;
+            let saved = active
+                .update(&self.db)
+                .await
+                .map_err(|e| AppError::internal(format!("lock job {}: {e}", row.job_id)))?;
             results.push(map_job(saved));
         }
         Ok(results)
@@ -319,9 +326,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
         let mut active: vector_index_jobs::ActiveModel = model.into();
         active.status = Set("succeeded".to_string());
         active.updated_at = Set(Utc::now().naive_utc());
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("mark_job_succeeded {job_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("mark_job_succeeded {job_id}: {e}")))?;
         Ok(())
     }
 
@@ -350,9 +358,10 @@ impl VectorIndexRepository for SeaOrmVectorIndexRepository {
             .to_string());
         }
         active.updated_at = Set(Utc::now().naive_utc());
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("mark_job_failed {job_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("mark_job_failed {job_id}: {e}")))?;
         Ok(())
     }
 }

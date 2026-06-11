@@ -8,10 +8,13 @@ use super::chunking::ChunkingService;
 
 /// Ingests content into the knowledge base: chunks the text, persists
 /// the document + chunks, and optionally generates embeddings.
+use super::vector_index_service::VectorIndexService;
+
 pub struct IngestionService {
     repo: Arc<dyn RAGRepository>,
     chunking: ChunkingService,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
+    vector_index: Option<Arc<VectorIndexService>>,
 }
 
 impl IngestionService {
@@ -24,7 +27,13 @@ impl IngestionService {
             repo,
             chunking,
             embedding,
+            vector_index: None,
         }
+    }
+
+    pub fn with_vector_index(mut self, vi: Arc<VectorIndexService>) -> Self {
+        self.vector_index = Some(vi);
+        self
     }
 
     /// Ingest a new document.
@@ -72,7 +81,7 @@ impl IngestionService {
 
         let saved_chunks = self.repo.save_chunks(&new_chunks).await?;
 
-        // 5. optionally embed
+        // 5. optionally embed (legacy path — kept for compatibility)
         if let Some(ref emb_provider) = self.embedding {
             let texts: Vec<String> = saved_chunks.iter().map(|c| c.content.clone()).collect();
             match emb_provider.embed(&texts).await {
@@ -80,7 +89,8 @@ impl IngestionService {
                     for (chunk, vec) in saved_chunks.iter().zip(embeddings.iter()) {
                         let emb_val: serde_json::Value =
                             serde_json::to_value(vec).unwrap_or(serde_json::Value::Null);
-                        self.repo
+                        let _ = self
+                            .repo
                             .save_embedding(NewEmbedding {
                                 chunk_id: chunk.chunk_id,
                                 provider: "llm_provider".into(),
@@ -88,12 +98,25 @@ impl IngestionService {
                                 dimension: vec.len() as u32,
                                 embedding_json: emb_val,
                             })
-                            .await?;
+                            .await;
                     }
                 }
                 Err(e) => {
-                    // embedding failure is non-fatal — log and continue
                     tracing::warn!(?e, "embedding generation failed during ingest");
+                }
+            }
+        }
+
+        // 6. index chunks via VectorIndexService (Qdrant + records + metadata)
+        if let Some(ref vi) = self.vector_index {
+            for chunk in &saved_chunks {
+                if let Err(e) = vi.index_knowledge_chunk(chunk, Some(&doc)).await {
+                    tracing::warn!(
+                        chunk_id = chunk.chunk_id,
+                        document_id = doc.document_id,
+                        error = %e,
+                        "failed to index knowledge chunk after ingest"
+                    );
                 }
             }
         }

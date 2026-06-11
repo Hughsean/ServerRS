@@ -109,9 +109,7 @@ impl QdrantVectorStore {
                 VectorCondition::MatchU64 { key, value } => {
                     Condition::matches(key.clone(), *value as i64)
                 }
-                VectorCondition::MatchI64 { key, value } => {
-                    Condition::matches(key.clone(), *value)
-                }
+                VectorCondition::MatchI64 { key, value } => Condition::matches(key.clone(), *value),
                 VectorCondition::MatchBool { key, value } => {
                     Condition::matches(key.clone(), *value)
                 }
@@ -188,7 +186,10 @@ impl VectorStore for QdrantVectorStore {
                     "collection '{collection}' has dimension {existing_dim} but config expects {dimension}"
                 )));
             }
-            debug!(collection, dimension, "collection exists with matching dimension");
+            debug!(
+                collection,
+                dimension, "collection exists with matching dimension"
+            );
             return Ok(());
         }
 
@@ -263,9 +264,10 @@ impl VectorStore for QdrantVectorStore {
         }
 
         let request = builder.build();
-        let response = self.client.search_points(request).await.map_err(|e| {
-            AppError::internal(format!("Qdrant search '{collection}' failed: {e}"))
-        })?;
+        let response =
+            self.client.search_points(request).await.map_err(|e| {
+                AppError::internal(format!("Qdrant search '{collection}' failed: {e}"))
+            })?;
 
         let hits: Vec<VectorSearchHit> = response
             .result
@@ -285,11 +287,7 @@ impl VectorStore for QdrantVectorStore {
         Ok(hits)
     }
 
-    async fn delete_points(
-        &self,
-        collection: &str,
-        ids: Vec<String>,
-    ) -> Result<(), AppError> {
+    async fn delete_points(&self, collection: &str, ids: Vec<String>) -> Result<(), AppError> {
         if ids.is_empty() {
             return Ok(());
         }

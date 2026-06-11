@@ -33,7 +33,7 @@ validator = { version = "0.20.0", features = ["derive"] }
 qdrant-client = { version = "1.15", optional = true }
 
 [features]
-default = []
+default = ["qdrant"]
 qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]

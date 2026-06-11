@@ -29,12 +29,17 @@ fn map_document(m: knowledge_documents::Model) -> KnowledgeDocument {
         document_id: m.document_id,
         source_type: m.source_type,
         source_id: m.source_id,
+        owner_user_id: m.owner_user_id,
+        visibility: m.visibility,
         title: m.title,
         content_hash: m.content_hash,
+        source_version: m.source_version,
+        source_updated_at: m.source_updated_at.map(|t| t.and_utc()),
         metadata: m.metadata.map(|j| j.into()),
         status: m.status,
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
+        deleted_at: m.deleted_at.map(|t| t.and_utc()),
     }
 }
 
@@ -46,6 +51,7 @@ fn map_chunk(m: knowledge_chunks::Model) -> KnowledgeChunk {
         content: m.content,
         token_count: m.token_count,
         metadata: m.metadata.map(|j| j.into()),
+        status: m.status,
         created_at: m.created_at.and_utc(),
     }
 }
@@ -180,6 +186,7 @@ impl RAGRepository for SeaOrmRAGRepository {
                 content: m.content,
                 token_count: m.token_count,
                 metadata: m.metadata.map(|v| v.into()),
+                status: m.status,
                 created_at: m.created_at.and_utc(),
             })
             .collect())
@@ -326,9 +333,7 @@ impl RAGRepository for SeaOrmRAGRepository {
         let row = knowledge_chunks::Entity::find_by_id(chunk_id)
             .one(&self.db)
             .await
-            .map_err(|e| {
-                AppError::internal(format!("failed to find chunk {chunk_id}: {e}"))
-            })?;
+            .map_err(|e| AppError::internal(format!("failed to find chunk {chunk_id}: {e}")))?;
         Ok(row.map(map_chunk))
     }
 
@@ -353,12 +358,13 @@ impl RAGRepository for SeaOrmRAGRepository {
         embedding_model: String,
         embedding_dimension: u32,
     ) -> Result<(), AppError> {
-        let mut active: knowledge_chunks::ActiveModel = knowledge_chunks::Entity::find_by_id(chunk_id)
-            .one(&self.db)
-            .await
-            .map_err(|e| AppError::internal(format!("find chunk {chunk_id}: {e}")))?
-            .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id} not found")))?
-            .into();
+        let mut active: knowledge_chunks::ActiveModel =
+            knowledge_chunks::Entity::find_by_id(chunk_id)
+                .one(&self.db)
+                .await
+                .map_err(|e| AppError::internal(format!("find chunk {chunk_id}: {e}")))?
+                .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id} not found")))?
+                .into();
         active.vector_id = Set(Some(vector_id));
         active.embedding_provider = Set(Some(embedding_provider));
         active.embedding_model = Set(Some(embedding_model));
@@ -371,17 +377,19 @@ impl RAGRepository for SeaOrmRAGRepository {
     }
 
     async fn mark_chunk_unindexed(&self, chunk_id: u64) -> Result<(), AppError> {
-        let mut active: knowledge_chunks::ActiveModel = knowledge_chunks::Entity::find_by_id(chunk_id)
-            .one(&self.db)
-            .await
-            .map_err(|e| AppError::internal(format!("find chunk {chunk_id}: {e}")))?
-            .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id} not found")))?
-            .into();
+        let mut active: knowledge_chunks::ActiveModel =
+            knowledge_chunks::Entity::find_by_id(chunk_id)
+                .one(&self.db)
+                .await
+                .map_err(|e| AppError::internal(format!("find chunk {chunk_id}: {e}")))?
+                .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id} not found")))?
+                .into();
         active.vector_id = Set(None);
         active.indexed_at = Set(None);
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("mark chunk unindexed {chunk_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("mark chunk unindexed {chunk_id}: {e}")))?;
         Ok(())
     }
 

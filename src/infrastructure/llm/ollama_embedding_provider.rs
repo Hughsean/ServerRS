@@ -65,7 +65,10 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             input: texts.to_vec(),
         };
 
-        debug!("OllamaEmbeddingProvider.embed -> {url} ({} texts)", texts.len());
+        debug!(
+            "OllamaEmbeddingProvider.embed -> {url} ({} texts)",
+            texts.len()
+        );
 
         let response = self
             .client
@@ -96,10 +99,9 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             )));
         }
 
-        let embed_response: EmbedResponse =
-            serde_json::from_slice(&body_bytes).map_err(|e| {
-                LlmError::InvalidResponse(format!("failed to parse embedding response: {e}"))
-            })?;
+        let embed_response: EmbedResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
+            LlmError::InvalidResponse(format!("failed to parse embedding response: {e}"))
+        })?;
 
         if embed_response.data.len() != texts.len() {
             return Err(LlmError::EmbeddingError(format!(

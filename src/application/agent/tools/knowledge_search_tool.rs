@@ -55,7 +55,9 @@ impl AgentTool for KnowledgeSearchTool {
             .await?;
 
         if results.is_empty() {
-            return Ok(json!({"results": [], "message": "No relevant knowledge found."}).to_string());
+            return Ok(
+                json!({"results": [], "message": "No relevant knowledge found."}).to_string(),
+            );
         }
 
         let items: Vec<Value> = results

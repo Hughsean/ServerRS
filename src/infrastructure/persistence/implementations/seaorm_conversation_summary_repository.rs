@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
+    QueryFilter, QueryOrder, Set,
+};
 
 use super::super::entities::conversation_summaries;
 
@@ -46,7 +49,9 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
             .order_by(conversation_summaries::Column::SummaryId, Order::Desc)
             .one(&self.db)
             .await
-            .map_err(|e| AppError::internal(format!("failed to query conversation_summaries: {e}")))?;
+            .map_err(|e| {
+                AppError::internal(format!("failed to query conversation_summaries: {e}"))
+            })?;
 
         Ok(row.map(map_summary))
     }
@@ -74,17 +79,15 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
             indexed_at: Set(None),
         };
 
-        let saved = active.insert(&self.db).await.map_err(|e| {
-            AppError::internal(format!("failed to save conversation summary: {e}"))
-        })?;
+        let saved = active
+            .insert(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("failed to save conversation summary: {e}")))?;
 
         Ok(map_summary(saved))
     }
 
-    async fn find_by_id(
-        &self,
-        summary_id: u64,
-    ) -> Result<Option<ConversationSummary>, AppError> {
+    async fn find_by_id(&self, summary_id: u64) -> Result<Option<ConversationSummary>, AppError> {
         let row = conversation_summaries::Entity::find_by_id(summary_id)
             .one(&self.db)
             .await
@@ -100,9 +103,10 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
             .ok_or_else(|| AppError::NotFound(format!("summary {summary_id} not found")))?;
         let mut active: conversation_summaries::ActiveModel = model.into();
         active.status = Set(0);
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("disable summary {summary_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("disable summary {summary_id}: {e}")))?;
         Ok(())
     }
 

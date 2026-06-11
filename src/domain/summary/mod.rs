@@ -19,10 +19,7 @@ pub trait SummaryRepository: Send + Sync {
     async fn save_summary(&self, summary: NewSummary) -> Result<ConversationSummary, AppError>;
 
     /// Look up a summary by primary key.
-    async fn find_by_id(
-        &self,
-        summary_id: u64,
-    ) -> Result<Option<ConversationSummary>, AppError>;
+    async fn find_by_id(&self, summary_id: u64) -> Result<Option<ConversationSummary>, AppError>;
 
     /// Soft-disable a summary (status = 0).
     async fn disable_summary(&self, summary_id: u64) -> Result<(), AppError>;

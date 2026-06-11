@@ -4,13 +4,13 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use super::agent_context::AgentContextBuilder;
+use crate::application::memory::memory_service::MemoryService;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
 };
-use crate::domain::memory::{MemoryRepository, NewMemory};
 use crate::domain::rag::RAGRepository;
 use crate::domain::risk::detection_types::{DetectionResult, RiskLevel};
 use crate::domain::risk::risk_detection_result::NewRiskDetectionResult;
@@ -90,7 +90,7 @@ pub struct ToolTrace {
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     rag_repo: Arc<dyn RAGRepository>,
-    memory_repo: Arc<dyn MemoryRepository>,
+    memory_service: Arc<MemoryService>,
     risk_detector: Arc<dyn RiskDetector>,
     risk_repo: Arc<dyn RiskRepository>,
     event_repo: Arc<dyn AgentEventRepository>,
@@ -106,7 +106,7 @@ impl AgentRuntime {
     pub fn new(
         llm: Arc<dyn LlmProvider>,
         rag_repo: Arc<dyn RAGRepository>,
-        memory_repo: Arc<dyn MemoryRepository>,
+        memory_service: Arc<MemoryService>,
         risk_detector: Arc<dyn RiskDetector>,
         risk_repo: Arc<dyn RiskRepository>,
         event_repo: Arc<dyn AgentEventRepository>,
@@ -119,7 +119,7 @@ impl AgentRuntime {
         Self {
             llm,
             rag_repo,
-            memory_repo,
+            memory_service,
             risk_repo,
             risk_detector,
             event_repo,
@@ -537,7 +537,7 @@ impl AgentRuntime {
         let _ = self.conversation_repo.touch_and_incr(cid, 2).await;
     }
 
-    /// Fire-and-forget task: extract memories from the conversation and
+    /// Fire-and-forget task: extract memories via MemoryService and
     /// persist the risk detection result.
     fn spawn_memory_extraction(
         &self,
@@ -548,7 +548,7 @@ impl AgentRuntime {
         emotion: &Option<String>,
         detection: &DetectionResult,
     ) {
-        let memory_repo = Arc::clone(&self.memory_repo);
+        let memory_service = Arc::clone(&self.memory_service);
         let risk_repo = Arc::clone(&self.risk_repo);
 
         let user_text = user_message.to_string();
@@ -582,37 +582,28 @@ impl AgentRuntime {
                 })
                 .await;
 
-            // Extract a simple memory from the user message.
-            if !user_text.is_empty() && user_text.len() > 10 {
-                let content = if let Some(ref e) = emotion_text {
-                    format!("User said (emotion: {e}): {user_text}")
-                } else {
-                    format!("User said: {user_text}")
-                };
+            // Extract memories via MemoryService (uses MemoryExtractor + vector index)
+            let messages = vec![
+                crate::domain::llm::ChatMessage {
+                    role: "user".into(),
+                    content: user_text.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                crate::domain::llm::ChatMessage {
+                    role: "assistant".into(),
+                    content: asst_text.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ];
 
-                let _ = memory_repo
-                    .save_memory(NewMemory {
-                        user_id,
-                        memory_type: "conversation_turn".into(),
-                        content,
-                        confidence: 0.6,
-                        source_conversation_id: conversation_id,
-                        source_message_id: None,
-                    })
-                    .await;
-
-                // Also save the assistant reply as a memory.
-                if !asst_text.is_empty() {
-                    let _ = memory_repo
-                        .save_memory(NewMemory {
-                            user_id,
-                            memory_type: "conversation_turn".into(),
-                            content: format!("Assistant replied: {asst_text}"),
-                            confidence: 0.5,
-                            source_conversation_id: conversation_id,
-                            source_message_id: None,
-                        })
-                        .await;
+            if let Some(cid) = conversation_id {
+                if let Err(e) = memory_service
+                    .extract_and_save(user_id, &messages, cid, 0)
+                    .await
+                {
+                    warn!(user_id, conversation_id = cid, error = %e, "memory extraction failed");
                 }
             }
         });

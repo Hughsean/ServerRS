@@ -13,12 +13,17 @@ pub struct KnowledgeDocument {
     pub document_id: u64,
     pub source_type: String,
     pub source_id: Option<u64>,
+    pub owner_user_id: Option<u64>,
+    pub visibility: String,
     pub title: Option<String>,
     pub content_hash: String,
+    pub source_version: Option<String>,
+    pub source_updated_at: Option<DateTime<Utc>>,
     pub metadata: Option<serde_json::Value>,
     pub status: i8,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +34,7 @@ pub struct KnowledgeChunk {
     pub content: String,
     pub token_count: Option<u32>,
     pub metadata: Option<serde_json::Value>,
+    pub status: i8,
     pub created_at: DateTime<Utc>,
 }
 

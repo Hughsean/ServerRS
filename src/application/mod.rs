@@ -9,4 +9,5 @@ pub mod psychology;
 pub mod rag;
 pub mod session;
 pub mod storage;
+pub mod summary;
 pub mod user;

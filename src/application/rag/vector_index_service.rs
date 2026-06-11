@@ -3,11 +3,14 @@ use std::sync::Arc;
 use serde_json::json;
 use tracing::{debug, warn};
 
-use crate::domain::summary::SummaryRepository;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::memory::{ConversationSummary, MemoryRepository, UserMemory};
 use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepository};
-use crate::domain::vector_index::{NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord, VectorIndexRepository};
+use crate::domain::summary::SummaryRepository;
+use crate::domain::vector_index::{
+    NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord,
+    VectorIndexRepository,
+};
 use crate::domain::vector_store::{
     VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorStore,
 };
@@ -130,39 +133,112 @@ impl VectorIndexService {
     ) -> Result<String, AppError> {
         let vector_id = chunk_vector_id(chunk.chunk_id);
 
-        let embedding = self
+        let embedding = match self
             .embedding_provider
             .embed(&[chunk.content.clone()])
             .await
-            .map_err(|e| {
-                AppError::internal(format!("failed to embed chunk {}: {e}", chunk.chunk_id))
-            })?;
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("failed to embed chunk {}: {e}", chunk.chunk_id);
+                let _ = self
+                    .vector_index_repo
+                    .mark_failed(&vector_id, msg.clone())
+                    .await;
+                let _ = self
+                    .vector_index_repo
+                    .enqueue_job(NewVectorIndexJob {
+                        action: "upsert".into(),
+                        object_type: "knowledge_chunk".into(),
+                        object_id: chunk.chunk_id,
+                        collection_name: self.config.rag_collection.clone(),
+                        vector_id: Some(vector_id.clone()),
+                        priority: 100,
+                    })
+                    .await;
+                return Err(AppError::internal(msg));
+            }
+        };
 
         let vector = embedding
             .into_iter()
             .next()
             .ok_or_else(|| AppError::Internal("embedding returned empty vector".to_string()))?;
+        let actual_dim = vector.len() as u32;
 
         let payload = json!({
             "kind": "rag_chunk",
+            "vector_id": vector_id,
             "chunk_id": chunk.chunk_id,
             "document_id": chunk.document_id,
             "source_type": document.map(|d| d.source_type.as_str()).unwrap_or("unknown"),
             "source_id": document.and_then(|d| d.source_id),
             "status": document.map(|d| d.status).unwrap_or(1),
-            "visibility": "public",
+            "visibility": document.and_then(|d| Some(d.visibility.as_str())).unwrap_or("public"),
         });
 
-        self.vector_store
+        // 1. Upsert Qdrant
+        if let Err(e) = self
+            .vector_store
             .upsert_points(
                 &self.config.rag_collection,
                 vec![VectorPoint {
                     id: vector_id.clone(),
                     vector,
-                    payload,
+                    payload: payload.clone(),
                 }],
             )
-            .await?;
+            .await
+        {
+            let msg = format!("Qdrant upsert failed for chunk {}: {e}", chunk.chunk_id);
+            let _ = self
+                .vector_index_repo
+                .mark_failed(&vector_id, msg.clone())
+                .await;
+            let _ = self
+                .vector_index_repo
+                .enqueue_job(NewVectorIndexJob {
+                    action: "upsert".into(),
+                    object_type: "knowledge_chunk".into(),
+                    object_id: chunk.chunk_id,
+                    collection_name: self.config.rag_collection.clone(),
+                    vector_id: Some(vector_id.clone()),
+                    priority: 100,
+                })
+                .await;
+            return Err(AppError::internal(msg));
+        }
+
+        // 2. Write vector_index_records
+        let _ = self
+            .vector_index_repo
+            .upsert_record(NewVectorIndexRecord {
+                vector_id: vector_id.clone(),
+                collection_name: self.config.rag_collection.clone(),
+                object_type: "knowledge_chunk".into(),
+                object_id: chunk.chunk_id,
+                owner_user_id: document.and_then(|d| d.owner_user_id),
+                source_table: "knowledge_chunks".into(),
+                source_hash: None,
+                embedding_provider: self.config.embedding_provider_name.clone(),
+                embedding_model: self.config.embedding_model.clone(),
+                embedding_dimension: actual_dim,
+                payload: payload.clone(),
+                index_status: "indexed".into(),
+            })
+            .await;
+
+        // 3. Update business table metadata
+        let _ = self
+            .rag_repo
+            .update_chunk_index_metadata(
+                chunk.chunk_id,
+                vector_id.clone(),
+                self.config.embedding_provider_name.clone(),
+                self.config.embedding_model.clone(),
+                actual_dim,
+            )
+            .await;
 
         debug!(chunk_id = chunk.chunk_id, vector_id = %vector_id, "indexed knowledge chunk");
         Ok(vector_id)
@@ -170,15 +246,22 @@ impl VectorIndexService {
 
     pub async fn delete_knowledge_chunk_index(&self, chunk_id: u64) -> Result<(), AppError> {
         let id = chunk_vector_id(chunk_id);
-        self.vector_store
-            .delete_points(&self.config.rag_collection, vec![id])
-            .await
+        // Delete from Qdrant (ignore errors on missing points)
+        let _ = self
+            .vector_store
+            .delete_points(&self.config.rag_collection, vec![id.clone()])
+            .await;
+        // Mark deleted in records
+        let _ = self.vector_index_repo.mark_deleted(&id).await;
+        // Clear business table metadata
+        let _ = self.rag_repo.mark_chunk_unindexed(chunk_id).await;
+        Ok(())
     }
 
     pub async fn rebuild_rag_chunks(&self) -> Result<usize, AppError> {
         let pairs = self
             .rag_repo
-            .list_chunks_with_embeddings()
+            .list_indexable_chunks(500)
             .await
             .map_err(|e| AppError::internal(format!("failed to list chunks for rebuild: {e}")))?;
 
@@ -199,41 +282,96 @@ impl VectorIndexService {
 
     pub async fn index_memory(&self, memory: &UserMemory) -> Result<String, AppError> {
         let vector_id = memory_vector_id(memory.memory_id);
-
-        let embedding = self
+        let embedding = match self
             .embedding_provider
             .embed(&[memory.content.clone()])
             .await
-            .map_err(|e| {
-                AppError::internal(format!("failed to embed memory {}: {e}", memory.memory_id))
-            })?;
-
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("embed memory {}: {e}", memory.memory_id);
+                let _ = self
+                    .vector_index_repo
+                    .mark_failed(&vector_id, msg.clone())
+                    .await;
+                let _ = self
+                    .vector_index_repo
+                    .enqueue_job(NewVectorIndexJob {
+                        action: "upsert".into(),
+                        object_type: "user_memory".into(),
+                        object_id: memory.memory_id,
+                        collection_name: self.config.memory_collection.clone(),
+                        vector_id: Some(vector_id.clone()),
+                        priority: 100,
+                    })
+                    .await;
+                return Err(AppError::internal(msg));
+            }
+        };
         let vector = embedding
             .into_iter()
             .next()
-            .ok_or_else(|| AppError::Internal("embedding returned empty vector".to_string()))?;
-
-        let payload = json!({
-            "kind": "user_memory",
-            "memory_id": memory.memory_id,
-            "user_id": memory.user_id,
-            "memory_type": memory.memory_type,
-            "status": memory.status,
-            "source_conversation_id": memory.source_conversation_id,
-        });
-
-        self.vector_store
+            .ok_or_else(|| AppError::Internal("empty vector".into()))?;
+        let actual_dim = vector.len() as u32;
+        let payload = json!({"kind":"user_memory","vector_id":vector_id,"memory_id":memory.memory_id,"user_id":memory.user_id,"memory_type":memory.memory_type,"status":memory.status,"source_conversation_id":memory.source_conversation_id});
+        if let Err(e) = self
+            .vector_store
             .upsert_points(
                 &self.config.memory_collection,
                 vec![VectorPoint {
                     id: vector_id.clone(),
                     vector,
-                    payload,
+                    payload: payload.clone(),
                 }],
             )
-            .await?;
-
-        debug!(memory_id = memory.memory_id, vector_id = %vector_id, "indexed memory");
+            .await
+        {
+            let msg = format!("Qdrant upsert memory {}: {e}", memory.memory_id);
+            let _ = self
+                .vector_index_repo
+                .mark_failed(&vector_id, msg.clone())
+                .await;
+            let _ = self
+                .vector_index_repo
+                .enqueue_job(NewVectorIndexJob {
+                    action: "upsert".into(),
+                    object_type: "user_memory".into(),
+                    object_id: memory.memory_id,
+                    collection_name: self.config.memory_collection.clone(),
+                    vector_id: Some(vector_id.clone()),
+                    priority: 100,
+                })
+                .await;
+            return Err(AppError::internal(msg));
+        }
+        let _ = self
+            .vector_index_repo
+            .upsert_record(NewVectorIndexRecord {
+                vector_id: vector_id.clone(),
+                collection_name: self.config.memory_collection.clone(),
+                object_type: "user_memory".into(),
+                object_id: memory.memory_id,
+                owner_user_id: Some(memory.user_id),
+                source_table: "user_memories".into(),
+                source_hash: None,
+                embedding_provider: self.config.embedding_provider_name.clone(),
+                embedding_model: self.config.embedding_model.clone(),
+                embedding_dimension: actual_dim,
+                payload: payload.clone(),
+                index_status: "indexed".into(),
+            })
+            .await;
+        let _ = self
+            .memory_repo
+            .update_memory_index_metadata(
+                memory.memory_id,
+                vector_id.clone(),
+                self.config.embedding_provider_name.clone(),
+                self.config.embedding_model.clone(),
+                actual_dim,
+            )
+            .await;
+        debug!(memory_id=memory.memory_id, vector_id=%vector_id, "indexed memory");
         Ok(vector_id)
     }
 
@@ -469,9 +607,31 @@ mod tests {
             Ok(None)
         }
 
-        async fn update_chunk_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
-        async fn mark_chunk_unindexed(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn list_indexable_chunks(&self, _: u64) -> Result<Vec<(crate::domain::rag::KnowledgeChunk, crate::domain::rag::KnowledgeDocument)>, AppError> { Ok(vec![]) }
+        async fn update_chunk_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn mark_chunk_unindexed(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn list_indexable_chunks(
+            &self,
+            _: u64,
+        ) -> Result<
+            Vec<(
+                crate::domain::rag::KnowledgeChunk,
+                crate::domain::rag::KnowledgeDocument,
+            )>,
+            AppError,
+        > {
+            Ok(vec![])
+        }
     }
 
     struct MockMemRepo;
@@ -518,40 +678,155 @@ mod tests {
         async fn find_memories_by_conversation(&self, _: u64) -> Result<Vec<UserMemory>, AppError> {
             Ok(vec![])
         }
-        async fn update_memory_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
-        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn find_by_memory_key(&self, _: u64, _: &str) -> Result<Option<UserMemory>, AppError> { Ok(None) }
-        async fn list_indexable_memories(&self, _: Option<u64>, _: u64) -> Result<Vec<UserMemory>, AppError> { Ok(vec![]) }
+        async fn update_memory_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn find_by_memory_key(
+            &self,
+            _: u64,
+            _: &str,
+        ) -> Result<Option<UserMemory>, AppError> {
+            Ok(None)
+        }
+        async fn list_indexable_memories(
+            &self,
+            _: Option<u64>,
+            _: u64,
+        ) -> Result<Vec<UserMemory>, AppError> {
+            Ok(vec![])
+        }
     }
 
     struct MockSumRepo;
     #[async_trait::async_trait]
     impl crate::domain::summary::SummaryRepository for MockSumRepo {
-        async fn find_latest_by_conversation(&self, _: u64) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> { Ok(None) }
-        async fn save_summary(&self, _: crate::domain::memory::NewSummary) -> Result<crate::domain::memory::ConversationSummary, AppError> { Err(AppError::internal("mock")) }
-        async fn find_by_id(&self, _: u64) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> { Ok(None) }
-        async fn disable_summary(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn list_indexable_summaries(&self, _: u64) -> Result<Vec<crate::domain::memory::ConversationSummary>, AppError> { Ok(vec![]) }
-        async fn update_summary_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
+        async fn find_latest_by_conversation(
+            &self,
+            _: u64,
+        ) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> {
+            Ok(None)
+        }
+        async fn save_summary(
+            &self,
+            _: crate::domain::memory::NewSummary,
+        ) -> Result<crate::domain::memory::ConversationSummary, AppError> {
+            Err(AppError::internal("mock"))
+        }
+        async fn find_by_id(
+            &self,
+            _: u64,
+        ) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> {
+            Ok(None)
+        }
+        async fn disable_summary(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn list_indexable_summaries(
+            &self,
+            _: u64,
+        ) -> Result<Vec<crate::domain::memory::ConversationSummary>, AppError> {
+            Ok(vec![])
+        }
+        async fn update_summary_index_metadata(
+            &self,
+            _: u64,
+            _: String,
+            _: String,
+            _: String,
+            _: u32,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
     }
 
     struct MockIndexRepo;
     #[async_trait::async_trait]
     impl VectorIndexRepository for MockIndexRepo {
-        async fn upsert_record(&self, r: NewVectorIndexRecord) -> Result<VectorIndexRecord, AppError> {
-            Ok(VectorIndexRecord { record_id: 1, vector_id: r.vector_id, collection_name: r.collection_name, object_type: r.object_type, object_id: r.object_id, owner_user_id: r.owner_user_id, source_table: r.source_table, source_hash: r.source_hash, embedding_provider: r.embedding_provider, embedding_model: r.embedding_model, embedding_dimension: r.embedding_dimension, payload: r.payload, index_status: r.index_status, indexed_at: None, failed_at: None, error_message: None })
+        async fn upsert_record(
+            &self,
+            r: NewVectorIndexRecord,
+        ) -> Result<VectorIndexRecord, AppError> {
+            Ok(VectorIndexRecord {
+                record_id: 1,
+                vector_id: r.vector_id,
+                collection_name: r.collection_name,
+                object_type: r.object_type,
+                object_id: r.object_id,
+                owner_user_id: r.owner_user_id,
+                source_table: r.source_table,
+                source_hash: r.source_hash,
+                embedding_provider: r.embedding_provider,
+                embedding_model: r.embedding_model,
+                embedding_dimension: r.embedding_dimension,
+                payload: r.payload,
+                index_status: r.index_status,
+                indexed_at: None,
+                failed_at: None,
+                error_message: None,
+            })
         }
-        async fn mark_indexed(&self, _: &str, _: u32, _: serde_json::Value) -> Result<(), AppError> { Ok(()) }
-        async fn mark_failed(&self, _: &str, _: String) -> Result<(), AppError> { Ok(()) }
-        async fn mark_deleted(&self, _: &str) -> Result<(), AppError> { Ok(()) }
-        async fn find_by_vector_id(&self, _: &str) -> Result<Option<VectorIndexRecord>, AppError> { Ok(None) }
-        async fn list_stale_by_collection(&self, _: &str, _: u64) -> Result<Vec<VectorIndexRecord>, AppError> { Ok(vec![]) }
+        async fn mark_indexed(
+            &self,
+            _: &str,
+            _: u32,
+            _: serde_json::Value,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn mark_failed(&self, _: &str, _: String) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn mark_deleted(&self, _: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn find_by_vector_id(&self, _: &str) -> Result<Option<VectorIndexRecord>, AppError> {
+            Ok(None)
+        }
+        async fn list_stale_by_collection(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> Result<Vec<VectorIndexRecord>, AppError> {
+            Ok(vec![])
+        }
         async fn enqueue_job(&self, j: NewVectorIndexJob) -> Result<VectorIndexJob, AppError> {
-            Ok(VectorIndexJob { job_id: 1, action: j.action, object_type: j.object_type, object_id: j.object_id, collection_name: j.collection_name, vector_id: j.vector_id, priority: j.priority, status: "pending".into(), attempts: 0, max_attempts: 5, next_run_at: chrono::Utc::now() })
+            Ok(VectorIndexJob {
+                job_id: 1,
+                action: j.action,
+                object_type: j.object_type,
+                object_id: j.object_id,
+                collection_name: j.collection_name,
+                vector_id: j.vector_id,
+                priority: j.priority,
+                status: "pending".into(),
+                attempts: 0,
+                max_attempts: 5,
+                next_run_at: chrono::Utc::now(),
+            })
         }
-        async fn fetch_pending_jobs(&self, _: u64, _: &str) -> Result<Vec<VectorIndexJob>, AppError> { Ok(vec![]) }
-        async fn mark_job_succeeded(&self, _: u64) -> Result<(), AppError> { Ok(()) }
-        async fn mark_job_failed(&self, _: u64, _: String, _: bool) -> Result<(), AppError> { Ok(()) }
+        async fn fetch_pending_jobs(
+            &self,
+            _: u64,
+            _: &str,
+        ) -> Result<Vec<VectorIndexJob>, AppError> {
+            Ok(vec![])
+        }
+        async fn mark_job_succeeded(&self, _: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn mark_job_failed(&self, _: u64, _: String, _: bool) -> Result<(), AppError> {
+            Ok(())
+        }
     }
 
     fn make_service() -> (
@@ -589,6 +864,7 @@ mod tests {
             content: "test content for indexing".into(),
             token_count: None,
             metadata: None,
+            status: 1,
             created_at: chrono::Utc::now(),
         };
 
@@ -651,8 +927,13 @@ mod tests {
         struct FailingEmbedding;
         #[async_trait::async_trait]
         impl EmbeddingProvider for FailingEmbedding {
-            async fn embed(&self, _: &[String]) -> Result<Vec<Vec<f32>>, crate::domain::llm::LlmError> {
-                Err(crate::domain::llm::LlmError::EmbeddingError("simulated failure".into()))
+            async fn embed(
+                &self,
+                _: &[String],
+            ) -> Result<Vec<Vec<f32>>, crate::domain::llm::LlmError> {
+                Err(crate::domain::llm::LlmError::EmbeddingError(
+                    "simulated failure".into(),
+                ))
             }
         }
 
@@ -680,6 +961,7 @@ mod tests {
             content: "test".into(),
             token_count: None,
             metadata: None,
+            status: 1,
             created_at: chrono::Utc::now(),
         };
 

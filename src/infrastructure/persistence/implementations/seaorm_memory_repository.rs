@@ -239,9 +239,10 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         let mut active: user_memories::ActiveModel = model.into();
         active.last_accessed_at = Set(Some(Utc::now().naive_utc()));
         active.access_count = Set(new_count);
-        active.update(&self.db).await.map_err(|e| {
-            AppError::internal(format!("touch memory access {memory_id}: {e}"))
-        })?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| AppError::internal(format!("touch memory access {memory_id}: {e}")))?;
         Ok(())
     }
 
