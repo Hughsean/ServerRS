@@ -14,10 +14,8 @@ use ServerRS::application::diary::diary_service::DiaryService;
 use ServerRS::application::music::music_service::MusicService;
 use ServerRS::application::psychology::psychology_service::PsychologyService;
 use ServerRS::application::session::conversation_orchestrator::ConversationOrchestrator;
-use ServerRS::application::session::risk_detection_service::RiskDetectionService;
 use ServerRS::application::session::session_manager::SessionManager;
 use ServerRS::application::session::session_service::SessionService;
-use ServerRS::application::session::tool_calling::{ToolCallService, ToolRegistry};
 use ServerRS::application::storage::object_service::ObjectService;
 use ServerRS::application::user::user_service::UserService;
 use ServerRS::domain::auth::password_service::PasswordService;
@@ -48,6 +46,7 @@ use ServerRS::domain::risk::detection_types::DetectionResult;
 use ServerRS::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
 use ServerRS::domain::risk::risk_detector::RiskDetector;
 use ServerRS::domain::risk::risk_repository::RiskRepository;
+use ServerRS::domain::storage::{StoredObject, StoredObjectRepository};
 use ServerRS::domain::tasks::task_publisher::TaskPublisher;
 use ServerRS::domain::user::user::{NewUser, User, UserRole, UserStatus, UserUpdate};
 use ServerRS::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfileUpdate};
@@ -63,6 +62,56 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 // ── Mock repositories (in-memory, no MySQL needed) ──
+
+struct MockStoredObjectRepo {
+    objects: std::sync::Mutex<Vec<StoredObject>>,
+}
+
+impl MockStoredObjectRepo {
+    fn new() -> Self {
+        Self {
+            objects: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl StoredObjectRepository for MockStoredObjectRepo {
+    async fn save(&self, mut object: StoredObject) -> Result<StoredObject, AppError> {
+        let mut objects = self.objects.lock().unwrap();
+        object.id = objects.len() as u64 + 1;
+        objects.push(object.clone());
+        Ok(object)
+    }
+
+    async fn find_by_id(&self, id: u64) -> Result<Option<StoredObject>, AppError> {
+        Ok(self
+            .objects
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|object| object.id == id)
+            .cloned())
+    }
+
+    async fn delete_by_id(&self, id: u64) -> Result<(), AppError> {
+        self.objects
+            .lock()
+            .unwrap()
+            .retain(|object| object.id != id);
+        Ok(())
+    }
+
+    async fn find_by_sha256(&self, sha256: &str) -> Result<Option<StoredObject>, AppError> {
+        Ok(self
+            .objects
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|object| object.sha256 == sha256)
+            .cloned())
+    }
+}
 
 struct MockUserRepo {
     users: std::sync::Mutex<Vec<User>>,
@@ -334,6 +383,39 @@ impl RiskRepository for MockRiskRepo {
     async fn find_by_conversation_id(&self, _: u64) -> Result<Vec<RiskDetectionResult>, AppError> {
         Ok(vec![])
     }
+    async fn find_all_paginated(
+        &self,
+        _: u64,
+        _: u64,
+        _: Option<ServerRS::domain::risk::detection_types::RiskLevel>,
+    ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
+        Ok((vec![], 0))
+    }
+    async fn mark_processed(
+        &self,
+        _: u64,
+        notes: Option<String>,
+    ) -> Result<RiskDetectionResult, AppError> {
+        Ok(RiskDetectionResult {
+            id: 1,
+            user_id: 0,
+            message_id: None,
+            conversation_id: None,
+            risk_level: ServerRS::domain::risk::detection_types::RiskLevel::None,
+            polarity: ServerRS::domain::risk::detection_types::Polarity::Neutral,
+            intent: ServerRS::domain::risk::detection_types::IntentLabel::Narrative,
+            target: ServerRS::domain::risk::detection_types::TargetLabel::Unknown,
+            confidence: 0.5,
+            evidence: "[]".into(),
+            reason: None,
+            raw_payload: None,
+            model_name: None,
+            detector_version: None,
+            is_processed: true,
+            process_notes: notes,
+            created_at: Utc::now(),
+        })
+    }
     async fn delete_by_conversation_id(&self, _: u64) -> Result<u64, AppError> {
         Ok(0)
     }
@@ -359,7 +441,7 @@ impl RefreshTokenRevocationRepository for MockRevokeRepo {
 struct MockRefreshTokenStore;
 
 #[async_trait]
-impl ServerRS::application::auth::auth_service::RefreshTokenStore for MockRefreshTokenStore {
+impl ServerRS::domain::auth::refresh_token_store::RefreshTokenStore for MockRefreshTokenStore {
     async fn store(&self, _: u64, _: String) -> Result<(), AppError> {
         Ok(())
     }
@@ -1520,8 +1602,9 @@ fn build_test_state() -> api::ApiState {
     tokio::spawn(tw.with_handler(Arc::new(LoggingHandler)).run());
     let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
 
-    let refresh_token_store: Arc<dyn ServerRS::application::auth::auth_service::RefreshTokenStore> =
-        Arc::new(MockRefreshTokenStore);
+    let refresh_token_store: Arc<
+        dyn ServerRS::domain::auth::refresh_token_store::RefreshTokenStore,
+    > = Arc::new(MockRefreshTokenStore);
 
     let auth: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(&user_repo),
@@ -1540,13 +1623,6 @@ fn build_test_state() -> api::ApiState {
         Arc::clone(&risk_repo),
     ));
 
-    let risk_detector: Arc<dyn RiskDetector> = Arc::new(MockRiskDetector);
-    let risk_detect: Arc<RiskDetectionService> = Arc::new(RiskDetectionService::new(
-        Arc::clone(&risk_repo),
-        Arc::clone(&task_publisher),
-        Arc::clone(&risk_detector),
-    ));
-
     let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
     let prompt_provider: Arc<dyn PromptProvider> = Arc::new(MockPromptProvider);
     let orchestrator: Arc<ConversationOrchestrator> = Arc::new(ConversationOrchestrator::new(
@@ -1555,14 +1631,6 @@ fn build_test_state() -> api::ApiState {
         Arc::clone(&prompt_provider),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&profile_repo),
-    ));
-
-    let tool_registry = ToolRegistry::new(Vec::new());
-    let tool_service: Arc<ToolCallService> = Arc::new(ToolCallService::new(
-        Arc::clone(&llm),
-        tool_registry,
-        3,
-        std::time::Duration::from_millis(5000),
     ));
 
     // ── Mock repos (in-memory, no stub_repositories) ──
@@ -1876,13 +1944,13 @@ fn build_test_state() -> api::ApiState {
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
         context_builder,
+        Arc::clone(&summary_service),
         Vec::new(),
         10,
     ));
 
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
-        risk_detect,
         Arc::clone(&orchestrator),
         Arc::clone(&agent_runtime),
         120,
@@ -1910,8 +1978,10 @@ fn build_test_state() -> api::ApiState {
     let local_storage: Arc<dyn ServerRS::domain::storage::ObjectStorage> = Arc::new(
         LocalObjectStorage::new(std::path::PathBuf::from("data/test-objects")),
     );
+    let stored_object_repo: Arc<dyn StoredObjectRepository> = Arc::new(MockStoredObjectRepo::new());
     let objects: Arc<ObjectService> = Arc::new(ObjectService::new(
         Arc::clone(&local_storage),
+        Arc::clone(&stored_object_repo),
         Default::default(),
     ));
 

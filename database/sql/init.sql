@@ -1,12 +1,33 @@
-DROP DATABASE IF EXISTS digital_companion;
--- 创建数据库
-CREATE DATABASE IF NOT EXISTS digital_companion DEFAULT CHARACTER
-    SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;
+-- ============================================================================
+-- init.sql — Complete database initialization for Digital Companion (ServerRS)
+--
+-- Generated from:
+--   database/sql/1-create.sql                    (base tables)
+--   database/patches/20260611_001_auth_role_refresh_likes.sql
+--   database/patches/20260611_002_agent_rag_memory.sql
+--   database/patches/20260611_003_qdrant_vector_index.sql
+--   database/patches/20260611_004_agent_vector_lifecycle.sql
+--   database/patches/20260611_005_stored_objects.sql
+--
+-- All patch columns/indices/constraints have been folded into the final
+-- CREATE TABLE statements below.  This file produces the EXACT same schema
+-- as applying base + all five patches in order.
+--
+-- Execution:
+--   mysql -u root -p < database/sql/init.sql
+-- ============================================================================
 
--- 使用数据库
+DROP DATABASE IF EXISTS digital_companion;
+CREATE DATABASE IF NOT EXISTS digital_companion
+    DEFAULT CHARACTER SET utf8mb4
+    DEFAULT COLLATE utf8mb4_unicode_ci;
+
 USE digital_companion;
 
--- 创建用户基础信息表
+-- ============================================================================
+-- 1. users — 用户基础信息表
+--    (role column from patch 001 already folded in)
+-- ============================================================================
 CREATE TABLE users
 (
     id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '用户ID',
@@ -29,7 +50,9 @@ CREATE TABLE users
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户基础信息表';
 
--- 刷新令牌表
+-- ============================================================================
+-- 2. refresh_tokens — 刷新令牌表 (from patch 001)
+-- ============================================================================
 CREATE TABLE refresh_tokens
 (
     refresh_token_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '刷新令牌ID',
@@ -49,7 +72,9 @@ CREATE TABLE refresh_tokens
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '刷新令牌表';
 
--- 用户画像表
+-- ============================================================================
+-- 3. user_profiles — 用户画像表
+-- ============================================================================
 CREATE TABLE user_profiles
 (
     id                      BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '画像ID',
@@ -67,7 +92,9 @@ CREATE TABLE user_profiles
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户画像表';
 
--- 创建用户日记表
+-- ============================================================================
+-- 4. user_diaries — 用户日记表
+-- ============================================================================
 CREATE TABLE user_diaries
 (
     id               BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '日记ID',
@@ -77,18 +104,16 @@ CREATE TABLE user_diaries
     mood_description VARCHAR(255) COMMENT '心情描述，使用大模型评估',
     created_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    -- 外键关联用户表
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    -- 索引设计
     INDEX idx_user_id (user_id),
     INDEX idx_created_at (created_at)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci
-    COMMENT = '用户日记表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '用户日记表';
 
-
--- 会话元数据表（不再存整段消息，仅存会话属性）
+-- ============================================================================
+-- 5. conversations — 会话元数据表
+-- ============================================================================
 CREATE TABLE conversations
 (
     id                 BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '会话ID',
@@ -103,10 +128,11 @@ CREATE TABLE conversations
     INDEX idx_created_at (created_at)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci COMMENT ='会话元数据表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '会话元数据表';
 
-
--- 会话消息表（每条消息一行）
+-- ============================================================================
+-- 6. conversation_messages — 会话消息表
+-- ============================================================================
 CREATE TABLE conversation_messages
 (
     id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '消息ID',
@@ -124,8 +150,9 @@ CREATE TABLE conversation_messages
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '会话消息表';
 
-
--- 用户交流社区帖子表
+-- ============================================================================
+-- 7. community_posts — 用户交流社区帖子表
+-- ============================================================================
 CREATE TABLE community_posts
 (
     post_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '帖子ID',
@@ -146,8 +173,9 @@ CREATE TABLE community_posts
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户交流社区帖子表';
 
-
--- 用户交流社区媒体表
+-- ============================================================================
+-- 8. community_post_media — 用户交流社区媒体表
+-- ============================================================================
 CREATE TABLE community_post_media
 (
     media_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '媒体ID',
@@ -163,7 +191,9 @@ CREATE TABLE community_post_media
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户交流社区媒体表';
 
--- 通用对象存储元数据表
+-- ============================================================================
+-- 9. stored_objects — 通用对象存储元数据表 (from patch 005)
+-- ============================================================================
 CREATE TABLE stored_objects
 (
     object_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '对象ID',
@@ -185,8 +215,9 @@ CREATE TABLE stored_objects
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '对象存储元数据表';
 
-
--- 用户交流社区评论表
+-- ============================================================================
+-- 10. community_comments — 用户交流社区评论表
+-- ============================================================================
 CREATE TABLE community_comments
 (
     comment_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '评论ID',
@@ -209,8 +240,9 @@ CREATE TABLE community_comments
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户交流社区评论表';
 
-
--- 量表定义表 (存储不同抑郁量表的元数据)
+-- ============================================================================
+-- 11. depression_scales — 抑郁量表定义表
+-- ============================================================================
 CREATE TABLE depression_scales
 (
     scale_id          SMALLINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '量表ID',
@@ -224,13 +256,14 @@ CREATE TABLE depression_scales
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci
-    COMMENT = '抑郁量表定义表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '抑郁量表定义表';
 
--- 评估记录表 (存储每次评估的详细结果)
+-- ============================================================================
+-- 12. depression_assessments — 抑郁评估记录表
+-- ============================================================================
 CREATE TABLE depression_assessments
 (
-    assessment_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '评估ID',
+    assessment_id   BIGINT UNSIGNED   PRIMARY KEY AUTO_INCREMENT COMMENT '评估ID',
     user_id         BIGINT UNSIGNED   NOT NULL COMMENT '用户ID',
     scale_id        SMALLINT UNSIGNED NOT NULL COMMENT '使用的量表ID',
     assessment_date DATE              NOT NULL COMMENT '评估日期',
@@ -239,17 +272,17 @@ CREATE TABLE depression_assessments
     notes           TEXT COMMENT '附加说明',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (scale_id) REFERENCES depression_scales (scale_id),
     INDEX idx_user_assessment (user_id, assessment_date),
     INDEX idx_scale (scale_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci
-    COMMENT = '抑郁评估记录表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '抑郁评估记录表';
 
--- 风险检测结果表：存储对单条用户消息的风险与意图检测结果
+-- ============================================================================
+-- 13. risk_detection_results — 风险检测结果表
+-- ============================================================================
 CREATE TABLE risk_detection_results
 (
     id               BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '检测结果ID',
@@ -282,7 +315,9 @@ CREATE TABLE risk_detection_results
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '风险检测结果表';
 
--- 心理知识库分类表
+-- ============================================================================
+-- 14. psychology_categories — 心理知识库分类表
+-- ============================================================================
 CREATE TABLE psychology_categories
 (
     category_id   SMALLINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '分类ID',
@@ -300,7 +335,9 @@ CREATE TABLE psychology_categories
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '心理知识库分类表';
 
--- 心理知识库文章表
+-- ============================================================================
+-- 15. psychology_articles — 心理知识库文章表
+-- ============================================================================
 CREATE TABLE psychology_articles
 (
     article_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '文章ID',
@@ -329,7 +366,9 @@ CREATE TABLE psychology_articles
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '心理知识库文章表';
 
--- 心理知识库问答表
+-- ============================================================================
+-- 16. psychology_qna — 心理知识库问答表
+-- ============================================================================
 CREATE TABLE psychology_qna
 (
     qna_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '问答ID',
@@ -354,7 +393,9 @@ CREATE TABLE psychology_qna
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '心理知识库问答表';
 
--- 心理资源库表
+-- ============================================================================
+-- 17. psychology_resources — 心理资源库表
+-- ============================================================================
 CREATE TABLE psychology_resources
 (
     resource_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '资源ID',
@@ -382,7 +423,9 @@ CREATE TABLE psychology_resources
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '心理资源库表';
 
--- 用户知识库收藏表
+-- ============================================================================
+-- 18. user_knowledge_favorites — 用户知识库收藏表
+-- ============================================================================
 CREATE TABLE user_knowledge_favorites
 (
     favorite_id  BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '收藏ID',
@@ -398,7 +441,9 @@ CREATE TABLE user_knowledge_favorites
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '用户知识库收藏表';
 
--- 内容点赞表
+-- ============================================================================
+-- 19. content_likes — 内容点赞表 (from patch 001)
+-- ============================================================================
 CREATE TABLE content_likes
 (
     like_id      BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '点赞ID',
@@ -414,7 +459,9 @@ CREATE TABLE content_likes
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '内容点赞表';
 
--- 音乐表
+-- ============================================================================
+-- 20. music — 音乐表
+-- ============================================================================
 CREATE TABLE music
 (
     music_id    BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '音乐ID',
@@ -442,3 +489,276 @@ CREATE TABLE music
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '音乐表';
+
+-- ============================================================================
+-- 21. knowledge_documents — RAG 知识文档表
+--     (base from patch 002, +owner_user_id/+visibility/+source_version/
+--      +source_updated_at/+deleted_at from patch 004)
+-- ============================================================================
+CREATE TABLE knowledge_documents
+(
+    document_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    source_type       VARCHAR(64)     NOT NULL,
+    source_id         BIGINT UNSIGNED NULL,
+    owner_user_id     BIGINT UNSIGNED NULL,
+    visibility        VARCHAR(32)     NOT NULL DEFAULT 'public',
+    title             VARCHAR(255)    NULL,
+    content_hash      CHAR(64)        NOT NULL,
+    source_version    VARCHAR(128)    NULL,
+    source_updated_at DATETIME(6)     NULL,
+    metadata          JSON            NULL,
+    status            TINYINT         NOT NULL DEFAULT 1,
+    created_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    deleted_at        DATETIME(6)     NULL,
+    UNIQUE KEY uk_knowledge_documents_source (source_type, source_id),
+    INDEX idx_knowledge_documents_status (status),
+    INDEX idx_knowledge_documents_owner_status (owner_user_id, status),
+    INDEX idx_knowledge_documents_visibility_status (visibility, status),
+    FOREIGN KEY (owner_user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 22. knowledge_chunks — RAG 知识分块表
+--     (base from patch 002,
+--      +vector_id/+embedding_provider/+embedding_model/+embedding_dimension/
+--      +indexed_at from patch 003,
+--      +status/+content_hash/+char_start/+char_end from patch 004)
+-- ============================================================================
+CREATE TABLE knowledge_chunks
+(
+    chunk_id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    document_id         BIGINT UNSIGNED NOT NULL,
+    chunk_index         INT UNSIGNED    NOT NULL,
+    char_start          INT UNSIGNED    NULL,
+    char_end            INT UNSIGNED    NULL,
+    content             TEXT            NOT NULL,
+    content_hash        CHAR(64)        NULL,
+    token_count         INT UNSIGNED    NULL,
+    metadata            JSON            NULL,
+    status              TINYINT         NOT NULL DEFAULT 1,
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    vector_id           VARCHAR(128)    NULL,
+    embedding_provider  VARCHAR(64)     NULL,
+    embedding_model     VARCHAR(128)    NULL,
+    embedding_dimension INT UNSIGNED    NULL,
+    indexed_at          DATETIME(6)     NULL,
+    UNIQUE KEY uk_knowledge_chunks_doc_idx (document_id, chunk_index),
+    UNIQUE KEY uk_knowledge_chunks_vector_id (vector_id),
+    FULLTEXT KEY ft_knowledge_chunks_content (content),
+    INDEX idx_knowledge_chunks_document_status (document_id, status),
+    INDEX idx_knowledge_chunks_vector_id (vector_id),
+    FOREIGN KEY (document_id) REFERENCES knowledge_documents (document_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 23. knowledge_embeddings — RAG 知识嵌入向量表 (from patch 002)
+-- ============================================================================
+CREATE TABLE knowledge_embeddings
+(
+    embedding_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    chunk_id       BIGINT UNSIGNED NOT NULL,
+    provider       VARCHAR(64)     NOT NULL,
+    model          VARCHAR(128)    NOT NULL,
+    dimension      INT UNSIGNED    NOT NULL,
+    embedding_json JSON            NOT NULL,
+    created_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uk_knowledge_embeddings_chunk_model (chunk_id, provider, model),
+    FOREIGN KEY (chunk_id) REFERENCES knowledge_chunks (chunk_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 24. user_memories — 用户长期记忆表
+--     (base from patch 002,
+--      +vector_id/+embedding_provider/+embedding_model/+embedding_dimension/
+--      +indexed_at from patch 003,
+--      +memory_key/+salience/+last_accessed_at/+access_count/+expires_at
+--       from patch 004)
+-- ============================================================================
+CREATE TABLE user_memories
+(
+    memory_id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id                BIGINT UNSIGNED NOT NULL,
+    memory_type            VARCHAR(64)     NOT NULL,
+    memory_key             CHAR(64)        NULL,
+    content                TEXT            NOT NULL,
+    confidence             DOUBLE          NOT NULL DEFAULT 0.7,
+    salience               DOUBLE          NOT NULL DEFAULT 0.5,
+    source_conversation_id BIGINT UNSIGNED NULL,
+    source_message_id      BIGINT UNSIGNED NULL,
+    status                 TINYINT         NOT NULL DEFAULT 1,
+    metadata               JSON            NULL,
+    created_at             DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at             DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    last_accessed_at       DATETIME(6)     NULL,
+    access_count           INT UNSIGNED    NOT NULL DEFAULT 0,
+    expires_at             DATETIME(6)     NULL,
+    vector_id              VARCHAR(128)    NULL,
+    embedding_provider     VARCHAR(64)     NULL,
+    embedding_model        VARCHAR(128)    NULL,
+    embedding_dimension    INT UNSIGNED    NULL,
+    indexed_at             DATETIME(6)     NULL,
+    UNIQUE KEY uk_user_memories_vector_id (vector_id),
+    INDEX idx_user_memories_user_status (user_id, status),
+    INDEX idx_user_memories_user_key (user_id, memory_key),
+    INDEX idx_user_memories_user_salience (user_id, status, salience),
+    INDEX idx_user_memories_expires_at (expires_at),
+    INDEX idx_user_memories_vector_id (vector_id),
+    FULLTEXT KEY ft_user_memories_content (content),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (source_conversation_id) REFERENCES conversations (id) ON DELETE SET NULL,
+    FOREIGN KEY (source_message_id) REFERENCES conversation_messages (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 25. user_memory_embeddings — 用户记忆嵌入向量表 (from patch 002)
+-- ============================================================================
+CREATE TABLE user_memory_embeddings
+(
+    embedding_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    memory_id      BIGINT UNSIGNED NOT NULL,
+    provider       VARCHAR(64)     NOT NULL,
+    model          VARCHAR(128)    NOT NULL,
+    dimension      INT UNSIGNED    NOT NULL,
+    embedding_json JSON            NOT NULL,
+    created_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uk_user_memory_embeddings_memory_model (memory_id, provider, model),
+    FOREIGN KEY (memory_id) REFERENCES user_memories (memory_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 26. conversation_summaries — 会话摘要表
+--     (base from patch 002,
+--      +vector_id/+embedding_provider/+embedding_model/+embedding_dimension/
+--      +indexed_at from patch 003,
+--      +status/+summary_version/+source_message_count from patch 004)
+-- ============================================================================
+CREATE TABLE conversation_summaries
+(
+    summary_id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    conversation_id       BIGINT UNSIGNED NOT NULL,
+    user_id               BIGINT UNSIGNED NOT NULL,
+    summary_type          VARCHAR(64)     NOT NULL DEFAULT 'rolling',
+    content               TEXT            NOT NULL,
+    message_start_id      BIGINT UNSIGNED NULL,
+    message_end_id        BIGINT UNSIGNED NULL,
+    token_count           INT UNSIGNED    NULL,
+    status                TINYINT         NOT NULL DEFAULT 1,
+    summary_version       INT UNSIGNED    NOT NULL DEFAULT 1,
+    source_message_count  INT UNSIGNED    NULL,
+    created_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    vector_id             VARCHAR(128)    NULL,
+    embedding_provider    VARCHAR(64)     NULL,
+    embedding_model       VARCHAR(128)    NULL,
+    embedding_dimension   INT UNSIGNED    NULL,
+    indexed_at            DATETIME(6)     NULL,
+    UNIQUE KEY uk_conversation_summaries_vector_id (vector_id),
+    INDEX idx_conversation_summaries_conversation (conversation_id),
+    INDEX idx_conversation_summaries_user (user_id),
+    INDEX idx_conversation_summaries_conv_status (conversation_id, status, updated_at),
+    INDEX idx_conversation_summaries_vector_id (vector_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 27. agent_events — Agent 事件追踪表
+--     (base from patch 002,
+--      +trace_id/+turn_id/+severity/+tool_name from patch 004)
+-- ============================================================================
+CREATE TABLE agent_events
+(
+    event_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id         BIGINT UNSIGNED NOT NULL,
+    conversation_id BIGINT UNSIGNED NULL,
+    session_id      VARCHAR(64)     NULL,
+    trace_id        VARCHAR(64)     NULL,
+    turn_id         VARCHAR(64)     NULL,
+    event_type      VARCHAR(64)     NOT NULL,
+    severity        VARCHAR(32)     NOT NULL DEFAULT 'info',
+    tool_name       VARCHAR(128)    NULL,
+    payload         JSON            NOT NULL,
+    created_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    INDEX idx_agent_events_user_time (user_id, created_at),
+    INDEX idx_agent_events_conversation (conversation_id),
+    INDEX idx_agent_events_trace (trace_id),
+    INDEX idx_agent_events_turn (turn_id),
+    INDEX idx_agent_events_type_time (event_type, created_at),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 28. vector_index_records — Qdrant 向量索引记录表 (from patch 004)
+-- ============================================================================
+CREATE TABLE vector_index_records
+(
+    record_id           BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    vector_id           VARCHAR(128)    NOT NULL,
+    collection_name     VARCHAR(128)    NOT NULL,
+    object_type         VARCHAR(64)     NOT NULL,
+    object_id           BIGINT UNSIGNED NOT NULL,
+    owner_user_id       BIGINT UNSIGNED NULL,
+    source_table        VARCHAR(64)     NOT NULL,
+    source_hash         CHAR(64)        NULL,
+    embedding_provider  VARCHAR(64)     NOT NULL,
+    embedding_model     VARCHAR(128)    NOT NULL,
+    embedding_dimension INT UNSIGNED    NOT NULL,
+    payload             JSON            NOT NULL,
+    index_status        VARCHAR(32)     NOT NULL DEFAULT 'indexed',
+    indexed_at          DATETIME(6)     NULL,
+    failed_at           DATETIME(6)     NULL,
+    error_message       TEXT            NULL,
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uk_vector_index_records_vector_id (vector_id),
+    INDEX idx_vector_index_records_object (object_type, object_id),
+    INDEX idx_vector_index_records_collection_status (collection_name, index_status),
+    INDEX idx_vector_index_records_owner_type (owner_user_id, object_type),
+    FOREIGN KEY (owner_user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 29. vector_index_jobs — Qdrant 向量索引作业表 (from patch 004)
+-- ============================================================================
+CREATE TABLE vector_index_jobs
+(
+    job_id          BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    action          VARCHAR(32)     NOT NULL,
+    object_type     VARCHAR(64)     NOT NULL,
+    object_id       BIGINT UNSIGNED NOT NULL,
+    collection_name VARCHAR(128)    NOT NULL,
+    vector_id       VARCHAR(128)    NULL,
+    priority        INT             NOT NULL DEFAULT 100,
+    status          VARCHAR(32)     NOT NULL DEFAULT 'pending',
+    attempts        INT UNSIGNED    NOT NULL DEFAULT 0,
+    max_attempts    INT UNSIGNED    NOT NULL DEFAULT 5,
+    next_run_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    locked_at       DATETIME(6)     NULL,
+    locked_by       VARCHAR(128)    NULL,
+    last_error      TEXT            NULL,
+    created_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    INDEX idx_vector_index_jobs_status_next (status, next_run_at, priority),
+    INDEX idx_vector_index_jobs_object (object_type, object_id),
+    INDEX idx_vector_index_jobs_vector_id (vector_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;

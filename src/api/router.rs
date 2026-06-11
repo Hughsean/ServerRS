@@ -22,13 +22,16 @@ use super::handlers::depression_handler::{
 use super::handlers::diary_handler::{
     create_diary, delete_diary, get_diary, list_diaries, update_diary,
 };
-use super::handlers::music_handler::{get_track, list_tracks, stream_track};
+use super::handlers::music_handler::{
+    admin_create_track, admin_delete_track, admin_update_track, get_track, list_tracks,
+    stream_track,
+};
 use super::handlers::object_handler::{
     delete_object, get_object, get_object_metadata, upload_object,
 };
 use super::handlers::psychology_handler::{
     check_favorite, get_article, get_category_tree, get_qna, get_resource, list_articles,
-    list_categories, list_favorites, list_qna, list_resources, toggle_favorite,
+    list_categories, list_favorites, list_qna, list_resources, toggle_favorite, toggle_like,
 };
 use super::handlers::session_handler::{
     create_session, get_session_status, list_conversation_messages, list_conversations,
@@ -40,6 +43,8 @@ use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth
 pub fn build_router(state: ApiState) -> Router {
     // ── Protected routes (require valid Bearer token) ──────────────────────────
     let protected = Router::new()
+        // Auth
+        .route("/api/v1/auth/me", get(me))
         // Users / Me
         .route("/api/v1/users/me", get(get_me))
         .route("/api/v1/users/me", patch(patch_me))
@@ -85,6 +90,7 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/api/v1/psychology/favorites", get(list_favorites))
         .route("/api/v1/psychology/favorites", post(toggle_favorite))
         .route("/api/v1/psychology/favorites/check", get(check_favorite))
+        .route("/api/v1/psychology/likes", post(toggle_like))
         // Community posts (write)
         .route("/api/v1/community/posts", post(create_post))
         .route("/api/v1/community/posts/{id}", put(update_post))
@@ -144,6 +150,9 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/admin/risk-detections/{id}/process",
             post(process_risk_detection),
         )
+        .route("/api/v1/admin/music", post(admin_create_track))
+        .route("/api/v1/admin/music/{id}", patch(admin_update_track))
+        .route("/api/v1/admin/music/{id}", delete(admin_delete_track))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer_auth,
@@ -157,12 +166,11 @@ pub fn build_router(state: ApiState) -> Router {
     Router::new()
         // Health
         .route("/health", get(health))
-        // Auth (public + /me which is protected via Extension<AuthenticatedUser>)
+        // Auth public endpoints
         .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh_token))
         .route("/api/v1/auth/logout", post(logout))
-        .route("/api/v1/auth/me", get(me))
         // Psychology — public read endpoints
         .route("/api/v1/psychology/categories", get(list_categories))
         .route("/api/v1/psychology/categories/tree", get(get_category_tree))

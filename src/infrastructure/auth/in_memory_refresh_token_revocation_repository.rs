@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::application::auth::auth_service::RefreshTokenStore;
 use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
+use crate::domain::auth::refresh_token_store::RefreshTokenStore;
 use crate::shared::error::AppError;
 
 #[derive(Default)]

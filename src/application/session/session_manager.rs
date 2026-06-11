@@ -8,7 +8,6 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::conversation_orchestrator::{ConversationOrchestrator, MessageResult};
-use super::risk_detection_service::RiskDetectionService;
 use crate::application::agent::agent_runtime::AgentRuntime;
 use crate::domain::llm::ChatMessage;
 use crate::domain::tasks::task_event::{SessionLifecycleTask, TaskEvent};
@@ -31,7 +30,6 @@ use crate::shared::error::AppError;
 /// the orchestrator is used here for pre-AgentRuntime tasks only.
 pub struct SessionManager {
     task_publisher: Arc<dyn TaskPublisher>,
-    risk_detection: Arc<RiskDetectionService>,
     orchestrator: Arc<ConversationOrchestrator>,
     agent_runtime: Arc<AgentRuntime>,
     sessions: RwLock<HashMap<String, SessionState>>,
@@ -54,16 +52,31 @@ impl SessionState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionStatus {
+    pub id: String,
+    pub user_id: u64,
+    pub dialogue_id: Option<u64>,
+    pub timeout_seconds: u64,
+}
+
+struct SessionSnapshot {
+    id: String,
+    prompt: String,
+    messages: Vec<ChatMessage>,
+    user_id: u64,
+    dialogue_id: Option<u64>,
+    is_first_turn: bool,
+}
+
 impl SessionManager {
     pub fn new(
         task_publisher: Arc<dyn TaskPublisher>,
-        risk_detection: Arc<RiskDetectionService>,
         orchestrator: Arc<ConversationOrchestrator>,
         agent_runtime: Arc<AgentRuntime>,
         timeout_seconds: u64,
     ) -> Self {
         Self {
-            risk_detection,
             task_publisher,
             orchestrator,
             agent_runtime,
@@ -78,11 +91,20 @@ impl SessionManager {
         dialogue_id: Option<u64>,
         location: Option<&HashMap<String, serde_json::Value>>,
     ) -> Result<SessionState, AppError> {
+        if let Some(did) = dialogue_id {
+            self.orchestrator
+                .validate_conversation_access(user_id, did)
+                .await?;
+        }
+
         // Reuse existing session for this dialogue if still alive
         if let Some(did) = dialogue_id {
             let sessions = self.sessions.read().await;
             for s in sessions.values() {
-                if s.dialogue_id == Some(did) && !s.is_expired(self.timeout_seconds) {
+                if s.user_id == user_id
+                    && s.dialogue_id == Some(did)
+                    && !s.is_expired(self.timeout_seconds)
+                {
                     return Ok(s.clone());
                 }
             }
@@ -125,32 +147,51 @@ impl SessionManager {
         Ok(state)
     }
 
+    pub fn timeout_seconds(&self) -> u64 {
+        self.timeout_seconds
+    }
+
     /// Process a user message through the AgentRuntime.
     ///
     /// Flow:
     /// 1. Ensure the session is alive
     /// 2. Ensure a DB conversation row exists
-    /// 3. Fire async risk detection
-    /// 4. Delegate to `AgentRuntime::respond` (which handles safety, LLM, tools, persist)
-    /// 5. Generate title on first turn
+    /// 3. Delegate to `AgentRuntime::respond` (which handles safety, LLM, tools, persist)
+    /// 4. Generate title on first turn
     pub async fn process_message(
         &self,
+        requesting_user_id: u64,
         session_id: &str,
         text: &str,
         emotion: Option<&str>,
     ) -> Result<Option<MessageResult>, AppError> {
-        let mut sessions = self.sessions.write().await;
-        let state = match sessions.get_mut(session_id) {
-            Some(s) if !s.is_expired(self.timeout_seconds) => s,
-            _ => {
-                sessions.remove(session_id);
-                return Ok(None);
+        let snapshot = {
+            let mut sessions = self.sessions.write().await;
+            let state = match sessions.get_mut(session_id) {
+                Some(s) if !s.is_expired(self.timeout_seconds) => s,
+                _ => {
+                    sessions.remove(session_id);
+                    return Ok(None);
+                }
+            };
+
+            if state.user_id != requesting_user_id {
+                return Err(AppError::Forbidden("not your session".into()));
+            }
+
+            state.last_active = Instant::now();
+            SessionSnapshot {
+                id: state.id.clone(),
+                prompt: state.prompt.clone(),
+                messages: state.messages.clone(),
+                user_id: state.user_id,
+                dialogue_id: state.dialogue_id,
+                is_first_turn: !state.messages.iter().any(|m| m.role == "user"),
             }
         };
-        state.last_active = Instant::now();
 
-        let is_first_turn = !state.messages.iter().any(|m| m.role == "user");
-        state.messages.push(ChatMessage {
+        let mut turn_messages = snapshot.messages.clone();
+        turn_messages.push(ChatMessage {
             role: "user".into(),
             content: text.to_string(),
             tool_calls: None,
@@ -160,38 +201,41 @@ impl SessionManager {
         // Ensure DB conversation exists
         let conv_id = self
             .orchestrator
-            .ensure_conversation(state.user_id, state.dialogue_id)
+            .ensure_conversation(snapshot.user_id, snapshot.dialogue_id)
             .await?;
-        state.dialogue_id = Some(conv_id);
 
-        // Async risk detection
-        let rd = Arc::clone(&self.risk_detection);
-        let text_owned = text.to_string();
-        let uid = state.user_id;
-        let cid = Some(conv_id);
-        tokio::spawn(async move {
-            rd.detect_and_save(&text_owned, uid, cid, None).await;
-        });
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(state) = sessions.get_mut(session_id) {
+                if state.user_id == requesting_user_id && !state.is_expired(self.timeout_seconds) {
+                    state.dialogue_id = Some(conv_id);
+                    state.last_active = Instant::now();
+                }
+            }
+        }
 
         // ── Delegate to AgentRuntime ──────────────────────────────
         let emotion_owned = emotion.map(|e| e.to_string());
         let response = self
             .agent_runtime
             .respond(
-                state.user_id,
-                state.id.clone(),
+                snapshot.user_id,
+                snapshot.id.clone(),
                 Some(conv_id),
                 text.to_string(),
                 emotion_owned,
-                None, // location
+                None,
+                turn_messages.clone(),
+                Some(snapshot.prompt.clone()),
             )
-            .await;
+            .await?;
 
         let reply = response.reply;
         let session_closed = response.session_closed;
 
+        let mut completed_messages = turn_messages;
         if !reply.is_empty() {
-            state.messages.push(ChatMessage {
+            completed_messages.push(ChatMessage {
                 role: "assistant".into(),
                 content: reply.clone(),
                 tool_calls: None,
@@ -200,13 +244,26 @@ impl SessionManager {
         }
 
         // Title generation on first turn
-        let title = if is_first_turn {
+        let title = if snapshot.is_first_turn {
             self.orchestrator
-                .generate_title(conv_id, &state.messages)
+                .generate_title(conv_id, &completed_messages)
                 .await
         } else {
             None
         };
+
+        {
+            let mut sessions = self.sessions.write().await;
+            if session_closed {
+                sessions.remove(session_id);
+            } else if let Some(state) = sessions.get_mut(session_id) {
+                if state.user_id == requesting_user_id {
+                    state.dialogue_id = Some(conv_id);
+                    state.messages = completed_messages;
+                    state.last_active = Instant::now();
+                }
+            }
+        }
 
         Ok(Some(MessageResult {
             reply,
@@ -216,15 +273,27 @@ impl SessionManager {
         }))
     }
 
-    pub async fn status(&self, session_id: &str) -> Option<serde_json::Value> {
+    pub async fn status(
+        &self,
+        requesting_user_id: u64,
+        session_id: &str,
+    ) -> Result<Option<SessionStatus>, AppError> {
         let sessions = self.sessions.read().await;
-        let s = sessions.get(session_id)?;
+        let s = match sessions.get(session_id) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
         if s.is_expired(self.timeout_seconds) {
-            return None;
+            return Ok(None);
         }
-        Some(serde_json::json!({
-            "sessionId": s.id, "userId": s.user_id,
-            "dialogueId": s.dialogue_id, "timeoutSeconds": self.timeout_seconds,
+        if s.user_id != requesting_user_id {
+            return Err(AppError::Forbidden("not your session".into()));
+        }
+        Ok(Some(SessionStatus {
+            id: s.id.clone(),
+            user_id: s.user_id,
+            dialogue_id: s.dialogue_id,
+            timeout_seconds: self.timeout_seconds,
         }))
     }
 

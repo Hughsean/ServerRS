@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use base64::Engine;
+
 use crate::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
 use crate::shared::error::AppError;
 
@@ -33,9 +35,13 @@ impl MusicService {
     }
 
     /// Returns the raw file data and MIME type for streaming.
-    pub async fn stream_track(&self, id: u64) -> Result<(String, String, u64), AppError> {
+    pub async fn stream_track(&self, id: u64) -> Result<(Vec<u8>, String, u64), AppError> {
         let track = self.get_track(id).await?;
-        Ok((track.file_data, track.mime_type, track.file_size))
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(track.file_data.trim())
+            .unwrap_or_else(|_| track.file_data.into_bytes());
+        let size = data.len() as u64;
+        Ok((data, track.mime_type, size))
     }
 
     pub async fn admin_create(&self, new: NewMusicTrack) -> Result<MusicTrack, AppError> {

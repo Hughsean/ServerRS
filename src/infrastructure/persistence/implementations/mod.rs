@@ -11,7 +11,9 @@ pub mod seaorm_psychology_repository;
 pub mod seaorm_rag_repository;
 pub mod seaorm_refresh_token_store;
 pub mod seaorm_risk_repository;
+pub mod seaorm_stored_object_repository;
 pub mod seaorm_user_profile_repository;
 pub mod seaorm_user_repository;
 pub mod seaorm_vector_index_repository;
+#[cfg(test)]
 pub mod stub_repositories;

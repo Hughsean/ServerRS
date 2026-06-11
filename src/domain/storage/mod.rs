@@ -56,9 +56,8 @@ pub struct ObjectBytes {
 #[async_trait]
 pub trait ObjectStorage: Send + Sync {
     async fn put(&self, input: PutObjectInput) -> Result<StoredObject, AppError>;
-    async fn get(&self, object_id: u64) -> Result<ObjectBytes, AppError>;
-    async fn delete(&self, object_id: u64) -> Result<(), AppError>;
-    async fn get_metadata(&self, object_id: u64) -> Result<StoredObject, AppError>;
+    async fn get(&self, object: &StoredObject) -> Result<ObjectBytes, AppError>;
+    async fn delete(&self, object: &StoredObject) -> Result<(), AppError>;
 }
 
 #[async_trait]

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::domain::auth::password_service::PasswordService;
+use crate::domain::auth::refresh_token_store::RefreshTokenStore;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
@@ -15,20 +15,6 @@ use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user::{NewUser, UserStatus};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
-
-// ── RefreshTokenStore trait ──────────────────────────────────────────────────
-
-#[async_trait]
-pub trait RefreshTokenStore: Send + Sync {
-    /// Persist a hashed refresh token for `user_id`.
-    async fn store(&self, user_id: u64, token_hash: String) -> Result<(), AppError>;
-    /// Check whether the hash is revoked / unknown.
-    async fn is_revoked(&self, token_hash: &str) -> Result<bool, AppError>;
-    /// Revoke (remove) a token hash.
-    async fn revoke(&self, token_hash: &str) -> Result<(), AppError>;
-    /// Clean up expired entries (returns number of removed rows).
-    async fn cleanup_expired(&self, now_seconds: u64) -> Result<usize, AppError>;
-}
 
 // ── Supporting types ─────────────────────────────────────────────────────────
 
@@ -41,6 +27,7 @@ pub struct LoginAttemptRecord {
 pub struct AuthConfig {
     pub max_attempts: u32,
     pub lockout_secs: u64,
+    pub access_ttl_secs: u64,
 }
 
 impl Default for AuthConfig {
@@ -48,6 +35,7 @@ impl Default for AuthConfig {
         Self {
             max_attempts: 5,
             lockout_secs: 300,
+            access_ttl_secs: 15 * 60,
         }
     }
 }
@@ -122,7 +110,7 @@ impl AuthService {
     ) -> Result<(String, String, u64), AppError> {
         let access = self.token_service.issue_access(user_id, username, role)?;
         let refresh = self.token_service.issue_refresh(user_id, username)?;
-        Ok((access, refresh, 15 * 60))
+        Ok((access, refresh, self.config.access_ttl_secs))
     }
 
     fn check_lockout(&self, username: &str) -> Result<(), AppError> {

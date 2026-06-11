@@ -79,6 +79,79 @@ async fn missing_token_returns_unauthorized() {
 }
 
 #[tokio::test]
+async fn auth_me_requires_token() {
+    let app = common::test_app().await;
+    let response = app
+        .oneshot(Request::get("/api/v1/auth/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn session_routes_enforce_owner() {
+    let app = common::test_app().await;
+
+    let owner = common::post(
+        &app,
+        "/api/v1/auth/register",
+        &json!({
+            "username": "session_owner",
+            "password": "password123!"
+        }),
+    )
+    .await;
+    let intruder = common::post(
+        &app,
+        "/api/v1/auth/register",
+        &json!({
+            "username": "session_intruder",
+            "password": "password123!"
+        }),
+    )
+    .await;
+
+    let owner_token = owner["accessToken"].as_str().unwrap().to_string();
+    let intruder_token = intruder["accessToken"].as_str().unwrap().to_string();
+    let owner_id = owner["user"]["id"].as_u64().unwrap();
+
+    let session = common::post_auth(
+        &app,
+        "/api/v1/llm/sessions",
+        &json!({
+            "user_id": owner_id
+        }),
+        &owner_token,
+    )
+    .await;
+    let session_id = session["session_id"].as_str().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/llm/sessions/{session_id}/messages"))
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {intruder_token}"))
+                .body(Body::from(json!({ "text": "hello" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .oneshot(
+            Request::get(format!("/api/v1/llm/sessions/{session_id}"))
+                .header("Authorization", format!("Bearer {intruder_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn user_profile_crud_flow() {
     let app = common::test_app().await;
     let resp = common::post(

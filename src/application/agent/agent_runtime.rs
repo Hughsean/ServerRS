@@ -5,12 +5,14 @@ use tracing::{info, warn};
 
 use super::agent_context::AgentContextBuilder;
 use crate::application::memory::memory_service::MemoryService;
+use crate::application::summary::summary_service::SummaryService;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
 };
+use crate::domain::memory::NewSummary;
 use crate::domain::rag::RAGRepository;
 use crate::domain::risk::detection_types::{DetectionResult, RiskLevel};
 use crate::domain::risk::risk_detection_result::NewRiskDetectionResult;
@@ -71,6 +73,10 @@ pub struct ToolTrace {
     pub result: String,
 }
 
+struct PersistedTurn {
+    user_message_id: u64,
+}
+
 // ---------------------------------------------------------------------------
 // AgentRuntime
 // ---------------------------------------------------------------------------
@@ -97,6 +103,7 @@ pub struct AgentRuntime {
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
     context_builder: Arc<AgentContextBuilder>,
+    summary_service: Arc<SummaryService>,
     tools: Vec<Arc<dyn AgentTool>>,
     max_tool_depth: usize,
 }
@@ -113,6 +120,7 @@ impl AgentRuntime {
         conversation_repo: Arc<dyn ConversationRepository>,
         user_profile_repo: Arc<dyn UserProfileRepository>,
         context_builder: Arc<AgentContextBuilder>,
+        summary_service: Arc<SummaryService>,
         tools: Vec<Arc<dyn AgentTool>>,
         max_tool_depth: usize,
     ) -> Self {
@@ -126,6 +134,7 @@ impl AgentRuntime {
             conversation_repo,
             user_profile_repo,
             context_builder,
+            summary_service,
             tools,
             max_tool_depth,
         }
@@ -139,8 +148,10 @@ impl AgentRuntime {
         conversation_id: Option<u64>,
         user_message: String,
         emotion: Option<String>,
-        #[allow(unused_variables)] location: Option<Value>,
-    ) -> AgentResponse {
+        location: Option<Value>,
+        recent_messages: Vec<ChatMessage>,
+        session_prompt: Option<String>,
+    ) -> Result<AgentResponse, AppError> {
         // ── Step 1: Safety pre-check ──────────────────────────────
         let detection = self.risk_detector.evaluate(&user_message);
 
@@ -169,21 +180,49 @@ impl AgentRuntime {
             let safety_reply = self.build_crisis_response(&detection);
 
             // Persist both the user message and the safety reply.
-            self.persist_messages(
+            let persisted = self
+                .persist_messages(
+                    user_id,
+                    conversation_id,
+                    &user_message,
+                    &safety_reply,
+                    &emotion,
+                )
+                .await?;
+            self.spawn_risk_persistence(
                 user_id,
                 conversation_id,
-                &user_message,
-                &safety_reply,
-                &emotion,
-            )
-            .await;
+                Some(persisted.user_message_id),
+                &detection,
+            );
 
-            return AgentResponse {
+            return Ok(AgentResponse {
                 reply: safety_reply,
                 tool_calls: Vec::new(),
                 session_closed: false,
                 safety_triggered: true,
-            };
+            });
+        }
+
+        if self.is_exit_intent(&user_message) {
+            let reply =
+                "好的，我们先到这里。需要的时候随时回来，我会继续接住你的话题。".to_string();
+            let persisted = self
+                .persist_messages(user_id, conversation_id, &user_message, &reply, &emotion)
+                .await?;
+            self.spawn_risk_persistence(
+                user_id,
+                conversation_id,
+                Some(persisted.user_message_id),
+                &detection,
+            );
+
+            return Ok(AgentResponse {
+                reply,
+                tool_calls: Vec::new(),
+                session_closed: true,
+                safety_triggered: false,
+            });
         }
 
         // ── Step 3: Build agent context ──────────────────────────
@@ -194,19 +233,8 @@ impl AgentRuntime {
             .ok()
             .flatten();
 
-        let user_chat_message = ChatMessage {
-            role: "user".into(),
-            content: match &emotion {
-                Some(e) if !e.is_empty() => {
-                    format!("{user_message}\n\n[user emotion: {e}]")
-                }
-                _ => user_message.clone(),
-            },
-            tool_calls: None,
-            tool_call_id: None,
-        };
-
-        let recent_messages = vec![user_chat_message];
+        let recent_messages =
+            self.prepare_recent_messages(recent_messages, &user_message, &emotion);
 
         let llm_tool_defs: Vec<LlmToolDef> = self
             .tools
@@ -241,24 +269,29 @@ impl AgentRuntime {
             .await;
 
         // ── Step 4: LLM chat with tools ──────────────────────────
-        let system_message = self.build_system_message(&context);
+        let system_message =
+            self.build_system_message(&context, session_prompt.as_deref(), location.as_ref());
 
-        let llm_messages = vec![
-            ChatMessage {
-                role: "system".into(),
-                content: system_message,
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            recent_messages[0].clone(),
-        ];
+        let mut llm_messages = Vec::with_capacity(recent_messages.len() + 1);
+        llm_messages.push(ChatMessage {
+            role: "system".into(),
+            content: system_message,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        llm_messages.extend(
+            recent_messages
+                .iter()
+                .filter(|m| m.role != "system")
+                .cloned(),
+        );
 
         let mut tool_traces: Vec<ToolTrace> = Vec::new();
         let mut messages_with_tool_results = llm_messages.clone();
         let mut depth = 0usize;
         #[allow(unused_assignments)]
         let mut final_content = String::new();
-        let mut end_session = false;
+        let end_session = false;
 
         let have_tools = !self.tools.is_empty();
 
@@ -280,7 +313,13 @@ impl AgentRuntime {
                 },
             };
 
-            let response = match self.llm.chat(request.clone()).await {
+            let response = match if have_tools {
+                self.llm
+                    .chat_with_tools(request.clone(), llm_tool_defs.clone())
+                    .await
+            } else {
+                self.llm.chat(request.clone()).await
+            } {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(error = %e, "LLM chat failed");
@@ -379,45 +418,122 @@ impl AgentRuntime {
         }
 
         // ── Step 7: Persist messages ─────────────────────────────
-        self.persist_messages(
+        let persisted = self
+            .persist_messages(
+                user_id,
+                conversation_id,
+                &user_message,
+                &final_content,
+                &emotion,
+            )
+            .await?;
+        self.spawn_risk_persistence(
             user_id,
             conversation_id,
-            &user_message,
-            &final_content,
-            &emotion,
-        )
-        .await;
+            Some(persisted.user_message_id),
+            &detection,
+        );
 
         // ── Step 8: Async memory extraction ──────────────────────
         self.spawn_memory_extraction(
             user_id,
             conversation_id,
+            persisted.user_message_id,
             &user_message,
             &final_content,
-            &emotion,
-            &detection,
         );
+        self.spawn_summary_refresh(user_id, conversation_id);
 
-        AgentResponse {
+        Ok(AgentResponse {
             reply: final_content,
             tool_calls: tool_traces,
             session_closed: end_session,
             safety_triggered: false,
-        }
+        })
     }
 
     // ── Private helpers ──────────────────────────────────────────
 
+    fn prepare_recent_messages(
+        &self,
+        mut messages: Vec<ChatMessage>,
+        user_message: &str,
+        emotion: &Option<String>,
+    ) -> Vec<ChatMessage> {
+        let content = match emotion {
+            Some(e) if !e.trim().is_empty() => {
+                format!("{user_message}\n\n[user emotion: {}]", e.trim())
+            }
+            _ => user_message.to_string(),
+        };
+
+        if let Some(last_user_message) = messages.iter_mut().rev().find(|m| m.role == "user") {
+            if last_user_message.content.trim() == user_message.trim() {
+                last_user_message.content = content;
+                return messages;
+            }
+        }
+
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        messages
+    }
+
+    fn is_exit_intent(&self, text: &str) -> bool {
+        let normalized = text
+            .trim()
+            .trim_matches(|c: char| c.is_ascii_punctuation() || "。！？、，；：".contains(c))
+            .to_lowercase();
+
+        matches!(
+            normalized.as_str(),
+            "结束对话"
+                | "结束会话"
+                | "关闭会话"
+                | "退出"
+                | "退出对话"
+                | "不聊了"
+                | "先这样"
+                | "再见"
+                | "拜拜"
+                | "bye"
+                | "goodbye"
+                | "exit"
+                | "quit"
+                | "end chat"
+                | "stop chat"
+        )
+    }
+
     /// Build the system message that seeds the LLM with context.
-    fn build_system_message(&self, context: &AgentContext) -> String {
+    fn build_system_message(
+        &self,
+        context: &AgentContext,
+        session_prompt: Option<&str>,
+        location: Option<&Value>,
+    ) -> String {
         let mut parts = Vec::new();
 
-        parts.push(
-            "You are a caring, professional mental-health support companion. \
-             Respond with empathy, clarity, and warmth. \
-             You have access to tools that can help you provide better assistance."
-                .to_string(),
-        );
+        if let Some(prompt) = session_prompt.filter(|p| !p.trim().is_empty()) {
+            parts.push(prompt.to_string());
+        } else {
+            parts.push(
+                "You are a caring, professional mental-health support companion. \
+                 Respond with empathy, clarity, and warmth. \
+                 You have access to tools that can help you provide better assistance."
+                    .to_string(),
+            );
+        }
+
+        if let Some(location) = location {
+            parts.push(format!(
+                "\n[User location]\n{location}\nUse this only when local context is relevant."
+            ));
+        }
 
         if let Some(ref summary) = context.summary {
             parts.push(format!(
@@ -498,10 +614,14 @@ impl AgentRuntime {
         user_message: &str,
         assistant_reply: &str,
         emotion: &Option<String>,
-    ) {
+    ) -> Result<PersistedTurn, AppError> {
         let cid = match conversation_id {
             Some(id) => id,
-            None => return,
+            None => {
+                return Err(AppError::Internal(
+                    "conversation id is required to persist messages".into(),
+                ));
+            }
         };
 
         let user_content = serde_json::json!({
@@ -509,7 +629,7 @@ impl AgentRuntime {
             "emotion": emotion,
         });
 
-        let _ = self
+        let user_msg = self
             .conversation_repo
             .save_message(NewConversationMessage {
                 conversation_id: cid,
@@ -519,11 +639,10 @@ impl AgentRuntime {
                 content: user_content.to_string(),
                 token_count: None,
             })
-            .await;
+            .await?;
 
         let asst_content = serde_json::json!({ "text": assistant_reply });
-        let _ = self
-            .conversation_repo
+        self.conversation_repo
             .save_message(NewConversationMessage {
                 conversation_id: cid,
                 sender_role: "assistant".into(),
@@ -532,56 +651,30 @@ impl AgentRuntime {
                 content: asst_content.to_string(),
                 token_count: None,
             })
-            .await;
+            .await?;
 
-        let _ = self.conversation_repo.touch_and_incr(cid, 2).await;
+        self.conversation_repo.touch_and_incr(cid, 2).await?;
+
+        Ok(PersistedTurn {
+            user_message_id: user_msg.id,
+        })
     }
 
-    /// Fire-and-forget task: extract memories via MemoryService and
-    /// persist the risk detection result.
+    /// Fire-and-forget task: extract memories via MemoryService.
     fn spawn_memory_extraction(
         &self,
         user_id: u64,
         conversation_id: Option<u64>,
+        source_message_id: u64,
         user_message: &str,
         assistant_reply: &str,
-        emotion: &Option<String>,
-        detection: &DetectionResult,
     ) {
         let memory_service = Arc::clone(&self.memory_service);
-        let risk_repo = Arc::clone(&self.risk_repo);
 
         let user_text = user_message.to_string();
         let asst_text = assistant_reply.to_string();
-        let emotion_text = emotion.clone();
-        let det = detection.clone();
 
         tokio::spawn(async move {
-            // Persist risk detection result.
-            let evidence_json =
-                serde_json::to_string(&det.evidence).unwrap_or_else(|_| "[]".into());
-            let _ = risk_repo
-                .save(NewRiskDetectionResult {
-                    user_id,
-                    message_id: None,
-                    conversation_id,
-                    risk_level: det.risk_level,
-                    polarity: det.polarity,
-                    intent: det.intent,
-                    target: det.target,
-                    confidence: det.confidence,
-                    evidence: evidence_json,
-                    reason: if det.reason.is_empty() {
-                        None
-                    } else {
-                        Some(det.reason)
-                    },
-                    raw_payload: None,
-                    model_name: Some("rule-based".into()),
-                    detector_version: Some("1.0".into()),
-                })
-                .await;
-
             // Extract memories via MemoryService (uses MemoryExtractor + vector index)
             let messages = vec![
                 crate::domain::llm::ChatMessage {
@@ -600,11 +693,163 @@ impl AgentRuntime {
 
             if let Some(cid) = conversation_id {
                 if let Err(e) = memory_service
-                    .extract_and_save(user_id, &messages, cid, 0)
+                    .extract_and_save(user_id, &messages, cid, source_message_id)
                     .await
                 {
                     warn!(user_id, conversation_id = cid, error = %e, "memory extraction failed");
                 }
+            }
+        });
+    }
+
+    fn spawn_summary_refresh(&self, user_id: u64, conversation_id: Option<u64>) {
+        let Some(cid) = conversation_id else {
+            return;
+        };
+
+        let conversation_repo = Arc::clone(&self.conversation_repo);
+        let summary_service = Arc::clone(&self.summary_service);
+        let llm = Arc::clone(&self.llm);
+
+        tokio::spawn(async move {
+            let messages = match conversation_repo
+                .find_messages_by_conversation_id(cid)
+                .await
+            {
+                Ok(messages) => messages,
+                Err(e) => {
+                    warn!(conversation_id = cid, error = %e, "failed to load messages for summary");
+                    return;
+                }
+            };
+
+            let dialogue: Vec<_> = messages
+                .iter()
+                .filter(|m| m.sender_role == "user" || m.sender_role == "assistant")
+                .collect();
+
+            if dialogue.len() < 8 || dialogue.len() % 6 != 0 {
+                return;
+            }
+
+            let window: Vec<String> = dialogue
+                .iter()
+                .rev()
+                .take(24)
+                .rev()
+                .map(|m| format!("{}: {}", m.sender_role, Self::message_text(&m.content)))
+                .collect();
+
+            let summary_prompt = format!(
+                "Summarize this mental-health support conversation for future continuity. \
+                 Keep it concise, factual, and useful. Include user concerns, preferences, \
+                 current goals, and any safety-relevant context. Do not invent details.\n\n{}",
+                window.join("\n")
+            );
+
+            let request = ChatCompletionRequest {
+                messages: vec![
+                    ChatMessage {
+                        role: "system".into(),
+                        content: "You write concise rolling conversation summaries.".into(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    ChatMessage {
+                        role: "user".into(),
+                        content: summary_prompt,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                ],
+                temperature: 0.2,
+                top_p: 1.0,
+                max_tokens: Some(512),
+                tools: None,
+            };
+
+            let summary = match llm.chat(request).await {
+                Ok(resp) => resp.content.trim().to_string(),
+                Err(e) => {
+                    warn!(conversation_id = cid, error = %e, "failed to generate conversation summary");
+                    return;
+                }
+            };
+
+            if summary.is_empty() {
+                return;
+            }
+
+            let message_start_id = dialogue.first().map(|m| m.id);
+            let message_end_id = dialogue.last().map(|m| m.id);
+            let token_count =
+                Some(summary.split_whitespace().count().min(u32::MAX as usize) as u32);
+
+            if let Err(e) = summary_service
+                .save_summary(NewSummary {
+                    conversation_id: cid,
+                    user_id,
+                    summary_type: "rolling".into(),
+                    content: summary,
+                    message_start_id,
+                    message_end_id,
+                    token_count,
+                })
+                .await
+            {
+                warn!(conversation_id = cid, error = %e, "failed to save conversation summary");
+            }
+        });
+    }
+
+    fn message_text(content: &str) -> String {
+        serde_json::from_str::<Value>(content)
+            .ok()
+            .and_then(|v| {
+                v.get("text")
+                    .and_then(|text| text.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| content.to_string())
+    }
+
+    fn spawn_risk_persistence(
+        &self,
+        user_id: u64,
+        conversation_id: Option<u64>,
+        message_id: Option<u64>,
+        detection: &DetectionResult,
+    ) {
+        let risk_repo = Arc::clone(&self.risk_repo);
+        let det = detection.clone();
+
+        tokio::spawn(async move {
+            let evidence_json =
+                serde_json::to_string(&det.evidence).unwrap_or_else(|_| "[]".into());
+
+            if let Err(e) = risk_repo
+                .save(NewRiskDetectionResult {
+                    user_id,
+                    message_id,
+                    conversation_id,
+                    risk_level: det.risk_level,
+                    polarity: det.polarity,
+                    intent: det.intent,
+                    target: det.target,
+                    confidence: det.confidence,
+                    evidence: evidence_json,
+                    reason: if det.reason.is_empty() {
+                        None
+                    } else {
+                        Some(det.reason)
+                    },
+                    raw_payload: None,
+                    model_name: Some("rule-based".into()),
+                    detector_version: Some("1.0".into()),
+                })
+                .await
+            {
+                warn!(error = %e, "failed to persist risk detection");
             }
         });
     }

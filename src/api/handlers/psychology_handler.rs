@@ -67,6 +67,7 @@ pub struct PageQuery {
     pub page: Option<u64>,
     pub page_size: Option<u64>,
     pub category_id: Option<u64>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +89,19 @@ pub struct FavoriteDto {
 #[serde(rename_all = "camelCase")]
 pub struct FavoriteStatusDto {
     pub favorited: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleLikeRequest {
+    pub content_type: String,
+    pub content_id: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LikeStatusDto {
+    pub liked: bool,
 }
 
 // ── Categories ────────────────────────────────────────────────────────────────
@@ -311,10 +325,10 @@ pub async fn list_favorites(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<FavoriteDto>>, AppError> {
-    let content_type = query.category_id.map(|_| "article").or(None);
+    let content_type = query.content_type.clone();
     let favorites = state
         .psychology
-        .list_favorites(auth_user.user_id, content_type)
+        .list_favorites(auth_user.user_id, content_type.as_deref())
         .await?;
     let items: Vec<FavoriteDto> = favorites
         .into_iter()
@@ -332,4 +346,22 @@ pub async fn list_favorites(
         page_size,
         items,
     }))
+}
+
+// ── Likes ─────────────────────────────────────────────────────────────────────
+
+pub async fn toggle_like(
+    State(state): State<ApiState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ToggleLikeRequest>,
+) -> Result<Json<LikeStatusDto>, AppError> {
+    let liked = state
+        .psychology
+        .toggle_like(
+            Some(auth_user.user_id),
+            payload.content_type,
+            payload.content_id,
+        )
+        .await?;
+    Ok(Json(LikeStatusDto { liked }))
 }

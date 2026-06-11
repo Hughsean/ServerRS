@@ -22,6 +22,7 @@ pub mod psychology_qna;
 pub mod psychology_resources;
 pub mod refresh_tokens;
 pub mod risk_detection_results;
+pub mod stored_objects;
 pub mod user_diaries;
 pub mod user_knowledge_favorites;
 pub mod user_memories;

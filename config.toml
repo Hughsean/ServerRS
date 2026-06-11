@@ -13,8 +13,9 @@ max_connections = 10
 [jwt]
 # Must match Java's jwt.secret for token compatibility
 secret = "xNbA/ysbmriMqzBp7UIOxU7RgGQlUIJw7yyvQZaUwfw="
-# Token expiration in seconds (default: 24h)
-expiration_secs = 86400
+# Access/refresh token expiration in seconds
+access_ttl_secs = 86400
+refresh_ttl_secs = 604800
 
 # ── LLM / Ollama (used in Phase 3) ──
 [ollama]
@@ -31,7 +32,7 @@ confidence_threshold = 0.5
 # ── Session Management (used in Phase 3) ──
 [session]
 timeout_seconds = 120
-cleanup_interval_ms = 20000
+cleanup_interval_secs = 20
 
 # ── Plugins (weather, news, etc.) ──
 # [plugins]

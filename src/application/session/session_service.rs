@@ -69,10 +69,13 @@ impl SessionService {
         &self,
         page: u64,
         page_size: u64,
-        _risk_level: Option<RiskLevel>,
+        risk_level: Option<RiskLevel>,
     ) -> Result<(Vec<Conversation>, u64), AppError> {
-        // List all risk detections, collect unique conversation IDs
-        let (detections, _total) = self.risk_repo.find_by_user_id_paginated(0, 1000, 0).await?;
+        let offset = (page.saturating_sub(1)) * page_size;
+        let (detections, total) = self
+            .risk_repo
+            .find_all_paginated(page_size, offset, risk_level)
+            .await?;
         let mut conv_ids: Vec<u64> = detections
             .iter()
             .filter_map(|d| d.conversation_id)
@@ -80,12 +83,8 @@ impl SessionService {
         conv_ids.sort();
         conv_ids.dedup();
 
-        // Paginate over unique conversation IDs
-        let total = conv_ids.len() as u64;
-        let start = ((page.saturating_sub(1)) * page_size) as usize;
-        let end = start.saturating_add(page_size as usize).min(conv_ids.len());
         let mut convs = Vec::new();
-        for &cid in &conv_ids[start..end] {
+        for &cid in &conv_ids {
             if let Some(c) = self.conv_repo.find_by_id(cid).await? {
                 convs.push(c);
             }
@@ -115,13 +114,10 @@ impl SessionService {
 
     pub async fn admin_process_risk_detection(
         &self,
-        _id: u64,
+        id: u64,
         _admin_user_id: u64,
-        _notes: Option<String>,
+        notes: Option<String>,
     ) -> Result<RiskDetectionResult, AppError> {
-        // TODO: Implement real processing via RiskRepository update
-        Err(AppError::NotFound(
-            "risk detection processing not yet implemented".into(),
-        ))
+        self.risk_repo.mark_processed(id, notes).await
     }
 }

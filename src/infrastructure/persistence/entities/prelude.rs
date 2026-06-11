@@ -20,6 +20,7 @@ pub use super::psychology_qna::Entity as PsychologyQna;
 pub use super::psychology_resources::Entity as PsychologyResources;
 pub use super::refresh_tokens::Entity as RefreshTokens;
 pub use super::risk_detection_results::Entity as RiskDetectionResults;
+pub use super::stored_objects::Entity as StoredObjects;
 pub use super::user_diaries::Entity as UserDiaries;
 pub use super::user_knowledge_favorites::Entity as UserKnowledgeFavorites;
 pub use super::user_memories::Entity as UserMemories;

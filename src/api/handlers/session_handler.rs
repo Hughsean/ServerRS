@@ -1,6 +1,8 @@
-use axum::{Extension, Json, extract::Path, extract::Query};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query, State},
+};
 use serde::Deserialize;
-use std::sync::Arc;
 use validator::Validate;
 
 use crate::api::ApiState;
@@ -13,11 +15,14 @@ use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 pub async fn create_session(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<SessionCreateRequest>,
 ) -> Result<Json<SessionCreateResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
+    if payload.user_id != 0 && payload.user_id != auth_user.user_id {
+        return Err(AppError::Forbidden("not your session user".into()));
+    }
     let sess = state
         .session
         .create(
@@ -31,20 +36,26 @@ pub async fn create_session(
         prompt: sess.prompt,
         location: payload.location,
         user_profile: None,
-        timeout_seconds: 120,
+        timeout_seconds: state.session.timeout_seconds(),
         dialogue_id: sess.dialogue_id,
     }))
 }
 
 pub async fn post_message(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
     Path(session_id): Path<String>,
     Json(payload): Json<MessageRequest>,
 ) -> Result<Json<MessageResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
     let result = state
         .session
-        .process_message(&session_id, &payload.text, payload.emotion.as_deref())
+        .process_message(
+            auth_user.user_id,
+            &session_id,
+            &payload.text,
+            payload.emotion.as_deref(),
+        )
         .await?
         .ok_or(AppError::NotFound("session not found or expired".into()))?;
     Ok(Json(MessageResponse {
@@ -57,24 +68,25 @@ pub async fn post_message(
 }
 
 pub async fn get_session_status(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionStatusResponse>, AppError> {
     let status = state
         .session
-        .status(&session_id)
-        .await
+        .status(auth_user.user_id, &session_id)
+        .await?
         .ok_or(AppError::NotFound("session not found or expired".into()))?;
     Ok(Json(SessionStatusResponse {
-        session_id: status["sessionId"].as_str().unwrap_or("").into(),
-        user_id: status["userId"].as_u64().unwrap_or(0),
-        dialogue_id: status["dialogueId"].as_u64(),
-        timeout_seconds: status["timeoutSeconds"].as_u64().unwrap_or(120),
+        session_id: status.id,
+        user_id: status.user_id,
+        dialogue_id: status.dialogue_id,
+        timeout_seconds: status.timeout_seconds,
     }))
 }
 
 pub async fn list_conversations(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
 ) -> Result<Json<Vec<ConversationResponse>>, AppError> {
@@ -99,10 +111,13 @@ pub async fn list_conversations(
 }
 
 pub async fn list_conversation_messages(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    Path((_user_id, conv_id)): Path<(u64, u64)>,
+    Path((user_id, conv_id)): Path<(u64, u64)>,
 ) -> Result<Json<Vec<ConversationMessageResponse>>, AppError> {
+    if auth_user.user_id != user_id {
+        return Err(AppError::Forbidden("not your conversations".into()));
+    }
     let msgs = state
         .query
         .list_messages(conv_id, auth_user.user_id)
@@ -130,7 +145,7 @@ pub struct RiskListQuery {
 }
 
 pub async fn list_risk_detections(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<RiskListQuery>,
 ) -> Result<Json<RiskDetectionPage>, AppError> {

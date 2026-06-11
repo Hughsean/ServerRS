@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::domain::storage::{ObjectBytes, ObjectStorage, PutObjectInput, StoredObject};
 use crate::shared::error::AppError;
@@ -31,7 +32,8 @@ impl ObjectStorage for LocalObjectStorage {
             .await
             .map_err(|e| AppError::internal(format!("failed to create storage dir: {e}")))?;
 
-        let path = dir.join(&sha256);
+        let filename = format!("{}-{sha256}", Uuid::new_v4());
+        let path = dir.join(&filename);
         tokio::fs::write(&path, &input.data)
             .await
             .map_err(|e| AppError::internal(format!("failed to write object: {e}")))?;
@@ -39,7 +41,7 @@ impl ObjectStorage for LocalObjectStorage {
         Ok(StoredObject {
             id: 0, // assigned by DB
             bucket: input.bucket,
-            object_key: format!("{}/{}", prefix, sha256),
+            object_key: format!("{}/{}", prefix, filename),
             original_name: input.original_name,
             mime_type: input.mime_type,
             size_bytes: input.data.len() as u64,
@@ -51,21 +53,33 @@ impl ObjectStorage for LocalObjectStorage {
         })
     }
 
-    async fn get(&self, object_id: u64) -> Result<ObjectBytes, AppError> {
-        Err(AppError::NotFound(format!(
-            "object {object_id}: direct filesystem lookup not yet implemented; use StoredObjectRepository first"
-        )))
+    async fn get(&self, object: &StoredObject) -> Result<ObjectBytes, AppError> {
+        let path = self.base_path.join(&object.bucket).join(&object.object_key);
+        let data = tokio::fs::read(&path).await.map_err(|e| {
+            AppError::NotFound(format!(
+                "object {} file not found at {}: {e}",
+                object.id,
+                path.display()
+            ))
+        })?;
+
+        Ok(ObjectBytes {
+            data,
+            mime_type: object.mime_type.clone(),
+            original_name: object.original_name.clone(),
+        })
     }
 
-    async fn delete(&self, object_id: u64) -> Result<(), AppError> {
-        Err(AppError::NotFound(format!(
-            "object {object_id}: direct filesystem delete not yet implemented; use StoredObjectRepository first"
-        )))
-    }
-
-    async fn get_metadata(&self, object_id: u64) -> Result<StoredObject, AppError> {
-        Err(AppError::NotFound(format!(
-            "object {object_id}: metadata lookup not yet implemented; use StoredObjectRepository first"
-        )))
+    async fn delete(&self, object: &StoredObject) -> Result<(), AppError> {
+        let path = self.base_path.join(&object.bucket).join(&object.object_key);
+        match tokio::fs::remove_file(&path).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(AppError::internal(format!(
+                "failed to delete object {} at {}: {e}",
+                object.id,
+                path.display()
+            ))),
+        }
     }
 }

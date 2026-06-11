@@ -1,17 +1,28 @@
 use std::sync::Arc;
 
-use crate::domain::storage::{ObjectBytes, ObjectStorage, PutObjectInput, StoredObject};
+use crate::domain::storage::{
+    ObjectBytes, ObjectStorage, PutObjectInput, StoredObject, StoredObjectRepository,
+};
 use crate::shared::config::StorageConfig;
 use crate::shared::error::AppError;
 
 pub struct ObjectService {
     storage: Arc<dyn ObjectStorage>,
+    repo: Arc<dyn StoredObjectRepository>,
     config: StorageConfig,
 }
 
 impl ObjectService {
-    pub fn new(storage: Arc<dyn ObjectStorage>, config: StorageConfig) -> Self {
-        Self { storage, config }
+    pub fn new(
+        storage: Arc<dyn ObjectStorage>,
+        repo: Arc<dyn StoredObjectRepository>,
+        config: StorageConfig,
+    ) -> Self {
+        Self {
+            storage,
+            repo,
+            config,
+        }
     }
 
     pub async fn upload(
@@ -46,19 +57,46 @@ impl ObjectService {
             data,
             created_by,
         };
-        self.storage.put(input).await
+        let stored = self.storage.put(input).await?;
+        match self.repo.save(stored.clone()).await {
+            Ok(object) => Ok(object),
+            Err(e) => {
+                if let Err(delete_err) = self.storage.delete(&stored).await {
+                    tracing::warn!(error = %delete_err, "failed to clean up object after metadata save failed");
+                }
+                Err(e)
+            }
+        }
     }
 
     pub async fn get_bytes(&self, object_id: u64) -> Result<ObjectBytes, AppError> {
-        self.storage.get(object_id).await
+        let object = self
+            .repo
+            .find_by_id(object_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))?;
+        self.storage.get(&object).await
     }
 
     pub async fn get_metadata(&self, object_id: u64) -> Result<StoredObject, AppError> {
-        self.storage.get_metadata(object_id).await
+        self.repo
+            .find_by_id(object_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))
     }
 
-    pub async fn delete(&self, _user_id: u64, object_id: u64) -> Result<(), AppError> {
-        // TODO: Add reference count check (music, community, etc.)
-        self.storage.delete(object_id).await
+    pub async fn delete(&self, user_id: u64, object_id: u64) -> Result<(), AppError> {
+        let object = self
+            .repo
+            .find_by_id(object_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))?;
+
+        if object.created_by != Some(user_id) {
+            return Err(AppError::Forbidden("not your object".into()));
+        }
+
+        self.storage.delete(&object).await?;
+        self.repo.delete_by_id(object_id).await
     }
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 
 use crate::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
@@ -53,29 +53,43 @@ impl SeaOrmMusicRepository {
 #[async_trait]
 impl MusicRepository for SeaOrmMusicRepository {
     async fn save(&self, track: NewMusicTrack) -> Result<MusicTrack, AppError> {
-        // file_data has #[sea_orm(ignore)] — SeaORM cannot insert/update LONGBLOB directly.
-        // Insert via ActiveModel; file_data defaults to empty in the database.
         let now = chrono::Utc::now();
-        let am = music::ActiveModel {
-            title: Set(track.title),
-            artist: Set(track.artist),
-            album: Set(track.album),
-            category: Set(track.category),
-            description: Set(track.description),
-            duration: Set(track.duration),
-            file_size: Set(track.file_size),
-            mime_type: Set(track.mime_type),
-            cover_image: Set(track.cover_image),
-            lyrics: Set(track.lyrics),
-            tags: Set(track.tags),
-            mood_tags: Set(track.mood_tags),
-            status: Set(1_i8),
-            created_at: Set(now),
-            updated_at: Set(now),
-            ..Default::default()
-        };
-        let inserted = am.insert(&self.db).await.map_err(map_err)?;
-        // The inserted model will have file_data populated by select_as.
+        let stmt = Statement::from_sql_and_values(
+            self.db.get_database_backend(),
+            r#"
+            INSERT INTO music
+                (title, artist, album, category, description, duration, file_data, file_size,
+                 mime_type, cover_image, lyrics, tags, mood_tags, status, created_at, updated_at)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+            vec![
+                Value::String(Some(track.title)),
+                Value::String(track.artist),
+                Value::String(track.album),
+                Value::String(track.category),
+                Value::String(track.description),
+                Value::Unsigned(track.duration),
+                Value::Bytes(Some(track.file_data.into_bytes())),
+                Value::BigUnsigned(Some(track.file_size)),
+                Value::String(Some(track.mime_type)),
+                Value::Bytes(track.cover_image),
+                Value::String(track.lyrics),
+                Value::Json(track.tags.map(Box::new)),
+                Value::Json(track.mood_tags.map(Box::new)),
+                Value::TinyInt(Some(1_i8)),
+                Value::ChronoDateTimeUtc(Some(now)),
+                Value::ChronoDateTimeUtc(Some(now)),
+            ],
+        );
+
+        let result = self.db.execute_raw(stmt).await.map_err(map_err)?;
+        let id = result.last_insert_id();
+        let inserted = music::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::Internal("created music track not found".into()))?;
         Ok(map(inserted))
     }
 
@@ -163,31 +177,5 @@ impl MusicRepository for SeaOrmMusicRepository {
             .map_err(map_err)?
             .rows_affected
             > 0)
-    }
-}
-
-fn opt_str(s: &Option<String>) -> String {
-    match s {
-        Some(v) => format!("'{}'", v.replace('\'', "\\'")),
-        None => "NULL".to_string(),
-    }
-}
-
-fn opt_num(n: Option<u32>) -> String {
-    n.map(|v| v.to_string())
-        .unwrap_or_else(|| "NULL".to_string())
-}
-
-fn opt_blob(b: &Option<Vec<u8>>) -> String {
-    match b {
-        Some(_v) => "NULL".to_string(), // BLOB writes via raw SQL impractical here; accept limitation
-        None => "NULL".to_string(),
-    }
-}
-
-fn opt_json(j: &Option<serde_json::Value>) -> String {
-    match j {
-        Some(v) => format!("'{}'", v.to_string().replace('\'', "\\'")),
-        None => "NULL".to_string(),
     }
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::application::auth::auth_service::RefreshTokenStore;
+use crate::domain::auth::refresh_token_store::RefreshTokenStore;
 use crate::shared::error::AppError;
 
 use super::super::entities::refresh_tokens;

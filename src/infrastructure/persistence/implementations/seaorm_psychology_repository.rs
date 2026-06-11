@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 
 use crate::domain::psychology::{
@@ -12,8 +12,8 @@ use crate::domain::psychology::{
 use crate::shared::error::AppError;
 
 use super::super::entities::{
-    psychology_articles, psychology_categories, psychology_qna, psychology_resources,
-    user_knowledge_favorites,
+    content_likes, psychology_articles, psychology_categories, psychology_qna,
+    psychology_resources, user_knowledge_favorites,
 };
 
 pub struct SeaOrmPsychologyRepository {
@@ -105,6 +105,87 @@ fn map_favorite(m: user_knowledge_favorites::Model) -> KnowledgeFavorite {
         content_id: m.content_id,
         created_at: m.created_at,
     }
+}
+
+fn normalize_psychology_content_type(raw: &str) -> Result<&'static str, AppError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "article" | "psychology_article" => Ok("article"),
+        "qna" | "psychology_qna" => Ok("qna"),
+        "resource" | "psychology_resource" => Ok("resource"),
+        _ => Err(AppError::Validation(
+            "content_type must be article, qna, or resource".into(),
+        )),
+    }
+}
+
+async fn ensure_content_exists<C>(
+    db: &C,
+    content_type: &str,
+    content_id: u64,
+) -> Result<(), AppError>
+where
+    C: ConnectionTrait,
+{
+    let exists = match content_type {
+        "article" => psychology_articles::Entity::find_by_id(content_id)
+            .one(db)
+            .await
+            .map_err(map_err)?
+            .is_some(),
+        "qna" => psychology_qna::Entity::find_by_id(content_id)
+            .one(db)
+            .await
+            .map_err(map_err)?
+            .is_some(),
+        "resource" => psychology_resources::Entity::find_by_id(content_id)
+            .one(db)
+            .await
+            .map_err(map_err)?
+            .is_some(),
+        _ => false,
+    };
+
+    if exists {
+        Ok(())
+    } else {
+        Err(AppError::NotFound(format!(
+            "{content_type} {content_id} not found"
+        )))
+    }
+}
+
+async fn update_like_count<C>(
+    db: &C,
+    content_type: &str,
+    content_id: u64,
+    liked: bool,
+) -> Result<(), AppError>
+where
+    C: ConnectionTrait,
+{
+    let assignment = if liked {
+        "like_count = like_count + 1"
+    } else {
+        "like_count = GREATEST(like_count - 1, 0)"
+    };
+
+    let sql = match content_type {
+        "article" => {
+            format!("UPDATE psychology_articles SET {assignment} WHERE article_id = {content_id}")
+        }
+        "qna" => format!("UPDATE psychology_qna SET {assignment} WHERE qna_id = {content_id}"),
+        "resource" => {
+            format!("UPDATE psychology_resources SET {assignment} WHERE resource_id = {content_id}")
+        }
+        _ => {
+            return Err(AppError::Validation(
+                "content_type must be article, qna, or resource".into(),
+            ));
+        }
+    };
+
+    db.execute_unprepared(&sql).await.map_err(map_err)?;
+    Ok(())
 }
 
 #[async_trait]
@@ -648,9 +729,41 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             .map(|v| v.into_iter().map(map_favorite).collect())
     }
 
-    // ── Likes (not supported — no likes table exists) ──
+    // ── Likes ──
 
-    async fn toggle_like(&self, _new: NewContentLike) -> Result<bool, AppError> {
-        Err(AppError::Internal("likes are not supported".into()))
+    async fn toggle_like(&self, new: NewContentLike) -> Result<bool, AppError> {
+        let content_type = normalize_psychology_content_type(&new.content_type)?;
+        ensure_content_exists(&self.db, content_type, new.content_id).await?;
+
+        let txn = self.db.begin().await.map_err(map_err)?;
+        let existing = content_likes::Entity::find()
+            .filter(content_likes::Column::UserId.eq(new.user_id))
+            .filter(content_likes::Column::ContentType.eq(content_type))
+            .filter(content_likes::Column::ContentId.eq(new.content_id))
+            .one(&txn)
+            .await
+            .map_err(map_err)?;
+
+        let liked = if let Some(record) = existing {
+            content_likes::Entity::delete_by_id(record.like_id)
+                .exec(&txn)
+                .await
+                .map_err(map_err)?;
+            false
+        } else {
+            let am = content_likes::ActiveModel {
+                user_id: Set(new.user_id),
+                content_type: Set(content_type.to_string()),
+                content_id: Set(new.content_id),
+                created_at: Set(chrono::Utc::now().naive_utc()),
+                ..Default::default()
+            };
+            am.insert(&txn).await.map_err(map_err)?;
+            true
+        };
+
+        update_like_count(&txn, content_type, new.content_id, liked).await?;
+        txn.commit().await.map_err(map_err)?;
+        Ok(liked)
     }
 }

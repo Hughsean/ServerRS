@@ -35,6 +35,10 @@ struct JwtClaims {
 impl JwtTokenService {
     pub fn new(secret: &str, access_ttl_seconds: u64) -> Self {
         let refresh_ttl_seconds = access_ttl_seconds * 7; // refresh lives 7x longer
+        Self::new_with_ttls(secret, access_ttl_seconds, refresh_ttl_seconds)
+    }
+
+    pub fn new_with_ttls(secret: &str, access_ttl_seconds: u64, refresh_ttl_seconds: u64) -> Self {
         Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),

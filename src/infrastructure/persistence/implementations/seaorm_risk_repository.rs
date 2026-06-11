@@ -4,6 +4,7 @@ use sea_orm::{
     QueryOrder, Set,
 };
 
+use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
@@ -132,6 +133,44 @@ impl RiskRepository for SeaOrmRiskRepository {
             .await
             .map_err(map_err)
             .map(|v| v.into_iter().map(map).collect())
+    }
+
+    async fn find_all_paginated(
+        &self,
+        limit: u64,
+        offset: u64,
+        risk_level: Option<RiskLevel>,
+    ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
+        let mut query = risk_detection_results::Entity::find();
+        if let Some(level) = risk_level {
+            query = query.filter(risk_detection_results::Column::RiskLevel.eq(enum_to_str(&level)));
+        }
+
+        let paginator = query
+            .order_by_desc(risk_detection_results::Column::CreatedAt)
+            .paginate(&self.db, limit);
+        let count = paginator.num_items().await.map_err(map_err)?;
+        let page_num = offset / limit;
+        let items = paginator.fetch_page(page_num).await.map_err(map_err)?;
+        Ok((items.into_iter().map(map).collect(), count))
+    }
+
+    async fn mark_processed(
+        &self,
+        id: u64,
+        notes: Option<String>,
+    ) -> Result<RiskDetectionResult, AppError> {
+        let existing = risk_detection_results::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::NotFound(format!("risk detection {id} not found")))?;
+
+        let mut active: risk_detection_results::ActiveModel = existing.into();
+        active.is_processed = Set(1_i8);
+        active.process_notes = Set(notes);
+        let updated = active.update(&self.db).await.map_err(map_err)?;
+        Ok(map(updated))
     }
 
     async fn delete_by_conversation_id(&self, cid: u64) -> Result<u64, AppError> {

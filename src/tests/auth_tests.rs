@@ -112,6 +112,7 @@ mod tests {
         let config = AuthConfig {
             max_attempts: 3,
             lockout_secs: 300,
+            access_ttl_secs: 900,
         };
         let user = "testuser";
 

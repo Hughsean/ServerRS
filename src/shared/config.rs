@@ -58,7 +58,7 @@ pub struct DatabaseConfig {
 pub struct JwtConfig {
     #[serde(default = "default_jwt_secret")]
     pub secret: String,
-    #[serde(default = "default_access_ttl")]
+    #[serde(default = "default_access_ttl", alias = "expiration_secs")]
     pub access_ttl_secs: u64,
     #[serde(default = "default_refresh_ttl")]
     pub refresh_ttl_secs: u64,
@@ -110,6 +110,16 @@ pub struct SessionConfig {
     pub timeout_seconds: u64,
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval_secs: u64,
+    #[serde(default)]
+    pub cleanup_interval_ms: Option<u64>,
+}
+
+impl SessionConfig {
+    pub fn cleanup_interval_seconds(&self) -> u64 {
+        self.cleanup_interval_ms
+            .map(|ms| (ms / 1000).max(1))
+            .unwrap_or(self.cleanup_interval_secs)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -324,6 +334,7 @@ impl Default for SessionConfig {
         Self {
             timeout_seconds: default_session_timeout(),
             cleanup_interval_secs: default_cleanup_interval(),
+            cleanup_interval_ms: None,
         }
     }
 }

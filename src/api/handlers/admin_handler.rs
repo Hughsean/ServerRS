@@ -1,11 +1,10 @@
 use axum::{
     Extension, Json,
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::api::ApiState;
 use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
@@ -105,7 +104,7 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 pub async fn list_users(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<PaginatedUsers>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
@@ -140,7 +139,7 @@ pub async fn list_users(
 }
 
 pub async fn get_user(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(id): Path<u64>,
 ) -> Result<Json<UserDto>, AppError> {
     let u = state
@@ -163,7 +162,7 @@ pub async fn get_user(
 }
 
 pub async fn patch_user(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(id): Path<u64>,
     Json(body): Json<AdminPatchUser>,
 ) -> Result<Json<UserDto>, AppError> {
@@ -195,7 +194,7 @@ pub async fn patch_user(
 }
 
 pub async fn delete_user(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
     state.user.admin_delete_user(id).await?;
@@ -203,7 +202,7 @@ pub async fn delete_user(
 }
 
 pub async fn list_risk_conversations(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Query(q): Query<RiskConvQuery>,
 ) -> Result<Json<PaginatedRiskConversations>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
@@ -234,7 +233,7 @@ pub async fn list_risk_conversations(
 }
 
 pub async fn get_risk_conversation(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(id): Path<u64>,
 ) -> Result<Json<RiskConversationDetail>, AppError> {
     let conv = state
@@ -292,7 +291,7 @@ pub async fn get_risk_conversation(
 }
 
 pub async fn process_risk_detection(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
     Json(body): Json<ProcessNotes>,

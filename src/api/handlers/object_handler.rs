@@ -1,12 +1,11 @@
 use axum::{
     Extension, Json,
-    extract::{Multipart, Path, Query},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, HeaderValue, header},
     response::IntoResponse,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::api::ApiState;
 use crate::application::auth::auth_service::AuthenticatedUser;
@@ -32,7 +31,7 @@ pub struct StoredObjectDto {
 }
 
 pub async fn upload_object(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
@@ -92,7 +91,7 @@ pub async fn upload_object(
 }
 
 pub async fn get_object(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(object_id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
     let obj = state.objects.get_bytes(object_id).await?;
@@ -108,7 +107,7 @@ pub async fn get_object(
 }
 
 pub async fn get_object_metadata(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Path(object_id): Path<u64>,
 ) -> Result<Json<StoredObjectDto>, AppError> {
     let result = state.objects.get_metadata(object_id).await?;
@@ -125,7 +124,7 @@ pub async fn get_object_metadata(
 }
 
 pub async fn delete_object(
-    Extension(state): Extension<Arc<ApiState>>,
+    State(state): State<ApiState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(object_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, AppError> {

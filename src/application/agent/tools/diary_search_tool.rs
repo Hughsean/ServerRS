@@ -1,17 +1,20 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::application::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
+use crate::domain::diary::DiaryRepository;
 use crate::shared::error::AppError;
 
-/// Placeholder tool for searching user diary entries.
-/// Currently returns an empty result set — implementation pending diary search service.
-pub struct DiarySearchTool;
+pub struct DiarySearchTool {
+    diary_repo: Arc<dyn DiaryRepository>,
+}
 
 impl DiarySearchTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(diary_repo: Arc<dyn DiaryRepository>) -> Self {
+        Self { diary_repo }
     }
 }
 
@@ -32,13 +35,62 @@ impl AgentTool for DiarySearchTool {
                 "query": {
                     "type": "string",
                     "description": "The search query for diary entries."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Maximum number of diary entries to return."
                 }
             },
             "required": ["query"]
         })
     }
 
-    async fn execute(&self, _context: &AgentContext, _args: Value) -> Result<String, AppError> {
-        Ok(json!({"results": [], "message": "Diary search not yet implemented."}).to_string())
+    async fn execute(&self, context: &AgentContext, args: Value) -> Result<String, AppError> {
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(1, 20);
+
+        let (diaries, _) = self
+            .diary_repo
+            .find_by_user_id(context.user_id, 100, 0)
+            .await?;
+        let mut results = Vec::new();
+
+        for diary in diaries {
+            let haystack = format!(
+                "{}\n{}\n{}",
+                diary.title,
+                diary.content,
+                diary.mood_description.clone().unwrap_or_default()
+            )
+            .to_lowercase();
+
+            if query.is_empty() || haystack.contains(&query) {
+                let excerpt: String = diary.content.chars().take(240).collect();
+                results.push(json!({
+                    "id": diary.id,
+                    "title": diary.title,
+                    "excerpt": excerpt,
+                    "moodDescription": diary.mood_description,
+                    "createdAt": diary.created_at.to_rfc3339(),
+                }));
+            }
+
+            if results.len() >= limit as usize {
+                break;
+            }
+        }
+
+        Ok(json!({ "results": results }).to_string())
     }
 }

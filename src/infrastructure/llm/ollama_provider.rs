@@ -208,6 +208,19 @@ impl LlmProvider for OllamaProvider {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, LlmError> {
         let url = self.chat_url();
+        let tools = request.tools.map(|tools| {
+            tools
+                .into_iter()
+                .map(|t| ToolDef {
+                    type_: "function".into(),
+                    function: ToolFunction {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    },
+                })
+                .collect()
+        });
 
         let body = ChatRequest {
             model: self.model.clone(),
@@ -215,7 +228,7 @@ impl LlmProvider for OllamaProvider {
             temperature: request.temperature,
             top_p: request.top_p,
             max_tokens: request.max_tokens,
-            tools: None,
+            tools,
         };
 
         debug!("OllamaProvider.chat -> {url}");

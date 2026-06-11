@@ -88,6 +88,7 @@ impl ConversationOrchestrator {
         current_dialogue_id: Option<u64>,
     ) -> Result<u64, AppError> {
         if let Some(did) = current_dialogue_id {
+            self.validate_conversation_access(user_id, did).await?;
             return Ok(did);
         }
         let conv = self
@@ -109,6 +110,24 @@ impl ConversationOrchestrator {
             }))
             .await;
         Ok(conv.id)
+    }
+
+    pub async fn validate_conversation_access(
+        &self,
+        user_id: u64,
+        dialogue_id: u64,
+    ) -> Result<(), AppError> {
+        let conv = self
+            .conversation_repo
+            .find_by_id(dialogue_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("conversation not found".into()))?;
+
+        if conv.user_id != user_id {
+            return Err(AppError::Forbidden("not your conversation".into()));
+        }
+
+        Ok(())
     }
 
     pub async fn chat(&self, messages: &[ChatMessage]) -> String {
