@@ -1,5 +1,6 @@
 mod api;
 mod application;
+mod bootstrap;
 mod domain;
 mod infrastructure;
 mod shared;
@@ -9,7 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use application::agent::agent_context::AgentContextBuilder;
 use application::agent::agent_runtime::{AgentRuntime, AgentTool};
-use application::auth::auth_service::AuthService;
 use application::community::community_service::CommunityService;
 use application::depression::depression_service::DepressionService;
 use application::diary::diary_service::DiaryService;
@@ -25,49 +25,17 @@ use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
 use application::storage::object_service::ObjectService;
 use application::user::user_service::UserService;
-use domain::agent::AgentEventRepository;
-use domain::auth::password_service::PasswordService;
 use domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use domain::auth::refresh_token_store::RefreshTokenStore;
-use domain::auth::token_service::TokenService;
-use domain::community::CommunityRepository;
 use domain::conversation::conversation_repository::ConversationRepository;
-use domain::depression::DepressionRepository;
-use domain::diary::DiaryRepository;
 use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider, PromptProvider};
-use domain::memory::MemoryRepository;
-use domain::music::MusicRepository;
-use domain::psychology::PsychologyRepository;
-use domain::rag::RAGRepository;
 use domain::risk::risk_detector::RiskDetector;
-use domain::risk::risk_repository::RiskRepository;
-use domain::storage::{ObjectStorage, StoredObjectRepository};
-use domain::summary::SummaryRepository;
+use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
-use domain::user::user_profile_repository::UserProfileRepository;
-use domain::user::user_repository::UserRepository;
-use infrastructure::auth::bcrypt_password_hasher::BcryptPasswordHasher;
-use infrastructure::auth::jwt_token_service::JwtTokenService;
 use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
 use infrastructure::llm::ollama_client::OllamaClient;
 use infrastructure::llm::ollama_provider::OllamaProvider;
 use infrastructure::llm::prompt_provider::PromptProvider as InfraPromptProvider;
-use infrastructure::persistence::implementations::seaorm_agent_repository::SeaOrmAgentEventRepository;
-use infrastructure::persistence::implementations::seaorm_community_repository::SeaOrmCommunityRepository;
-use infrastructure::persistence::implementations::seaorm_conversation_repository::SeaOrmConversationRepository;
-use infrastructure::persistence::implementations::seaorm_conversation_summary_repository::SeaOrmConversationSummaryRepository;
-use infrastructure::persistence::implementations::seaorm_depression_repository::SeaOrmDepressionRepository;
-use infrastructure::persistence::implementations::seaorm_diary_repository::SeaOrmDiaryRepository;
-use infrastructure::persistence::implementations::seaorm_memory_repository::SeaOrmMemoryRepository;
-use infrastructure::persistence::implementations::seaorm_music_repository::SeaOrmMusicRepository;
-use infrastructure::persistence::implementations::seaorm_psychology_repository::SeaOrmPsychologyRepository;
-use infrastructure::persistence::implementations::seaorm_rag_repository::SeaOrmRAGRepository;
-use infrastructure::persistence::implementations::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
-use infrastructure::persistence::implementations::seaorm_risk_repository::SeaOrmRiskRepository;
-use infrastructure::persistence::implementations::seaorm_stored_object_repository::SeaOrmStoredObjectRepository;
-use infrastructure::persistence::implementations::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
-use infrastructure::persistence::implementations::seaorm_user_repository::SeaOrmUserRepository;
 use infrastructure::persistence::seaorm_db::init_db;
 use infrastructure::storage::local_storage::LocalObjectStorage;
 use infrastructure::tasks::alert_handler::{AlertConfig, AlertHandler};
@@ -100,32 +68,26 @@ async fn run() -> Result<(), std::io::Error> {
     let db = init_db(&config.database.url).await.expect("db init");
 
     // ── Repositories ──
-    let user_repo: Arc<dyn UserRepository> = Arc::new(SeaOrmUserRepository::new(db.clone()));
-    let profile_repo: Arc<dyn UserProfileRepository> =
-        Arc::new(SeaOrmUserProfileRepository::new(db.clone()));
-    let conv_repo: Arc<dyn ConversationRepository> =
-        Arc::new(SeaOrmConversationRepository::new(db.clone()));
-    let risk_repo: Arc<dyn RiskRepository> = Arc::new(SeaOrmRiskRepository::new(db.clone()));
-    let psychology_repo: Arc<dyn PsychologyRepository> =
-        Arc::new(SeaOrmPsychologyRepository::new(db.clone()));
-    let depression_repo: Arc<dyn DepressionRepository> =
-        Arc::new(SeaOrmDepressionRepository::new(db.clone()));
-    let diary_repo: Arc<dyn DiaryRepository> = Arc::new(SeaOrmDiaryRepository::new(db.clone()));
-    let music_repo: Arc<dyn MusicRepository> = Arc::new(SeaOrmMusicRepository::new(db.clone()));
-    let community_repo: Arc<dyn CommunityRepository> =
-        Arc::new(SeaOrmCommunityRepository::new(db.clone()));
-    let agent_event_repo: Arc<dyn AgentEventRepository> =
-        Arc::new(SeaOrmAgentEventRepository::new(db.clone()));
-    let stored_object_repo: Arc<dyn StoredObjectRepository> =
-        Arc::new(SeaOrmStoredObjectRepository::new(db.clone()));
+    let repos = bootstrap::repos::build_repos(&db);
 
-    // ── RAG / Memory / Summary repos (real SeaORM implementations) ──
-    let rag_repo: Arc<dyn RAGRepository> = Arc::new(SeaOrmRAGRepository::new(db.clone()));
-    let memory_repo: Arc<dyn MemoryRepository> = Arc::new(SeaOrmMemoryRepository::new(db.clone()));
-    let summary_repo: Arc<dyn SummaryRepository> =
-        Arc::new(SeaOrmConversationSummaryRepository::new(db.clone()));
+    let user_repo = Arc::clone(&repos.user_repo);
+    let profile_repo = Arc::clone(&repos.profile_repo);
+    let conv_repo = Arc::clone(&repos.conv_repo);
+    let risk_repo = Arc::clone(&repos.risk_repo);
+    let psychology_repo = Arc::clone(&repos.psychology_repo);
+    let depression_repo = Arc::clone(&repos.depression_repo);
+    let diary_repo = Arc::clone(&repos.diary_repo);
+    let music_repo = Arc::clone(&repos.music_repo);
+    let community_repo = Arc::clone(&repos.community_repo);
+    let agent_event_repo = Arc::clone(&repos.agent_event_repo);
+    let stored_object_repo = Arc::clone(&repos.stored_object_repo);
+    let rag_repo = Arc::clone(&repos.rag_repo);
+    let memory_repo = Arc::clone(&repos.memory_repo);
+    let summary_repo = Arc::clone(&repos.summary_repo);
 
     // ── Tasks ──
+    let mut background = bootstrap::tasks::BackgroundTasks::new();
+
     let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));
     let rate_limit_handler = Arc::new(RateLimitHandler::new(
         RateLimitConfig::default(),
@@ -133,16 +95,16 @@ async fn run() -> Result<(), std::io::Error> {
     ));
 
     let (tp, tw) = new_task_channel(256);
-    let tw_handle = tokio::spawn(
+    background.spawn(tokio::spawn(
         tw.with_handler(Arc::new(LoggingHandler))
             .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
             .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>)
             .run(),
-    );
+    ));
     let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
 
     // Periodic cleanup for stateful handlers
-    let alert_cleanup = {
+    background.spawn({
         let h = Arc::clone(&alert_handler);
         tokio::spawn(async move {
             let mut i = tokio::time::interval(tokio::time::Duration::from_secs(300));
@@ -151,8 +113,8 @@ async fn run() -> Result<(), std::io::Error> {
                 h.cleanup().await;
             }
         })
-    };
-    let rl_cleanup = {
+    });
+    background.spawn({
         let h = Arc::clone(&rate_limit_handler);
         tokio::spawn(async move {
             let mut i = tokio::time::interval(tokio::time::Duration::from_secs(120));
@@ -161,17 +123,11 @@ async fn run() -> Result<(), std::io::Error> {
                 h.cleanup().await;
             }
         })
-    };
+    });
 
     // ── Auth infra ──
-    let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
-    let revoke_repo: Arc<SeaOrmRefreshTokenStore> =
-        Arc::new(SeaOrmRefreshTokenStore::new(db.clone()));
-    let jwt: Arc<JwtTokenService> = Arc::new(JwtTokenService::new_with_ttls(
-        &config.jwt.secret,
-        config.jwt.access_ttl_secs,
-        config.jwt.refresh_ttl_secs,
-    ));
+    let auth_graph =
+        bootstrap::auth::build_auth(&db, &config.jwt, &config.auth, &user_repo, &task_publisher);
 
     // ── LLM (infrastructure → domain trait) ──
     // Legacy LlmClient (used by ConversationOrchestrator and DiaryService)
@@ -265,18 +221,7 @@ async fn run() -> Result<(), std::io::Error> {
     let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
 
     // ── Services ──
-    let auth: Arc<AuthService> = Arc::new(AuthService::new(
-        Arc::clone(&user_repo),
-        Arc::clone(&password_service) as Arc<dyn PasswordService>,
-        Arc::clone(&jwt) as Arc<dyn TokenService>,
-        Arc::clone(&revoke_repo) as Arc<dyn RefreshTokenStore>,
-        Arc::clone(&task_publisher),
-        application::auth::auth_service::AuthConfig {
-            max_attempts: config.auth.max_login_attempts,
-            lockout_secs: config.auth.lockout_duration_secs,
-            access_ttl_secs: config.jwt.access_ttl_secs,
-        },
-    ));
+    let auth = Arc::clone(&auth_graph.auth_service);
     let user: Arc<UserService> = Arc::new(UserService::new(
         Arc::clone(&user_repo),
         Arc::clone(&profile_repo),
@@ -375,7 +320,7 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&agent_runtime),
         config.session.timeout_seconds,
     ));
-    let sess_cleanup = {
+    background.spawn({
         let s = Arc::clone(&session);
         let cleanup_interval =
             tokio::time::Duration::from_secs(config.session.cleanup_interval_seconds());
@@ -386,7 +331,7 @@ async fn run() -> Result<(), std::io::Error> {
                 s.cleanup().await;
             }
         })
-    };
+    });
 
     // ── Domain services with real SeaORM repositories ──
     let psychology: Arc<PsychologyService> =
@@ -410,7 +355,7 @@ async fn run() -> Result<(), std::io::Error> {
     ));
 
     // ── API ──
-    let state = api::ApiState {
+    let services = bootstrap::state::ServiceGraph {
         auth,
         user,
         session,
@@ -426,6 +371,8 @@ async fn run() -> Result<(), std::io::Error> {
         memory: memory_svc,
         agent_runtime,
     };
+
+    let state = bootstrap::state::build_state(&services);
     let app = api::router::build_router(state);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -435,10 +382,7 @@ async fn run() -> Result<(), std::io::Error> {
     let r = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
-    tw_handle.abort();
-    sess_cleanup.abort();
-    alert_cleanup.abort();
-    rl_cleanup.abort();
+    background.abort_all();
     r
 }
 

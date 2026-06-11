@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::ApiState;
+use crate::api::CommunityState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
@@ -92,7 +92,7 @@ fn comment_to_dto(c: &crate::domain::community::Comment) -> CommentDto {
 // ── Posts ─────────────────────────────────────────────────────────────────────
 
 pub async fn list_posts(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<PostDto>>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
@@ -108,7 +108,7 @@ pub async fn list_posts(
 }
 
 pub async fn get_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Path(id): Path<u64>,
 ) -> Result<Json<PostDto>, AppError> {
     let post = state.community.get_post(id).await?;
@@ -116,7 +116,7 @@ pub async fn get_post(
 }
 
 pub async fn create_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(body): Json<CreatePostRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -128,7 +128,7 @@ pub async fn create_post(
 }
 
 pub async fn update_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
     Json(body): Json<UpdatePostRequest>,
@@ -141,7 +141,7 @@ pub async fn update_post(
 }
 
 pub async fn delete_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, AppError> {
@@ -152,7 +152,7 @@ pub async fn delete_post(
 // ── Comments ──────────────────────────────────────────────────────────────────
 
 pub async fn list_comments(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Path(post_id): Path<u64>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<CommentDto>>, AppError> {
@@ -172,7 +172,7 @@ pub async fn list_comments(
 }
 
 pub async fn create_comment(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(post_id): Path<u64>,
     Json(body): Json<CreateCommentRequest>,
@@ -185,7 +185,7 @@ pub async fn create_comment(
 }
 
 pub async fn delete_comment(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path((_post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
@@ -199,7 +199,7 @@ pub async fn delete_comment(
 // ── Like / Unlike ─────────────────────────────────────────────────────────────
 
 pub async fn like_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(post_id): Path<u64>,
 ) -> Result<StatusCode, AppError> {
@@ -208,7 +208,7 @@ pub async fn like_post(
 }
 
 pub async fn unlike_post(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(post_id): Path<u64>,
 ) -> Result<StatusCode, AppError> {
@@ -217,7 +217,7 @@ pub async fn unlike_post(
 }
 
 pub async fn like_comment(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path((_post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
@@ -229,7 +229,7 @@ pub async fn like_comment(
 }
 
 pub async fn unlike_comment(
-    State(state): State<ApiState>,
+    State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path((_post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use validator::Validate;
 
-use crate::api::ApiState;
+use crate::api::UserState;
 use crate::api::dto::user_dto::{
     DeleteUserResponse, UpdateUserRequest, UpsertUserProfileRequest, UserProfileResponse,
     UserResponse,
@@ -66,7 +66,7 @@ pub struct UpsertProfileRequest {
 
 pub async fn get_me(
     Extension(auth_user): Extension<AuthenticatedUser>,
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
 ) -> Result<Json<UserDto>, AppError> {
     let user = state
         .user
@@ -77,7 +77,7 @@ pub async fn get_me(
 
 pub async fn patch_me(
     Extension(auth_user): Extension<AuthenticatedUser>,
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Json(payload): Json<PatchMeRequest>,
 ) -> Result<Json<UserDto>, AppError> {
     let user = state
@@ -96,7 +96,7 @@ pub async fn patch_me(
 
 pub async fn delete_me(
     Extension(auth_user): Extension<AuthenticatedUser>,
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
 ) -> Result<StatusCode, AppError> {
     state
         .user
@@ -107,7 +107,7 @@ pub async fn delete_me(
 
 pub async fn get_profile(
     Extension(auth_user): Extension<AuthenticatedUser>,
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
 ) -> Result<Json<UserProfileDto>, AppError> {
     let profile = state.user.get_profile(auth_user.user_id).await?;
     Ok(Json(to_profile_dto(profile, None)))
@@ -115,7 +115,7 @@ pub async fn get_profile(
 
 pub async fn put_profile(
     Extension(auth_user): Extension<AuthenticatedUser>,
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Json(payload): Json<UpsertProfileRequest>,
 ) -> Result<Json<UserProfileDto>, AppError> {
     let profile = state
@@ -135,7 +135,7 @@ pub async fn put_profile(
 // ── Legacy handlers (kept for existing router.rs routes) ─────────────────────
 
 pub async fn get_user_profile(
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
 ) -> Result<Json<UserProfileResponse>, AppError> {
@@ -160,7 +160,7 @@ pub async fn get_user_profile(
 }
 
 pub async fn update_user(
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
     Json(payload): Json<UpdateUserRequest>,
@@ -184,7 +184,7 @@ pub async fn update_user(
 }
 
 pub async fn delete_user(
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
 ) -> Result<Json<DeleteUserResponse>, AppError> {
@@ -193,14 +193,14 @@ pub async fn delete_user(
 }
 
 pub async fn list_users(
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
 ) -> Result<Json<Vec<UserResponse>>, AppError> {
     let users = state.user.list_users().await?;
     Ok(Json(users.into_iter().map(user_to_response).collect()))
 }
 
 pub async fn upsert_user_profile(
-    State(state): State<ApiState>,
+    State(state): State<UserState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
     Json(payload): Json<UpsertUserProfileRequest>,

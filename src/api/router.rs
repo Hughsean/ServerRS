@@ -5,7 +5,7 @@ use axum::{
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use super::ApiState;
+use super::AppState;
 use super::handlers::admin_handler::{
     delete_user as admin_delete_user, get_risk_conversation, get_user as admin_get_user,
     list_risk_conversations, list_users as admin_list_users, patch_user as admin_patch_user,
@@ -40,7 +40,7 @@ use super::handlers::session_handler::{
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
-pub fn build_router(state: ApiState) -> Router {
+pub fn build_router(state: AppState) -> Router {
     // ── Protected routes (require valid Bearer token) ──────────────────────────
     let protected = Router::new()
         // Auth

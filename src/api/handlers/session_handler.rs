@@ -5,7 +5,7 @@ use axum::{
 use serde::Deserialize;
 use validator::Validate;
 
-use crate::api::ApiState;
+use crate::api::SessionState;
 use crate::api::dto::risk_dto::{RiskDetectionPage, RiskDetectionResponse};
 use crate::api::dto::session_dto::{
     ConversationMessageResponse, ConversationResponse, MessageRequest, MessageResponse,
@@ -15,7 +15,7 @@ use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 pub async fn create_session(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<SessionCreateRequest>,
 ) -> Result<Json<SessionCreateResponse>, AppError> {
@@ -42,7 +42,7 @@ pub async fn create_session(
 }
 
 pub async fn post_message(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(session_id): Path<String>,
     Json(payload): Json<MessageRequest>,
@@ -68,7 +68,7 @@ pub async fn post_message(
 }
 
 pub async fn get_session_status(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionStatusResponse>, AppError> {
@@ -86,7 +86,7 @@ pub async fn get_session_status(
 }
 
 pub async fn list_conversations(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(user_id): Path<u64>,
 ) -> Result<Json<Vec<ConversationResponse>>, AppError> {
@@ -111,7 +111,7 @@ pub async fn list_conversations(
 }
 
 pub async fn list_conversation_messages(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path((user_id, conv_id)): Path<(u64, u64)>,
 ) -> Result<Json<Vec<ConversationMessageResponse>>, AppError> {
@@ -145,7 +145,7 @@ pub struct RiskListQuery {
 }
 
 pub async fn list_risk_detections(
-    State(state): State<ApiState>,
+    State(state): State<SessionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<RiskListQuery>,
 ) -> Result<Json<RiskDetectionPage>, AppError> {

@@ -8,7 +8,7 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::api::ApiState;
+use crate::api::MusicState;
 use crate::api::dto::music_dto::{TrackDto, TrackListQuery};
 use crate::domain::music::{MusicTrackUpdate, NewMusicTrack};
 use crate::shared::error::AppError;
@@ -46,7 +46,7 @@ pub struct UpdateTrackRequest {
 }
 
 pub async fn list_tracks(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Query(params): Query<TrackListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let page = params.page.unwrap_or(1).max(1) as u64;
@@ -84,7 +84,7 @@ pub async fn list_tracks(
 }
 
 pub async fn get_track(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Path(id): Path<u64>,
 ) -> Result<Json<TrackDto>, AppError> {
     let track = state.music.get_track(id).await?;
@@ -106,7 +106,7 @@ pub async fn get_track(
 }
 
 pub async fn stream_track(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Path(id): Path<u64>,
 ) -> Result<Response, AppError> {
     let (data, mime_type, file_size) = state.music.stream_track(id).await?;
@@ -121,7 +121,7 @@ pub async fn stream_track(
 }
 
 pub async fn admin_create_track(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Json(payload): Json<CreateTrackRequest>,
 ) -> Result<Json<TrackDto>, AppError> {
     let file_bytes = decode_base64(&payload.file_data, "fileData")?;
@@ -153,7 +153,7 @@ pub async fn admin_create_track(
 }
 
 pub async fn admin_update_track(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Path(id): Path<u64>,
     Json(payload): Json<UpdateTrackRequest>,
 ) -> Result<Json<TrackDto>, AppError> {
@@ -180,7 +180,7 @@ pub async fn admin_update_track(
 }
 
 pub async fn admin_delete_track(
-    State(state): State<ApiState>,
+    State(state): State<MusicState>,
     Path(id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     state.music.admin_delete(id).await?;

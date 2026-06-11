@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::ApiState;
+use crate::api::AdminState;
 use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::domain::risk::detection_types::RiskLevel;
@@ -104,7 +104,7 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 pub async fn list_users(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<PaginatedUsers>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
@@ -139,7 +139,7 @@ pub async fn list_users(
 }
 
 pub async fn get_user(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Path(id): Path<u64>,
 ) -> Result<Json<UserDto>, AppError> {
     let u = state
@@ -162,7 +162,7 @@ pub async fn get_user(
 }
 
 pub async fn patch_user(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Path(id): Path<u64>,
     Json(body): Json<AdminPatchUser>,
 ) -> Result<Json<UserDto>, AppError> {
@@ -194,7 +194,7 @@ pub async fn patch_user(
 }
 
 pub async fn delete_user(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Path(id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
     state.user.admin_delete_user(id).await?;
@@ -202,7 +202,7 @@ pub async fn delete_user(
 }
 
 pub async fn list_risk_conversations(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Query(q): Query<RiskConvQuery>,
 ) -> Result<Json<PaginatedRiskConversations>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
@@ -233,7 +233,7 @@ pub async fn list_risk_conversations(
 }
 
 pub async fn get_risk_conversation(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Path(id): Path<u64>,
 ) -> Result<Json<RiskConversationDetail>, AppError> {
     let conv = state
@@ -291,7 +291,7 @@ pub async fn get_risk_conversation(
 }
 
 pub async fn process_risk_detection(
-    State(state): State<ApiState>,
+    State(state): State<AdminState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
     Json(body): Json<ProcessNotes>,

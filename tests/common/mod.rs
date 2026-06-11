@@ -1583,7 +1583,7 @@ pub async fn test_app() -> Router {
     api::router::build_router(state)
 }
 
-fn build_test_state() -> api::ApiState {
+fn build_test_state() -> api::AppState {
     let user_repo: Arc<dyn UserRepository> = Arc::new(MockUserRepo::new());
     let profile_repo: Arc<dyn UserProfileRepository> = Arc::new(MockProfileRepo {
         profiles: std::sync::Mutex::new(vec![]),
@@ -1985,21 +1985,45 @@ fn build_test_state() -> api::ApiState {
         Default::default(),
     ));
 
-    api::ApiState {
-        auth,
-        user,
-        session,
-        query: _query,
-        objects,
-        psychology,
-        depression,
-        diaries,
-        music,
-        community,
-        retrieval,
-        ingestion,
-        memory: memory_svc,
-        agent_runtime,
+    api::AppState {
+        auth: api::AuthState {
+            auth: Arc::clone(&auth),
+        },
+        user: api::UserState {
+            user: Arc::clone(&user),
+        },
+        session: api::SessionState {
+            session: Arc::clone(&session),
+            query: Arc::clone(&_query),
+        },
+        object: api::ObjectState {
+            objects: Arc::clone(&objects),
+        },
+        psychology: api::PsychologyState {
+            psychology: Arc::clone(&psychology),
+        },
+        depression: api::DepressionState {
+            depression: Arc::clone(&depression),
+        },
+        diary: api::DiaryState {
+            diaries: Arc::clone(&diaries),
+        },
+        music: api::MusicState {
+            music: Arc::clone(&music),
+        },
+        community: api::CommunityState {
+            community: Arc::clone(&community),
+        },
+        admin: api::AdminState {
+            user: Arc::clone(&user),
+            query: Arc::clone(&_query),
+        },
+        internal: api::InternalState {
+            retrieval: Arc::clone(&retrieval),
+            ingestion: Arc::clone(&ingestion),
+            memory: Arc::clone(&memory_svc),
+            agent_runtime: Arc::clone(&agent_runtime),
+        },
     }
 }
 

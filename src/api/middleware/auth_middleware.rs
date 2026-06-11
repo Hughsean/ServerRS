@@ -4,14 +4,14 @@ use axum::http::{Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::api::ApiState;
+use crate::api::AuthState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
-/// NOTE: Uses State<ApiState>, NOT State<Arc<ApiState>>.
-/// Called via `from_fn_with_state(state: ApiState, require_bearer_auth)`.
+/// NOTE: Uses State<AuthState>, NOT State<Arc<AuthState>>.
+/// Called via `from_fn_with_state(state: AppState, require_bearer_auth)`. AuthState is extracted via FromRef.
 pub async fn require_bearer_auth(
-    State(state): State<ApiState>,
+    State(state): State<AuthState>,
     _req_method: axum::http::Method, // dummy second extractor for Axum 0.8 compat
     mut request: Request<Body>,
     next: Next,
@@ -33,10 +33,10 @@ pub async fn require_bearer_auth(
 /// Must be placed after `require_bearer_auth` (or equivalent) so that
 /// the `AuthenticatedUser` extension is present in the request.
 ///
-/// Called via `from_fn_with_state(state: ApiState, require_admin_role)`
+/// Called via `from_fn_with_state(state: AppState, require_admin_role)`. AuthState is extracted via FromRef.
 /// on a sub-router layered on top of the bearer-auth-protected routes.
 pub async fn require_admin_role(
-    State(_state): State<ApiState>,
+    State(_state): State<AuthState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {

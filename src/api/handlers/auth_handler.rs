@@ -4,7 +4,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use crate::api::ApiState;
+use crate::api::AuthState;
 use crate::api::dto::auth_dto::{
     LoginRequest, LogoutRequest, RefreshTokenRequest, RegisterRequest,
 };
@@ -71,7 +71,7 @@ pub async fn health() -> Json<HealthResponse> {
 }
 
 pub async fn register(
-    State(state): State<ApiState>,
+    State(state): State<AuthState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     payload.validate().map_err(AppError::validation)?;
@@ -87,7 +87,7 @@ pub async fn register(
 }
 
 pub async fn login(
-    State(state): State<ApiState>,
+    State(state): State<AuthState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
@@ -104,7 +104,7 @@ pub async fn login(
 }
 
 pub async fn refresh_token(
-    State(state): State<ApiState>,
+    State(state): State<AuthState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
@@ -117,7 +117,7 @@ pub async fn refresh_token(
 }
 
 pub async fn logout(
-    State(state): State<ApiState>,
+    State(state): State<AuthState>,
     Json(payload): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
     payload.validate().map_err(AppError::validation)?;

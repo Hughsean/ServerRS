@@ -4,7 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::ApiState;
+use crate::api::DepressionState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::application::depression::depression_service::AssessmentDetail;
 use crate::shared::error::AppError;
@@ -73,7 +73,9 @@ pub struct PaginatedAssessments {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// GET /api/v1/depression/scales
-pub async fn list_scales(State(state): State<ApiState>) -> Result<Json<Vec<ScaleDto>>, AppError> {
+pub async fn list_scales(
+    State(state): State<DepressionState>,
+) -> Result<Json<Vec<ScaleDto>>, AppError> {
     let scales = state.depression.list_scales().await?;
     let dtos: Vec<ScaleDto> = scales
         .into_iter()
@@ -90,7 +92,7 @@ pub async fn list_scales(State(state): State<ApiState>) -> Result<Json<Vec<Scale
 
 /// GET /api/v1/depression/scales/{scale_id}
 pub async fn get_scale(
-    State(state): State<ApiState>,
+    State(state): State<DepressionState>,
     Path(scale_id): Path<u16>,
 ) -> Result<Json<ScaleDto>, AppError> {
     let scale = state.depression.get_scale(scale_id).await?;
@@ -105,7 +107,7 @@ pub async fn get_scale(
 
 /// GET /api/v1/depression/assessments
 pub async fn list_assessments(
-    State(state): State<ApiState>,
+    State(state): State<DepressionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedAssessments>, AppError> {
@@ -133,7 +135,7 @@ pub async fn list_assessments(
 
 /// GET /api/v1/depression/assessments/{assessment_id}
 pub async fn get_assessment(
-    State(state): State<ApiState>,
+    State(state): State<DepressionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(assessment_id): Path<u64>,
 ) -> Result<Json<AssessmentDto>, AppError> {
@@ -157,7 +159,7 @@ pub async fn get_assessment(
 
 /// POST /api/v1/depression/assessments
 pub async fn create_assessment(
-    State(state): State<ApiState>,
+    State(state): State<DepressionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<CreateAssessmentRequest>,
 ) -> Result<Json<AssessmentDto>, AppError> {
@@ -195,7 +197,7 @@ pub async fn create_assessment(
 
 /// DELETE /api/v1/depression/assessments/{assessment_id}
 pub async fn delete_assessment(
-    State(state): State<ApiState>,
+    State(state): State<DepressionState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(assessment_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, AppError> {

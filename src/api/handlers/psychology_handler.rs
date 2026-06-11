@@ -4,7 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::ApiState;
+use crate::api::PsychologyState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
@@ -107,7 +107,7 @@ pub struct LikeStatusDto {
 // ── Categories ────────────────────────────────────────────────────────────────
 
 pub async fn list_categories(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
 ) -> Result<Json<Vec<CategoryDto>>, AppError> {
     let categories = state.psychology.list_categories().await?;
     let dtos = categories
@@ -123,7 +123,7 @@ pub async fn list_categories(
 }
 
 pub async fn get_category_tree(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
 ) -> Result<Json<Vec<CategoryDto>>, AppError> {
     let categories = state.psychology.list_categories().await?;
     let tree = build_category_tree(categories, None);
@@ -148,7 +148,7 @@ fn build_category_tree(
 // ── Articles ──────────────────────────────────────────────────────────────────
 
 pub async fn list_articles(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<ArticleDto>>, AppError> {
     let page = query.page.unwrap_or(1).max(1);
@@ -179,7 +179,7 @@ pub async fn list_articles(
 }
 
 pub async fn get_article(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Path(id): Path<u64>,
 ) -> Result<Json<ArticleDto>, AppError> {
     let article = state.psychology.get_article(id).await?;
@@ -198,7 +198,7 @@ pub async fn get_article(
 // ── QnA ───────────────────────────────────────────────────────────────────────
 
 pub async fn list_qna(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<QnaDto>>, AppError> {
     let page = query.page.unwrap_or(1).max(1);
@@ -226,7 +226,7 @@ pub async fn list_qna(
 }
 
 pub async fn get_qna(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Path(id): Path<u64>,
 ) -> Result<Json<QnaDto>, AppError> {
     let qna = state.psychology.get_qna(id).await?;
@@ -242,7 +242,7 @@ pub async fn get_qna(
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 pub async fn list_resources(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<ResourceDto>>, AppError> {
     let page = query.page.unwrap_or(1).max(1);
@@ -270,7 +270,7 @@ pub async fn list_resources(
 }
 
 pub async fn get_resource(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Path(id): Path<u64>,
 ) -> Result<Json<ResourceDto>, AppError> {
     let resource = state.psychology.get_resource(id).await?;
@@ -286,7 +286,7 @@ pub async fn get_resource(
 // ── Favorites ─────────────────────────────────────────────────────────────────
 
 pub async fn toggle_favorite(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<ToggleFavoriteRequest>,
 ) -> Result<Json<FavoriteStatusDto>, AppError> {
@@ -302,7 +302,7 @@ pub async fn toggle_favorite(
 }
 
 pub async fn check_favorite(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<CheckFavoriteQuery>,
 ) -> Result<Json<FavoriteStatusDto>, AppError> {
@@ -321,7 +321,7 @@ pub struct CheckFavoriteQuery {
 }
 
 pub async fn list_favorites(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<FavoriteDto>>, AppError> {
@@ -351,7 +351,7 @@ pub async fn list_favorites(
 // ── Likes ─────────────────────────────────────────────────────────────────────
 
 pub async fn toggle_like(
-    State(state): State<ApiState>,
+    State(state): State<PsychologyState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<ToggleLikeRequest>,
 ) -> Result<Json<LikeStatusDto>, AppError> {

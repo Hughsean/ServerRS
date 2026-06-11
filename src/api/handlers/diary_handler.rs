@@ -4,7 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::ApiState;
+use crate::api::DiaryState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
@@ -57,7 +57,7 @@ impl From<crate::domain::diary::UserDiary> for DiaryDto {
 }
 
 pub async fn list_diaries(
-    State(state): State<ApiState>,
+    State(state): State<DiaryState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Query(q): Query<DiaryListQuery>,
 ) -> Result<Json<Vec<DiaryDto>>, AppError> {
@@ -70,7 +70,7 @@ pub async fn list_diaries(
 }
 
 pub async fn get_diary(
-    State(state): State<ApiState>,
+    State(state): State<DiaryState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
 ) -> Result<Json<DiaryDto>, AppError> {
@@ -79,7 +79,7 @@ pub async fn get_diary(
 }
 
 pub async fn create_diary(
-    State(state): State<ApiState>,
+    State(state): State<DiaryState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Json(payload): Json<CreateDiaryRequest>,
 ) -> Result<Json<DiaryDto>, AppError> {
@@ -92,7 +92,7 @@ pub async fn create_diary(
 }
 
 pub async fn update_diary(
-    State(state): State<ApiState>,
+    State(state): State<DiaryState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
     Json(payload): Json<UpdateDiaryRequest>,
@@ -105,7 +105,7 @@ pub async fn update_diary(
 }
 
 pub async fn delete_diary(
-    State(state): State<ApiState>,
+    State(state): State<DiaryState>,
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
