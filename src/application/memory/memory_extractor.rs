@@ -53,6 +53,7 @@ impl MemoryExtractor {
             content: EXTRACTION_PROMPT.to_string(),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         });
 
         let request = ChatCompletionRequest {
@@ -166,6 +167,7 @@ mod tests {
             content: "I love jazz".to_string(),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         }];
         let memories = extractor.extract(42, &messages).await;
         assert_eq!(memories.len(), 2);

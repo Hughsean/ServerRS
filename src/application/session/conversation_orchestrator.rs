@@ -157,12 +157,14 @@ impl ConversationOrchestrator {
                 content: "生成中文短标题".into(),
                 tool_calls: None,
                 tool_call_id: None,
+                name: None,
             },
             ChatMessage {
                 role: "user".into(),
                 content: prompt,
                 tool_calls: None,
                 tool_call_id: None,
+                name: None,
             },
         ];
 

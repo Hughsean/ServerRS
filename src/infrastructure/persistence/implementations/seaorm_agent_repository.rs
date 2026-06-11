@@ -25,7 +25,9 @@ fn from_model(model: agent_events::Model) -> AgentEvent {
         user_id: model.user_id,
         conversation_id: model.conversation_id,
         session_id: model.session_id,
+        trace_id: model.trace_id,
         event_type: model.event_type,
+        tool_name: model.tool_name,
         payload: model.payload.into(),
         created_at: model.created_at.and_utc(),
     }
@@ -45,7 +47,7 @@ impl AgentEventRepository for SeaOrmAgentEventRepository {
             turn_id: Set(None),
             event_type: Set(event.event_type),
             severity: Set("info".to_string()),
-            tool_name: Set(None),
+            tool_name: Set(event.tool_name),
             payload: Set(event.payload.into()),
             created_at: Set(now),
         };

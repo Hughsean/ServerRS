@@ -563,6 +563,7 @@ mod tests {
             content: "I love jazz".into(),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         }];
 
         let saved = svc.extract_and_save(42, &messages, 1, 1).await.unwrap();

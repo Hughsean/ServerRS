@@ -21,6 +21,7 @@ use application::rag::chunking::ChunkingService;
 use application::rag::ingestion_service::IngestionService;
 use application::rag::retrieval_service::RetrievalService;
 use application::session::conversation_orchestrator::ConversationOrchestrator;
+use application::session::risk_detection_service::RiskDetectionService;
 use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
 use application::storage::object_service::ObjectService;
@@ -211,8 +212,14 @@ async fn run() -> Result<(), std::io::Error> {
         })?;
     }
 
-    // ── Risk detector ──
+    // ── Risk detector + detection service ──
     let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
+
+    let risk_detection_service = Arc::new(RiskDetectionService::new(
+        Arc::clone(&risk_repo),
+        Arc::clone(&task_publisher),
+        Arc::clone(&risk_detector),
+    ));
 
     // ── Services ──
     let auth = Arc::clone(&auth_graph.auth_service);
@@ -300,8 +307,7 @@ async fn run() -> Result<(), std::io::Error> {
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&ollama_provider),
         Arc::clone(&memory_svc),
-        Arc::clone(&risk_detector),
-        Arc::clone(&risk_repo),
+        Arc::clone(&risk_detection_service),
         Arc::clone(&agent_event_repo),
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
@@ -419,8 +425,17 @@ async fn shutdown_signal() {
 }
 
 fn init_tracing() {
-    let f = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let env_filter = std::env::var("RUST_LOG").unwrap_or_default();
+    let combined = if env_filter.is_empty() {
+        "info,sqlx=warn".to_string()
+    } else if env_filter.contains("sqlx") {
+        // User explicitly set sqlx level — respect it.
+        env_filter
+    } else {
+        // Append sqlx=warn so sqlx query logs are suppressed by default.
+        format!("{},sqlx=warn", env_filter)
+    };
+    let f = tracing_subscriber::EnvFilter::new(&combined);
     tracing_subscriber::fmt()
         .with_env_filter(f)
         .with_target(true)

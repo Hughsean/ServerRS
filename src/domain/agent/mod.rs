@@ -13,8 +13,10 @@ pub struct AgentEvent {
     pub user_id: u64,
     pub conversation_id: Option<u64>,
     pub session_id: Option<String>,
+    pub trace_id: Option<String>,
     /// One of: plan, tool_call, tool_result, rag_retrieval, memory_write, safety_block.
     pub event_type: String,
+    pub tool_name: Option<String>,
     pub payload: Value,
     pub created_at: DateTime<Utc>,
 }
@@ -26,6 +28,7 @@ pub struct NewAgentEvent {
     pub conversation_id: Option<u64>,
     pub session_id: Option<String>,
     pub event_type: String,
+    pub tool_name: Option<String>,
     pub payload: Value,
 }
 

@@ -309,6 +309,7 @@ let tool_deps = AgentToolDeps {
     music_repo: Arc::clone(&music_repo),
     community_repo: Arc::clone(&community_repo),
     agent_event_repo: Arc::clone(&agent_event_repo),
+    plugins: config.plugins.clone(),
 };
 
 let agent_tools = build_default_agent_tools(&tool_deps)?;
@@ -325,6 +326,10 @@ let agent_tools = build_default_agent_tools(&tool_deps)?;
 | 5 | `music_recommend` | MusicRecommendTool | `music_repo: Arc<dyn MusicRepository>` |
 | 6 | `community_search` | CommunitySearchTool | `community_repo: Arc<dyn CommunityRepository>` |
 | 7 | `risk_escalation` | RiskEscalationTool | `agent_event_repo: Arc<dyn AgentEventRepository>` |
+| 8 | `get_time` | GetTimeTool | (无需依赖) |
+| 9 | `fetch_web_content` | FetchWebContentTool | `plugins.fetch_web_content` |
+| 10 | `get_baidu_baike` | BaiduBaikeTool | `plugins.baidu_baike` |
+| 11 | `get_weather` | GetWeatherTool | `plugins.weather` |
 
 ### 设计原则
 
@@ -335,7 +340,7 @@ let agent_tools = build_default_agent_tools(&tool_deps)?;
 - 本阶段不使用 `inventory`，避免分布式注册导致调试困难。
 - 后续若工具数量超过 10 个，再考虑 inventory v2。
 - Agent tools 通过 `src/application/agent/tool_registry.rs` 注册。
-- 首个从 Java 插件迁移到 Rust AgentTool 系统的工具是 `get_time`。
+- 从 Java 插件迁移到 Rust AgentTool 系统的工具包括 `get_time`、`fetch_web_content`、`get_baidu_baike`、`get_weather`。
 - 插件配置通过 `config.toml` 的 `[plugins.*]` 段和 `src/shared/config.rs` 表示。
 
 ---

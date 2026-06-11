@@ -51,6 +51,7 @@ impl DiaryService {
                     content: prompt,
                     tool_calls: None,
                     tool_call_id: None,
+                    name: None,
                 }];
                 let response = llm.chat(&messages).await;
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {

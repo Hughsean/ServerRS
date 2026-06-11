@@ -4,10 +4,13 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::application::agent::agent_runtime::AgentTool;
+use crate::application::agent::tools::baidu_baike_tool::BaiduBaikeTool;
 use crate::application::agent::tools::community_search_tool::CommunitySearchTool;
 use crate::application::agent::tools::depression_scale_tool::DepressionScaleTool;
 use crate::application::agent::tools::diary_search_tool::DiarySearchTool;
+use crate::application::agent::tools::fetch_web_content_tool::FetchWebContentTool;
 use crate::application::agent::tools::get_time_tool::GetTimeTool;
+use crate::application::agent::tools::get_weather_tool::GetWeatherTool;
 use crate::application::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
 use crate::application::agent::tools::memory_search_tool::MemorySearchTool;
 use crate::application::agent::tools::music_recommend_tool::MusicRecommendTool;
@@ -97,6 +100,28 @@ pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
             order: 80,
             enabled_by_default: true,
             factory: |_deps| Arc::new(GetTimeTool::new()),
+        },
+        AgentToolRegistration {
+            key: "fetch_web_content",
+            order: 90,
+            enabled_by_default: true,
+            factory: |deps| {
+                Arc::new(FetchWebContentTool::new(
+                    deps.plugins.fetch_web_content.clone(),
+                ))
+            },
+        },
+        AgentToolRegistration {
+            key: "get_baidu_baike",
+            order: 100,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(BaiduBaikeTool::new(deps.plugins.baidu_baike.clone())),
+        },
+        AgentToolRegistration {
+            key: "get_weather",
+            order: 120,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(GetWeatherTool::new(deps.plugins.weather.clone())),
         },
     ]
 }
@@ -201,6 +226,9 @@ mod tests {
                 "community_search",
                 "risk_escalation",
                 "get_time",
+                "fetch_web_content",
+                "get_baidu_baike",
+                "get_weather",
             ]
         );
     }

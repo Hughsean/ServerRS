@@ -125,6 +125,7 @@ impl SessionManager {
                 content: final_prompt,
                 tool_calls: None,
                 tool_call_id: None,
+                name: None,
             }],
             user_id,
             dialogue_id,
@@ -196,6 +197,7 @@ impl SessionManager {
             content: text.to_string(),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         });
 
         // Ensure DB conversation exists
@@ -240,6 +242,7 @@ impl SessionManager {
                 content: reply.clone(),
                 tool_calls: None,
                 tool_call_id: None,
+                name: None,
             });
         }
 

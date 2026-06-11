@@ -47,6 +47,7 @@ impl AgentTool for GetTimeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::ToolDefinition;
 
     #[test]
     fn name_returns_get_time() {
@@ -64,12 +65,42 @@ mod tests {
         assert_eq!(params["required"].as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn execute_returns_time_string() {
+    #[tokio::test]
+    async fn execute_returns_time_string() {
+        use chrono::NaiveDateTime;
+
         let tool = GetTimeTool::new();
-        // execute requires AgentContext which is complex to construct;
-        // we test only name() and parameters() here.
-        // Integration tests should verify execute() with a full agent pipeline.
-        let _ = tool; // suppress unused warning
+
+        let context = AgentContext {
+            user_id: 1,
+            session_id: "test-session".into(),
+            conversation_id: None,
+            recent_messages: vec![],
+            summary: None,
+            memories: vec![],
+            rag_chunks: vec![],
+            user_profile: None,
+            tools: vec![ToolDefinition {
+                name: "get_time".into(),
+                description: "get current time".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            }],
+        };
+
+        let output = tool.execute(&context, serde_json::json!({})).await.unwrap();
+
+        let prefix = "当前日期时间为: ";
+        assert!(
+            output.starts_with(prefix),
+            "output should start with '{prefix}', got: {output}"
+        );
+
+        let time_part = output.trim_start_matches(prefix);
+        NaiveDateTime::parse_from_str(time_part, "%Y-%m-%d %H:%M:%S")
+            .expect("time should match yyyy-MM-dd HH:mm:ss");
     }
 }

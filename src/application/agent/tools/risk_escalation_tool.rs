@@ -83,6 +83,7 @@ impl AgentTool for RiskEscalationTool {
                 conversation_id: context.conversation_id,
                 session_id: Some(context.session_id.clone()),
                 event_type: "risk_escalation".to_string(),
+                tool_name: Some("risk_escalation".to_string()),
                 payload,
             })
             .await;

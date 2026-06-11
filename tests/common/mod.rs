@@ -14,6 +14,7 @@ use ServerRS::application::diary::diary_service::DiaryService;
 use ServerRS::application::music::music_service::MusicService;
 use ServerRS::application::psychology::psychology_service::PsychologyService;
 use ServerRS::application::session::conversation_orchestrator::ConversationOrchestrator;
+use ServerRS::application::session::risk_detection_service::RiskDetectionService;
 use ServerRS::application::session::session_manager::SessionManager;
 use ServerRS::application::session::session_service::SessionService;
 use ServerRS::application::storage::object_service::ObjectService;
@@ -1889,7 +1890,9 @@ fn build_test_state() -> api::AppState {
                 user_id: 0,
                 conversation_id: None,
                 session_id: None,
+                trace_id: None,
                 event_type: String::new(),
+                tool_name: None,
                 payload: serde_json::Value::Null,
                 created_at: Utc::now(),
             }
@@ -1934,12 +1937,18 @@ fn build_test_state() -> api::AppState {
     let agent_llm: Arc<dyn ServerRS::domain::llm::LlmProvider> =
         Arc::new(MockLlmProvider::new("mock reply"));
     let agent_risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
+
+    let agent_risk_detection_service = Arc::new(RiskDetectionService::new(
+        Arc::clone(&risk_repo),
+        Arc::clone(&task_publisher),
+        Arc::clone(&agent_risk_detector),
+    ));
+
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&agent_llm),
         // Arc::clone(&rag_repo),
         Arc::clone(&memory_svc),
-        Arc::clone(&agent_risk_detector),
-        Arc::clone(&risk_repo),
+        Arc::clone(&agent_risk_detection_service),
         Arc::clone(&agent_event_repo),
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),

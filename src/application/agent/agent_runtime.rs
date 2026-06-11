@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::agent_context::AgentContextBuilder;
 use crate::application::memory::memory_service::MemoryService;
+use crate::application::session::risk_detection_service::RiskDetectionService;
 use crate::application::summary::summary_service::SummaryService;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
@@ -14,9 +15,6 @@ use crate::domain::llm::{
 };
 use crate::domain::memory::NewSummary;
 use crate::domain::risk::detection_types::{DetectionResult, RiskLevel};
-use crate::domain::risk::risk_detection_result::NewRiskDetectionResult;
-use crate::domain::risk::risk_detector::RiskDetector;
-use crate::domain::risk::risk_repository::RiskRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
 
@@ -77,6 +75,61 @@ struct PersistedTurn {
 }
 
 // ---------------------------------------------------------------------------
+// Tool call arguments helpers
+// ---------------------------------------------------------------------------
+
+/// Normalise tool-call arguments so that tools always receive a JSON Object.
+///
+/// OpenAI-compatible APIs (including Ollama) often embed the arguments as a
+/// JSON-encoded string inside `function.arguments` instead of a native object.
+/// This function handles:
+///
+/// - `Value::String`  → parse the inner JSON
+/// - `Value::Null`    → return `{}`
+/// - `Value::Object`  → pass through unchanged
+/// - other            → pass through unchanged (with a warn)
+pub fn normalize_tool_arguments(raw: &Value) -> Value {
+    match raw {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return serde_json::json!({});
+            }
+            serde_json::from_str::<Value>(trimmed).unwrap_or_else(|err| {
+                warn!(
+                    error = %err,
+                    raw_arguments = %trimmed,
+                    "failed to parse tool call arguments; wrapping as error response"
+                );
+                serde_json::json!({
+                    "_invalid_tool_arguments": true,
+                    "_raw": trimmed,
+                    "_error": err.to_string()
+                })
+            })
+        }
+        Value::Null => serde_json::json!({}),
+        Value::Object(_) => raw.clone(),
+        other => {
+            warn!(
+                ?other,
+                "unexpected tool arguments type; passing through as-is"
+            );
+            other.clone()
+        }
+    }
+}
+
+/// Check whether an LLM error message indicates a tool-call-arguments
+/// compatibility problem.
+pub fn is_tool_call_argument_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("invalid tool call arguments")
+        || (lower.contains("400") && lower.contains("bad request") && lower.contains("tool"))
+        || lower.contains("tool call arguments")
+}
+
+// ---------------------------------------------------------------------------
 // AgentRuntime
 // ---------------------------------------------------------------------------
 
@@ -95,8 +148,7 @@ struct PersistedTurn {
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     memory_service: Arc<MemoryService>,
-    risk_detector: Arc<dyn RiskDetector>,
-    risk_repo: Arc<dyn RiskRepository>,
+    risk_detection_service: Arc<RiskDetectionService>,
     event_repo: Arc<dyn AgentEventRepository>,
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
@@ -111,8 +163,7 @@ impl AgentRuntime {
     pub fn new(
         llm: Arc<dyn LlmProvider>,
         memory_service: Arc<MemoryService>,
-        risk_detector: Arc<dyn RiskDetector>,
-        risk_repo: Arc<dyn RiskRepository>,
+        risk_detection_service: Arc<RiskDetectionService>,
         event_repo: Arc<dyn AgentEventRepository>,
         conversation_repo: Arc<dyn ConversationRepository>,
         user_profile_repo: Arc<dyn UserProfileRepository>,
@@ -124,8 +175,7 @@ impl AgentRuntime {
         Self {
             llm,
             memory_service,
-            risk_repo,
-            risk_detector,
+            risk_detection_service,
             event_repo,
             conversation_repo,
             user_profile_repo,
@@ -149,7 +199,7 @@ impl AgentRuntime {
         session_prompt: Option<String>,
     ) -> Result<AgentResponse, AppError> {
         // ── Step 1: Safety pre-check ──────────────────────────────
-        let detection = self.risk_detector.evaluate(&user_message);
+        let detection = self.risk_detection_service.evaluate(&user_message);
 
         // Log the detection event.
         self.log_event(
@@ -157,6 +207,7 @@ impl AgentRuntime {
             user_id,
             conversation_id,
             "safety_block",
+            None,
             serde_json::json!({
                 "risk_level": format!("{:?}", detection.risk_level),
                 "intent": format!("{:?}", detection.intent),
@@ -185,7 +236,7 @@ impl AgentRuntime {
                     &emotion,
                 )
                 .await?;
-            self.spawn_risk_persistence(
+            self.spawn_risk_persist_and_publish(
                 user_id,
                 conversation_id,
                 Some(persisted.user_message_id),
@@ -206,7 +257,7 @@ impl AgentRuntime {
             let persisted = self
                 .persist_messages(user_id, conversation_id, &user_message, &reply, &emotion)
                 .await?;
-            self.spawn_risk_persistence(
+            self.spawn_risk_persist_and_publish(
                 user_id,
                 conversation_id,
                 Some(persisted.user_message_id),
@@ -274,6 +325,7 @@ impl AgentRuntime {
             content: system_message,
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         });
         llm_messages.extend(
             recent_messages
@@ -290,6 +342,16 @@ impl AgentRuntime {
         let end_session = false;
 
         let have_tools = !self.tools.is_empty();
+        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+
+        info!(
+            session_id = %session_id,
+            ?conversation_id,
+            tools_enabled = have_tools,
+            tool_names = %tool_names.join(","),
+            message_count = messages_with_tool_results.len(),
+            "calling LLM"
+        );
 
         loop {
             if depth > self.max_tool_depth {
@@ -318,11 +380,56 @@ impl AgentRuntime {
             } {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(error = %e, "LLM chat failed");
-                    final_content =
-                        "Sorry, I encountered an error processing your request. Please try again."
-                            .to_string();
-                    break;
+                    let err_msg = e.to_string();
+                    warn!(
+                        session_id = %session_id,
+                        ?conversation_id,
+                        error = %e,
+                        "LLM chat failed"
+                    );
+
+                    // If the LLM rejected the request because of tool-call
+                    // arguments, retry once without tools.
+                    if have_tools && is_tool_call_argument_error(&err_msg) {
+                        warn!(
+                            session_id = %session_id,
+                            ?conversation_id,
+                            error = %e,
+                            "LLM tool call failed; retrying without tools"
+                        );
+
+                        let fallback_request = ChatCompletionRequest {
+                            messages: messages_with_tool_results.clone(),
+                            temperature: 0.7,
+                            top_p: 1.0,
+                            max_tokens: None,
+                            tools: None,
+                        };
+
+                        match self.llm.chat(fallback_request).await {
+                            Ok(r) => {
+                                final_content = r.content;
+                                break;
+                            }
+                            Err(fb_err) => {
+                                warn!(
+                                    session_id = %session_id,
+                                    ?conversation_id,
+                                    error = %fb_err,
+                                    "LLM fallback (no tools) also failed"
+                                );
+                                final_content =
+                                    "Sorry, I encountered an error processing your request. Please try again."
+                                        .to_string();
+                                break;
+                            }
+                        }
+                    } else {
+                        final_content =
+                            "Sorry, I encountered an error processing your request. Please try again."
+                                .to_string();
+                        break;
+                    }
                 }
             };
 
@@ -332,10 +439,26 @@ impl AgentRuntime {
                 break;
             }
 
+            info!(
+                tool_call_count = response.tool_calls.len(),
+                "LLM returned tool calls"
+            );
+
             let mut tool_results: Vec<ChatMessage> = Vec::new();
 
             for tc in &response.tool_calls {
-                let result = self.execute_tool(&context, &tc.name, &tc.arguments).await;
+                let normalized_arguments = normalize_tool_arguments(&tc.arguments);
+
+                debug!(
+                    tool_name = %tc.name,
+                    raw_arguments = %tc.arguments,
+                    parsed_arguments = %normalized_arguments,
+                    "processing tool call"
+                );
+
+                let result = self
+                    .execute_tool(&context, &tc.name, &normalized_arguments)
+                    .await;
 
                 let result_string = match &result {
                     Ok(text) => text.clone(),
@@ -344,7 +467,7 @@ impl AgentRuntime {
 
                 tool_traces.push(ToolTrace {
                     tool_name: tc.name.clone(),
-                    arguments: tc.arguments.clone(),
+                    arguments: normalized_arguments.clone(),
                     result: result_string.clone(),
                 });
 
@@ -355,9 +478,11 @@ impl AgentRuntime {
                         user_id,
                         conversation_id,
                         "tool_call",
+                        Some(tc.name.clone()),
                         serde_json::json!({
                             "tool": tc.name,
-                            "arguments": tc.arguments,
+                            "arguments": normalized_arguments,
+                            "raw_arguments": tc.arguments,
                             "result": &result_string,
                         }),
                     )
@@ -369,19 +494,42 @@ impl AgentRuntime {
                     content: result_string,
                     tool_calls: None,
                     tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.name.clone()),
                 });
             }
 
             // Append the assistant message (with tool_calls metadata) and the
             // tool results to the conversation so the LLM sees them in the
             // next iteration.
-            let tool_calls_value: Value =
-                serde_json::to_value(&response.tool_calls).unwrap_or_default();
+            //
+            // Format tool_calls in OpenAI-compatible shape:
+            //   [{id, type:"function", function:{name, arguments}}]
+            // where `arguments` is a JSON-encoded string (not a raw object).
+            let tool_calls_openai: Vec<Value> = response
+                .tool_calls
+                .iter()
+                .map(|tc| {
+                    let args_str = match &tc.arguments {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": args_str,
+                        }
+                    })
+                })
+                .collect();
+            let tool_calls_value = Value::Array(tool_calls_openai);
             messages_with_tool_results.push(ChatMessage {
                 role: "assistant".into(),
                 content: response.content.clone(),
                 tool_calls: Some(tool_calls_value),
                 tool_call_id: None,
+                name: None,
             });
             messages_with_tool_results.extend(tool_results);
             depth += 1;
@@ -423,7 +571,7 @@ impl AgentRuntime {
                 &emotion,
             )
             .await?;
-        self.spawn_risk_persistence(
+        self.spawn_risk_persist_and_publish(
             user_id,
             conversation_id,
             Some(persisted.user_message_id),
@@ -475,6 +623,7 @@ impl AgentRuntime {
             content,
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         });
         messages
     }
@@ -596,7 +745,16 @@ impl AgentRuntime {
     ) -> Result<String, AppError> {
         for tool in &self.tools {
             if tool.name() == name {
-                return tool.execute(context, args.clone()).await;
+                match tool.execute(context, args.clone()).await {
+                    Ok(output) => {
+                        info!(tool = name, "agent tool completed");
+                        return Ok(output);
+                    }
+                    Err(e) => {
+                        warn!(tool = name, error = %e, "agent tool failed");
+                        return Err(e);
+                    }
+                }
             }
         }
         Err(AppError::Internal(format!("Unknown tool: {name}")))
@@ -678,12 +836,14 @@ impl AgentRuntime {
                     content: user_text.clone(),
                     tool_calls: None,
                     tool_call_id: None,
+                    name: None,
                 },
                 crate::domain::llm::ChatMessage {
                     role: "assistant".into(),
                     content: asst_text.clone(),
                     tool_calls: None,
                     tool_call_id: None,
+                    name: None,
                 },
             ];
 
@@ -750,12 +910,14 @@ impl AgentRuntime {
                         content: "You write concise rolling conversation summaries.".into(),
                         tool_calls: None,
                         tool_call_id: None,
+                        name: None,
                     },
                     ChatMessage {
                         role: "user".into(),
                         content: summary_prompt,
                         tool_calls: None,
                         tool_call_id: None,
+                        name: None,
                     },
                 ],
                 temperature: 0.2,
@@ -809,44 +971,20 @@ impl AgentRuntime {
             .unwrap_or_else(|| content.to_string())
     }
 
-    fn spawn_risk_persistence(
+    fn spawn_risk_persist_and_publish(
         &self,
         user_id: u64,
         conversation_id: Option<u64>,
         message_id: Option<u64>,
         detection: &DetectionResult,
     ) {
-        let risk_repo = Arc::clone(&self.risk_repo);
+        let risk_detection_service = Arc::clone(&self.risk_detection_service);
         let det = detection.clone();
 
         tokio::spawn(async move {
-            let evidence_json =
-                serde_json::to_string(&det.evidence).unwrap_or_else(|_| "[]".into());
-
-            if let Err(e) = risk_repo
-                .save(NewRiskDetectionResult {
-                    user_id,
-                    message_id,
-                    conversation_id,
-                    risk_level: det.risk_level,
-                    polarity: det.polarity,
-                    intent: det.intent,
-                    target: det.target,
-                    confidence: det.confidence,
-                    evidence: evidence_json,
-                    reason: if det.reason.is_empty() {
-                        None
-                    } else {
-                        Some(det.reason)
-                    },
-                    raw_payload: None,
-                    model_name: Some("rule-based".into()),
-                    detector_version: Some("1.0".into()),
-                })
-                .await
-            {
-                warn!(error = %e, "failed to persist risk detection");
-            }
+            risk_detection_service
+                .persist_and_publish_result(det, user_id, conversation_id, message_id)
+                .await;
         });
     }
 
@@ -857,6 +995,7 @@ impl AgentRuntime {
         user_id: u64,
         conversation_id: Option<u64>,
         event_type: &str,
+        tool_name: Option<String>,
         payload: Value,
     ) {
         let _ = self
@@ -866,8 +1005,74 @@ impl AgentRuntime {
                 conversation_id,
                 session_id: Some(session_id.to_string()),
                 event_type: event_type.to_string(),
+                tool_name,
                 payload,
             })
             .await;
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── normalize_tool_arguments ──────────────────────────────────────
+
+    #[test]
+    fn arguments_string_json_object_is_parsed() {
+        let raw = json!(r#"{"query":"最近新闻热点","top_k":5}"#);
+        let result = normalize_tool_arguments(&raw);
+        assert_eq!(result["query"], "最近新闻热点");
+        assert_eq!(result["top_k"], 5);
+    }
+
+    #[test]
+    fn empty_arguments_string_becomes_empty_object() {
+        let result = normalize_tool_arguments(&json!(""));
+        assert_eq!(result, json!({}));
+    }
+
+    #[test]
+    fn null_arguments_becomes_empty_object() {
+        let result = normalize_tool_arguments(&json!(null));
+        assert_eq!(result, json!({}));
+    }
+
+    #[test]
+    fn object_arguments_passthrough() {
+        let obj = json!({"query": "test"});
+        let result = normalize_tool_arguments(&obj);
+        assert_eq!(result, obj);
+    }
+
+    #[test]
+    fn malformed_arguments_does_not_panic() {
+        let raw = json!(r#"{"query":"#);
+        let result = normalize_tool_arguments(&raw);
+        assert!(result["_invalid_tool_arguments"] == true);
+        assert!(result["_raw"].as_str().unwrap().contains("query"));
+    }
+
+    // ── is_tool_call_argument_error ───────────────────────────────────
+
+    #[test]
+    fn detects_invalid_tool_call_arguments() {
+        assert!(is_tool_call_argument_error("invalid tool call arguments"));
+    }
+
+    #[test]
+    fn detects_400_bad_request_with_tool() {
+        assert!(is_tool_call_argument_error(
+            "LLM returned 400 Bad Request from http://127.0.0.1:11434/v1/chat/completions: {\"error\":{\"message\":\"invalid tool call arguments\"}}"
+        ));
+    }
+
+    #[test]
+    fn non_tool_error_returns_false() {
+        assert!(!is_tool_call_argument_error("connection refused"));
+        assert!(!is_tool_call_argument_error("timeout"));
     }
 }
