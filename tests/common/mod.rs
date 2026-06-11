@@ -1936,7 +1936,7 @@ fn build_test_state() -> api::AppState {
     let agent_risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&agent_llm),
-        Arc::clone(&rag_repo),
+        // Arc::clone(&rag_repo),
         Arc::clone(&memory_svc),
         Arc::clone(&agent_risk_detector),
         Arc::clone(&risk_repo),

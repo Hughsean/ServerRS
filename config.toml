@@ -35,9 +35,29 @@ timeout_seconds = 120
 cleanup_interval_secs = 20
 
 # ── Plugins (weather, news, etc.) ──
-# [plugins]
-# news_api_key = "your-newsapi-org-key"
-# news_api_url = "https://newsapi.org/v2"
+
+[plugins.weather]
+api_key = "fb3df76f71774a998a5579ed1ffcf3b0"
+default_location = "合肥"
+city_lookup_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/geo/v2/city/lookup"
+weather_now_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/v7/weather/now"
+lang_query_enabled = false
+
+[plugins.news]
+default_rss_url = "https://www.chinanews.com.cn/rss/society.xml"
+society_url = "https://www.chinanews.com.cn/rss/society.xml"
+world_url = "https://www.chinanews.com.cn/rss/world.xml"
+finance_url = "https://www.chinanews.com.cn/rss/finance.xml"
+
+[plugins.web_search]
+enabled = true
+timeout_secs = 10
+
+[plugins.fetch_web_content]
+enabled = true
+
+[plugins.baidu_baike]
+enabled = true
 
 # ── Embedding Provider ──────────────────────────────────────────────────────
 # Separate from the chat LLM — embedding uses its own model.

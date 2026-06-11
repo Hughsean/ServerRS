@@ -1,0 +1,213 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use tracing::info;
+
+use crate::application::agent::agent_runtime::AgentTool;
+use crate::application::agent::tools::community_search_tool::CommunitySearchTool;
+use crate::application::agent::tools::depression_scale_tool::DepressionScaleTool;
+use crate::application::agent::tools::diary_search_tool::DiarySearchTool;
+use crate::application::agent::tools::get_time_tool::GetTimeTool;
+use crate::application::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
+use crate::application::agent::tools::memory_search_tool::MemorySearchTool;
+use crate::application::agent::tools::music_recommend_tool::MusicRecommendTool;
+use crate::application::agent::tools::risk_escalation_tool::RiskEscalationTool;
+use crate::application::memory::memory_service::MemoryService;
+use crate::application::rag::retrieval_service::RetrievalService;
+use crate::domain::agent::AgentEventRepository;
+use crate::domain::community::CommunityRepository;
+use crate::domain::depression::DepressionRepository;
+use crate::domain::diary::DiaryRepository;
+use crate::domain::music::MusicRepository;
+use crate::shared::config::PluginsConfig;
+use crate::shared::error::AppError;
+
+// ── Agent Tool Dependencies ────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct AgentToolDeps {
+    pub retrieval: Arc<RetrievalService>,
+    pub memory: Arc<MemoryService>,
+    pub diary_repo: Arc<dyn DiaryRepository>,
+    pub depression_repo: Arc<dyn DepressionRepository>,
+    pub music_repo: Arc<dyn MusicRepository>,
+    pub community_repo: Arc<dyn CommunityRepository>,
+    pub agent_event_repo: Arc<dyn AgentEventRepository>,
+    pub plugins: PluginsConfig,
+}
+
+// ── Agent Tool Registration ────────────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+pub struct AgentToolRegistration {
+    pub key: &'static str,
+    pub order: u16,
+    pub enabled_by_default: bool,
+    pub factory: fn(&AgentToolDeps) -> Arc<dyn AgentTool>,
+}
+
+// ── Default Registrations ──────────────────────────────────────────────────
+
+pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
+    vec![
+        AgentToolRegistration {
+            key: "knowledge_search",
+            order: 10,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(KnowledgeSearchTool::new(Arc::clone(&deps.retrieval))),
+        },
+        AgentToolRegistration {
+            key: "memory_search",
+            order: 20,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(MemorySearchTool::new(Arc::clone(&deps.memory))),
+        },
+        AgentToolRegistration {
+            key: "diary_search",
+            order: 30,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(DiarySearchTool::new(Arc::clone(&deps.diary_repo))),
+        },
+        AgentToolRegistration {
+            key: "depression_scale",
+            order: 40,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(DepressionScaleTool::new(Arc::clone(&deps.depression_repo))),
+        },
+        AgentToolRegistration {
+            key: "music_recommend",
+            order: 50,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(MusicRecommendTool::new(Arc::clone(&deps.music_repo))),
+        },
+        AgentToolRegistration {
+            key: "community_search",
+            order: 60,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(CommunitySearchTool::new(Arc::clone(&deps.community_repo))),
+        },
+        AgentToolRegistration {
+            key: "risk_escalation",
+            order: 70,
+            enabled_by_default: true,
+            factory: |deps| Arc::new(RiskEscalationTool::new(Arc::clone(&deps.agent_event_repo))),
+        },
+        AgentToolRegistration {
+            key: "get_time",
+            order: 80,
+            enabled_by_default: true,
+            factory: |_deps| Arc::new(GetTimeTool::new()),
+        },
+    ]
+}
+
+// ── Build ──────────────────────────────────────────────────────────────────
+
+pub fn build_default_agent_tools(
+    deps: &AgentToolDeps,
+) -> Result<Vec<Arc<dyn AgentTool>>, AppError> {
+    let mut registrations = default_agent_tool_registrations();
+
+    registrations.sort_by_key(|registration| registration.order);
+
+    validate_registration_keys(&registrations)?;
+
+    let mut tools = Vec::new();
+
+    for registration in registrations
+        .into_iter()
+        .filter(|registration| registration.enabled_by_default)
+    {
+        let tool = (registration.factory)(deps);
+        tools.push(tool);
+    }
+
+    validate_tool_names(&tools)?;
+
+    info!(
+        tools = %tools
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        "agent tools registered"
+    );
+
+    Ok(tools)
+}
+
+// ── Validation ─────────────────────────────────────────────────────────────
+
+fn validate_registration_keys(registrations: &[AgentToolRegistration]) -> Result<(), AppError> {
+    let mut keys = HashSet::new();
+
+    for registration in registrations {
+        if !keys.insert(registration.key) {
+            return Err(AppError::internal(format!(
+                "duplicate agent tool registration key: {}",
+                registration.key
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_tool_names(tools: &[Arc<dyn AgentTool>]) -> Result<(), AppError> {
+    let mut names = HashSet::new();
+
+    for tool in tools {
+        let name = tool.name();
+
+        if name.trim().is_empty() {
+            return Err(AppError::internal("agent tool name cannot be empty"));
+        }
+
+        if !names.insert(name.to_string()) {
+            return Err(AppError::internal(format!(
+                "duplicate agent tool name: {}",
+                name
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_registrations_are_sorted_after_build_sort_key_is_applied() {
+        let mut registrations = default_agent_tool_registrations();
+        registrations.sort_by_key(|registration| registration.order);
+
+        let keys = registrations
+            .iter()
+            .map(|registration| registration.key)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            keys,
+            vec![
+                "knowledge_search",
+                "memory_search",
+                "diary_search",
+                "depression_scale",
+                "music_recommend",
+                "community_search",
+                "risk_escalation",
+                "get_time",
+            ]
+        );
+    }
+
+    #[test]
+    fn default_registration_keys_are_unique() {
+        let registrations = default_agent_tool_registrations();
+        validate_registration_keys(&registrations).expect("default tool keys must be unique");
+    }
+}

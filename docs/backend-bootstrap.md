@@ -289,6 +289,57 @@ pub struct ServiceGraph {
 
 ---
 
+---
+
+## Agent Tool Registry
+
+当前 Agent 工具不再在 `main.rs` 中直接手写 `vec![...]` 构造，而是通过：
+
+- `application::agent::tool_registry::AgentToolDeps` — 工具依赖集合
+- `application::agent::tool_registry::build_default_agent_tools` — 集中构建
+
+### 使用方式
+
+```rust
+let tool_deps = AgentToolDeps {
+    retrieval: Arc::clone(&retrieval),
+    memory: Arc::clone(&memory_svc),
+    diary_repo: Arc::clone(&diary_repo),
+    depression_repo: Arc::clone(&depression_repo),
+    music_repo: Arc::clone(&music_repo),
+    community_repo: Arc::clone(&community_repo),
+    agent_event_repo: Arc::clone(&agent_event_repo),
+};
+
+let agent_tools = build_default_agent_tools(&tool_deps)?;
+```
+
+### 默认工具顺序
+
+| 序号 | key | Tool | 依赖 |
+|------|-----|------|------|
+| 1 | `knowledge_search` | KnowledgeSearchTool | `retrieval: Arc<RetrievalService>` |
+| 2 | `memory_search` | MemorySearchTool | `memory: Arc<MemoryService>` |
+| 3 | `diary_search` | DiarySearchTool | `diary_repo: Arc<dyn DiaryRepository>` |
+| 4 | `depression_scale` | DepressionScaleTool | `depression_repo: Arc<dyn DepressionRepository>` |
+| 5 | `music_recommend` | MusicRecommendTool | `music_repo: Arc<dyn MusicRepository>` |
+| 6 | `community_search` | CommunitySearchTool | `community_repo: Arc<dyn CommunityRepository>` |
+| 7 | `risk_escalation` | RiskEscalationTool | `agent_event_repo: Arc<dyn AgentEventRepository>` |
+
+### 设计原则
+
+- 工具注册顺序必须显式（通过 `order` 字段 + `sort_by_key`）。
+- 工具 key 必须唯一（`validate_registration_keys` 校验）。
+- `tool.name()` 必须唯一（`validate_tool_names` 校验）。
+- `main.rs` 不直接依赖具体 tool 类型（只 import `AgentToolDeps` 和 `build_default_agent_tools`）。
+- 本阶段不使用 `inventory`，避免分布式注册导致调试困难。
+- 后续若工具数量超过 10 个，再考虑 inventory v2。
+- Agent tools 通过 `src/application/agent/tool_registry.rs` 注册。
+- 首个从 Java 插件迁移到 Rust AgentTool 系统的工具是 `get_time`。
+- 插件配置通过 `config.toml` 的 `[plugins.*]` 段和 `src/shared/config.rs` 表示。
+
+---
+
 ## 禁止事项（备忘）
 
 以下模式在本项目中**不得引入**：

@@ -13,7 +13,6 @@ use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
 };
 use crate::domain::memory::NewSummary;
-use crate::domain::rag::RAGRepository;
 use crate::domain::risk::detection_types::{DetectionResult, RiskLevel};
 use crate::domain::risk::risk_detection_result::NewRiskDetectionResult;
 use crate::domain::risk::risk_detector::RiskDetector;
@@ -95,7 +94,6 @@ struct PersistedTurn {
 /// 8. Spawn async tasks for memory extraction and risk persistence.
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
-    rag_repo: Arc<dyn RAGRepository>,
     memory_service: Arc<MemoryService>,
     risk_detector: Arc<dyn RiskDetector>,
     risk_repo: Arc<dyn RiskRepository>,
@@ -112,7 +110,6 @@ impl AgentRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         llm: Arc<dyn LlmProvider>,
-        rag_repo: Arc<dyn RAGRepository>,
         memory_service: Arc<MemoryService>,
         risk_detector: Arc<dyn RiskDetector>,
         risk_repo: Arc<dyn RiskRepository>,
@@ -126,7 +123,6 @@ impl AgentRuntime {
     ) -> Self {
         Self {
             llm,
-            rag_repo,
             memory_service,
             risk_repo,
             risk_detector,

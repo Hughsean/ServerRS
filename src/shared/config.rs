@@ -150,18 +150,28 @@ pub struct PluginsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WeatherPluginConfig {
-    #[serde(default = "default_weather_provider")]
-    pub provider: String,
     #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
+    pub default_location: String,
+    #[serde(default = "default_weather_city_lookup_endpoint")]
+    pub city_lookup_endpoint: String,
+    #[serde(default = "default_weather_now_endpoint")]
+    pub weather_now_endpoint: String,
+    #[serde(default)]
+    pub lang_query_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewsPluginConfig {
-    #[serde(default = "default_news_rss_url")]
-    pub rss_url: String,
-    #[serde(default)]
-    pub category_urls: std::collections::HashMap<String, String>,
+    #[serde(default = "default_news_default_rss_url")]
+    pub default_rss_url: String,
+    #[serde(default = "default_news_society_url")]
+    pub society_url: String,
+    #[serde(default = "default_news_world_url")]
+    pub world_url: String,
+    #[serde(default = "default_news_finance_url")]
+    pub finance_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -351,16 +361,21 @@ impl Default for DetectorConfig {
 impl Default for WeatherPluginConfig {
     fn default() -> Self {
         Self {
-            provider: default_weather_provider(),
             api_key: String::new(),
+            default_location: String::new(),
+            city_lookup_endpoint: default_weather_city_lookup_endpoint(),
+            weather_now_endpoint: default_weather_now_endpoint(),
+            lang_query_enabled: false,
         }
     }
 }
 impl Default for NewsPluginConfig {
     fn default() -> Self {
         Self {
-            rss_url: default_news_rss_url(),
-            category_urls: Default::default(),
+            default_rss_url: default_news_default_rss_url(),
+            society_url: default_news_society_url(),
+            world_url: default_news_world_url(),
+            finance_url: default_news_finance_url(),
         }
     }
 }
@@ -604,11 +619,23 @@ fn default_confidence_threshold() -> f64 {
 fn default_max_retries() -> u32 {
     3
 }
-fn default_weather_provider() -> String {
-    "openweathermap".into()
+fn default_weather_city_lookup_endpoint() -> String {
+    "https://mk4ky3n4am.re.qweatherapi.com/geo/v2/city/lookup".into()
 }
-fn default_news_rss_url() -> String {
-    "https://feeds.bbci.co.uk/news/rss.xml".into()
+fn default_weather_now_endpoint() -> String {
+    "https://mk4ky3n4am.re.qweatherapi.com/v7/weather/now".into()
+}
+fn default_news_default_rss_url() -> String {
+    "https://www.chinanews.com.cn/rss/society.xml".into()
+}
+fn default_news_society_url() -> String {
+    "https://www.chinanews.com.cn/rss/society.xml".into()
+}
+fn default_news_world_url() -> String {
+    "https://www.chinanews.com.cn/rss/world.xml".into()
+}
+fn default_news_finance_url() -> String {
+    "https://www.chinanews.com.cn/rss/finance.xml".into()
 }
 fn default_web_search_timeout() -> u64 {
     10

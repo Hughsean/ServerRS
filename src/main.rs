@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use application::agent::agent_context::AgentContextBuilder;
-use application::agent::agent_runtime::{AgentRuntime, AgentTool};
+use application::agent::agent_runtime::AgentRuntime;
 use application::community::community_service::CommunityService;
 use application::depression::depression_service::DepressionService;
 use application::diary::diary_service::DiaryService;
@@ -46,14 +46,8 @@ use infrastructure::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandle
 use shared::config::AppConfig;
 use tracing::info;
 
-// ── Agent tools ────────────────────────────────────────────────────────────
-use application::agent::tools::community_search_tool::CommunitySearchTool;
-use application::agent::tools::depression_scale_tool::DepressionScaleTool;
-use application::agent::tools::diary_search_tool::DiarySearchTool;
-use application::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
-use application::agent::tools::memory_search_tool::MemorySearchTool;
-use application::agent::tools::music_recommend_tool::MusicRecommendTool;
-use application::agent::tools::risk_escalation_tool::RiskEscalationTool;
+// ── Agent tool registry ────────────────────────────────────────────────────
+use application::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
 
 #[tokio::main]
 async fn main() {
@@ -289,19 +283,22 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&profile_repo),
     ));
 
-    let agent_tools: Vec<Arc<dyn AgentTool>> = vec![
-        Arc::new(KnowledgeSearchTool::new(Arc::clone(&retrieval))) as Arc<dyn AgentTool>,
-        Arc::new(MemorySearchTool::new(Arc::clone(&memory_svc))) as Arc<dyn AgentTool>,
-        Arc::new(DiarySearchTool::new(Arc::clone(&diary_repo))) as Arc<dyn AgentTool>,
-        Arc::new(DepressionScaleTool::new(Arc::clone(&depression_repo))) as Arc<dyn AgentTool>,
-        Arc::new(MusicRecommendTool::new(Arc::clone(&music_repo))) as Arc<dyn AgentTool>,
-        Arc::new(CommunitySearchTool::new(Arc::clone(&community_repo))) as Arc<dyn AgentTool>,
-        Arc::new(RiskEscalationTool::new(Arc::clone(&agent_event_repo))) as Arc<dyn AgentTool>,
-    ];
+    let tool_deps = AgentToolDeps {
+        retrieval: Arc::clone(&retrieval),
+        memory: Arc::clone(&memory_svc),
+        diary_repo: Arc::clone(&diary_repo),
+        depression_repo: Arc::clone(&depression_repo),
+        music_repo: Arc::clone(&music_repo),
+        community_repo: Arc::clone(&community_repo),
+        agent_event_repo: Arc::clone(&agent_event_repo),
+        plugins: config.plugins.clone(),
+    };
+
+    let agent_tools = build_default_agent_tools(&tool_deps)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&ollama_provider),
-        Arc::clone(&rag_repo),
         Arc::clone(&memory_svc),
         Arc::clone(&risk_detector),
         Arc::clone(&risk_repo),
