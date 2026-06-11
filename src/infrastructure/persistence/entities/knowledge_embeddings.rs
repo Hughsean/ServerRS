@@ -3,32 +3,78 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "knowledge_embeddings")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "knowledge_embeddings"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub embedding_id: u64,
-    #[sea_orm(unique_key = "uk_knowledge_embeddings_chunk_model")]
     pub chunk_id: u64,
-    #[sea_orm(unique_key = "uk_knowledge_embeddings_chunk_model")]
     pub provider: String,
-    #[sea_orm(unique_key = "uk_knowledge_embeddings_chunk_model")]
     pub model: String,
     pub dimension: u32,
     pub embedding_json: Json,
     pub created_at: DateTime,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    EmbeddingId,
+    ChunkId,
+    Provider,
+    Model,
+    Dimension,
+    EmbeddingJson,
+    CreatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    EmbeddingId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::knowledge_chunks::Entity",
-        from = "Column::ChunkId",
-        to = "super::knowledge_chunks::Column::ChunkId",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     KnowledgeChunks,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::EmbeddingId => ColumnType::BigUnsigned.def(),
+            Self::ChunkId => ColumnType::BigUnsigned.def(),
+            Self::Provider => ColumnType::String(StringLen::N(64u32)).def(),
+            Self::Model => ColumnType::String(StringLen::N(128u32)).def(),
+            Self::Dimension => ColumnType::Unsigned.def(),
+            Self::EmbeddingJson => ColumnType::Json.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::KnowledgeChunks => Entity::belongs_to(super::knowledge_chunks::Entity)
+                .from(Column::ChunkId)
+                .to(super::knowledge_chunks::Column::ChunkId)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::knowledge_chunks::Entity> for Entity {

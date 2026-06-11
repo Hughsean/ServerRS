@@ -3,14 +3,19 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "knowledge_documents")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "knowledge_documents"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub document_id: u64,
-    #[sea_orm(unique_key = "uk_knowledge_documents_source")]
     pub source_type: String,
-    #[sea_orm(unique_key = "uk_knowledge_documents_source")]
     pub source_id: Option<u64>,
     pub owner_user_id: Option<u64>,
     pub visibility: String,
@@ -25,18 +30,74 @@ pub struct Model {
     pub deleted_at: Option<DateTime>,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    DocumentId,
+    SourceType,
+    SourceId,
+    OwnerUserId,
+    Visibility,
+    Title,
+    ContentHash,
+    SourceVersion,
+    SourceUpdatedAt,
+    Metadata,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    DocumentId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::knowledge_chunks::Entity")]
     KnowledgeChunks,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::OwnerUserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::DocumentId => ColumnType::BigUnsigned.def(),
+            Self::SourceType => ColumnType::String(StringLen::N(64u32)).def(),
+            Self::SourceId => ColumnType::BigUnsigned.def().null(),
+            Self::OwnerUserId => ColumnType::BigUnsigned.def().null(),
+            Self::Visibility => ColumnType::String(StringLen::N(32u32)).def(),
+            Self::Title => ColumnType::String(StringLen::N(255u32)).def().null(),
+            Self::ContentHash => ColumnType::Char(Some(64u32)).def(),
+            Self::SourceVersion => ColumnType::String(StringLen::N(128u32)).def().null(),
+            Self::SourceUpdatedAt => ColumnType::DateTime.def().null(),
+            Self::Metadata => ColumnType::Json.def().null(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
+            Self::DeletedAt => ColumnType::DateTime.def().null(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::KnowledgeChunks => Entity::has_many(super::knowledge_chunks::Entity).into(),
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::OwnerUserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::knowledge_chunks::Entity> for Entity {

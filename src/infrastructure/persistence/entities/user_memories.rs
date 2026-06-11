@@ -3,19 +3,23 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "user_memories")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "user_memories"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub memory_id: u64,
     pub user_id: u64,
     pub memory_type: String,
     pub memory_key: Option<String>,
-    #[sea_orm(column_type = "Text")]
     pub content: String,
-    #[sea_orm(column_type = "Double")]
     pub confidence: f64,
-    #[sea_orm(column_type = "Double")]
     pub salience: f64,
     pub source_conversation_id: Option<u64>,
     pub source_message_id: Option<u64>,
@@ -26,7 +30,6 @@ pub struct Model {
     pub last_accessed_at: Option<DateTime>,
     pub access_count: u32,
     pub expires_at: Option<DateTime>,
-    #[sea_orm(unique)]
     pub vector_id: Option<String>,
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
@@ -34,34 +37,103 @@ pub struct Model {
     pub indexed_at: Option<DateTime>,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    MemoryId,
+    UserId,
+    MemoryType,
+    MemoryKey,
+    Content,
+    Confidence,
+    Salience,
+    SourceConversationId,
+    SourceMessageId,
+    Status,
+    Metadata,
+    CreatedAt,
+    UpdatedAt,
+    LastAccessedAt,
+    AccessCount,
+    ExpiresAt,
+    VectorId,
+    EmbeddingProvider,
+    EmbeddingModel,
+    EmbeddingDimension,
+    IndexedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    MemoryId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::conversation_messages::Entity",
-        from = "Column::SourceMessageId",
-        to = "super::conversation_messages::Column::Id",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
     ConversationMessages,
-    #[sea_orm(
-        belongs_to = "super::conversations::Entity",
-        from = "Column::SourceConversationId",
-        to = "super::conversations::Column::Id",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
     Conversations,
-    #[sea_orm(has_many = "super::user_memory_embeddings::Entity")]
     UserMemoryEmbeddings,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::MemoryId => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::MemoryType => ColumnType::String(StringLen::N(64u32)).def(),
+            Self::MemoryKey => ColumnType::Char(Some(64u32)).def().null(),
+            Self::Content => ColumnType::Text.def(),
+            Self::Confidence => ColumnType::Double.def(),
+            Self::Salience => ColumnType::Double.def(),
+            Self::SourceConversationId => ColumnType::BigUnsigned.def().null(),
+            Self::SourceMessageId => ColumnType::BigUnsigned.def().null(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::Metadata => ColumnType::Json.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
+            Self::LastAccessedAt => ColumnType::DateTime.def().null(),
+            Self::AccessCount => ColumnType::Unsigned.def(),
+            Self::ExpiresAt => ColumnType::DateTime.def().null(),
+            Self::VectorId => ColumnType::String(StringLen::N(128u32))
+                .def()
+                .null()
+                .unique(),
+            Self::EmbeddingProvider => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::EmbeddingModel => ColumnType::String(StringLen::N(128u32)).def().null(),
+            Self::EmbeddingDimension => ColumnType::Unsigned.def().null(),
+            Self::IndexedAt => ColumnType::DateTime.def().null(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::ConversationMessages => Entity::belongs_to(super::conversation_messages::Entity)
+                .from(Column::SourceMessageId)
+                .to(super::conversation_messages::Column::Id)
+                .into(),
+            Self::Conversations => Entity::belongs_to(super::conversations::Entity)
+                .from(Column::SourceConversationId)
+                .to(super::conversations::Column::Id)
+                .into(),
+            Self::UserMemoryEmbeddings => {
+                Entity::has_many(super::user_memory_embeddings::Entity).into()
+            }
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::conversation_messages::Entity> for Entity {

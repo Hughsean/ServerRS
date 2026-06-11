@@ -3,15 +3,21 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "conversation_summaries")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "conversation_summaries"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub summary_id: u64,
     pub conversation_id: u64,
     pub user_id: u64,
     pub summary_type: String,
-    #[sea_orm(column_type = "Text")]
     pub content: String,
     pub message_start_id: Option<u64>,
     pub message_end_id: Option<u64>,
@@ -21,7 +27,6 @@ pub struct Model {
     pub source_message_count: Option<u32>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
-    #[sea_orm(unique)]
     pub vector_id: Option<String>,
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
@@ -29,24 +34,88 @@ pub struct Model {
     pub indexed_at: Option<DateTime>,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    SummaryId,
+    ConversationId,
+    UserId,
+    SummaryType,
+    Content,
+    MessageStartId,
+    MessageEndId,
+    TokenCount,
+    Status,
+    SummaryVersion,
+    SourceMessageCount,
+    CreatedAt,
+    UpdatedAt,
+    VectorId,
+    EmbeddingProvider,
+    EmbeddingModel,
+    EmbeddingDimension,
+    IndexedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    SummaryId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::conversations::Entity",
-        from = "Column::ConversationId",
-        to = "super::conversations::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Conversations,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::SummaryId => ColumnType::BigUnsigned.def(),
+            Self::ConversationId => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::SummaryType => ColumnType::String(StringLen::N(64u32)).def(),
+            Self::Content => ColumnType::Text.def(),
+            Self::MessageStartId => ColumnType::BigUnsigned.def().null(),
+            Self::MessageEndId => ColumnType::BigUnsigned.def().null(),
+            Self::TokenCount => ColumnType::Unsigned.def().null(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::SummaryVersion => ColumnType::Unsigned.def(),
+            Self::SourceMessageCount => ColumnType::Unsigned.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
+            Self::VectorId => ColumnType::String(StringLen::N(128u32))
+                .def()
+                .null()
+                .unique(),
+            Self::EmbeddingProvider => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::EmbeddingModel => ColumnType::String(StringLen::N(128u32)).def().null(),
+            Self::EmbeddingDimension => ColumnType::Unsigned.def().null(),
+            Self::IndexedAt => ColumnType::DateTime.def().null(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::Conversations => Entity::belongs_to(super::conversations::Entity)
+                .from(Column::ConversationId)
+                .to(super::conversations::Column::Id)
+                .into(),
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::conversations::Entity> for Entity {

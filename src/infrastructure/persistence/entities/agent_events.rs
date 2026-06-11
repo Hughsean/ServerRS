@@ -3,10 +3,17 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "agent_events")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "agent_events"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub event_id: u64,
     pub user_id: u64,
     pub conversation_id: Option<u64>,
@@ -20,24 +27,71 @@ pub struct Model {
     pub created_at: DateTime,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    EventId,
+    UserId,
+    ConversationId,
+    SessionId,
+    TraceId,
+    TurnId,
+    EventType,
+    Severity,
+    ToolName,
+    Payload,
+    CreatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    EventId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::conversations::Entity",
-        from = "Column::ConversationId",
-        to = "super::conversations::Column::Id",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
     Conversations,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::EventId => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::ConversationId => ColumnType::BigUnsigned.def().null(),
+            Self::SessionId => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::TraceId => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::TurnId => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::EventType => ColumnType::String(StringLen::N(64u32)).def(),
+            Self::Severity => ColumnType::String(StringLen::N(32u32)).def(),
+            Self::ToolName => ColumnType::String(StringLen::N(128u32)).def().null(),
+            Self::Payload => ColumnType::Json.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::Conversations => Entity::belongs_to(super::conversations::Entity)
+                .from(Column::ConversationId)
+                .to(super::conversations::Column::Id)
+                .into(),
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::conversations::Entity> for Entity {

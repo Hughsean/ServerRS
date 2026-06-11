@@ -3,15 +3,20 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "psychology_qna")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "psychology_qna"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub qna_id: u64,
     pub category_id: u16,
-    #[sea_orm(column_type = "Text")]
     pub question: String,
-    #[sea_orm(ignore, column_type = "custom(\"LONGTEXT\")", select_as = "text")]
     pub answer: String,
     pub expert_name: Option<String>,
     pub expert_title: Option<String>,
@@ -24,16 +29,70 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    QnaId,
+    CategoryId,
+    Question,
+    Answer,
+    ExpertName,
+    ExpertTitle,
+    Tags,
+    ViewCount,
+    LikeCount,
+    IsVerified,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    QnaId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::psychology_categories::Entity",
-        from = "Column::CategoryId",
-        to = "super::psychology_categories::Column::CategoryId",
-        on_update = "NoAction",
-        on_delete = "Restrict"
-    )]
     PsychologyCategories,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::QnaId => ColumnType::BigUnsigned.def(),
+            Self::CategoryId => ColumnType::SmallUnsigned.def(),
+            Self::Question => ColumnType::Text.def(),
+            Self::Answer => ColumnType::custom("LONGTEXT").def(),
+            Self::ExpertName => ColumnType::String(StringLen::N(100u32)).def().null(),
+            Self::ExpertTitle => ColumnType::String(StringLen::N(200u32)).def().null(),
+            Self::Tags => ColumnType::Json.def().null(),
+            Self::ViewCount => ColumnType::Unsigned.def(),
+            Self::LikeCount => ColumnType::Unsigned.def(),
+            Self::IsVerified => ColumnType::TinyInteger.def(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::UpdatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::PsychologyCategories => Entity::belongs_to(super::psychology_categories::Entity)
+                .from(Column::CategoryId)
+                .to(super::psychology_categories::Column::CategoryId)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::psychology_categories::Entity> for Entity {

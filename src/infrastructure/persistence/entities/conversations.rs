@@ -3,10 +3,17 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "conversations")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "conversations"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub id: u64,
     pub user_id: u64,
     pub title: Option<String>,
@@ -16,26 +23,74 @@ pub struct Model {
     pub created_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    Id,
+    UserId,
+    Title,
+    IsTitleGenerated,
+    LastMessageAt,
+    MessageCount,
+    CreatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    Id,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::agent_events::Entity")]
     AgentEvents,
-    #[sea_orm(has_many = "super::conversation_messages::Entity")]
     ConversationMessages,
-    #[sea_orm(has_many = "super::conversation_summaries::Entity")]
     ConversationSummaries,
-    #[sea_orm(has_many = "super::risk_detection_results::Entity")]
     RiskDetectionResults,
-    #[sea_orm(has_many = "super::user_memories::Entity")]
     UserMemories,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::Id => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::Title => ColumnType::String(StringLen::N(100u32)).def().null(),
+            Self::IsTitleGenerated => ColumnType::TinyInteger.def(),
+            Self::LastMessageAt => ColumnType::Timestamp.def().null(),
+            Self::MessageCount => ColumnType::Unsigned.def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::AgentEvents => Entity::has_many(super::agent_events::Entity).into(),
+            Self::ConversationMessages => {
+                Entity::has_many(super::conversation_messages::Entity).into()
+            }
+            Self::ConversationSummaries => {
+                Entity::has_many(super::conversation_summaries::Entity).into()
+            }
+            Self::RiskDetectionResults => {
+                Entity::has_many(super::risk_detection_results::Entity).into()
+            }
+            Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::agent_events::Entity> for Entity {

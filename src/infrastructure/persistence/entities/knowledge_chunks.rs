@@ -3,25 +3,28 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "knowledge_chunks")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "knowledge_chunks"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub chunk_id: u64,
-    #[sea_orm(unique_key = "uk_knowledge_chunks_doc_idx")]
     pub document_id: u64,
-    #[sea_orm(unique_key = "uk_knowledge_chunks_doc_idx")]
     pub chunk_index: u32,
     pub char_start: Option<u32>,
     pub char_end: Option<u32>,
-    #[sea_orm(column_type = "Text")]
     pub content: String,
     pub content_hash: Option<String>,
     pub token_count: Option<u32>,
     pub metadata: Option<Json>,
     pub status: i8,
     pub created_at: DateTime,
-    #[sea_orm(unique)]
     pub vector_id: Option<String>,
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
@@ -29,18 +32,83 @@ pub struct Model {
     pub indexed_at: Option<DateTime>,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    ChunkId,
+    DocumentId,
+    ChunkIndex,
+    CharStart,
+    CharEnd,
+    Content,
+    ContentHash,
+    TokenCount,
+    Metadata,
+    Status,
+    CreatedAt,
+    VectorId,
+    EmbeddingProvider,
+    EmbeddingModel,
+    EmbeddingDimension,
+    IndexedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    ChunkId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::knowledge_documents::Entity",
-        from = "Column::DocumentId",
-        to = "super::knowledge_documents::Column::DocumentId",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     KnowledgeDocuments,
-    #[sea_orm(has_many = "super::knowledge_embeddings::Entity")]
     KnowledgeEmbeddings,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::ChunkId => ColumnType::BigUnsigned.def(),
+            Self::DocumentId => ColumnType::BigUnsigned.def(),
+            Self::ChunkIndex => ColumnType::Unsigned.def(),
+            Self::CharStart => ColumnType::Unsigned.def().null(),
+            Self::CharEnd => ColumnType::Unsigned.def().null(),
+            Self::Content => ColumnType::Text.def(),
+            Self::ContentHash => ColumnType::Char(Some(64u32)).def().null(),
+            Self::TokenCount => ColumnType::Unsigned.def().null(),
+            Self::Metadata => ColumnType::Json.def().null(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::VectorId => ColumnType::String(StringLen::N(128u32))
+                .def()
+                .null()
+                .unique(),
+            Self::EmbeddingProvider => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::EmbeddingModel => ColumnType::String(StringLen::N(128u32)).def().null(),
+            Self::EmbeddingDimension => ColumnType::Unsigned.def().null(),
+            Self::IndexedAt => ColumnType::DateTime.def().null(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::KnowledgeDocuments => Entity::belongs_to(super::knowledge_documents::Entity)
+                .from(Column::DocumentId)
+                .to(super::knowledge_documents::Column::DocumentId)
+                .into(),
+            Self::KnowledgeEmbeddings => {
+                Entity::has_many(super::knowledge_embeddings::Entity).into()
+            }
+        }
+    }
 }
 
 impl Related<super::knowledge_documents::Entity> for Entity {

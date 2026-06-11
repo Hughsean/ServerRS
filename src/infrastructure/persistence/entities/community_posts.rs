@@ -3,14 +3,20 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "community_posts")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "community_posts"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub post_id: u64,
     pub user_id: u64,
     pub title: Option<String>,
-    #[sea_orm(column_type = "Text")]
     pub content: String,
     pub extra_metadata: Option<Json>,
     pub likes_count: u32,
@@ -20,20 +26,70 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    PostId,
+    UserId,
+    Title,
+    Content,
+    ExtraMetadata,
+    LikesCount,
+    CommentsCount,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    PostId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::community_comments::Entity")]
     CommunityComments,
-    #[sea_orm(has_many = "super::community_post_media::Entity")]
     CommunityPostMedia,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::PostId => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::Title => ColumnType::String(StringLen::N(150u32)).def().null(),
+            Self::Content => ColumnType::Text.def(),
+            Self::ExtraMetadata => ColumnType::Json.def().null(),
+            Self::LikesCount => ColumnType::Unsigned.def(),
+            Self::CommentsCount => ColumnType::Unsigned.def(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::UpdatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::CommunityComments => Entity::has_many(super::community_comments::Entity).into(),
+            Self::CommunityPostMedia => {
+                Entity::has_many(super::community_post_media::Entity).into()
+            }
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::community_comments::Entity> for Entity {

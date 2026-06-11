@@ -3,10 +3,17 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "risk_detection_results")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "risk_detection_results"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub id: u64,
     pub user_id: u64,
     pub message_id: u64,
@@ -15,7 +22,6 @@ pub struct Model {
     pub polarity: String,
     pub intent: String,
     pub target: String,
-    #[sea_orm(column_type = "Decimal(Some((4, 3)))")]
     pub confidence: Decimal,
     pub evidence: Option<Json>,
     pub reason: Option<String>,
@@ -23,37 +29,92 @@ pub struct Model {
     pub model_name: Option<String>,
     pub detector_version: Option<String>,
     pub is_processed: i8,
-    #[sea_orm(column_type = "Text", nullable)]
     pub process_notes: Option<String>,
     pub created_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    Id,
+    UserId,
+    MessageId,
+    ConversationId,
+    RiskLevel,
+    Polarity,
+    Intent,
+    Target,
+    Confidence,
+    Evidence,
+    Reason,
+    RawPayload,
+    ModelName,
+    DetectorVersion,
+    IsProcessed,
+    ProcessNotes,
+    CreatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    Id,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::conversation_messages::Entity",
-        from = "Column::MessageId",
-        to = "super::conversation_messages::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     ConversationMessages,
-    #[sea_orm(
-        belongs_to = "super::conversations::Entity",
-        from = "Column::ConversationId",
-        to = "super::conversations::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Conversations,
-    #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     Users,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::Id => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::MessageId => ColumnType::BigUnsigned.def(),
+            Self::ConversationId => ColumnType::BigUnsigned.def(),
+            Self::RiskLevel => ColumnType::String(StringLen::N(16u32)).def(),
+            Self::Polarity => ColumnType::String(StringLen::N(16u32)).def(),
+            Self::Intent => ColumnType::String(StringLen::N(32u32)).def(),
+            Self::Target => ColumnType::String(StringLen::N(32u32)).def(),
+            Self::Confidence => ColumnType::Decimal(Some((4u32, 3u32))).def(),
+            Self::Evidence => ColumnType::Json.def().null(),
+            Self::Reason => ColumnType::String(StringLen::N(200u32)).def().null(),
+            Self::RawPayload => ColumnType::Json.def().null(),
+            Self::ModelName => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::DetectorVersion => ColumnType::String(StringLen::N(32u32)).def().null(),
+            Self::IsProcessed => ColumnType::TinyInteger.def(),
+            Self::ProcessNotes => ColumnType::Text.def().null(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::ConversationMessages => Entity::belongs_to(super::conversation_messages::Entity)
+                .from(Column::MessageId)
+                .to(super::conversation_messages::Column::Id)
+                .into(),
+            Self::Conversations => Entity::belongs_to(super::conversations::Entity)
+                .from(Column::ConversationId)
+                .to(super::conversations::Column::Id)
+                .into(),
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::conversation_messages::Entity> for Entity {

@@ -3,29 +3,75 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "community_post_media")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "community_post_media"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub media_id: u64,
     pub post_id: u64,
     pub media_type: String,
     pub mime_type: String,
-    #[sea_orm(ignore, column_type = "custom(\"longblob\")", select_as = "text")]
     pub media_data: String,
     pub created_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    MediaId,
+    PostId,
+    MediaType,
+    MimeType,
+    MediaData,
+    CreatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    MediaId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::community_posts::Entity",
-        from = "Column::PostId",
-        to = "super::community_posts::Column::PostId",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
     CommunityPosts,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::MediaId => ColumnType::BigUnsigned.def(),
+            Self::PostId => ColumnType::BigUnsigned.def(),
+            Self::MediaType => ColumnType::String(StringLen::N(20u32)).def(),
+            Self::MimeType => ColumnType::String(StringLen::N(100u32)).def(),
+            Self::MediaData => ColumnType::custom("longblob").def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::CommunityPosts => Entity::belongs_to(super::community_posts::Entity)
+                .from(Column::PostId)
+                .to(super::community_posts::Column::PostId)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::community_posts::Entity> for Entity {

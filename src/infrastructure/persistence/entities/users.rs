@@ -3,19 +3,22 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "users")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "users"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub id: u64,
-    #[sea_orm(unique)]
     pub username: String,
     pub password: String,
-    #[sea_orm(unique)]
     pub email: Option<String>,
-    #[sea_orm(unique)]
     pub phone: Option<String>,
-    #[sea_orm(column_type = "Binary(255)", nullable)]
     pub avatar: Option<Vec<u8>>,
     pub nickname: Option<String>,
     pub created_at: DateTimeUtc,
@@ -25,38 +28,111 @@ pub struct Model {
     pub role: String,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    Id,
+    Username,
+    Password,
+    Email,
+    Phone,
+    Avatar,
+    Nickname,
+    CreatedAt,
+    UpdatedAt,
+    LastLoginAt,
+    Status,
+    Role,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    Id,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::agent_events::Entity")]
     AgentEvents,
-    #[sea_orm(has_many = "super::community_comments::Entity")]
     CommunityComments,
-    #[sea_orm(has_many = "super::community_posts::Entity")]
     CommunityPosts,
-    #[sea_orm(has_many = "super::content_likes::Entity")]
     ContentLikes,
-    #[sea_orm(has_many = "super::conversation_summaries::Entity")]
     ConversationSummaries,
-    #[sea_orm(has_many = "super::conversations::Entity")]
     Conversations,
-    #[sea_orm(has_many = "super::depression_assessments::Entity")]
     DepressionAssessments,
-    #[sea_orm(has_many = "super::knowledge_documents::Entity")]
     KnowledgeDocuments,
-    #[sea_orm(has_many = "super::refresh_tokens::Entity")]
     RefreshTokens,
-    #[sea_orm(has_many = "super::risk_detection_results::Entity")]
     RiskDetectionResults,
-    #[sea_orm(has_many = "super::user_diaries::Entity")]
+    StoredObjects,
     UserDiaries,
-    #[sea_orm(has_many = "super::user_knowledge_favorites::Entity")]
     UserKnowledgeFavorites,
-    #[sea_orm(has_many = "super::user_memories::Entity")]
     UserMemories,
-    #[sea_orm(has_one = "super::user_profiles::Entity")]
     UserProfiles,
-    #[sea_orm(has_many = "super::vector_index_records::Entity")]
     VectorIndexRecords,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::Id => ColumnType::BigUnsigned.def(),
+            Self::Username => ColumnType::String(StringLen::N(50u32)).def().unique(),
+            Self::Password => ColumnType::String(StringLen::N(255u32)).def(),
+            Self::Email => ColumnType::String(StringLen::N(100u32))
+                .def()
+                .null()
+                .unique(),
+            Self::Phone => ColumnType::String(StringLen::N(20u32))
+                .def()
+                .null()
+                .unique(),
+            Self::Avatar => ColumnType::Binary(255u32).def().null(),
+            Self::Nickname => ColumnType::String(StringLen::N(50u32)).def().null(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::LastLoginAt => ColumnType::Timestamp.def().null(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::Role => ColumnType::String(StringLen::N(32u32)).def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::AgentEvents => Entity::has_many(super::agent_events::Entity).into(),
+            Self::CommunityComments => Entity::has_many(super::community_comments::Entity).into(),
+            Self::CommunityPosts => Entity::has_many(super::community_posts::Entity).into(),
+            Self::ContentLikes => Entity::has_many(super::content_likes::Entity).into(),
+            Self::ConversationSummaries => {
+                Entity::has_many(super::conversation_summaries::Entity).into()
+            }
+            Self::Conversations => Entity::has_many(super::conversations::Entity).into(),
+            Self::DepressionAssessments => {
+                Entity::has_many(super::depression_assessments::Entity).into()
+            }
+            Self::KnowledgeDocuments => Entity::has_many(super::knowledge_documents::Entity).into(),
+            Self::RefreshTokens => Entity::has_many(super::refresh_tokens::Entity).into(),
+            Self::RiskDetectionResults => {
+                Entity::has_many(super::risk_detection_results::Entity).into()
+            }
+            Self::StoredObjects => Entity::has_many(super::stored_objects::Entity).into(),
+            Self::UserDiaries => Entity::has_many(super::user_diaries::Entity).into(),
+            Self::UserKnowledgeFavorites => {
+                Entity::has_many(super::user_knowledge_favorites::Entity).into()
+            }
+            Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
+            Self::UserProfiles => Entity::has_one(super::user_profiles::Entity).into(),
+            Self::VectorIndexRecords => {
+                Entity::has_many(super::vector_index_records::Entity).into()
+            }
+        }
+    }
 }
 
 impl Related<super::agent_events::Entity> for Entity {
@@ -116,6 +192,12 @@ impl Related<super::refresh_tokens::Entity> for Entity {
 impl Related<super::risk_detection_results::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::RiskDetectionResults.def()
+    }
+}
+
+impl Related<super::stored_objects::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::StoredObjects.def()
     }
 }
 

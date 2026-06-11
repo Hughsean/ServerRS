@@ -3,28 +3,27 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "psychology_resources")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "psychology_resources"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub resource_id: u64,
     pub category_id: u16,
     pub resource_type: String,
     pub title: String,
-    #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"longblob\")",
-        select_as = "text",
-        nullable
-    )]
     pub file_data: Option<String>,
     pub external_url: Option<String>,
     pub file_size: Option<u64>,
     pub mime_type: Option<String>,
     pub duration: Option<u32>,
-    #[sea_orm(column_type = "Binary(255)", nullable)]
     pub thumbnail: Option<Vec<u8>>,
     pub tags: Option<Json>,
     pub view_count: u32,
@@ -34,16 +33,78 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    ResourceId,
+    CategoryId,
+    ResourceType,
+    Title,
+    Description,
+    FileData,
+    ExternalUrl,
+    FileSize,
+    MimeType,
+    Duration,
+    Thumbnail,
+    Tags,
+    ViewCount,
+    LikeCount,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    ResourceId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u64;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::psychology_categories::Entity",
-        from = "Column::CategoryId",
-        to = "super::psychology_categories::Column::CategoryId",
-        on_update = "NoAction",
-        on_delete = "Restrict"
-    )]
     PsychologyCategories,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::ResourceId => ColumnType::BigUnsigned.def(),
+            Self::CategoryId => ColumnType::SmallUnsigned.def(),
+            Self::ResourceType => ColumnType::String(StringLen::N(32u32)).def(),
+            Self::Title => ColumnType::String(StringLen::N(200u32)).def(),
+            Self::Description => ColumnType::Text.def().null(),
+            Self::FileData => ColumnType::custom("longblob").def().null(),
+            Self::ExternalUrl => ColumnType::String(StringLen::N(500u32)).def().null(),
+            Self::FileSize => ColumnType::BigUnsigned.def().null(),
+            Self::MimeType => ColumnType::String(StringLen::N(100u32)).def().null(),
+            Self::Duration => ColumnType::Unsigned.def().null(),
+            Self::Thumbnail => ColumnType::Binary(255u32).def().null(),
+            Self::Tags => ColumnType::Json.def().null(),
+            Self::ViewCount => ColumnType::Unsigned.def(),
+            Self::LikeCount => ColumnType::Unsigned.def(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::UpdatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::PsychologyCategories => Entity::belongs_to(super::psychology_categories::Entity)
+                .from(Column::CategoryId)
+                .to(super::psychology_categories::Column::CategoryId)
+                .into(),
+        }
+    }
 }
 
 impl Related<super::psychology_categories::Entity> for Entity {

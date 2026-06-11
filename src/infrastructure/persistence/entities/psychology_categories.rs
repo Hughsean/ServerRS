@@ -3,15 +3,20 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "psychology_categories")]
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &'static str {
+        "psychology_categories"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    #[sea_orm(primary_key)]
     pub category_id: u16,
-    #[sea_orm(unique)]
     pub category_name: String,
     pub parent_id: Option<u16>,
-    #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
     pub sort_order: i32,
     pub status: i8,
@@ -19,22 +24,68 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    CategoryId,
+    CategoryName,
+    ParentId,
+    Description,
+    SortOrder,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    CategoryId,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = u16;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::psychology_articles::Entity")]
     PsychologyArticles,
-    #[sea_orm(
-        belongs_to = "Entity",
-        from = "Column::ParentId",
-        to = "Column::CategoryId",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
     SelfRef,
-    #[sea_orm(has_many = "super::psychology_qna::Entity")]
     PsychologyQna,
-    #[sea_orm(has_many = "super::psychology_resources::Entity")]
     PsychologyResources,
+}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::CategoryId => ColumnType::SmallUnsigned.def(),
+            Self::CategoryName => ColumnType::String(StringLen::N(50u32)).def().unique(),
+            Self::ParentId => ColumnType::SmallUnsigned.def().null(),
+            Self::Description => ColumnType::Text.def().null(),
+            Self::SortOrder => ColumnType::Integer.def(),
+            Self::Status => ColumnType::TinyInteger.def(),
+            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::UpdatedAt => ColumnType::Timestamp.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        match self {
+            Self::PsychologyArticles => Entity::has_many(super::psychology_articles::Entity).into(),
+            Self::SelfRef => Entity::belongs_to(Entity)
+                .from(Column::ParentId)
+                .to(Column::CategoryId)
+                .into(),
+            Self::PsychologyQna => Entity::has_many(super::psychology_qna::Entity).into(),
+            Self::PsychologyResources => {
+                Entity::has_many(super::psychology_resources::Entity).into()
+            }
+        }
+    }
 }
 
 impl Related<super::psychology_articles::Entity> for Entity {
