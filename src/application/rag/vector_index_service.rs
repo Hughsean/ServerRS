@@ -7,10 +7,7 @@ use crate::domain::llm::EmbeddingProvider;
 use crate::domain::memory::{ConversationSummary, MemoryRepository, UserMemory};
 use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepository};
 use crate::domain::summary::SummaryRepository;
-use crate::domain::vector_index::{
-    NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord,
-    VectorIndexRepository,
-};
+use crate::domain::vector_index::{NewVectorIndexJob, NewVectorIndexRecord, VectorIndexRepository};
 use crate::domain::vector_store::{
     VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorStore,
 };
@@ -522,6 +519,7 @@ pub fn payload_summary_id(payload: &serde_json::Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::vector_index::{VectorIndexJob, VectorIndexRecord};
     use crate::infrastructure::llm::mock_provider::MockEmbeddingProvider;
     use crate::infrastructure::vector_store::mock_vector_store::MockVectorStore;
 

@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::{Extension, Json, extract::State, response::IntoResponse};
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use validator::Validate;
 
 use crate::api::AuthState;

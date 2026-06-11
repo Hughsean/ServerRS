@@ -110,7 +110,7 @@ impl MemoryExtractor {
 /// Mock LLM provider used in both the extractor and service unit tests.
 #[cfg(test)]
 pub(crate) mod test_utils {
-    use super::*;
+
     use crate::domain::llm::{
         ChatCompletionRequest, ChatCompletionResponse, LlmError, LlmProvider, TokenUsage,
     };
@@ -155,7 +155,6 @@ mod tests {
     use super::*;
     use crate::domain::llm::{
         ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmError, LlmProvider,
-        TokenUsage,
     };
     use test_utils::MockLlm;
 

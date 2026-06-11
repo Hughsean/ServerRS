@@ -308,7 +308,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             .one(&self.db)
             .await
             .map_err(map_err)?;
-        if let Some(m) = opt {
+        if let Some(_m) = opt {
             // Increment view_count via raw SQL because content is ignore-marked,
             // so the ActiveModel cannot round-trip through update safely.
             let sql = format!(
@@ -462,7 +462,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             .one(&self.db)
             .await
             .map_err(map_err)?;
-        if let Some(m) = opt {
+        if let Some(_m) = opt {
             // Increment view_count via raw SQL (answer is ignore-marked)
             let sql = format!(
                 "UPDATE psychology_qna SET view_count = view_count + 1 WHERE qna_id = {}",
@@ -591,7 +591,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             .one(&self.db)
             .await
             .map_err(map_err)?;
-        if let Some(m) = opt {
+        if let Some(_m) = opt {
             // Increment view_count via raw SQL (file_data is ignore-marked BLOB alias)
             let sql = format!(
                 "UPDATE psychology_resources SET view_count = view_count + 1 WHERE resource_id = {}",

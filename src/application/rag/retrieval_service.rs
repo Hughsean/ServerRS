@@ -339,8 +339,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::rag::{NewChunk, NewDocument, NewEmbedding};
-    use async_trait::async_trait;
+
     use chrono::Utc;
 
     // ── can_read_document unit tests ────────────────────────────

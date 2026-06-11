@@ -4,7 +4,6 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use validator::Validate;
 
 use crate::api::UserState;

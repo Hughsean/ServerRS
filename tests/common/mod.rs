@@ -38,9 +38,9 @@ use ServerRS::domain::like::{ContentLike, ContentLikeRepository};
 use ServerRS::domain::llm::{ChatMessage, ChatResponse, LlmClient, PromptProvider};
 use ServerRS::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
 use ServerRS::domain::psychology::{
-    ContentLike as PsychologyContentLike, KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite,
-    NewPsychologyArticle, NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource,
-    PsychologyArticle, PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
+    KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite, NewPsychologyArticle,
+    NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource, PsychologyArticle,
+    PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
 };
 use ServerRS::domain::risk::detection_types::DetectionResult;
 use ServerRS::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
@@ -1206,7 +1206,7 @@ impl MusicRepository for MockMusicRepo {
         offset: u64,
     ) -> Result<(Vec<MusicTrack>, u64), AppError> {
         let tracks = self.tracks.lock().unwrap();
-        let total = tracks.len() as u64;
+        let _total = tracks.len() as u64;
         let filtered: Vec<MusicTrack> = match category {
             Some(ref cat) => tracks
                 .iter()
@@ -1379,7 +1379,7 @@ impl CommunityRepository for MockCommunityRepo {
             .filter(|c| c.post_id == post_id)
             .cloned()
             .collect();
-        let total = filtered.len();
+        let _total = filtered.len();
         let page: Vec<Comment> = filtered
             .iter()
             .skip(offset as usize)
@@ -1592,7 +1592,7 @@ fn build_test_state() -> api::AppState {
     let risk_repo: Arc<dyn RiskRepository> = Arc::new(MockRiskRepo);
 
     let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
-    let revoke_repo = Arc::new(MockRevokeRepo);
+    let _revoke_repo = Arc::new(MockRevokeRepo);
     let jwt: Arc<JwtTokenService> = Arc::new(JwtTokenService::new(
         "test-secret-key-for-integration-tests",
         86400,

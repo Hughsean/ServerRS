@@ -118,7 +118,7 @@ impl QdrantVectorStore {
         Some(Filter::all(conditions))
     }
 
-    fn domain_payload_to_qdrant(mut payload: serde_json::Value) -> Payload {
+    fn domain_payload_to_qdrant(payload: serde_json::Value) -> Payload {
         let mut map: HashMap<String, Value> = match payload {
             serde_json::Value::Object(ref obj) => obj
                 .iter()
@@ -382,7 +382,6 @@ fn qdrant_payload_to_json(payload: HashMap<String, Value>) -> serde_json::Value 
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::vector_store::{VectorDistance, VectorFilter, VectorPoint};
 
     #[test]
     fn test_fnv_deterministic() {
