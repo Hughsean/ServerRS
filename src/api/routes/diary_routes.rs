@@ -1,9 +1,9 @@
 use axum::{Router, routing::get};
 
+use crate::api::ApiState;
 use crate::api::handlers::diary_handler::{
     create_diary, delete_diary, get_diary, list_diaries, update_diary,
 };
-use crate::api::ApiState;
 
 pub fn diary_routes(state: ApiState) -> Router {
     Router::new()

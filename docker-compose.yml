@@ -1,7 +1,7 @@
 services:
   mysql:
     image: mysql:8
-    container_name: mysql8-digital-companion
+    container_name: serverrs-mysql
     environment:
       # 设置 root 密码
       MYSQL_ROOT_PASSWORD: passwd
@@ -17,4 +17,14 @@ services:
     # 数据持久化
     volumes:
       # XXX: 修改为自己的路径
-      - ./database/mysql8-digital-companion:/var/lib/mysql
+      - ./database/mysql8:/var/lib/mysql
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.3
+    container_name: serverrs-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./database/qdrant/storage:/qdrant/storage

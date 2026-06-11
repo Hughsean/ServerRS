@@ -23,7 +23,10 @@ impl MockLlmProvider {
 
 #[async_trait]
 impl LlmProvider for MockLlmProvider {
-    async fn chat(&self, _request: ChatCompletionRequest) -> Result<ChatCompletionResponse, LlmError> {
+    async fn chat(
+        &self,
+        _request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LlmError> {
         Ok(ChatCompletionResponse {
             content: self.fixed_response.clone(),
             tool_calls: Vec::new(),

@@ -46,11 +46,7 @@ impl MemoryExtractor {
     /// Sends an extraction prompt plus the conversation to the LLM, parses the
     /// JSON response, and returns the resulting `NewMemory` structs.  Returns
     /// an empty `Vec` on any parse failure or if the LLM returns nothing.
-    pub async fn extract(
-        &self,
-        user_id: u64,
-        messages: &[ChatMessage],
-    ) -> Vec<NewMemory> {
+    pub async fn extract(&self, user_id: u64, messages: &[ChatMessage]) -> Vec<NewMemory> {
         let mut prompt_messages = messages.to_vec();
         prompt_messages.push(ChatMessage {
             role: "system".to_string(),
@@ -115,10 +111,10 @@ impl MemoryExtractor {
 #[cfg(test)]
 pub(crate) mod test_utils {
     use super::*;
-    use async_trait::async_trait;
     use crate::domain::llm::{
-        ChatCompletionResponse, ChatCompletionRequest, LlmError, LlmProvider, TokenUsage,
+        ChatCompletionRequest, ChatCompletionResponse, LlmError, LlmProvider, TokenUsage,
     };
+    use async_trait::async_trait;
 
     pub(crate) struct MockLlm;
 
@@ -142,6 +138,14 @@ pub(crate) mod test_utils {
                     total_tokens: 150,
                 }),
             })
+        }
+
+        async fn chat_with_tools(
+            &self,
+            _request: ChatCompletionRequest,
+            _tools: Vec<crate::domain::llm::ToolDefinition>,
+        ) -> Result<ChatCompletionResponse, LlmError> {
+            self.chat(_request).await
         }
     }
 }
@@ -174,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn test_extract_empty_on_bad_json() {
         struct BadLlm;
-        #[async_trait]
+        #[async_trait::async_trait]
         impl LlmProvider for BadLlm {
             async fn chat(
                 &self,
@@ -187,6 +191,14 @@ mod tests {
                     usage: None,
                 })
             }
+
+            async fn chat_with_tools(
+                &self,
+                _request: ChatCompletionRequest,
+                _tools: Vec<crate::domain::llm::ToolDefinition>,
+            ) -> Result<ChatCompletionResponse, LlmError> {
+                Err(LlmError::ProviderError("not implemented for mock".into()))
+            }
         }
 
         let extractor = MemoryExtractor::new(Arc::new(BadLlm));
@@ -197,13 +209,21 @@ mod tests {
     #[tokio::test]
     async fn test_extract_empty_on_llm_error() {
         struct ErrLlm;
-        #[async_trait]
+        #[async_trait::async_trait]
         impl LlmProvider for ErrLlm {
             async fn chat(
                 &self,
                 _request: ChatCompletionRequest,
             ) -> Result<ChatCompletionResponse, LlmError> {
                 Err(LlmError::ProviderError("down".to_string()))
+            }
+
+            async fn chat_with_tools(
+                &self,
+                _request: ChatCompletionRequest,
+                _tools: Vec<crate::domain::llm::ToolDefinition>,
+            ) -> Result<ChatCompletionResponse, LlmError> {
+                Err(LlmError::ProviderError("down".into()))
             }
         }
 

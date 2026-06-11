@@ -1,7 +1,7 @@
 use axum::{Router, routing::get};
 
-use crate::api::handlers::music_handler::{get_track, list_tracks, stream_track};
 use crate::api::ApiState;
+use crate::api::handlers::music_handler::{get_track, list_tracks, stream_track};
 
 pub fn music_routes(state: ApiState) -> Router {
     Router::new()

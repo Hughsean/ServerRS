@@ -1,7 +1,10 @@
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
-use crate::api::handlers::auth_handler::{health, login, logout, me, refresh_token, register};
 use crate::api::ApiState;
+use crate::api::handlers::auth_handler::{health, login, logout, me, refresh_token, register};
 
 pub fn auth_routes(state: ApiState) -> Router {
     Router::new()

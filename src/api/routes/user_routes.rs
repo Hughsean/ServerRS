@@ -1,7 +1,10 @@
-use axum::{Router, routing::{delete, get, patch, put}};
+use axum::{
+    Router,
+    routing::{delete, get, patch, put},
+};
 
-use crate::api::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use crate::api::ApiState;
+use crate::api::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 
 pub fn user_routes(state: ApiState) -> Router {
     Router::new()

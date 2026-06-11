@@ -107,10 +107,7 @@ pub trait RAGRepository: Send + Sync {
     ) -> Result<Vec<KnowledgeChunk>, AppError>;
 
     /// Persist a single embedding.
-    async fn save_embedding(
-        &self,
-        emb: NewEmbedding,
-    ) -> Result<KnowledgeEmbedding, AppError>;
+    async fn save_embedding(&self, emb: NewEmbedding) -> Result<KnowledgeEmbedding, AppError>;
 
     /// Retrieve the embedding attached to a chunk, if any.
     async fn find_embedding_by_chunk(
@@ -134,4 +131,34 @@ pub trait RAGRepository: Send + Sync {
     async fn list_chunks_with_embeddings(
         &self,
     ) -> Result<Vec<(KnowledgeChunk, KnowledgeEmbedding)>, AppError>;
+
+    /// Look up a single chunk by its primary key.
+    async fn find_chunk_by_id(&self, chunk_id: u64) -> Result<Option<KnowledgeChunk>, AppError>;
+
+    /// Look up a document by its primary key.
+    async fn find_document_by_id(
+        &self,
+        document_id: u64,
+    ) -> Result<Option<KnowledgeDocument>, AppError>;
+
+    /// Update vector-index metadata on a chunk row.
+    async fn update_chunk_index_metadata(
+        &self,
+        chunk_id: u64,
+        vector_id: String,
+        embedding_provider: String,
+        embedding_model: String,
+        embedding_dimension: u32,
+    ) -> Result<(), AppError>;
+
+    /// Clear index metadata on a chunk (mark unindexed).
+    async fn mark_chunk_unindexed(&self, chunk_id: u64) -> Result<(), AppError>;
+
+    /// List chunks eligible for vector indexing.
+    /// Returns chunks joined with their parent document, filtered by:
+    ///   document.status = 1 AND document.deleted_at IS NULL AND chunk.status = 1.
+    async fn list_indexable_chunks(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<(KnowledgeChunk, KnowledgeDocument)>, AppError>;
 }

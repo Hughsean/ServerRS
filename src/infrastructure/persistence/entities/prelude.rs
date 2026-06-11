@@ -26,3 +26,5 @@ pub use super::user_memories::Entity as UserMemories;
 pub use super::user_memory_embeddings::Entity as UserMemoryEmbeddings;
 pub use super::user_profiles::Entity as UserProfiles;
 pub use super::users::Entity as Users;
+pub use super::vector_index_jobs::Entity as VectorIndexJobs;
+pub use super::vector_index_records::Entity as VectorIndexRecords;

@@ -49,13 +49,13 @@ impl CommunityService {
         title: Option<String>,
         content: Option<String>,
     ) -> Result<Post, AppError> {
-        let existing = self.repo.find_post_by_id(post_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("post {post_id} not found"))
-        })?;
+        let existing = self
+            .repo
+            .find_post_by_id(post_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("post {post_id} not found")))?;
         if existing.user_id != user_id {
-            return Err(AppError::Forbidden(
-                "you do not own this post".to_string(),
-            ));
+            return Err(AppError::Forbidden("you do not own this post".to_string()));
         }
         let update = PostUpdate {
             title: title.map(Some),
@@ -67,13 +67,13 @@ impl CommunityService {
     }
 
     pub async fn delete_post(&self, post_id: u64, user_id: u64) -> Result<bool, AppError> {
-        let existing = self.repo.find_post_by_id(post_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("post {post_id} not found"))
-        })?;
+        let existing = self
+            .repo
+            .find_post_by_id(post_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("post {post_id} not found")))?;
         if existing.user_id != user_id {
-            return Err(AppError::Forbidden(
-                "you do not own this post".to_string(),
-            ));
+            return Err(AppError::Forbidden("you do not own this post".to_string()));
         }
         self.repo.delete_post(post_id).await
     }
@@ -110,11 +110,19 @@ impl CommunityService {
             self.repo
                 .find_comment_by_id(parent_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("parent comment {parent_id} not found")))?;
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("parent comment {parent_id} not found"))
+                })?;
         }
 
-        let new_comment =
-            NewComment::new(post_id, user_id, parent_comment_id, content, None, ArticleStatus::Published);
+        let new_comment = NewComment::new(
+            post_id,
+            user_id,
+            parent_comment_id,
+            content,
+            None,
+            ArticleStatus::Published,
+        );
         self.repo.save_comment(new_comment).await
     }
 
@@ -135,30 +143,34 @@ impl CommunityService {
     // ── Like / Unlike ────────────────────────────────────────────────────────
 
     pub async fn like_post(&self, post_id: u64, user_id: u64) -> Result<(), AppError> {
-        self.repo.find_post_by_id(post_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("post {post_id} not found"))
-        })?;
+        self.repo
+            .find_post_by_id(post_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("post {post_id} not found")))?;
         self.repo.like_post(post_id, user_id).await
     }
 
     pub async fn unlike_post(&self, post_id: u64, user_id: u64) -> Result<(), AppError> {
-        self.repo.find_post_by_id(post_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("post {post_id} not found"))
-        })?;
+        self.repo
+            .find_post_by_id(post_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("post {post_id} not found")))?;
         self.repo.unlike_post(post_id, user_id).await
     }
 
     pub async fn like_comment(&self, comment_id: u64, user_id: u64) -> Result<(), AppError> {
-        self.repo.find_comment_by_id(comment_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("comment {comment_id} not found"))
-        })?;
+        self.repo
+            .find_comment_by_id(comment_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("comment {comment_id} not found")))?;
         self.repo.like_comment(comment_id, user_id).await
     }
 
     pub async fn unlike_comment(&self, comment_id: u64, user_id: u64) -> Result<(), AppError> {
-        self.repo.find_comment_by_id(comment_id).await?.ok_or_else(|| {
-            AppError::NotFound(format!("comment {comment_id} not found"))
-        })?;
+        self.repo
+            .find_comment_by_id(comment_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("comment {comment_id} not found")))?;
         self.repo.unlike_comment(comment_id, user_id).await
     }
 }

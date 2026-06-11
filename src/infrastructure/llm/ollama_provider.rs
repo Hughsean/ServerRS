@@ -168,7 +168,9 @@ impl OllamaProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    LlmError::Timeout(format!("request to {url} timed out after {DEFAULT_TIMEOUT_SECS}s"))
+                    LlmError::Timeout(format!(
+                        "request to {url} timed out after {DEFAULT_TIMEOUT_SECS}s"
+                    ))
                 } else if e.is_connect() {
                     LlmError::Connection(format!("cannot connect to {url}: {e}"))
                 } else {
@@ -177,9 +179,10 @@ impl OllamaProvider {
             })?;
 
         let status = response.status();
-        let body_bytes = response.bytes().await.map_err(|e| {
-            LlmError::InvalidResponse(format!("failed to read response body: {e}"))
-        })?;
+        let body_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| LlmError::InvalidResponse(format!("failed to read response body: {e}")))?;
 
         if !status.is_success() {
             let body_text = String::from_utf8_lossy(&body_bytes);
@@ -200,7 +203,10 @@ impl OllamaProvider {
 
 #[async_trait]
 impl LlmProvider for OllamaProvider {
-    async fn chat(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, LlmError> {
+    async fn chat(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LlmError> {
         let url = self.chat_url();
 
         let body = ChatRequest {

@@ -1,5 +1,6 @@
 use axum::{
-    Extension, Json, extract::{Path, Query, State},
+    Extension, Json,
+    extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,9 +73,7 @@ pub struct PaginatedAssessments {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// GET /api/v1/depression/scales
-pub async fn list_scales(
-    State(state): State<ApiState>,
-) -> Result<Json<Vec<ScaleDto>>, AppError> {
+pub async fn list_scales(State(state): State<ApiState>) -> Result<Json<Vec<ScaleDto>>, AppError> {
     let scales = state.depression.list_scales().await?;
     let dtos: Vec<ScaleDto> = scales
         .into_iter()
@@ -183,8 +182,14 @@ pub async fn create_assessment(
         total_score: assessment.total_score,
         severity_level,
         notes: assessment.notes,
-        created_at: assessment.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
-        updated_at: assessment.updated_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+        created_at: assessment
+            .created_at
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_default(),
+        updated_at: assessment
+            .updated_at
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_default(),
     }))
 }
 

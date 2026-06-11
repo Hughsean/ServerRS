@@ -7,12 +7,15 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "agent_events")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub event_id: u64,
     pub user_id: u64,
     pub conversation_id: Option<u64>,
     pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub turn_id: Option<String>,
     pub event_type: String,
+    pub severity: String,
+    pub tool_name: Option<String>,
     pub payload: Json,
     pub created_at: DateTime,
 }

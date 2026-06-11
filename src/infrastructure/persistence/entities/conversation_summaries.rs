@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "conversation_summaries")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub summary_id: u64,
     pub conversation_id: u64,
     pub user_id: u64,
@@ -17,8 +16,17 @@ pub struct Model {
     pub message_start_id: Option<u64>,
     pub message_end_id: Option<u64>,
     pub token_count: Option<u32>,
+    pub status: i8,
+    pub summary_version: u32,
+    pub source_message_count: Option<u32>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
+    #[sea_orm(unique)]
+    pub vector_id: Option<String>,
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_dimension: Option<u32>,
+    pub indexed_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

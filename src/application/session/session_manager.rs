@@ -9,20 +9,31 @@ use uuid::Uuid;
 
 use super::conversation_orchestrator::{ConversationOrchestrator, MessageResult};
 use super::risk_detection_service::RiskDetectionService;
-use super::tool_calling::ToolCallService;
+use crate::application::agent::agent_runtime::AgentRuntime;
 use crate::domain::llm::ChatMessage;
-use crate::domain::llm::tools::ToolExecutionContext;
 use crate::domain::tasks::task_event::{SessionLifecycleTask, TaskEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::shared::error::AppError;
 
-/// Manages in-memory session state and routes messages to the ConversationOrchestrator.
-/// Focused on session lifecycle: create, process, status, cleanup.
+/// Manages in-memory session state and routes messages through AgentRuntime.
+///
+/// SessionManager owns session lifecycle (create, status, cleanup) and delegates
+/// the actual message processing (safety check, LLM call, tool execution, RAG,
+/// memory extraction) to `AgentRuntime`.
+///
+/// `ConversationOrchestrator` is retained for:
+///   - `ensure_conversation` (creating the DB conversation row)
+///   - `generate_title` (first-turn title generation)
+///   - `save_message` / `touch_and_incr` (persisting user/assistant messages)
+///   - `build_persona` (system prompt generation)
+///
+/// Message persistence is done by `AgentRuntime::persist_messages` internally;
+/// the orchestrator is used here for pre-AgentRuntime tasks only.
 pub struct SessionManager {
     task_publisher: Arc<dyn TaskPublisher>,
     risk_detection: Arc<RiskDetectionService>,
     orchestrator: Arc<ConversationOrchestrator>,
-    tool_service: Arc<ToolCallService>,
+    agent_runtime: Arc<AgentRuntime>,
     sessions: RwLock<HashMap<String, SessionState>>,
     timeout_seconds: u64,
 }
@@ -35,7 +46,6 @@ pub struct SessionState {
     pub user_id: u64,
     pub dialogue_id: Option<u64>,
     pub last_active: Instant,
-    pub tool_context: ToolExecutionContext,
 }
 
 impl SessionState {
@@ -49,14 +59,14 @@ impl SessionManager {
         task_publisher: Arc<dyn TaskPublisher>,
         risk_detection: Arc<RiskDetectionService>,
         orchestrator: Arc<ConversationOrchestrator>,
-        tool_service: Arc<ToolCallService>,
+        agent_runtime: Arc<AgentRuntime>,
         timeout_seconds: u64,
     ) -> Self {
         Self {
             risk_detection,
             task_publisher,
             orchestrator,
-            tool_service,
+            agent_runtime,
             sessions: RwLock::new(HashMap::new()),
             timeout_seconds,
         }
@@ -97,7 +107,6 @@ impl SessionManager {
             user_id,
             dialogue_id,
             last_active: Instant::now(),
-            tool_context: ToolExecutionContext::default(),
         };
 
         self.sessions
@@ -116,6 +125,14 @@ impl SessionManager {
         Ok(state)
     }
 
+    /// Process a user message through the AgentRuntime.
+    ///
+    /// Flow:
+    /// 1. Ensure the session is alive
+    /// 2. Ensure a DB conversation row exists
+    /// 3. Fire async risk detection
+    /// 4. Delegate to `AgentRuntime::respond` (which handles safety, LLM, tools, persist)
+    /// 5. Generate title on first turn
     pub async fn process_message(
         &self,
         session_id: &str,
@@ -132,14 +149,10 @@ impl SessionManager {
         };
         state.last_active = Instant::now();
 
-        let composed = match emotion.filter(|e| !e.is_empty()) {
-            Some(e) => format!("{text}\n\n[情绪提示] 系统检测到用户当前情绪：{e}"),
-            None => format!("{text}\n\n[情绪提示] 前端未提供用户明确情绪。"),
-        };
         let is_first_turn = !state.messages.iter().any(|m| m.role == "user");
         state.messages.push(ChatMessage {
             role: "user".into(),
-            content: composed.clone(),
+            content: text.to_string(),
             tool_calls: None,
             tool_call_id: None,
         });
@@ -151,13 +164,6 @@ impl SessionManager {
             .await?;
         state.dialogue_id = Some(conv_id);
 
-        // Persist user message
-        let user_content =
-            serde_json::json!({ "text": text, "composed": composed, "emotion": emotion });
-        self.orchestrator
-            .save_message(conv_id, "user", Some(state.user_id), &user_content)
-            .await;
-
         // Async risk detection
         let rd = Arc::clone(&self.risk_detection);
         let text_owned = text.to_string();
@@ -167,22 +173,22 @@ impl SessionManager {
             rd.detect_and_save(&text_owned, uid, cid, None).await;
         });
 
-        // Title generation on first turn
-        let title = if is_first_turn {
-            self.orchestrator
-                .generate_title(conv_id, &state.messages)
-                .await
-        } else {
-            None
-        };
-
-        // LLM chat with tool calls
-        let tool_result = self
-            .tool_service
-            .chat_with_tools(&mut state.messages, &mut state.tool_context)
+        // ── Delegate to AgentRuntime ──────────────────────────────
+        let emotion_owned = emotion.map(|e| e.to_string());
+        let response = self
+            .agent_runtime
+            .respond(
+                state.user_id,
+                state.id.clone(),
+                Some(conv_id),
+                text.to_string(),
+                emotion_owned,
+                None, // location
+            )
             .await;
-        let reply = tool_result.reply;
-        let session_closed = tool_result.end_session;
+
+        let reply = response.reply;
+        let session_closed = response.session_closed;
 
         if !reply.is_empty() {
             state.messages.push(ChatMessage {
@@ -191,14 +197,16 @@ impl SessionManager {
                 tool_calls: None,
                 tool_call_id: None,
             });
-
-            let asst_content = serde_json::json!({ "text": reply });
-            self.orchestrator
-                .save_message(conv_id, "assistant", None, &asst_content)
-                .await;
-
-            let _ = self.orchestrator.touch_and_incr(conv_id, 2).await;
         }
+
+        // Title generation on first turn
+        let title = if is_first_turn {
+            self.orchestrator
+                .generate_title(conv_id, &state.messages)
+                .await
+        } else {
+            None
+        };
 
         Ok(Some(MessageResult {
             reply,

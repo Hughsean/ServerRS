@@ -221,7 +221,10 @@ pub async fn like_comment(
     Extension(auth): Extension<AuthenticatedUser>,
     Path((_post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
-    state.community.like_comment(comment_id, auth.user_id).await?;
+    state
+        .community
+        .like_comment(comment_id, auth.user_id)
+        .await?;
     Ok(StatusCode::OK)
 }
 
@@ -230,6 +233,9 @@ pub async fn unlike_comment(
     Extension(auth): Extension<AuthenticatedUser>,
     Path((_post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
-    state.community.unlike_comment(comment_id, auth.user_id).await?;
+    state
+        .community
+        .unlike_comment(comment_id, auth.user_id)
+        .await?;
     Ok(StatusCode::OK)
 }

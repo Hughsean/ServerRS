@@ -59,8 +59,16 @@ impl ToolDefinition {
     pub fn from_tool(tool: &dyn LlmTool) -> Self {
         let def = tool.tool_definition();
         Self {
-            name: def.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
-            description: def.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+            name: def
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            description: def
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             parameters: def.get("parameters").cloned().unwrap_or(Value::Null),
         }
     }

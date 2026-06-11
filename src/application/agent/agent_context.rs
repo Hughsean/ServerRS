@@ -2,37 +2,22 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::application::memory::memory_service::MemoryService;
+use crate::application::rag::retrieval_service::RetrievalService;
 use crate::domain::agent::{AgentContext, ToolDefinition};
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::ChatMessage;
-use crate::domain::memory::{MemoryRepository, NewSummary};
-use crate::domain::rag::RAGRepository;
+use crate::domain::summary::SummaryRepository;
 use crate::domain::user::user_profile::UserProfile;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
-use crate::shared::error::AppError;
 
-/// Trait for repositories that persist / load conversation summaries.
+/// Builder that assembles an `AgentContext` for a single turn.
 ///
-/// This is intentionally separate from `ConversationRepository` because
-/// summaries are a derived / consolidated artifact, not raw conversation
-/// data.  Implementations typically read from the `conversation_summaries`
-/// table or an equivalent read-model store.
-#[async_trait::async_trait]
-pub trait SummaryRepository: Send + Sync {
-    /// Load the most recent summary for a conversation, if one exists.
-    async fn find_latest_by_conversation(
-        &self,
-        conversation_id: u64,
-    ) -> Result<Option<String>, AppError>;
-
-    /// Persist a new summary.
-    async fn save_summary(&self, summary: NewSummary) -> Result<(), AppError>;
-}
-
-/// Builder that assembles a fully-populated `AgentContext` for a single turn.
+/// Uses `MemoryService` and `RetrievalService` (which prefer Qdrant when
+/// configured) instead of calling repository methods directly.
 pub struct AgentContextBuilder {
-    memory_repo: Arc<dyn MemoryRepository>,
-    rag_repo: Arc<dyn RAGRepository>,
+    memory_service: Arc<MemoryService>,
+    retrieval_service: Arc<RetrievalService>,
     summary_repo: Arc<dyn SummaryRepository>,
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
@@ -40,31 +25,21 @@ pub struct AgentContextBuilder {
 
 impl AgentContextBuilder {
     pub fn new(
-        memory_repo: Arc<dyn MemoryRepository>,
-        rag_repo: Arc<dyn RAGRepository>,
+        memory_service: Arc<MemoryService>,
+        retrieval_service: Arc<RetrievalService>,
         summary_repo: Arc<dyn SummaryRepository>,
         conversation_repo: Arc<dyn ConversationRepository>,
         user_profile_repo: Arc<dyn UserProfileRepository>,
     ) -> Self {
         Self {
-            memory_repo,
-            rag_repo,
+            memory_service,
+            retrieval_service,
             summary_repo,
             conversation_repo,
             user_profile_repo,
         }
     }
 
-    /// Build an `AgentContext` for the given turn.
-    ///
-    /// 1. Loads the conversation summary (if any).
-    /// 2. Recalls semantically relevant memories for the user, using the
-    ///    concatenated recent messages as the query.
-    /// 3. Retrieves knowledge-base chunks relevant to the user's query (RAG).
-    /// 4. Loads the user profile (if any).
-    ///
-    /// Errors from any of the individual lookups are logged / swallowed so
-    /// that a missing profile or empty RAG index does not block the agent.
     pub async fn build(
         &self,
         session_id: String,
@@ -74,17 +49,18 @@ impl AgentContextBuilder {
         user_profile: Option<UserProfile>,
         tools: Vec<ToolDefinition>,
     ) -> AgentContext {
-        // ── Summary ────────────────────────────────────────────
+        // ── Summary (MySQL only) — extract content from ConversationSummary ─
         let summary = if let Some(cid) = conversation_id {
             self.summary_repo
                 .find_latest_by_conversation(cid)
                 .await
                 .unwrap_or(None)
+                .map(|s| s.content)
         } else {
             None
         };
 
-        // ── Memory recall (semantic search) ────────────────────
+        // ── Memory recall via MemoryService (Qdrant-first) ─────
         let query_text: String = recent_messages
             .iter()
             .filter(|m| m.role == "user" || m.role == "assistant")
@@ -92,8 +68,6 @@ impl AgentContextBuilder {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // If there are no user messages yet we derive a generic query
-        // from the conversation context.
         let recall_query = if query_text.is_empty() {
             "user conversation context".to_string()
         } else {
@@ -101,15 +75,20 @@ impl AgentContextBuilder {
         };
 
         let memories = self
-            .memory_repo
-            .search_by_user(user_id, &recall_query, 10)
+            .memory_service
+            .recall(user_id, &recall_query, 10)
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|m| format!("[{}] {} (confidence: {:.2})", m.memory_type, m.content, m.confidence))
+            .map(|m| {
+                format!(
+                    "[{}] {} (confidence: {:.2})",
+                    m.memory_type, m.content, m.confidence
+                )
+            })
             .collect();
 
-        // ── RAG retrieval ──────────────────────────────────────
+        // ── RAG via RetrievalService (Qdrant-first) ────────────
         let rag_query = recent_messages
             .iter()
             .find(|m| m.role == "user")
@@ -120,8 +99,8 @@ impl AgentContextBuilder {
         let rag_chunks = if rag_query.is_empty() {
             Vec::new()
         } else {
-            self.rag_repo
-                .search_by_keyword(&rag_query, 5)
+            self.retrieval_service
+                .retrieve(&rag_query, user_id, 5)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -129,7 +108,7 @@ impl AgentContextBuilder {
                 .collect()
         };
 
-        // ── User profile (fallback if not provided by caller) ──
+        // ── User profile ─────────────────────────────────────────
         let profile: Option<Value> = match user_profile {
             Some(p) => serde_json::to_value(p).ok(),
             None => self

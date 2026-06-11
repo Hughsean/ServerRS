@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "knowledge_embeddings")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub embedding_id: u64,
     #[sea_orm(unique_key = "uk_knowledge_embeddings_chunk_model")]
     pub chunk_id: u64,

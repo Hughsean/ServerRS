@@ -7,29 +7,47 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "knowledge_documents")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub document_id: u64,
     #[sea_orm(unique_key = "uk_knowledge_documents_source")]
     pub source_type: String,
     #[sea_orm(unique_key = "uk_knowledge_documents_source")]
     pub source_id: Option<u64>,
+    pub owner_user_id: Option<u64>,
+    pub visibility: String,
     pub title: Option<String>,
     pub content_hash: String,
+    pub source_version: Option<String>,
+    pub source_updated_at: Option<DateTime>,
     pub metadata: Option<Json>,
     pub status: i8,
     pub created_at: DateTime,
     pub updated_at: DateTime,
+    pub deleted_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(has_many = "super::knowledge_chunks::Entity")]
     KnowledgeChunks,
+    #[sea_orm(
+        belongs_to = "super::users::Entity",
+        from = "Column::OwnerUserId",
+        to = "super::users::Column::Id",
+        on_update = "NoAction",
+        on_delete = "SetNull"
+    )]
+    Users,
 }
 
 impl Related<super::knowledge_chunks::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::KnowledgeChunks.def()
+    }
+}
+
+impl Related<super::users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Users.def()
     }
 }
 

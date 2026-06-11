@@ -123,4 +123,31 @@ pub trait MemoryRepository: Send + Sync {
         &self,
         conversation_id: u64,
     ) -> Result<Vec<UserMemory>, AppError>;
+
+    /// Update vector-index metadata on a memory row.
+    async fn update_memory_index_metadata(
+        &self,
+        memory_id: u64,
+        vector_id: String,
+        embedding_provider: String,
+        embedding_model: String,
+        embedding_dimension: u32,
+    ) -> Result<(), AppError>;
+
+    /// Record access (last_accessed_at = now, access_count += 1).
+    async fn touch_memory_access(&self, memory_id: u64) -> Result<(), AppError>;
+
+    /// Find a memory by its dedup key (user_id + memory_key).
+    async fn find_by_memory_key(
+        &self,
+        user_id: u64,
+        memory_key: &str,
+    ) -> Result<Option<UserMemory>, AppError>;
+
+    /// List memories eligible for vector indexing (status = 1, unindexed).
+    async fn list_indexable_memories(
+        &self,
+        user_id: Option<u64>,
+        limit: u64,
+    ) -> Result<Vec<UserMemory>, AppError>;
 }

@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "psychology_qna")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub qna_id: u64,
     pub category_id: u16,
     #[sea_orm(column_type = "Text")]

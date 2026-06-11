@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
 };
 
 use crate::domain::like::{ContentLike, ContentLikeRepository};
@@ -85,11 +86,7 @@ impl ContentLikeRepository for SeaOrmLikeRepository {
         Ok(count > 0)
     }
 
-    async fn count_by_content(
-        &self,
-        content_type: &str,
-        content_id: u64,
-    ) -> Result<u64, AppError> {
+    async fn count_by_content(&self, content_type: &str, content_id: u64) -> Result<u64, AppError> {
         content_likes::Entity::find()
             .filter(content_likes::Column::ContentType.eq(content_type))
             .filter(content_likes::Column::ContentId.eq(content_id))

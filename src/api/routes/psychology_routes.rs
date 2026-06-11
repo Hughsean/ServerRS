@@ -1,10 +1,13 @@
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
+use crate::api::ApiState;
 use crate::api::handlers::psychology_handler::{
     check_favorite, get_article, get_category_tree, get_qna, get_resource, list_articles,
     list_categories, list_favorites, list_qna, list_resources, toggle_favorite,
 };
-use crate::api::ApiState;
 
 pub fn psychology_routes(state: ApiState) -> Router {
     Router::new()
@@ -16,7 +19,10 @@ pub fn psychology_routes(state: ApiState) -> Router {
         .route("/api/v1/psychology/qna/{id}", get(get_qna))
         .route("/api/v1/psychology/resources", get(list_resources))
         .route("/api/v1/psychology/resources/{id}", get(get_resource))
-        .route("/api/v1/psychology/favorites", post(toggle_favorite).get(list_favorites))
+        .route(
+            "/api/v1/psychology/favorites",
+            post(toggle_favorite).get(list_favorites),
+        )
         .route("/api/v1/psychology/favorites/check", get(check_favorite))
         .with_state(state)
 }

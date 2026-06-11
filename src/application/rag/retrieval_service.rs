@@ -1,40 +1,167 @@
 use std::sync::Arc;
 
+use tracing::{debug, warn};
+
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::{KnowledgeChunk, RAGRepository};
+use crate::domain::vector_store::{VectorFilter, VectorStore};
 use crate::shared::error::AppError;
 
-/// Retrieval service implementing hybrid search.
+use super::vector_index_service::payload_chunk_id;
+
+/// Hybrid retrieval service.
 ///
-/// Strategy:
-/// 1. Always runs a FULLTEXT keyword search.
-/// 2. If an `EmbeddingProvider` is configured, also generates a query
-///    embedding and computes cosine similarity against stored chunk
-///    embeddings.
-/// 3. Merges results with a hybrid score: `0.6 * vec_score + 0.4 * keyword_score`.
-/// 4. If the embedding step fails, falls back to FULLTEXT-only results.
+/// Strategy (Qdrant-first):
+/// 1. If `VectorStore` + `EmbeddingProvider` are available:
+///    a. Generate query embedding.
+///    b. Search Qdrant collection with payload filters.
+///    c. Re-load chunks from MySQL (verify existence, status, document validity).
+///    d. Return verified (chunk, score) pairs.
+/// 2. If Qdrant is unavailable or fails:
+///    Fall back to MySQL keyword search (`RAGRepository::search_by_keyword`).
 pub struct RetrievalService {
     repo: Arc<dyn RAGRepository>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
+    vector_store: Option<Arc<dyn VectorStore>>,
+    rag_collection: String,
 }
 
 impl RetrievalService {
-    pub fn new(repo: Arc<dyn RAGRepository>, embedding: Option<Arc<dyn EmbeddingProvider>>) -> Self {
-        Self { repo, embedding }
+    pub fn new(
+        repo: Arc<dyn RAGRepository>,
+        embedding: Option<Arc<dyn EmbeddingProvider>>,
+    ) -> Self {
+        Self {
+            repo,
+            embedding,
+            vector_store: None,
+            rag_collection: "rag_chunks".into(),
+        }
+    }
+
+    /// Attach a `VectorStore` for Qdrant-first retrieval.
+    pub fn with_vector_store(mut self, vs: Arc<dyn VectorStore>, collection: String) -> Self {
+        self.vector_store = Some(vs);
+        self.rag_collection = collection;
+        self
     }
 
     /// Retrieve the top-k relevant chunks for `query` scoped to `user_id`.
-    ///
-    /// `user_id` is reserved for future per-user filtering (e.g. ACL on
-    /// documents); the current implementation ignores it and returns
-    /// globally matching chunks.
     pub async fn retrieve(
         &self,
+        query: &str,
+        user_id: u64,
+        top_k: u64,
+    ) -> Result<Vec<(KnowledgeChunk, f64)>, AppError> {
+        // Try Qdrant path first
+        if let (Some(vs), Some(ep)) = (&self.vector_store, &self.embedding) {
+            match self.qdrant_retrieve(vs, ep, query, user_id, top_k).await {
+                Ok(results) if !results.is_empty() => {
+                    debug!(count = results.len(), "Qdrant retrieval succeeded");
+                    return Ok(results);
+                }
+                Ok(_) => {
+                    debug!("Qdrant returned empty results; falling back to keyword");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Qdrant retrieval failed; falling back to keyword");
+                }
+            }
+        }
+
+        // Fallback: MySQL keyword search
+        self.repo.search_by_keyword(query, top_k).await
+    }
+
+    async fn qdrant_retrieve(
+        &self,
+        vs: &Arc<dyn VectorStore>,
+        ep: &Arc<dyn EmbeddingProvider>,
         query: &str,
         _user_id: u64,
         top_k: u64,
     ) -> Result<Vec<(KnowledgeChunk, f64)>, AppError> {
-        // ── 1. Keyword search (always runs) ──
+        // 1. Generate query embedding
+        let vecs = ep
+            .embed(&[query.to_string()])
+            .await
+            .map_err(|e| AppError::internal(format!("query embedding failed: {e}")))?;
+
+        let query_vec = vecs
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Internal("embedding returned empty vector".to_string()))?;
+
+        // 2. Search Qdrant
+        let hits = vs
+            .search(
+                &self.rag_collection,
+                query_vec,
+                VectorFilter::default(),
+                top_k as usize,
+            )
+            .await
+            .map_err(|e| AppError::internal(format!("Qdrant search failed: {e}")))?;
+
+        // 3. Re-load chunks from MySQL and verify
+        let mut results = Vec::with_capacity(hits.len());
+        for hit in &hits {
+            let chunk_id = match payload_chunk_id(&hit.payload) {
+                Some(id) => id,
+                None => {
+                    warn!(hit_id = %hit.id, "Qdrant hit has no chunk_id in payload; skipping");
+                    continue;
+                }
+            };
+
+            // 3a. Load the chunk from MySQL
+            let chunk = match self.repo.find_chunk_by_id(chunk_id).await {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    debug!(chunk_id, "chunk not found in MySQL; skipping");
+                    continue;
+                }
+                Err(e) => {
+                    warn!(chunk_id, error = %e, "failed to load chunk from MySQL; skipping");
+                    continue;
+                }
+            };
+
+            // 3b. Load the document from MySQL and verify status
+            let document = match self.repo.find_document_by_id(chunk.document_id).await {
+                Ok(Some(d)) => d,
+                Ok(None) => {
+                    debug!(doc_id = chunk.document_id, "document not found in MySQL; skipping");
+                    continue;
+                }
+                Err(e) => {
+                    warn!(doc_id = chunk.document_id, error = %e, "failed to load document; skipping");
+                    continue;
+                }
+            };
+
+            // 3c. Verify document status (TRUST MYSQL, not Qdrant payload)
+            if document.status != 1 {
+                debug!(chunk_id, doc_id = document.document_id, "document status is {}; skipping", document.status);
+                continue;
+            }
+
+            results.push((chunk, hit.score as f64));
+        }
+
+        Ok(results)
+    }
+
+    // The old vector_search / hybrid_merge methods are kept for backward
+    // compatibility but are only used in the embedding_json fallback path
+    // (via list_chunks_with_embeddings).
+
+    #[doc(hidden)]
+    pub async fn retrieve_fallback_legacy(
+        &self,
+        query: &str,
+        top_k: u64,
+    ) -> Result<Vec<(KnowledgeChunk, f64)>, AppError> {
         let keyword_results = self.repo.search_by_keyword(query, top_k).await?;
 
         let embedding_provider = match self.embedding {
@@ -42,22 +169,21 @@ impl RetrievalService {
             None => return Ok(keyword_results),
         };
 
-        // ── 2. Vector search ──
-        let vec_results = match self.vector_search(embedding_provider, query, top_k).await {
+        let vec_results = match self
+            .legacy_vector_search(embedding_provider, query, top_k)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(?e, "vector search failed — falling back to keyword only");
+                warn!(?e, "legacy vector search failed");
                 return Ok(keyword_results);
             }
         };
 
-        // ── 3. Hybrid merge ──
         Ok(Self::hybrid_merge(keyword_results, vec_results, top_k))
     }
 
-    // ── private helpers ──
-
-    async fn vector_search(
+    async fn legacy_vector_search(
         &self,
         provider: &Arc<dyn EmbeddingProvider>,
         query: &str,
@@ -78,14 +204,12 @@ impl RetrievalService {
         let mut scored: Vec<(KnowledgeChunk, f64)> = chunks_with_embs
             .into_iter()
             .filter_map(|(chunk, emb)| {
-                let stored_vec: Vec<f32> =
-                    serde_json::from_value(emb.embedding_json).ok()?;
+                let stored_vec: Vec<f32> = serde_json::from_value(emb.embedding_json).ok()?;
                 let sim = cosine_similarity(q_vec, &stored_vec);
                 Some((chunk, sim))
             })
             .collect();
 
-        // sort descending by similarity
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k as usize);
         Ok(scored)
@@ -98,14 +222,12 @@ impl RetrievalService {
     ) -> Vec<(KnowledgeChunk, f64)> {
         use std::collections::BTreeMap;
 
-        // Capture full chunk data by id before consuming the vectors for scoring.
         let chunks_by_id: BTreeMap<u64, KnowledgeChunk> = keyword
             .iter()
             .chain(vector.iter())
             .map(|(chunk, _)| (chunk.chunk_id, chunk.clone()))
             .collect();
 
-        // Normalize keyword scores to [0, 1].
         let kw_max = keyword
             .iter()
             .map(|(_, s)| *s)
@@ -118,7 +240,6 @@ impl RetrievalService {
             })
             .collect();
 
-        // Normalize vector scores to [0, 1].
         let vec_max = vector
             .iter()
             .map(|(_, s)| *s)
@@ -131,16 +252,10 @@ impl RetrievalService {
             })
             .collect();
 
-        // Collect all chunk IDs present in either set.
-        let mut all_ids: Vec<u64> = kw_map
-            .keys()
-            .chain(vec_map.keys())
-            .copied()
-            .collect();
+        let mut all_ids: Vec<u64> = kw_map.keys().chain(vec_map.keys()).copied().collect();
         all_ids.sort();
         all_ids.dedup();
 
-        // Hybrid score: 0.6 * vec + 0.4 * keyword
         let mut scored: Vec<(u64, f64)> = all_ids
             .into_iter()
             .map(|id| {
@@ -153,12 +268,9 @@ impl RetrievalService {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k as usize);
 
-        // Reconstruct (chunk, score) pairs using the saved chunk data.
         scored
             .into_iter()
-            .filter_map(|(id, score)| {
-                chunks_by_id.get(&id).map(|chunk| (chunk.clone(), score))
-            })
+            .filter_map(|(id, score)| chunks_by_id.get(&id).map(|chunk| (chunk.clone(), score)))
             .collect()
     }
 }

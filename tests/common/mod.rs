@@ -24,8 +24,8 @@ use ServerRS::domain::auth::password_service::PasswordService;
 use ServerRS::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
 use ServerRS::domain::auth::token_service::TokenService;
 use ServerRS::domain::community::{
-    ArticleStatus, Comment, CommunityRepository, NewComment, NewPost, Post, PostMedia, PostUpdate,
-    NewPostMedia,
+    ArticleStatus, Comment, CommunityRepository, NewComment, NewPost, NewPostMedia, Post,
+    PostMedia, PostUpdate,
 };
 use ServerRS::domain::conversation::conversation::{Conversation, NewConversation};
 use ServerRS::domain::conversation::conversation_message::{
@@ -42,8 +42,7 @@ use ServerRS::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, New
 use ServerRS::domain::psychology::{
     ContentLike as PsychologyContentLike, KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite,
     NewPsychologyArticle, NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource,
-    PsychologyArticle,
-    PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
+    PsychologyArticle, PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
 };
 use ServerRS::domain::risk::detection_types::DetectionResult;
 use ServerRS::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
@@ -389,16 +388,15 @@ impl LlmClient for MockLlmClient {
         _messages: &[ChatMessage],
         _tools: Option<&[serde_json::Value]>,
     ) -> Result<ChatResponse, String> {
-        let response: ChatResponse =
-            serde_json::from_value(serde_json::json!({
-                "choices": [{
-                    "message": {
-                        "content": "你好，我是小美，有什么可以帮你的？",
-                        "tool_calls": null
-                    }
-                }]
-            }))
-            .map_err(|e| e.to_string())?;
+        let response: ChatResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "你好，我是小美，有什么可以帮你的？",
+                    "tool_calls": null
+                }
+            }]
+        }))
+        .map_err(|e| e.to_string())?;
         Ok(response)
     }
 }
@@ -469,12 +467,21 @@ impl MockPsychologyRepo {
 impl PsychologyRepository for MockPsychologyRepo {
     // Categories
     async fn find_category_by_id(&self, id: u64) -> Result<Option<PsychologyCategory>, AppError> {
-        Ok(self.categories.lock().unwrap().iter().find(|c| c.id == id).cloned())
+        Ok(self
+            .categories
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == id)
+            .cloned())
     }
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError> {
         Ok(self.categories.lock().unwrap().clone())
     }
-    async fn create_category(&self, new: NewPsychologyCategory) -> Result<PsychologyCategory, AppError> {
+    async fn create_category(
+        &self,
+        new: NewPsychologyCategory,
+    ) -> Result<PsychologyCategory, AppError> {
         let mut cats = self.categories.lock().unwrap();
         let id = cats.len() as u64 + 1;
         let cat = PsychologyCategory {
@@ -489,9 +496,16 @@ impl PsychologyRepository for MockPsychologyRepo {
         cats.push(cat.clone());
         Ok(cat)
     }
-    async fn update_category(&self, id: u64, new: NewPsychologyCategory) -> Result<PsychologyCategory, AppError> {
+    async fn update_category(
+        &self,
+        id: u64,
+        new: NewPsychologyCategory,
+    ) -> Result<PsychologyCategory, AppError> {
         let mut cats = self.categories.lock().unwrap();
-        let cat = cats.iter_mut().find(|c| c.id == id).ok_or_else(|| AppError::NotFound("category".into()))?;
+        let cat = cats
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| AppError::NotFound("category".into()))?;
         cat.parent_id = new.parent_id;
         cat.name = new.name;
         cat.description = new.description;
@@ -508,7 +522,13 @@ impl PsychologyRepository for MockPsychologyRepo {
 
     // Articles
     async fn find_article_by_id(&self, id: u64) -> Result<Option<PsychologyArticle>, AppError> {
-        Ok(self.articles.lock().unwrap().iter().find(|a| a.id == id).cloned())
+        Ok(self
+            .articles
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.id == id)
+            .cloned())
     }
     async fn list_articles(
         &self,
@@ -521,10 +541,18 @@ impl PsychologyRepository for MockPsychologyRepo {
         let items = self.articles.lock().unwrap();
         let total = items.len() as u64;
         let offset = ((page.saturating_sub(1)) * page_size) as usize;
-        let page_items: Vec<PsychologyArticle> = items.iter().skip(offset).take(page_size as usize).cloned().collect();
+        let page_items: Vec<PsychologyArticle> = items
+            .iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .cloned()
+            .collect();
         Ok((page_items, total))
     }
-    async fn create_article(&self, new: NewPsychologyArticle) -> Result<PsychologyArticle, AppError> {
+    async fn create_article(
+        &self,
+        new: NewPsychologyArticle,
+    ) -> Result<PsychologyArticle, AppError> {
         let mut articles = self.articles.lock().unwrap();
         let id = articles.len() as u64 + 1;
         let now = Utc::now();
@@ -544,9 +572,16 @@ impl PsychologyRepository for MockPsychologyRepo {
         articles.push(article.clone());
         Ok(article)
     }
-    async fn update_article(&self, id: u64, new: NewPsychologyArticle) -> Result<PsychologyArticle, AppError> {
+    async fn update_article(
+        &self,
+        id: u64,
+        new: NewPsychologyArticle,
+    ) -> Result<PsychologyArticle, AppError> {
         let mut articles = self.articles.lock().unwrap();
-        let article = articles.iter_mut().find(|a| a.id == id).ok_or_else(|| AppError::NotFound("article".into()))?;
+        let article = articles
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| AppError::NotFound("article".into()))?;
         article.category_id = new.category_id;
         article.title = new.title;
         article.summary = new.summary;
@@ -564,7 +599,13 @@ impl PsychologyRepository for MockPsychologyRepo {
 
     // QnA
     async fn find_qna_by_id(&self, id: u64) -> Result<Option<PsychologyQna>, AppError> {
-        Ok(self.qnas.lock().unwrap().iter().find(|q| q.id == id).cloned())
+        Ok(self
+            .qnas
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|q| q.id == id)
+            .cloned())
     }
     async fn list_qnas(
         &self,
@@ -576,7 +617,12 @@ impl PsychologyRepository for MockPsychologyRepo {
         let items = self.qnas.lock().unwrap();
         let total = items.len() as u64;
         let offset = ((page.saturating_sub(1)) * page_size) as usize;
-        let page_items: Vec<PsychologyQna> = items.iter().skip(offset).take(page_size as usize).cloned().collect();
+        let page_items: Vec<PsychologyQna> = items
+            .iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .cloned()
+            .collect();
         Ok((page_items, total))
     }
     async fn create_qna(&self, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
@@ -598,7 +644,10 @@ impl PsychologyRepository for MockPsychologyRepo {
     }
     async fn update_qna(&self, id: u64, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
         let mut qnas = self.qnas.lock().unwrap();
-        let qna = qnas.iter_mut().find(|q| q.id == id).ok_or_else(|| AppError::NotFound("qna".into()))?;
+        let qna = qnas
+            .iter_mut()
+            .find(|q| q.id == id)
+            .ok_or_else(|| AppError::NotFound("qna".into()))?;
         qna.category_id = new.category_id;
         qna.question = new.question;
         qna.answer = new.answer;
@@ -615,7 +664,13 @@ impl PsychologyRepository for MockPsychologyRepo {
 
     // Resources
     async fn find_resource_by_id(&self, id: u64) -> Result<Option<PsychologyResource>, AppError> {
-        Ok(self.resources.lock().unwrap().iter().find(|r| r.id == id).cloned())
+        Ok(self
+            .resources
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.id == id)
+            .cloned())
     }
     async fn list_resources(
         &self,
@@ -627,10 +682,18 @@ impl PsychologyRepository for MockPsychologyRepo {
         let items = self.resources.lock().unwrap();
         let total = items.len() as u64;
         let offset = ((page.saturating_sub(1)) * page_size) as usize;
-        let page_items: Vec<PsychologyResource> = items.iter().skip(offset).take(page_size as usize).cloned().collect();
+        let page_items: Vec<PsychologyResource> = items
+            .iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .cloned()
+            .collect();
         Ok((page_items, total))
     }
-    async fn create_resource(&self, new: NewPsychologyResource) -> Result<PsychologyResource, AppError> {
+    async fn create_resource(
+        &self,
+        new: NewPsychologyResource,
+    ) -> Result<PsychologyResource, AppError> {
         let mut resources = self.resources.lock().unwrap();
         let id = resources.len() as u64 + 1;
         let resource = PsychologyResource {
@@ -650,9 +713,16 @@ impl PsychologyRepository for MockPsychologyRepo {
         resources.push(resource.clone());
         Ok(resource)
     }
-    async fn update_resource(&self, id: u64, new: NewPsychologyResource) -> Result<PsychologyResource, AppError> {
+    async fn update_resource(
+        &self,
+        id: u64,
+        new: NewPsychologyResource,
+    ) -> Result<PsychologyResource, AppError> {
         let mut resources = self.resources.lock().unwrap();
-        let resource = resources.iter_mut().find(|r| r.id == id).ok_or_else(|| AppError::NotFound("resource".into()))?;
+        let resource = resources
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| AppError::NotFound("resource".into()))?;
         resource.category_id = new.category_id;
         resource.title = new.title;
         resource.description = new.description;
@@ -673,7 +743,11 @@ impl PsychologyRepository for MockPsychologyRepo {
     // Favorites
     async fn toggle_favorite(&self, new: NewKnowledgeFavorite) -> Result<bool, AppError> {
         let mut favs = self.favorites.lock().unwrap();
-        if let Some(pos) = favs.iter().position(|f| f.user_id == new.user_id && f.content_type == new.content_type && f.content_id == new.content_id) {
+        if let Some(pos) = favs.iter().position(|f| {
+            f.user_id == new.user_id
+                && f.content_type == new.content_type
+                && f.content_id == new.content_id
+        }) {
             favs.remove(pos);
             Ok(false)
         } else {
@@ -688,20 +762,37 @@ impl PsychologyRepository for MockPsychologyRepo {
             Ok(true)
         }
     }
-    async fn check_favorite(&self, user_id: u64, content_type: &str, content_id: u64) -> Result<bool, AppError> {
+    async fn check_favorite(
+        &self,
+        user_id: u64,
+        content_type: &str,
+        content_id: u64,
+    ) -> Result<bool, AppError> {
         let favs = self.favorites.lock().unwrap();
-        Ok(favs.iter().any(|f| f.user_id == user_id && f.content_type == content_type && f.content_id == content_id))
+        Ok(favs.iter().any(|f| {
+            f.user_id == user_id && f.content_type == content_type && f.content_id == content_id
+        }))
     }
-    async fn list_favorites(&self, user_id: u64, content_type: Option<&str>) -> Result<Vec<KnowledgeFavorite>, AppError> {
+    async fn list_favorites(
+        &self,
+        user_id: u64,
+        content_type: Option<&str>,
+    ) -> Result<Vec<KnowledgeFavorite>, AppError> {
         let favs = self.favorites.lock().unwrap();
-        Ok(favs.iter()
-            .filter(|f| f.user_id == user_id && content_type.map_or(true, |ct| f.content_type == ct))
+        Ok(favs
+            .iter()
+            .filter(|f| {
+                f.user_id == user_id && content_type.map_or(true, |ct| f.content_type == ct)
+            })
             .cloned()
             .collect())
     }
     async fn toggle_like(&self, new: NewContentLike) -> Result<bool, AppError> {
         let mut likes = self.likes.lock().unwrap();
-        if let Some(pos) = likes.iter().position(|l| l.content_type == new.content_type && l.content_id == new.content_id) {
+        if let Some(pos) = likes
+            .iter()
+            .position(|l| l.content_type == new.content_type && l.content_id == new.content_id)
+        {
             likes.remove(pos);
             Ok(false)
         } else {
@@ -753,7 +844,13 @@ impl MockDepressionRepo {
 #[async_trait]
 impl DepressionRepository for MockDepressionRepo {
     async fn find_scale_by_id(&self, id: u16) -> Result<Option<DepressionScale>, AppError> {
-        Ok(self.scales.lock().unwrap().iter().find(|s| s.scale_id == id).cloned())
+        Ok(self
+            .scales
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.scale_id == id)
+            .cloned())
     }
     async fn list_scales(&self) -> Result<Vec<DepressionScale>, AppError> {
         Ok(self.scales.lock().unwrap().clone())
@@ -779,8 +876,17 @@ impl DepressionRepository for MockDepressionRepo {
         assessments.push(assessment.clone());
         Ok(assessment)
     }
-    async fn find_assessment_by_id(&self, id: u64) -> Result<Option<DepressionAssessment>, AppError> {
-        Ok(self.assessments.lock().unwrap().iter().find(|a| a.assessment_id == id).cloned())
+    async fn find_assessment_by_id(
+        &self,
+        id: u64,
+    ) -> Result<Option<DepressionAssessment>, AppError> {
+        Ok(self
+            .assessments
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.assessment_id == id)
+            .cloned())
     }
     async fn find_assessments_by_user_id(
         &self,
@@ -790,13 +896,28 @@ impl DepressionRepository for MockDepressionRepo {
     ) -> Result<(Vec<DepressionAssessment>, u64), AppError> {
         let items = self.assessments.lock().unwrap();
         let total = items.len() as u64;
-        let filtered: Vec<DepressionAssessment> = items.iter().filter(|a| a.user_id == user_id).cloned().collect();
-        let page: Vec<DepressionAssessment> = filtered.iter().skip(offset as usize).take(limit as usize).cloned().collect();
+        let filtered: Vec<DepressionAssessment> = items
+            .iter()
+            .filter(|a| a.user_id == user_id)
+            .cloned()
+            .collect();
+        let page: Vec<DepressionAssessment> = filtered
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect();
         Ok((page, total))
     }
-    async fn update_assessment(&self, id: u64, notes: Option<String>) -> Result<DepressionAssessment, AppError> {
+    async fn update_assessment(
+        &self,
+        id: u64,
+        notes: Option<String>,
+    ) -> Result<DepressionAssessment, AppError> {
         let mut assessments = self.assessments.lock().unwrap();
-        let assessment = assessments.iter_mut().find(|a| a.assessment_id == id)
+        let assessment = assessments
+            .iter_mut()
+            .find(|a| a.assessment_id == id)
             .ok_or_else(|| AppError::NotFound("assessment".into()))?;
         assessment.notes = notes;
         Ok(assessment.clone())
@@ -842,7 +963,13 @@ impl DiaryRepository for MockDiaryRepo {
         Ok(entry)
     }
     async fn find_by_id(&self, id: u64) -> Result<Option<UserDiary>, AppError> {
-        Ok(self.diaries.lock().unwrap().iter().find(|d| d.id == id).cloned())
+        Ok(self
+            .diaries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.id == id)
+            .cloned())
     }
     async fn find_by_user_id(
         &self,
@@ -852,13 +979,24 @@ impl DiaryRepository for MockDiaryRepo {
     ) -> Result<(Vec<UserDiary>, u64), AppError> {
         let items = self.diaries.lock().unwrap();
         let total = items.len() as u64;
-        let filtered: Vec<UserDiary> = items.iter().filter(|d| d.user_id == user_id).cloned().collect();
-        let page: Vec<UserDiary> = filtered.iter().skip(offset as usize).take(limit as usize).cloned().collect();
+        let filtered: Vec<UserDiary> = items
+            .iter()
+            .filter(|d| d.user_id == user_id)
+            .cloned()
+            .collect();
+        let page: Vec<UserDiary> = filtered
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect();
         Ok((page, total))
     }
     async fn update(&self, id: u64, update: UserDiaryUpdate) -> Result<UserDiary, AppError> {
         let mut diaries = self.diaries.lock().unwrap();
-        let entry = diaries.iter_mut().find(|d| d.id == id)
+        let entry = diaries
+            .iter_mut()
+            .find(|d| d.id == id)
             .ok_or_else(|| AppError::NotFound("diary".into()))?;
         if let Some(t) = update.title {
             entry.title = t;
@@ -970,7 +1108,13 @@ impl MusicRepository for MockMusicRepo {
         Ok(entry)
     }
     async fn find_by_id(&self, id: u64) -> Result<Option<MusicTrack>, AppError> {
-        Ok(self.tracks.lock().unwrap().iter().find(|t| t.music_id == id).cloned())
+        Ok(self
+            .tracks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.music_id == id)
+            .cloned())
     }
     async fn find_all(
         &self,
@@ -982,16 +1126,27 @@ impl MusicRepository for MockMusicRepo {
         let tracks = self.tracks.lock().unwrap();
         let total = tracks.len() as u64;
         let filtered: Vec<MusicTrack> = match category {
-            Some(ref cat) => tracks.iter().filter(|t| t.category.as_deref() == Some(cat.as_str())).cloned().collect(),
+            Some(ref cat) => tracks
+                .iter()
+                .filter(|t| t.category.as_deref() == Some(cat.as_str()))
+                .cloned()
+                .collect(),
             None => tracks.clone(),
         };
         let total_filtered = filtered.len() as u64;
-        let page: Vec<MusicTrack> = filtered.iter().skip(offset as usize).take(limit as usize).cloned().collect();
+        let page: Vec<MusicTrack> = filtered
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect();
         Ok((page, total_filtered))
     }
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError> {
         let mut tracks = self.tracks.lock().unwrap();
-        let track = tracks.iter_mut().find(|t| t.music_id == id)
+        let track = tracks
+            .iter_mut()
+            .find(|t| t.music_id == id)
             .ok_or_else(|| AppError::NotFound("track".into()))?;
         if let Some(t) = update.title {
             track.title = t;
@@ -1031,20 +1186,18 @@ impl MockCommunityRepo {
     fn new() -> Self {
         let now = Utc::now();
         Self {
-            posts: std::sync::Mutex::new(vec![
-                Post {
-                    post_id: 1,
-                    user_id: 1,
-                    title: Some("欢迎".into()),
-                    content: "欢迎来到社区".into(),
-                    extra_metadata: None,
-                    likes_count: 0,
-                    comments_count: 0,
-                    status: ArticleStatus::Published,
-                    created_at: now,
-                    updated_at: now,
-                },
-            ]),
+            posts: std::sync::Mutex::new(vec![Post {
+                post_id: 1,
+                user_id: 1,
+                title: Some("欢迎".into()),
+                content: "欢迎来到社区".into(),
+                extra_metadata: None,
+                likes_count: 0,
+                comments_count: 0,
+                status: ArticleStatus::Published,
+                created_at: now,
+                updated_at: now,
+            }]),
             comments: std::sync::Mutex::new(vec![]),
             media: std::sync::Mutex::new(vec![]),
         }
@@ -1055,14 +1208,25 @@ impl MockCommunityRepo {
 impl CommunityRepository for MockCommunityRepo {
     async fn list_posts(&self, limit: u64, offset: u64) -> Result<Vec<Post>, AppError> {
         let posts = self.posts.lock().unwrap();
-        let page: Vec<Post> = posts.iter().skip(offset as usize).take(limit as usize).cloned().collect();
+        let page: Vec<Post> = posts
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect();
         Ok(page)
     }
     async fn count_posts(&self) -> Result<u64, AppError> {
         Ok(self.posts.lock().unwrap().len() as u64)
     }
     async fn find_post_by_id(&self, post_id: u64) -> Result<Option<Post>, AppError> {
-        Ok(self.posts.lock().unwrap().iter().find(|p| p.post_id == post_id).cloned())
+        Ok(self
+            .posts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.post_id == post_id)
+            .cloned())
     }
     async fn save_post(&self, new_post: NewPost) -> Result<Post, AppError> {
         let mut posts = self.posts.lock().unwrap();
@@ -1085,7 +1249,9 @@ impl CommunityRepository for MockCommunityRepo {
     }
     async fn update_post(&self, post_id: u64, update: PostUpdate) -> Result<Post, AppError> {
         let mut posts = self.posts.lock().unwrap();
-        let post = posts.iter_mut().find(|p| p.post_id == post_id)
+        let post = posts
+            .iter_mut()
+            .find(|p| p.post_id == post_id)
             .ok_or_else(|| AppError::NotFound("post".into()))?;
         if let Some(t) = update.title {
             post.title = t;
@@ -1126,9 +1292,18 @@ impl CommunityRepository for MockCommunityRepo {
         offset: u64,
     ) -> Result<Vec<Comment>, AppError> {
         let comments = self.comments.lock().unwrap();
-        let filtered: Vec<Comment> = comments.iter().filter(|c| c.post_id == post_id).cloned().collect();
+        let filtered: Vec<Comment> = comments
+            .iter()
+            .filter(|c| c.post_id == post_id)
+            .cloned()
+            .collect();
         let total = filtered.len();
-        let page: Vec<Comment> = filtered.iter().skip(offset as usize).take(limit as usize).cloned().collect();
+        let page: Vec<Comment> = filtered
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect();
         Ok(page)
     }
     async fn count_comments_by_post(&self, post_id: u64) -> Result<u64, AppError> {
@@ -1136,7 +1311,13 @@ impl CommunityRepository for MockCommunityRepo {
         Ok(comments.iter().filter(|c| c.post_id == post_id).count() as u64)
     }
     async fn find_comment_by_id(&self, comment_id: u64) -> Result<Option<Comment>, AppError> {
-        Ok(self.comments.lock().unwrap().iter().find(|c| c.comment_id == comment_id).cloned())
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c.comment_id == comment_id)
+            .cloned())
     }
     async fn save_comment(&self, new_comment: NewComment) -> Result<Comment, AppError> {
         let mut comments = self.comments.lock().unwrap();
@@ -1164,7 +1345,9 @@ impl CommunityRepository for MockCommunityRepo {
         status: Option<ArticleStatus>,
     ) -> Result<Comment, AppError> {
         let mut comments = self.comments.lock().unwrap();
-        let comment = comments.iter_mut().find(|c| c.comment_id == comment_id)
+        let comment = comments
+            .iter_mut()
+            .find(|c| c.comment_id == comment_id)
             .ok_or_else(|| AppError::NotFound("comment".into()))?;
         if let Some(c) = content {
             comment.content = c;
@@ -1183,7 +1366,11 @@ impl CommunityRepository for MockCommunityRepo {
     }
     async fn list_media_by_post(&self, post_id: u64) -> Result<Vec<PostMedia>, AppError> {
         let media = self.media.lock().unwrap();
-        Ok(media.iter().filter(|m| m.post_id == post_id).cloned().collect())
+        Ok(media
+            .iter()
+            .filter(|m| m.post_id == post_id)
+            .cloned()
+            .collect())
     }
     async fn save_media(&self, new_media: NewPostMedia) -> Result<PostMedia, AppError> {
         let mut media = self.media.lock().unwrap();
@@ -1249,7 +1436,12 @@ impl MockContentLikeRepo {
 
 #[async_trait]
 impl ContentLikeRepository for MockContentLikeRepo {
-    async fn toggle(&self, user_id: u64, content_type: &str, content_id: u64) -> Result<bool, AppError> {
+    async fn toggle(
+        &self,
+        user_id: u64,
+        content_type: &str,
+        content_id: u64,
+    ) -> Result<bool, AppError> {
         let mut likes = self.likes.lock().unwrap();
         if let Some(pos) = likes.iter().position(|l| {
             l.user_id == user_id && l.content_type == content_type && l.content_id == content_id
@@ -1269,7 +1461,12 @@ impl ContentLikeRepository for MockContentLikeRepo {
         }
     }
 
-    async fn is_liked(&self, user_id: u64, content_type: &str, content_id: u64) -> Result<bool, AppError> {
+    async fn is_liked(
+        &self,
+        user_id: u64,
+        content_type: &str,
+        content_id: u64,
+    ) -> Result<bool, AppError> {
         let likes = self.likes.lock().unwrap();
         Ok(likes.iter().any(|l| {
             l.user_id == user_id && l.content_type == content_type && l.content_id == content_id
@@ -1278,13 +1475,23 @@ impl ContentLikeRepository for MockContentLikeRepo {
 
     async fn count_by_content(&self, content_type: &str, content_id: u64) -> Result<u64, AppError> {
         let likes = self.likes.lock().unwrap();
-        Ok(likes.iter().filter(|l| l.content_type == content_type && l.content_id == content_id).count() as u64)
+        Ok(likes
+            .iter()
+            .filter(|l| l.content_type == content_type && l.content_id == content_id)
+            .count() as u64)
     }
 
-    async fn delete(&self, user_id: u64, content_type: &str, content_id: u64) -> Result<bool, AppError> {
+    async fn delete(
+        &self,
+        user_id: u64,
+        content_type: &str,
+        content_id: u64,
+    ) -> Result<bool, AppError> {
         let mut likes = self.likes.lock().unwrap();
         let before = likes.len();
-        likes.retain(|l| !(l.user_id == user_id && l.content_type == content_type && l.content_id == content_id));
+        likes.retain(|l| {
+            !(l.user_id == user_id && l.content_type == content_type && l.content_id == content_id)
+        });
         Ok(likes.len() < before)
     }
 }
@@ -1358,11 +1565,238 @@ fn build_test_state() -> api::ApiState {
         std::time::Duration::from_millis(5000),
     ));
 
+    // ── Mock repos (in-memory, no stub_repositories) ──
+    // These must be constructed BEFORE SessionManager since SessionManager now needs AgentRuntime
+    use ServerRS::application::agent::agent_context::AgentContextBuilder;
+    use ServerRS::domain::summary::SummaryRepository;
+    use ServerRS::application::agent::agent_runtime::AgentRuntime;
+    use ServerRS::application::memory::memory_extractor::MemoryExtractor;
+    use ServerRS::application::memory::memory_service::MemoryService;
+    use ServerRS::application::rag::chunking::ChunkingService;
+    use ServerRS::application::rag::ingestion_service::IngestionService;
+    use ServerRS::application::rag::retrieval_service::RetrievalService;
+    use ServerRS::domain::agent::AgentEventRepository;
+    use ServerRS::domain::memory::MemoryRepository;
+    use ServerRS::domain::rag::RAGRepository;
+
+    struct MockRAGRepo;
+    #[async_trait::async_trait]
+    impl RAGRepository for MockRAGRepo {
+        async fn save_document(
+            &self,
+            _d: ServerRS::domain::rag::NewDocument,
+        ) -> Result<ServerRS::domain::rag::KnowledgeDocument, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn find_document_by_source(
+            &self,
+            _s: &str,
+            _id: Option<u64>,
+        ) -> Result<Option<ServerRS::domain::rag::KnowledgeDocument>, AppError> {
+            Ok(None)
+        }
+        async fn list_documents_by_source_type(
+            &self,
+            _s: &str,
+        ) -> Result<Vec<ServerRS::domain::rag::KnowledgeDocument>, AppError> {
+            Ok(vec![])
+        }
+        async fn save_chunks(
+            &self,
+            _c: &[ServerRS::domain::rag::NewChunk],
+        ) -> Result<Vec<ServerRS::domain::rag::KnowledgeChunk>, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn find_chunks_by_document(
+            &self,
+            _id: u64,
+        ) -> Result<Vec<ServerRS::domain::rag::KnowledgeChunk>, AppError> {
+            Ok(vec![])
+        }
+        async fn save_embedding(
+            &self,
+            _e: ServerRS::domain::rag::NewEmbedding,
+        ) -> Result<ServerRS::domain::rag::KnowledgeEmbedding, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn find_embedding_by_chunk(
+            &self,
+            _id: u64,
+        ) -> Result<Option<ServerRS::domain::rag::KnowledgeEmbedding>, AppError> {
+            Ok(None)
+        }
+        async fn search_by_keyword(
+            &self,
+            _q: &str,
+            _k: u64,
+        ) -> Result<Vec<(ServerRS::domain::rag::KnowledgeChunk, f64)>, AppError> {
+            Ok(vec![])
+        }
+        async fn delete_document(&self, _id: u64) -> Result<(), AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn list_chunks_with_embeddings(
+            &self,
+        ) -> Result<
+            Vec<(
+                ServerRS::domain::rag::KnowledgeChunk,
+                ServerRS::domain::rag::KnowledgeEmbedding,
+            )>,
+            AppError,
+        > {
+            Ok(vec![])
+        }
+
+        async fn find_chunk_by_id(
+            &self,
+            _: u64,
+        ) -> Result<Option<ServerRS::domain::rag::KnowledgeChunk>, AppError> {
+            Ok(None)
+        }
+
+        async fn find_document_by_id(
+            &self,
+            _: u64,
+        ) -> Result<Option<ServerRS::domain::rag::KnowledgeDocument>, AppError> {
+            Ok(None)
+        }
+
+        async fn update_chunk_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
+        async fn mark_chunk_unindexed(&self, _: u64) -> Result<(), AppError> { Ok(()) }
+        async fn list_indexable_chunks(&self, _: u64) -> Result<Vec<(ServerRS::domain::rag::KnowledgeChunk, ServerRS::domain::rag::KnowledgeDocument)>, AppError> { Ok(vec![]) }
+    }
+
+    struct MockMemRepo;
+    #[async_trait::async_trait]
+    impl MemoryRepository for MockMemRepo {
+        async fn save_memory(
+            &self,
+            _m: ServerRS::domain::memory::NewMemory,
+        ) -> Result<ServerRS::domain::memory::UserMemory, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn find_by_id(
+            &self,
+            _id: u64,
+        ) -> Result<Option<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(None)
+        }
+        async fn find_by_user_id(
+            &self,
+            _uid: u64,
+            _s: Option<i8>,
+        ) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(vec![])
+        }
+        async fn search_by_user(
+            &self,
+            _uid: u64,
+            _q: &str,
+            _k: u32,
+        ) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> {
+            Ok(vec![])
+        }
+        async fn update_memory(
+            &self,
+            _id: u64,
+            _c: Option<String>,
+            _conf: Option<f64>,
+        ) -> Result<ServerRS::domain::memory::UserMemory, AppError> {
+            Err(AppError::Internal("mock".into()))
+        }
+        async fn disable_memory(&self, _id: u64) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn delete_memory(&self, _id: u64) -> Result<bool, AppError> {
+            Ok(true)
+        }
+        async fn find_memories_by_conversation(&self, _: u64) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> { Ok(vec![]) }
+        async fn update_memory_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
+        async fn touch_memory_access(&self, _: u64) -> Result<(), AppError> { Ok(()) }
+        async fn find_by_memory_key(&self, _: u64, _: &str) -> Result<Option<ServerRS::domain::memory::UserMemory>, AppError> { Ok(None) }
+        async fn list_indexable_memories(&self, _: Option<u64>, _: u64) -> Result<Vec<ServerRS::domain::memory::UserMemory>, AppError> { Ok(vec![]) }
+    }
+
+    struct MockSumRepo;
+    #[async_trait::async_trait]
+    impl ServerRS::domain::summary::SummaryRepository for MockSumRepo {
+        async fn find_latest_by_conversation(&self, _: u64) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(None) }
+        async fn save_summary(&self, _: ServerRS::domain::memory::NewSummary) -> Result<ServerRS::domain::memory::ConversationSummary, AppError> { Err(AppError::Internal("mock".into())) }
+        async fn find_by_id(&self, _: u64) -> Result<Option<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(None) }
+        async fn disable_summary(&self, _: u64) -> Result<(), AppError> { Ok(()) }
+        async fn list_indexable_summaries(&self, _: u64) -> Result<Vec<ServerRS::domain::memory::ConversationSummary>, AppError> { Ok(vec![]) }
+        async fn update_summary_index_metadata(&self, _: u64, _: String, _: String, _: String, _: u32) -> Result<(), AppError> { Ok(()) }
+    }
+
+    struct MockAgentEventRepo;
+    #[async_trait::async_trait]
+    impl AgentEventRepository for MockAgentEventRepo {
+        async fn log_event(
+            &self,
+            _e: ServerRS::domain::agent::NewAgentEvent,
+        ) -> ServerRS::domain::agent::AgentEvent {
+            ServerRS::domain::agent::AgentEvent {
+                event_id: 0,
+                user_id: 0,
+                conversation_id: None,
+                session_id: None,
+                event_type: String::new(),
+                payload: serde_json::Value::Null,
+                created_at: Utc::now(),
+            }
+        }
+    }
+
+    let rag_repo: Arc<dyn RAGRepository> = Arc::new(MockRAGRepo);
+    let memory_repo: Arc<dyn MemoryRepository> = Arc::new(MockMemRepo);
+    let summary_repo: Arc<dyn SummaryRepository> = Arc::new(MockSumRepo);
+    let agent_event_repo: Arc<dyn AgentEventRepository> = Arc::new(MockAgentEventRepo);
+
+    let retrieval: Arc<RetrievalService> =
+        Arc::new(RetrievalService::new(Arc::clone(&rag_repo), None));
+    let chunking = ChunkingService::new();
+    let ingestion: Arc<IngestionService> =
+        Arc::new(IngestionService::new(Arc::clone(&rag_repo), chunking, None));
+
+    let memory_extractor: Arc<MemoryExtractor> =
+        Arc::new(MemoryExtractor::new(Arc::new(MockLlmProvider::new("[]"))));
+    let memory_svc: Arc<MemoryService> = Arc::new(MemoryService::new(
+        Arc::clone(&memory_repo),
+        memory_extractor,
+    ));
+
+    let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
+        Arc::clone(&memory_svc),
+        Arc::clone(&retrieval),
+        Arc::clone(&summary_repo),
+        Arc::clone(&conv_repo),
+        Arc::clone(&profile_repo),
+    ));
+
+    use ServerRS::infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
+    use ServerRS::infrastructure::llm::mock_provider::MockLlmProvider;
+    let agent_llm: Arc<dyn ServerRS::domain::llm::LlmProvider> =
+        Arc::new(MockLlmProvider::new("mock reply"));
+    let agent_risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
+    let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
+        Arc::clone(&agent_llm),
+        Arc::clone(&rag_repo),
+        Arc::clone(&memory_repo),
+        Arc::clone(&agent_risk_detector),
+        Arc::clone(&risk_repo),
+        Arc::clone(&agent_event_repo),
+        Arc::clone(&conv_repo),
+        Arc::clone(&profile_repo),
+        context_builder,
+        Vec::new(),
+        10,
+    ));
+
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
         risk_detect,
         Arc::clone(&orchestrator),
-        Arc::clone(&tool_service),
+        Arc::clone(&agent_runtime),
         120,
     ));
     tokio::spawn({
@@ -1375,16 +1809,13 @@ fn build_test_state() -> api::ApiState {
         }
     });
 
-    // ── Mock repos (in-memory, no stub_repositories) ──
-
     let psychology: Arc<PsychologyService> =
         Arc::new(PsychologyService::new(Arc::new(MockPsychologyRepo::new())));
     let depression: Arc<DepressionService> =
         Arc::new(DepressionService::new(Arc::new(MockDepressionRepo::new())));
     let diaries: Arc<DiaryService> =
         Arc::new(DiaryService::new(Arc::new(MockDiaryRepo::new()), None));
-    let music: Arc<MusicService> =
-        Arc::new(MusicService::new(Arc::new(MockMusicRepo::new())));
+    let music: Arc<MusicService> = Arc::new(MusicService::new(Arc::new(MockMusicRepo::new())));
     let community: Arc<CommunityService> =
         Arc::new(CommunityService::new(Arc::new(MockCommunityRepo::new())));
 
@@ -1407,6 +1838,10 @@ fn build_test_state() -> api::ApiState {
         diaries,
         music,
         community,
+        retrieval,
+        ingestion,
+        memory: memory_svc,
+        agent_runtime,
     }
 }
 

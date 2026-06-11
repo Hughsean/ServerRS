@@ -28,3 +28,5 @@ pub mod user_memories;
 pub mod user_memory_embeddings;
 pub mod user_profiles;
 pub mod users;
+pub mod vector_index_jobs;
+pub mod vector_index_records;

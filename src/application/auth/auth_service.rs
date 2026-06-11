@@ -114,7 +114,12 @@ impl AuthService {
         }
     }
 
-    fn issue_pair(&self, user_id: u64, username: &str, role: &str) -> Result<(String, String, u64), AppError> {
+    fn issue_pair(
+        &self,
+        user_id: u64,
+        username: &str,
+        role: &str,
+    ) -> Result<(String, String, u64), AppError> {
         let access = self.token_service.issue_access(user_id, username, role)?;
         let refresh = self.token_service.issue_refresh(user_id, username)?;
         Ok((access, refresh, 15 * 60))
@@ -193,7 +198,8 @@ impl AuthService {
 
         self.clear_failures(&input.username);
 
-        let (access_token, refresh_token, expires_in) = self.issue_pair(user.id, &user.username, user.role.as_str())?;
+        let (access_token, refresh_token, expires_in) =
+            self.issue_pair(user.id, &user.username, user.role.as_str())?;
 
         let token_hash = sha256_hex(&refresh_token);
         self.refresh_token_store.store(user.id, token_hash).await?;
@@ -237,7 +243,8 @@ impl AuthService {
             .save(NewUser::new(username.clone(), hash, UserStatus::Active))
             .await?;
 
-        let (access_token, refresh_token, expires_in) = self.issue_pair(user.id, &user.username, user.role.as_str())?;
+        let (access_token, refresh_token, expires_in) =
+            self.issue_pair(user.id, &user.username, user.role.as_str())?;
 
         let token_hash = sha256_hex(&refresh_token);
         self.refresh_token_store.store(user.id, token_hash).await?;
@@ -292,8 +299,14 @@ impl AuthService {
 
         self.refresh_token_store.revoke(&old_hash).await?;
 
-        let user = self.user_repo.find_by_id(claims.user_id).await?.ok_or(AppError::Unauthorized)?;
-        if !user.is_active() { return Err(AppError::Forbidden("user is disabled".into())); }
+        let user = self
+            .user_repo
+            .find_by_id(claims.user_id)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+        if !user.is_active() {
+            return Err(AppError::Forbidden("user is disabled".into()));
+        }
 
         let (access_token, new_refresh, expires_in) =
             self.issue_pair(claims.user_id, &claims.username, user.role.as_str())?;

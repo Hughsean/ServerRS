@@ -37,16 +37,23 @@ impl AgentEventRepository for SeaOrmAgentEventRepository {
         let now = Utc::now().naive_utc();
 
         let active = agent_events::ActiveModel {
-            event_id: Set(0), // auto-increment
+            event_id: Set(0),
             user_id: Set(event.user_id),
             conversation_id: Set(event.conversation_id),
             session_id: Set(event.session_id),
+            trace_id: Set(None),
+            turn_id: Set(None),
             event_type: Set(event.event_type),
+            severity: Set("info".to_string()),
+            tool_name: Set(None),
             payload: Set(event.payload.into()),
             created_at: Set(now),
         };
 
-        let saved = active.insert(&self.db).await.expect("failed to insert agent_event");
+        let saved = active
+            .insert(&self.db)
+            .await
+            .expect("failed to insert agent_event");
         from_model(saved)
     }
 }

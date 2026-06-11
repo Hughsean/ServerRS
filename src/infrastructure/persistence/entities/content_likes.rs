@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "content_likes")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub like_id: u64,
     #[sea_orm(unique_key = "uk_content_likes_user_content")]
     pub user_id: u64,

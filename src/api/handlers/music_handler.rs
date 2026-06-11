@@ -1,8 +1,8 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::header,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde_json::json;
 
@@ -79,10 +79,7 @@ pub async fn stream_track(
     let headers = [
         (header::CONTENT_TYPE, mime_type),
         (header::CONTENT_LENGTH, file_size.to_string()),
-        (
-            header::CONTENT_DISPOSITION,
-            "inline".to_string(),
-        ),
+        (header::CONTENT_DISPOSITION, "inline".to_string()),
     ];
 
     Ok((headers, data).into_response())

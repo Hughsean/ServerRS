@@ -12,5 +12,8 @@ pub mod psychology;
 pub mod rag;
 pub mod risk;
 pub mod storage;
+pub mod summary;
 pub mod tasks;
 pub mod user;
+pub mod vector_index;
+pub mod vector_store;

@@ -5,9 +5,11 @@ use tracing::{info, warn};
 
 use super::agent_context::AgentContextBuilder;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
-use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::conversation::conversation_message::NewConversationMessage;
-use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef};
+use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::llm::{
+    ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
+};
 use crate::domain::memory::{MemoryRepository, NewMemory};
 use crate::domain::rag::RAGRepository;
 use crate::domain::risk::detection_types::{DetectionResult, RiskLevel};
@@ -282,7 +284,9 @@ impl AgentRuntime {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(error = %e, "LLM chat failed");
-                    final_content = "Sorry, I encountered an error processing your request. Please try again.".to_string();
+                    final_content =
+                        "Sorry, I encountered an error processing your request. Please try again."
+                            .to_string();
                     break;
                 }
             };
@@ -296,9 +300,7 @@ impl AgentRuntime {
             let mut tool_results: Vec<ChatMessage> = Vec::new();
 
             for tc in &response.tool_calls {
-                let result = self
-                    .execute_tool(&context, &tc.name, &tc.arguments)
-                    .await;
+                let result = self.execute_tool(&context, &tc.name, &tc.arguments).await;
 
                 let result_string = match &result {
                     Ok(text) => text.clone(),
@@ -338,7 +340,8 @@ impl AgentRuntime {
             // Append the assistant message (with tool_calls metadata) and the
             // tool results to the conversation so the LLM sees them in the
             // next iteration.
-            let tool_calls_value: Value = serde_json::to_value(&response.tool_calls).unwrap_or_default();
+            let tool_calls_value: Value =
+                serde_json::to_value(&response.tool_calls).unwrap_or_default();
             messages_with_tool_results.push(ChatMessage {
                 role: "assistant".into(),
                 content: response.content.clone(),
@@ -454,7 +457,10 @@ impl AgentRuntime {
         let evidence = if detection.evidence.is_empty() {
             String::new()
         } else {
-            format!("\nSpecific concerns detected: {}", detection.evidence.join("; "))
+            format!(
+                "\nSpecific concerns detected: {}",
+                detection.evidence.join("; ")
+            )
         };
 
         format!(

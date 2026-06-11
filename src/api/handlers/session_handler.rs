@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use axum::{Extension, Json, extract::Path, extract::Query};
 use serde::Deserialize;
+use std::sync::Arc;
 use validator::Validate;
 
 use crate::api::ApiState;
@@ -168,4 +168,3 @@ pub async fn list_risk_detections(
         size,
     }))
 }
-

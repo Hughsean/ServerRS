@@ -38,11 +38,6 @@ impl ChunkingService {
         let mut start = 0usize;
         while start < len {
             let end = (start + chunk_size).min(len);
-            // Avoid producing a trailing chunk that is identical to the last one
-            // when the remaining text fits entirely inside the current window.
-            if !chunks.is_empty() && end == len && start + step >= len {
-                break;
-            }
             chunks.push(content[start..end].to_string());
             start += step;
         }
@@ -67,12 +62,15 @@ mod tests {
         let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars
         let result = service.chunk_text(text, 10, 3);
         // step = 7: [0..10), [7..17), [14..24), [21..26)
-        assert_eq!(result, vec![
-            "abcdefghij".to_string(),
-            "hijklmnopq".to_string(),
-            "opqrstuvwx".to_string(),
-            "uvwxyz".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                "abcdefghij".to_string(),
+                "hijklmnopq".to_string(),
+                "opqrstuvwx".to_string(),
+                "vwxyz".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -80,10 +78,10 @@ mod tests {
         let service = ChunkingService::new();
         let text = "abcdefghijklmnop";
         let result = service.chunk_text(text, 8, 0);
-        assert_eq!(result, vec![
-            "abcdefgh".to_string(),
-            "ijklmnop".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec!["abcdefgh".to_string(), "ijklmnop".to_string(),]
+        );
     }
 
     #[test]

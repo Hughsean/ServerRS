@@ -17,7 +17,10 @@ pub fn object_routes(state: ApiState) -> Router {
 
     Router::new()
         .route("/api/v1/objects/{objectId}", get(get_object))
-        .route("/api/v1/objects/{objectId}/metadata", get(get_object_metadata))
+        .route(
+            "/api/v1/objects/{objectId}/metadata",
+            get(get_object_metadata),
+        )
         .merge(protected)
         .with_state(state)
 }

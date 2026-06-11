@@ -1,5 +1,5 @@
-use axum::{Extension, Json, extract::State, response::IntoResponse};
 use axum::http::StatusCode;
+use axum::{Extension, Json, extract::State, response::IntoResponse};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -132,4 +132,3 @@ pub async fn me(Extension(user): Extension<AuthenticatedUser>) -> Json<UserInfo>
         role: user.role,
     })
 }
-

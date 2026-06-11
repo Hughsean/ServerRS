@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "users")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub id: u64,
     #[sea_orm(unique)]
     pub username: String,
@@ -42,6 +41,8 @@ pub enum Relation {
     Conversations,
     #[sea_orm(has_many = "super::depression_assessments::Entity")]
     DepressionAssessments,
+    #[sea_orm(has_many = "super::knowledge_documents::Entity")]
+    KnowledgeDocuments,
     #[sea_orm(has_many = "super::refresh_tokens::Entity")]
     RefreshTokens,
     #[sea_orm(has_many = "super::risk_detection_results::Entity")]
@@ -54,6 +55,8 @@ pub enum Relation {
     UserMemories,
     #[sea_orm(has_one = "super::user_profiles::Entity")]
     UserProfiles,
+    #[sea_orm(has_many = "super::vector_index_records::Entity")]
+    VectorIndexRecords,
 }
 
 impl Related<super::agent_events::Entity> for Entity {
@@ -98,6 +101,12 @@ impl Related<super::depression_assessments::Entity> for Entity {
     }
 }
 
+impl Related<super::knowledge_documents::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgeDocuments.def()
+    }
+}
+
 impl Related<super::refresh_tokens::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::RefreshTokens.def()
@@ -131,6 +140,12 @@ impl Related<super::user_memories::Entity> for Entity {
 impl Related<super::user_profiles::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UserProfiles.def()
+    }
+}
+
+impl Related<super::vector_index_records::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::VectorIndexRecords.def()
     }
 }
 

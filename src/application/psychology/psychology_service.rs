@@ -69,7 +69,9 @@ impl PsychologyService {
         category_id: Option<u64>,
         is_featured: Option<bool>,
     ) -> Result<(Vec<PsychologyArticle>, u64), AppError> {
-        self.repo.list_articles(page, page_size, search, category_id, is_featured).await
+        self.repo
+            .list_articles(page, page_size, search, category_id, is_featured)
+            .await
     }
 
     pub async fn get_article(&self, id: u64) -> Result<PsychologyArticle, AppError> {
@@ -118,7 +120,9 @@ impl PsychologyService {
         category_id: Option<u64>,
         is_verified: Option<bool>,
     ) -> Result<(Vec<PsychologyQna>, u64), AppError> {
-        self.repo.list_qnas(page, page_size, category_id, is_verified).await
+        self.repo
+            .list_qnas(page, page_size, category_id, is_verified)
+            .await
     }
 
     pub async fn get_qna(&self, id: u64) -> Result<PsychologyQna, AppError> {
@@ -167,7 +171,9 @@ impl PsychologyService {
         category_id: Option<u64>,
         resource_type: Option<String>,
     ) -> Result<(Vec<PsychologyResource>, u64), AppError> {
-        self.repo.list_resources(page, page_size, category_id, resource_type).await
+        self.repo
+            .list_resources(page, page_size, category_id, resource_type)
+            .await
     }
 
     pub async fn get_resource(&self, id: u64) -> Result<PsychologyResource, AppError> {

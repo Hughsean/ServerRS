@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "refresh_tokens")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub refresh_token_id: u64,
     #[sea_orm(unique)]
     pub token_id: String,

@@ -4,3 +4,4 @@ pub mod llm;
 pub mod persistence;
 pub mod storage;
 pub mod tasks;
+pub mod vector_store;

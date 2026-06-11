@@ -81,11 +81,7 @@ impl SeaOrmCommunityRepository {
 impl CommunityRepository for SeaOrmCommunityRepository {
     // -- Posts ---------------------------------------------------------------
 
-    async fn list_posts(
-        &self,
-        limit: u64,
-        offset: u64,
-    ) -> Result<Vec<Post>, AppError> {
+    async fn list_posts(&self, limit: u64, offset: u64) -> Result<Vec<Post>, AppError> {
         let paginator = community_posts::Entity::find()
             .filter(community_posts::Column::Status.eq(1i8))
             .order_by_desc(community_posts::Column::CreatedAt)
@@ -162,10 +158,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             "UPDATE community_posts SET comments_count = comments_count + 1 WHERE post_id = {}",
             post_id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
         Ok(())
     }
 
@@ -174,10 +167,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             "UPDATE community_posts SET comments_count = GREATEST(comments_count - 1, 0) WHERE post_id = {}",
             post_id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
         Ok(())
     }
 

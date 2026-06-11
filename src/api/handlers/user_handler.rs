@@ -1,6 +1,10 @@
-use std::sync::Arc;
-use axum::{Extension, Json, extract::{Path, State}, http::StatusCode};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use validator::Validate;
 
 use crate::api::ApiState;
@@ -274,4 +278,3 @@ fn user_to_response(u: crate::domain::user::user::User) -> UserResponse {
         last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
     }
 }
-

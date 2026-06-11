@@ -32,6 +32,10 @@ pub struct AppConfig {
     pub agent: AgentConfig,
     #[serde(default)]
     pub rag: RagConfig,
+    #[serde(default)]
+    pub qdrant: QdrantConfig,
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -412,6 +416,91 @@ impl Default for AgentConfig {
         }
     }
 }
+// ── EmbeddingConfig ──
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingConfig {
+    #[serde(default = "default_embedding_provider")]
+    pub provider: String,
+    #[serde(default = "default_embedding_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_embedding_model")]
+    pub model: String,
+    #[serde(default = "default_embedding_dimension")]
+    pub dimension: usize,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_embedding_provider(),
+            base_url: default_embedding_base_url(),
+            model: default_embedding_model(),
+            dimension: default_embedding_dimension(),
+        }
+    }
+}
+
+fn default_embedding_provider() -> String {
+    "ollama".into()
+}
+fn default_embedding_base_url() -> String {
+    "http://127.0.0.1:11434".into()
+}
+fn default_embedding_model() -> String {
+    "nomic-embed-text".into()
+}
+fn default_embedding_dimension() -> usize {
+    768
+}
+
+// ── QdrantConfig ──
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QdrantConfig {
+    #[serde(default = "default_qdrant_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_qdrant_url")]
+    pub url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_qdrant_rag_collection")]
+    pub rag_collection: String,
+    #[serde(default = "default_qdrant_memory_collection")]
+    pub memory_collection: String,
+    #[serde(default = "default_qdrant_summary_collection")]
+    pub summary_collection: String,
+}
+
+impl Default for QdrantConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_qdrant_enabled(),
+            url: default_qdrant_url(),
+            api_key: None,
+            rag_collection: default_qdrant_rag_collection(),
+            memory_collection: default_qdrant_memory_collection(),
+            summary_collection: default_qdrant_summary_collection(),
+        }
+    }
+}
+
+fn default_qdrant_enabled() -> bool {
+    false
+}
+fn default_qdrant_url() -> String {
+    "http://127.0.0.1:6333".into()
+}
+fn default_qdrant_rag_collection() -> String {
+    "rag_chunks".into()
+}
+fn default_qdrant_memory_collection() -> String {
+    "user_memories".into()
+}
+fn default_qdrant_summary_collection() -> String {
+    "conversation_summaries".into()
+}
+
 impl Default for RagConfig {
     fn default() -> Self {
         Self {
@@ -625,6 +714,8 @@ impl Default for AppConfig {
             llm: Default::default(),
             agent: Default::default(),
             rag: Default::default(),
+            qdrant: Default::default(),
+            embedding: Default::default(),
         }
     }
 }

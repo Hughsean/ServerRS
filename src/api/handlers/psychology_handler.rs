@@ -116,7 +116,10 @@ pub async fn get_category_tree(
     Ok(Json(tree))
 }
 
-fn build_category_tree(all: Vec<crate::domain::psychology::PsychologyCategory>, parent_id: Option<u64>) -> Vec<CategoryDto> {
+fn build_category_tree(
+    all: Vec<crate::domain::psychology::PsychologyCategory>,
+    parent_id: Option<u64>,
+) -> Vec<CategoryDto> {
     all.iter()
         .filter(|c| c.parent_id == parent_id)
         .map(|c| CategoryDto {

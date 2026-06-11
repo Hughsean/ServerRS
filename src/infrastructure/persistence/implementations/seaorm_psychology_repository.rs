@@ -192,7 +192,11 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         }
 
         if let Some(featured) = is_featured {
-            base = base.filter(psychology_articles::Column::IsFeatured.eq(if featured { 1_i8 } else { 0_i8 }));
+            base = base.filter(psychology_articles::Column::IsFeatured.eq(if featured {
+                1_i8
+            } else {
+                0_i8
+            }));
         }
 
         if let Some(ref q) = search {
@@ -274,10 +278,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             "UPDATE psychology_articles SET content = '{}' WHERE article_id = {}",
             escaped_content, inserted_id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
 
         // Re-fetch to return the complete model
         let final_article = psychology_articles::Entity::find_by_id(inserted_id)
@@ -295,7 +296,9 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
     ) -> Result<PsychologyArticle, AppError> {
         // Use raw SQL update for content (ignore-marked) + standard fields
         // We build the SQL manually to set content alongside other fields.
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.f").to_string();
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S%.f")
+            .to_string();
         let escaped_title = new.title.replace('\'', "''");
         let escaped_summary = new.summary.as_ref().map(|s| s.replace('\'', "''"));
         let escaped_content = new.content.replace('\'', "''");
@@ -315,13 +318,9 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
              category_id = {}, title = '{}', summary = {}, content = '{}', \
              tags = {}, is_published = {}, updated_at = '{}' \
              WHERE article_id = {}",
-            cat_id, escaped_title, summary_sql, escaped_content,
-            tags_sql, is_pub, now, id
+            cat_id, escaped_title, summary_sql, escaped_content, tags_sql, is_pub, now, id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
 
         // Re-fetch to return complete model
         let updated = psychology_articles::Entity::find_by_id(id)
@@ -349,15 +348,19 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         category_id: Option<u64>,
         is_verified: Option<bool>,
     ) -> Result<(Vec<PsychologyQna>, u64), AppError> {
-        let mut base = psychology_qna::Entity::find()
-            .filter(psychology_qna::Column::Status.eq(1_i8));
+        let mut base =
+            psychology_qna::Entity::find().filter(psychology_qna::Column::Status.eq(1_i8));
 
         if let Some(cid) = category_id {
             base = base.filter(psychology_qna::Column::CategoryId.eq(cid as u16));
         }
 
         if let Some(verified) = is_verified {
-            base = base.filter(psychology_qna::Column::IsVerified.eq(if verified { 1_i8 } else { 0_i8 }));
+            base = base.filter(psychology_qna::Column::IsVerified.eq(if verified {
+                1_i8
+            } else {
+                0_i8
+            }));
         }
 
         let paginator = base
@@ -384,10 +387,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
                 "UPDATE psychology_qna SET view_count = view_count + 1 WHERE qna_id = {}",
                 id
             );
-            self.db
-                .execute_unprepared(&sql)
-                .await
-                .map_err(map_err)?;
+            self.db.execute_unprepared(&sql).await.map_err(map_err)?;
             let updated = psychology_qna::Entity::find_by_id(id)
                 .one(&self.db)
                 .await
@@ -422,10 +422,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             "UPDATE psychology_qna SET answer = '{}' WHERE qna_id = {}",
             escaped_answer, inserted_id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
 
         let final_qna = psychology_qna::Entity::find_by_id(inserted_id)
             .one(&self.db)
@@ -435,12 +432,10 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         Ok(map_qna(final_qna))
     }
 
-    async fn update_qna(
-        &self,
-        id: u64,
-        new: NewPsychologyQna,
-    ) -> Result<PsychologyQna, AppError> {
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.f").to_string();
+    async fn update_qna(&self, id: u64, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S%.f")
+            .to_string();
         let escaped_question = new.question.replace('\'', "''");
         let escaped_answer = new.answer.replace('\'', "''");
         let tags_sql = match &new.tags {
@@ -455,13 +450,9 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
              category_id = {}, question = '{}', answer = '{}', \
              tags = {}, status = {}, updated_at = '{}' \
              WHERE qna_id = {}",
-            cat_id, escaped_question, escaped_answer,
-            tags_sql, is_pub, now, id
+            cat_id, escaped_question, escaped_answer, tags_sql, is_pub, now, id
         );
-        self.db
-            .execute_unprepared(&sql)
-            .await
-            .map_err(map_err)?;
+        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
 
         let updated = psychology_qna::Entity::find_by_id(id)
             .one(&self.db)
@@ -525,10 +516,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
                 "UPDATE psychology_resources SET view_count = view_count + 1 WHERE resource_id = {}",
                 id
             );
-            self.db
-                .execute_unprepared(&sql)
-                .await
-                .map_err(map_err)?;
+            self.db.execute_unprepared(&sql).await.map_err(map_err)?;
             let updated = psychology_resources::Entity::find_by_id(id)
                 .one(&self.db)
                 .await
@@ -563,10 +551,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             thumbnail: Set(None),
             ..Default::default()
         };
-        am.insert(&self.db)
-            .await
-            .map_err(map_err)
-            .map(map_resource)
+        am.insert(&self.db).await.map_err(map_err).map(map_resource)
     }
 
     async fn update_resource(
@@ -588,10 +573,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         am.tags = Set(string_to_json(new.tags));
         am.status = Set(if new.is_published { 1_i8 } else { 0_i8 });
         am.updated_at = Set(chrono::Utc::now());
-        am.update(&self.db)
-            .await
-            .map_err(map_err)
-            .map(map_resource)
+        am.update(&self.db).await.map_err(map_err).map(map_resource)
     }
 
     async fn delete_resource(&self, id: u64) -> Result<bool, AppError> {
@@ -628,10 +610,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
                 new.content_type.replace('\'', "''"),
                 new.content_id
             );
-            self.db
-                .execute_unprepared(&sql)
-                .await
-                .map_err(map_err)?;
+            self.db.execute_unprepared(&sql).await.map_err(map_err)?;
             Ok(true)
         }
     }

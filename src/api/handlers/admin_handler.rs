@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -6,6 +5,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::api::ApiState;
 use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
@@ -315,4 +315,3 @@ pub async fn process_risk_detection(
         created_at: r.created_at.to_rfc3339(),
     }))
 }
-

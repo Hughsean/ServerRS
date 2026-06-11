@@ -218,11 +218,7 @@ impl NewPostMedia {
 pub trait CommunityRepository: Send + Sync {
     // -- Posts ---------------------------------------------------------------
 
-    async fn list_posts(
-        &self,
-        limit: u64,
-        offset: u64,
-    ) -> Result<Vec<Post>, AppError>;
+    async fn list_posts(&self, limit: u64, offset: u64) -> Result<Vec<Post>, AppError>;
 
     async fn count_posts(&self) -> Result<u64, AppError>;
 

@@ -7,17 +7,26 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "knowledge_chunks")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub chunk_id: u64,
     #[sea_orm(unique_key = "uk_knowledge_chunks_doc_idx")]
     pub document_id: u64,
     #[sea_orm(unique_key = "uk_knowledge_chunks_doc_idx")]
     pub chunk_index: u32,
+    pub char_start: Option<u32>,
+    pub char_end: Option<u32>,
     #[sea_orm(column_type = "Text")]
     pub content: String,
+    pub content_hash: Option<String>,
     pub token_count: Option<u32>,
     pub metadata: Option<Json>,
+    pub status: i8,
     pub created_at: DateTime,
+    #[sea_orm(unique)]
+    pub vector_id: Option<String>,
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_dimension: Option<u32>,
+    pub indexed_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

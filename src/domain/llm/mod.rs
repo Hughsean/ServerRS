@@ -75,10 +75,22 @@ pub struct ChatCompletionRequest {
 
 impl ChatCompletionRequest {
     pub fn new(messages: Vec<ChatMessage>) -> Self {
-        Self { messages, temperature: 0.7, top_p: 0.9, max_tokens: None, tools: None }
+        Self {
+            messages,
+            temperature: 0.7,
+            top_p: 0.9,
+            max_tokens: None,
+            tools: None,
+        }
     }
-    pub fn with_temperature(mut self, t: f64) -> Self { self.temperature = t; self }
-    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self { self.tools = Some(tools); self }
+    pub fn with_temperature(mut self, t: f64) -> Self {
+        self.temperature = t;
+        self
+    }
+    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +133,10 @@ impl std::fmt::Display for LlmError {
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn chat(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, LlmError>;
+    async fn chat(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LlmError>;
     async fn chat_with_tools(
         &self,
         request: ChatCompletionRequest,

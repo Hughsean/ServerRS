@@ -28,7 +28,8 @@ fn model_to_domain(m: users::Model) -> User {
         phone: m.phone,
         nickname: m.nickname,
         status: UserStatus::from_i32(m.status as i32).unwrap_or(UserStatus::Disabled),
-        role: crate::domain::user::user::UserRole::from_str(&m.role).unwrap_or(crate::domain::user::user::UserRole::User),
+        role: crate::domain::user::user::UserRole::from_str(&m.role)
+            .unwrap_or(crate::domain::user::user::UserRole::User),
         created_at: m.created_at,
         updated_at: m.updated_at,
         last_login_at: m.last_login_at,

@@ -1,4 +1,7 @@
-use axum::{Router, middleware, routing::{delete, get, patch, post, put}};
+use axum::{
+    Router, middleware,
+    routing::{delete, get, patch, post, put},
+};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -20,7 +23,9 @@ use super::handlers::diary_handler::{
     create_diary, delete_diary, get_diary, list_diaries, update_diary,
 };
 use super::handlers::music_handler::{get_track, list_tracks, stream_track};
-use super::handlers::object_handler::{delete_object, get_object, get_object_metadata, upload_object};
+use super::handlers::object_handler::{
+    delete_object, get_object, get_object_metadata, upload_object,
+};
 use super::handlers::psychology_handler::{
     check_favorite, get_article, get_category_tree, get_qna, get_resource, list_articles,
     list_categories, list_favorites, list_qna, list_resources, toggle_favorite,
@@ -42,19 +47,34 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/api/v1/users/me/profile", get(get_profile))
         .route("/api/v1/users/me/profile", put(put_profile))
         // Conversations
-        .route("/api/v1/users/{user_id}/conversations", get(list_conversations))
-        .route("/api/v1/users/{user_id}/conversations/{conv_id}", get(list_conversation_messages))
+        .route(
+            "/api/v1/users/{user_id}/conversations",
+            get(list_conversations),
+        )
+        .route(
+            "/api/v1/users/{user_id}/conversations/{conv_id}",
+            get(list_conversation_messages),
+        )
         // LLM Sessions
         .route("/api/v1/llm/sessions", post(create_session))
-        .route("/api/v1/llm/sessions/{session_id}/messages", post(post_message))
+        .route(
+            "/api/v1/llm/sessions/{session_id}/messages",
+            post(post_message),
+        )
         .route("/api/v1/llm/sessions/{session_id}", get(get_session_status))
         // Risk detections
         .route("/api/v1/risk-detections", get(list_risk_detections))
         // Depression scales (read) + assessments (write)
         .route("/api/v1/depression/assessments", get(list_assessments))
         .route("/api/v1/depression/assessments", post(create_assessment))
-        .route("/api/v1/depression/assessments/{assessment_id}", get(get_assessment))
-        .route("/api/v1/depression/assessments/{assessment_id}", delete(delete_assessment))
+        .route(
+            "/api/v1/depression/assessments/{assessment_id}",
+            get(get_assessment),
+        )
+        .route(
+            "/api/v1/depression/assessments/{assessment_id}",
+            delete(delete_assessment),
+        )
         // Diary CRUD
         .route("/api/v1/diaries", get(list_diaries))
         .route("/api/v1/diaries", post(create_diary))
@@ -70,17 +90,35 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/api/v1/community/posts/{id}", put(update_post))
         .route("/api/v1/community/posts/{id}", delete(delete_post))
         // Community comments (write)
-        .route("/api/v1/community/posts/{post_id}/comments", post(create_comment))
-        .route("/api/v1/community/posts/{post_id}/comments/{comment_id}", delete(delete_comment))
+        .route(
+            "/api/v1/community/posts/{post_id}/comments",
+            post(create_comment),
+        )
+        .route(
+            "/api/v1/community/posts/{post_id}/comments/{comment_id}",
+            delete(delete_comment),
+        )
         // Community likes
         .route("/api/v1/community/posts/{post_id}/like", post(like_post))
-        .route("/api/v1/community/posts/{post_id}/like", delete(unlike_post))
-        .route("/api/v1/community/posts/{post_id}/comments/{comment_id}/like", post(like_comment))
-        .route("/api/v1/community/posts/{post_id}/comments/{comment_id}/like", delete(unlike_comment))
+        .route(
+            "/api/v1/community/posts/{post_id}/like",
+            delete(unlike_post),
+        )
+        .route(
+            "/api/v1/community/posts/{post_id}/comments/{comment_id}/like",
+            post(like_comment),
+        )
+        .route(
+            "/api/v1/community/posts/{post_id}/comments/{comment_id}/like",
+            delete(unlike_comment),
+        )
         // Object storage
         .route("/api/v1/objects/upload", post(upload_object))
         .route("/api/v1/objects/{object_id}", get(get_object))
-        .route("/api/v1/objects/{object_id}/metadata", get(get_object_metadata))
+        .route(
+            "/api/v1/objects/{object_id}/metadata",
+            get(get_object_metadata),
+        )
         .route("/api/v1/objects/{object_id}", delete(delete_object))
         // Apply bearer-auth middleware to all protected routes
         .route_layer(middleware::from_fn_with_state(
@@ -94,9 +132,18 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/api/v1/admin/users/{id}", get(admin_get_user))
         .route("/api/v1/admin/users/{id}", patch(admin_patch_user))
         .route("/api/v1/admin/users/{id}", delete(admin_delete_user))
-        .route("/api/v1/admin/risk-conversations", get(list_risk_conversations))
-        .route("/api/v1/admin/risk-conversations/{id}", get(get_risk_conversation))
-        .route("/api/v1/admin/risk-detections/{id}/process", post(process_risk_detection))
+        .route(
+            "/api/v1/admin/risk-conversations",
+            get(list_risk_conversations),
+        )
+        .route(
+            "/api/v1/admin/risk-conversations/{id}",
+            get(get_risk_conversation),
+        )
+        .route(
+            "/api/v1/admin/risk-detections/{id}/process",
+            post(process_risk_detection),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer_auth,
@@ -135,7 +182,10 @@ pub fn build_router(state: ApiState) -> Router {
         // Community — public read
         .route("/api/v1/community/posts", get(list_posts))
         .route("/api/v1/community/posts/{id}", get(get_post))
-        .route("/api/v1/community/posts/{post_id}/comments", get(list_comments))
+        .route(
+            "/api/v1/community/posts/{post_id}/comments",
+            get(list_comments),
+        )
         // Merge protected and admin sub-routers
         .merge(protected)
         .merge(admin)

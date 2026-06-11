@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     Extension, Json,
     extract::{Multipart, Path, Query},
@@ -7,6 +6,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::api::ApiState;
 use crate::application::auth::auth_service::AuthenticatedUser;
@@ -132,4 +132,3 @@ pub async fn delete_object(
     state.objects.delete(auth_user.user_id, object_id).await?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
-

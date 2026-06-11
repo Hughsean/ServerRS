@@ -7,20 +7,31 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "user_memories")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    #[serde(skip_deserializing)]
     pub memory_id: u64,
     pub user_id: u64,
     pub memory_type: String,
+    pub memory_key: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub content: String,
     #[sea_orm(column_type = "Double")]
     pub confidence: f64,
+    #[sea_orm(column_type = "Double")]
+    pub salience: f64,
     pub source_conversation_id: Option<u64>,
     pub source_message_id: Option<u64>,
     pub status: i8,
     pub metadata: Option<Json>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
+    pub last_accessed_at: Option<DateTime>,
+    pub access_count: u32,
+    pub expires_at: Option<DateTime>,
+    #[sea_orm(unique)]
+    pub vector_id: Option<String>,
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_dimension: Option<u32>,
+    pub indexed_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
