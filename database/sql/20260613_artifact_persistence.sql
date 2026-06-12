@@ -9,6 +9,9 @@
 --
 -- After execution, regenerate SeaORM entities:
 --   sea-orm-cli generate entity -o src/infrastructure/persistence/entities
+--
+-- Existing installations that already have these columns must also apply:
+--   database/sql/20260613_expand_ingestion_artifacts.sql
 
 ALTER TABLE knowledge_ingestion_runs
   ADD COLUMN fetched_body_text MEDIUMTEXT NULL COMMENT '原始抓取的网页正文（max ~5MB from fetcher）',

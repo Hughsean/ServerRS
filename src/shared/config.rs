@@ -981,6 +981,11 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
+        // Load .env file into process environment BEFORE reading config.
+        // dotenvy::dotenv() is a no-op if .env doesn't exist, so it's safe
+        // in production (where env vars are set via the orchestrator).
+        let _ = dotenvy::dotenv();
+
         let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".into());
         let mut cfg = match std::fs::read_to_string(&path) {
             Ok(content) => match toml::from_str(&content) {

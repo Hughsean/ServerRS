@@ -143,15 +143,18 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .map_err(|e| WebIngestionError::Internal(format!("UrlDiscovered: {e}")))?;
 
     // ── Content-unchanged check ────────────────────────────────────────────
-    if url_rec.last_content_hash.as_deref() == Some(&ch) {
+    if let Some(existing_run_id) = unchanged_run_id(
+        url_rec.last_content_hash.as_deref(),
+        page.latest_content_hash.as_deref(),
+        page.latest_success_run_id,
+        &ch,
+    ) {
         ctx.source_url_repo
             .mark_crawled(source_url_id, &ch, Utc::now())
             .await?;
-        if let Some(existing_run_id) = page.latest_success_run_id {
-            ctx.page_repo
-                .mark_fetched(page.id, &ch, existing_run_id, Utc::now())
-                .await?;
-        }
+        ctx.page_repo
+            .mark_fetched(page.id, &ch, existing_run_id, Utc::now())
+            .await?;
         ctx.audit_repo
             .insert(NewAuditLog {
                 source_id: Some(effective_source_id),
@@ -175,10 +178,17 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
     // ── run_key idempotency with RESUME (§5.8 special requirement) ──────────
     if let Some(existing) = ctx.run_repo.find_by_run_key(&rk).await? {
-        ctx.source_url_repo
-            .mark_crawled(source_url_id, &ch, Utc::now())
-            .await?;
-        return resume_existing_run(ctx, &existing, &ch, &fetch_result.body_text).await;
+        let outcome = resume_existing_run(ctx, &existing, &ch, &fetch_result.body_text).await?;
+        if outcome == ResumeOutcome::FetchedOrLater {
+            let fetched_at = Utc::now();
+            ctx.page_repo
+                .mark_fetched(page.id, &ch, existing.id, fetched_at)
+                .await?;
+            ctx.source_url_repo
+                .mark_crawled(source_url_id, &ch, fetched_at)
+                .await?;
+        }
+        return Ok(());
     }
 
     // ── Create a fresh ingestion run ───────────────────────────────────────
@@ -281,17 +291,23 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 ///   - already fetched or later  → ensure PageFetched exists (emit if missing)
 ///   - still fetching            → re-persist the body and re-emit
 ///   - terminal                  → idempotent Ok
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumeOutcome {
+    FetchedOrLater,
+    Terminal,
+}
+
 async fn resume_existing_run(
     ctx: &PipelineContext,
     existing: &crate::domain::web_ingestion::repository::KnowledgeIngestionRun,
     content_hash: &str,
     body_text: &str,
-) -> Result<(), WebIngestionError> {
+) -> Result<ResumeOutcome, WebIngestionError> {
     use crate::domain::web_ingestion::status::is_terminal_run_status;
 
     if is_terminal_run_status(&existing.status) {
         tracing::info!(run_id = existing.id, status = %existing.status, "UrlDiscovered resume: terminal — idempotent");
-        return Ok(());
+        return Ok(ResumeOutcome::Terminal);
     }
 
     match existing.stage.as_str() {
@@ -312,17 +328,34 @@ async fn resume_existing_run(
                 None,
             )
             .await?;
-            emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await
+            emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
+            Ok(ResumeOutcome::FetchedOrLater)
         }
         run_stage::FETCHED => {
             // Re-emit PageFetched (idempotent via event_key) so the pipeline
             // continues even if the original event was lost.
-            emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await
+            emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
+            Ok(ResumeOutcome::FetchedOrLater)
         }
         other => {
             tracing::info!(run_id = existing.id, stage = %other, "UrlDiscovered resume: past fetched — idempotent");
-            Ok(())
+            Ok(ResumeOutcome::FetchedOrLater)
         }
+    }
+}
+
+fn unchanged_run_id(
+    source_content_hash: Option<&str>,
+    page_content_hash: Option<&str>,
+    latest_success_run_id: Option<u64>,
+    fetched_content_hash: &str,
+) -> Option<u64> {
+    if source_content_hash == Some(fetched_content_hash)
+        && page_content_hash == Some(fetched_content_hash)
+    {
+        latest_success_run_id
+    } else {
+        None
     }
 }
 
@@ -350,4 +383,30 @@ async fn emit_page_fetched(
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unchanged_run_id;
+
+    #[test]
+    fn unchanged_requires_source_page_and_run_to_agree() {
+        assert_eq!(
+            unchanged_run_id(Some("hash"), Some("hash"), Some(42), "hash"),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn source_hash_alone_does_not_skip_stranded_run() {
+        assert_eq!(unchanged_run_id(Some("hash"), None, None, "hash"), None);
+    }
+
+    #[test]
+    fn stale_page_hash_does_not_skip_new_content() {
+        assert_eq!(
+            unchanged_run_id(Some("new"), Some("old"), Some(42), "new"),
+            None
+        );
+    }
 }

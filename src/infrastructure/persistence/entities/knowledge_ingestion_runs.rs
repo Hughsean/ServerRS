@@ -144,8 +144,8 @@ impl ColumnTrait for Column {
             Self::FinishedAt => ColumnType::DateTime.def().null(),
             Self::CreatedAt => ColumnType::DateTime.def(),
             Self::UpdatedAt => ColumnType::DateTime.def(),
-            Self::FetchedBodyText => ColumnType::Text.def().null(),
-            Self::CleanText => ColumnType::Text.def().null(),
+            Self::FetchedBodyText => ColumnType::custom("MEDIUMTEXT").def().null(),
+            Self::CleanText => ColumnType::custom("MEDIUMTEXT").def().null(),
             Self::DistilledJson => ColumnType::Json.def().null(),
         }
     }

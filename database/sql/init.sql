@@ -8,10 +8,14 @@
 --   database/patches/20260611_003_qdrant_vector_index.sql
 --   database/patches/20260611_004_agent_vector_lifecycle.sql
 --   database/patches/20260611_005_stored_objects.sql
+--   database/sql/20260612_web_ingestion_final.sql
+--   database/sql/20260612_web_ingestion_fix_p0.sql
+--   database/sql/20260613_artifact_persistence.sql
+--   database/sql/20260613_expand_ingestion_artifacts.sql
 --
--- All patch columns/indices/constraints have been folded into the final
--- CREATE TABLE statements below.  This file produces the EXACT same schema
--- as applying base + all five patches in order.
+-- All patch columns, indexes, constraints, and triggers are folded into the
+-- final CREATE TABLE / CREATE TRIGGER statements below. No follow-up migration
+-- is required for a fresh development database.
 --
 -- Execution:
 --   mysql -u root -p < database/sql/init.sql
@@ -23,6 +27,7 @@ CREATE DATABASE IF NOT EXISTS digital_companion
     DEFAULT COLLATE utf8mb4_unicode_ci;
 
 USE digital_companion;
+SET NAMES utf8mb4;
 
 -- ============================================================================
 -- 1. users — 用户基础信息表
@@ -762,3 +767,369 @@ CREATE TABLE vector_index_jobs
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 30. web_sources — 网页来源策略配置表
+-- ============================================================================
+CREATE TABLE web_sources
+(
+    id               BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '来源ID',
+    name             VARCHAR(128)    NOT NULL COMMENT '来源名称',
+    description      TEXT            NULL COMMENT '来源描述',
+    approval_status  VARCHAR(32)     NOT NULL DEFAULT 'pending'
+                     COMMENT '审核状态: pending/approved/rejected/disabled',
+    trust_level      VARCHAR(32)     NOT NULL DEFAULT 'normal'
+                     COMMENT '信任级别: official/trusted/normal/untrusted',
+    auto_publish     TINYINT(1)      NOT NULL DEFAULT 0
+                     COMMENT '是否自动发布（仍需通过质量门控）',
+    allowed_domains  JSON            NULL
+                     COMMENT '允许抓取的域名列表（JSON数组）',
+    default_language VARCHAR(16)     NOT NULL DEFAULT 'zh'
+                     COMMENT '默认语言代码',
+    enabled          TINYINT(1)      NOT NULL DEFAULT 0
+                     COMMENT '是否启用: 1启用, 0禁用',
+    created_at       DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                     COMMENT '创建时间',
+    updated_at       DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                     ON UPDATE CURRENT_TIMESTAMP(6)
+                     COMMENT '更新时间',
+    deleted_at       DATETIME(6)     NULL COMMENT '软删除时间',
+    INDEX idx_web_sources_approval (approval_status),
+    INDEX idx_web_sources_enabled (enabled),
+    INDEX idx_web_sources_trust (trust_level)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '网页来源策略配置表';
+
+-- ============================================================================
+-- 31. web_source_urls — 来源下的待抓取 URL
+-- ============================================================================
+CREATE TABLE web_source_urls
+(
+    id                  BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT 'URL记录ID',
+    source_id           BIGINT UNSIGNED NOT NULL COMMENT '关联来源ID',
+    url                 TEXT            NOT NULL COMMENT '原始URL',
+    canonical_url       TEXT            NULL COMMENT '规范化URL',
+    url_hash            CHAR(64)        NOT NULL COMMENT '规范化URL的SHA-256',
+    enabled             TINYINT(1)      NOT NULL DEFAULT 1
+                        COMMENT '是否启用: 1启用, 0禁用',
+    crawl_interval_secs INT UNSIGNED    NOT NULL DEFAULT 86400
+                        COMMENT '抓取间隔（秒），默认24小时',
+    last_crawled_at     DATETIME(6)     NULL COMMENT '最近一次抓取时间',
+    last_content_hash   CHAR(64)        NULL COMMENT '最近一次抓取的content_hash',
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        COMMENT '创建时间',
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6)
+                        COMMENT '更新时间',
+    deleted_at          DATETIME(6)     NULL COMMENT '软删除时间',
+    UNIQUE KEY uk_web_source_urls_source_hash (source_id, url_hash),
+    INDEX idx_web_source_urls_source (source_id),
+    INDEX idx_web_source_urls_enabled (enabled),
+    INDEX idx_web_source_urls_last_crawled (last_crawled_at),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '来源待抓取URL表';
+
+-- ============================================================================
+-- 32. web_crawl_jobs — 定时抓取批次
+-- ============================================================================
+CREATE TABLE web_crawl_jobs
+(
+    id           BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '抓取批次ID',
+    source_id    BIGINT UNSIGNED NULL COMMENT '关联来源ID（可为NULL表示跨来源批次）',
+    status       VARCHAR(32)     NOT NULL DEFAULT 'pending'
+                 COMMENT '状态: pending/running/succeeded/failed/dead/cancelled',
+    scheduled_at DATETIME(6)     NOT NULL COMMENT '计划执行时间',
+    started_at   DATETIME(6)     NULL COMMENT '实际开始时间',
+    finished_at  DATETIME(6)     NULL COMMENT '完成时间',
+    last_error   TEXT            NULL COMMENT '最近一次错误信息',
+    created_at   DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at   DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                 ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    INDEX idx_web_crawl_jobs_status_scheduled (status, scheduled_at),
+    INDEX idx_web_crawl_jobs_source (source_id),
+    INDEX idx_web_crawl_jobs_created (created_at),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '定时抓取批次表';
+
+-- ============================================================================
+-- 33. web_pages — source 下的网页实体
+-- ============================================================================
+CREATE TABLE web_pages
+(
+    id                    BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '网页实体ID',
+    source_id             BIGINT UNSIGNED NOT NULL COMMENT '关联来源ID',
+    source_url_id         BIGINT UNSIGNED NULL COMMENT '关联URL记录ID',
+    url                   TEXT            NOT NULL COMMENT '当前URL',
+    canonical_url         TEXT            NULL COMMENT '规范化URL',
+    url_hash              CHAR(64)        NOT NULL COMMENT '规范化URL的SHA-256',
+    latest_content_hash   CHAR(64)        NULL COMMENT '最近一次成功抓取的content_hash',
+    latest_success_run_id BIGINT UNSIGNED NULL COMMENT '最近一次成功ingestion run的ID',
+    last_fetched_at       DATETIME(6)     NULL COMMENT '最近一次抓取时间',
+    created_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                          COMMENT '创建时间',
+    updated_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                          ON UPDATE CURRENT_TIMESTAMP(6)
+                          COMMENT '更新时间',
+    deleted_at            DATETIME(6)     NULL COMMENT '软删除时间',
+    UNIQUE KEY uk_web_pages_source_hash (source_id, url_hash),
+    INDEX idx_web_pages_source (source_id),
+    INDEX idx_web_pages_source_url (source_url_id),
+    INDEX idx_web_pages_latest_run (latest_success_run_id),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE CASCADE,
+    FOREIGN KEY (source_url_id) REFERENCES web_source_urls (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '网页实体表';
+
+-- ============================================================================
+-- 34. knowledge_ingestion_runs — 内容版本处理流程
+-- ============================================================================
+CREATE TABLE knowledge_ingestion_runs
+(
+    id                  BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT 'Run ID',
+    source_id           BIGINT UNSIGNED NOT NULL COMMENT '关联来源ID',
+    source_url_id       BIGINT UNSIGNED NULL COMMENT '关联URL记录ID',
+    crawl_job_id        BIGINT UNSIGNED NULL COMMENT '关联抓取批次ID',
+    page_id             BIGINT UNSIGNED NOT NULL COMMENT '关联网页实体ID',
+    content_hash        CHAR(64)        NOT NULL COMMENT '内容SHA-256',
+    content_key         CHAR(64)        NOT NULL COMMENT 'sha256(source_id+page_id+content_hash)',
+    run_key             CHAR(64)        NOT NULL COMMENT '完整处理配置的幂等键',
+    version_key         CHAR(64)        NOT NULL COMMENT '版本键，= run_key',
+    status              VARCHAR(32)     NOT NULL DEFAULT 'pending'
+                        COMMENT 'pending/running/staged/published/rejected/skipped/failed/dead/cancelled',
+    stage               VARCHAR(32)     NOT NULL DEFAULT 'pending'
+                        COMMENT '当前处理阶段',
+    llm_provider        VARCHAR(64)     NULL COMMENT '使用的LLM provider',
+    llm_model           VARCHAR(128)    NULL COMMENT '使用的LLM模型名',
+    llm_prompt_version  VARCHAR(64)     NULL COMMENT 'prompt版本标识',
+    llm_input_tokens    INT UNSIGNED    NULL COMMENT 'LLM输入token数',
+    llm_output_tokens   INT UNSIGNED    NULL COMMENT 'LLM输出token数',
+    chunker_version     VARCHAR(64)     NULL COMMENT 'chunker版本标识',
+    embedding_provider  VARCHAR(64)     NULL COMMENT 'embedding provider',
+    embedding_model     VARCHAR(128)    NULL COMMENT 'embedding模型名',
+    embedding_dimension INT UNSIGNED    NULL COMMENT 'embedding维度',
+    quality_score       DOUBLE          NULL COMMENT '质量分数 0.0-1.0',
+    quality_result      JSON            NULL COMMENT '质量门控详细结果',
+    risk_flags          JSON            NULL COMMENT '风险标记（JSON数组）',
+    should_publish      TINYINT(1)      NULL COMMENT '质量门控是否建议发布',
+    last_error          TEXT            NULL COMMENT '最近一次错误信息',
+    retry_count         INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '重试次数',
+    started_at          DATETIME(6)     NULL COMMENT '开始处理时间',
+    finished_at         DATETIME(6)     NULL COMMENT '完成时间',
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    fetched_body_text   MEDIUMTEXT      NULL COMMENT '原始抓取的网页正文（max ~5MB from fetcher）',
+    clean_text          MEDIUMTEXT      NULL COMMENT '经 extractor 清洗后的纯文本',
+    distilled_json      JSON            NULL COMMENT 'Distill LLM 返回的完整结构化 JSON',
+    UNIQUE KEY uk_ingestion_runs_run_key (run_key),
+    UNIQUE KEY uk_ingestion_runs_version_key (version_key),
+    INDEX idx_ingestion_runs_content_key (content_key),
+    INDEX idx_ingestion_runs_page (page_id),
+    INDEX idx_ingestion_runs_source (source_id),
+    INDEX idx_ingestion_runs_source_url (source_url_id),
+    INDEX idx_ingestion_runs_crawl_job (crawl_job_id),
+    INDEX idx_ingestion_runs_status_stage (status, stage),
+    INDEX idx_ingestion_runs_created (created_at),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE CASCADE,
+    FOREIGN KEY (source_url_id) REFERENCES web_source_urls (id) ON DELETE SET NULL,
+    FOREIGN KEY (crawl_job_id) REFERENCES web_crawl_jobs (id) ON DELETE SET NULL,
+    FOREIGN KEY (page_id) REFERENCES web_pages (id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '内容版本处理流程表';
+
+-- ============================================================================
+-- 35. knowledge_publish_records — 发布版本记录
+-- ============================================================================
+CREATE TABLE knowledge_publish_records
+(
+    id                         BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '发布记录ID',
+    source_id                  BIGINT UNSIGNED NOT NULL COMMENT '关联来源ID',
+    page_id                    BIGINT UNSIGNED NOT NULL COMMENT '关联网页实体ID',
+    run_id                     BIGINT UNSIGNED NOT NULL COMMENT '关联ingestion run ID',
+    document_id                BIGINT UNSIGNED NOT NULL COMMENT '关联knowledge_documents.document_id',
+    version_key                CHAR(64)        NOT NULL COMMENT '版本键',
+    content_hash               CHAR(64)        NOT NULL COMMENT '内容SHA-256',
+    publish_status             VARCHAR(32)     NOT NULL DEFAULT 'staged'
+                               COMMENT 'staged/publishing/published/superseded/rolled_back/failed',
+    active                     TINYINT(1)      NOT NULL DEFAULT 0
+                               COMMENT '是否当前活跃版本',
+    active_page_key            VARCHAR(128)    NULL
+                               COMMENT 'active=1时为source_id:page_id，由trigger自动维护',
+    activated_at               DATETIME(6)     NULL COMMENT '激活时间',
+    superseded_at              DATETIME(6)     NULL COMMENT '被新版本替代的时间',
+    superseded_by_record_id    BIGINT UNSIGNED NULL COMMENT '替代此版本的发布记录ID（应用层FK）',
+    rolled_back_from_record_id BIGINT UNSIGNED NULL COMMENT 'rollback来源记录ID（应用层FK）',
+    created_at                 DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at                 DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                               ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_publish_records_one_active_page (active_page_key),
+    INDEX idx_publish_records_page (source_id, page_id),
+    INDEX idx_publish_records_run (run_id),
+    INDEX idx_publish_records_document (document_id),
+    INDEX idx_publish_records_status (publish_status),
+    INDEX idx_publish_records_version_key (version_key),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE CASCADE,
+    FOREIGN KEY (page_id) REFERENCES web_pages (id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES knowledge_ingestion_runs (id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES knowledge_documents (document_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '知识发布版本记录表';
+
+CREATE TRIGGER trg_kpr_active_page_key_bi
+  BEFORE INSERT ON knowledge_publish_records
+  FOR EACH ROW
+  SET NEW.active_page_key = IF(
+      NEW.active = 1,
+      CONCAT(NEW.source_id, ':', NEW.page_id),
+      NULL
+  );
+
+CREATE TRIGGER trg_kpr_active_page_key_bu
+  BEFORE UPDATE ON knowledge_publish_records
+  FOR EACH ROW
+  SET NEW.active_page_key = IF(
+      NEW.active = 1,
+      CONCAT(NEW.source_id, ':', NEW.page_id),
+      NULL
+  );
+
+-- ============================================================================
+-- 36. knowledge_chunk_manifests — ingestion chunk 映射
+-- ============================================================================
+CREATE TABLE knowledge_chunk_manifests
+(
+    id                BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT 'Manifest ID',
+    publish_record_id BIGINT UNSIGNED NOT NULL COMMENT '关联发布记录ID',
+    run_id            BIGINT UNSIGNED NOT NULL COMMENT '关联ingestion run ID',
+    document_id       BIGINT UNSIGNED NOT NULL COMMENT '关联knowledge_documents.document_id',
+    chunk_id          BIGINT UNSIGNED NOT NULL COMMENT '关联knowledge_chunks.chunk_id',
+    version_key       CHAR(64)        NOT NULL COMMENT '版本键',
+    chunk_hash        CHAR(64)        NOT NULL COMMENT 'chunk幂等哈希',
+    chunk_type        VARCHAR(32)     NOT NULL DEFAULT 'atomic'
+                      COMMENT 'document_summary/section_summary/atomic',
+    chunk_index       INT UNSIGNED    NOT NULL COMMENT 'chunk在版本内的序号',
+    active            TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否活跃',
+    created_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                      ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_chunk_manifests_version_hash (version_key, chunk_hash),
+    UNIQUE KEY uk_chunk_manifests_chunk_id (chunk_id),
+    INDEX idx_chunk_manifests_publish_record (publish_record_id),
+    INDEX idx_chunk_manifests_run (run_id),
+    INDEX idx_chunk_manifests_document (document_id),
+    INDEX idx_chunk_manifests_active (active),
+    FOREIGN KEY (publish_record_id) REFERENCES knowledge_publish_records (id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES knowledge_ingestion_runs (id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES knowledge_documents (document_id) ON DELETE CASCADE,
+    FOREIGN KEY (chunk_id) REFERENCES knowledge_chunks (chunk_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = 'Web Ingestion Chunk 映射表';
+
+-- ============================================================================
+-- 37. knowledge_vector_manifests — ingestion 向量映射
+-- ============================================================================
+CREATE TABLE knowledge_vector_manifests
+(
+    id                  BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT 'Vector Manifest ID',
+    publish_record_id   BIGINT UNSIGNED NOT NULL COMMENT '关联发布记录ID',
+    run_id              BIGINT UNSIGNED NOT NULL COMMENT '关联ingestion run ID',
+    document_id         BIGINT UNSIGNED NOT NULL COMMENT '关联knowledge_documents.document_id',
+    chunk_id            BIGINT UNSIGNED NOT NULL COMMENT '关联knowledge_chunks.chunk_id',
+    chunk_hash          CHAR(64)        NOT NULL COMMENT '关联的chunk_hash',
+    qdrant_collection   VARCHAR(128)    NOT NULL COMMENT 'Qdrant collection名称',
+    qdrant_point_id     CHAR(64)        NOT NULL COMMENT '确定性Qdrant point ID',
+    embedding_provider  VARCHAR(64)     NOT NULL COMMENT 'embedding provider',
+    embedding_model     VARCHAR(128)    NOT NULL COMMENT 'embedding模型名',
+    embedding_dimension INT UNSIGNED    NOT NULL COMMENT 'embedding维度',
+    active              TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否活跃',
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_vector_manifests_qdrant_point (qdrant_collection, qdrant_point_id),
+    UNIQUE KEY uk_vector_manifests_chunk_model (chunk_id, embedding_model),
+    INDEX idx_vector_manifests_publish_record (publish_record_id),
+    INDEX idx_vector_manifests_run (run_id),
+    INDEX idx_vector_manifests_document (document_id),
+    INDEX idx_vector_manifests_active (active),
+    FOREIGN KEY (publish_record_id) REFERENCES knowledge_publish_records (id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES knowledge_ingestion_runs (id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES knowledge_documents (document_id) ON DELETE CASCADE,
+    FOREIGN KEY (chunk_id) REFERENCES knowledge_chunks (chunk_id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = 'Web Ingestion 向量映射表';
+
+-- ============================================================================
+-- 38. domain_event_outbox — 持久化核心流程事件
+-- ============================================================================
+CREATE TABLE domain_event_outbox
+(
+    id             BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '事件ID',
+    event_key      CHAR(64)        NOT NULL COMMENT '确定性幂等事件键',
+    event_type     VARCHAR(128)    NOT NULL COMMENT '领域事件类型',
+    aggregate_type VARCHAR(64)     NOT NULL COMMENT '聚合类型',
+    aggregate_id   BIGINT UNSIGNED NOT NULL COMMENT '聚合根ID',
+    payload        JSON            NOT NULL COMMENT '仅存ID和小型元数据，禁止全文/向量',
+    status         VARCHAR(32)     NOT NULL DEFAULT 'pending'
+                   COMMENT 'pending/processing/published/failed/dead',
+    retry_count    INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '已重试次数',
+    max_retries    INT UNSIGNED    NOT NULL DEFAULT 5 COMMENT '最大重试次数',
+    next_retry_at  DATETIME(6)     NULL COMMENT '下次重试时间',
+    locked_by      VARCHAR(128)    NULL COMMENT '锁定者标识',
+    locked_until   DATETIME(6)     NULL COMMENT '锁过期时间',
+    last_error     TEXT            NULL COMMENT '最近一次错误信息',
+    created_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                   ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    published_at   DATETIME(6)     NULL COMMENT '成功处理时间',
+    UNIQUE KEY uk_outbox_event_key (event_key),
+    INDEX idx_outbox_claim (status, next_retry_at, created_at),
+    INDEX idx_outbox_locked_by (locked_by),
+    INDEX idx_outbox_aggregate (aggregate_type, aggregate_id),
+    INDEX idx_outbox_event_type (event_type),
+    INDEX idx_outbox_created (created_at)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = '领域事件发件箱表';
+
+-- ============================================================================
+-- 39. web_ingestion_audit_logs — Web ingestion 审计日志
+-- ============================================================================
+CREATE TABLE web_ingestion_audit_logs
+(
+    id                BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '审计日志ID',
+    source_id         BIGINT UNSIGNED NULL COMMENT '关联来源ID',
+    source_url_id     BIGINT UNSIGNED NULL COMMENT '关联URL记录ID',
+    page_id           BIGINT UNSIGNED NULL COMMENT '关联网页实体ID',
+    run_id            BIGINT UNSIGNED NULL COMMENT '关联ingestion run ID',
+    publish_record_id BIGINT UNSIGNED NULL COMMENT '关联发布记录ID',
+    action            VARCHAR(64)     NOT NULL COMMENT '操作类型',
+    status            VARCHAR(32)     NOT NULL DEFAULT 'info'
+                      COMMENT 'info/warning/error/success',
+    message           TEXT            NOT NULL COMMENT '日志消息',
+    metadata          JSON            NULL COMMENT '附加元数据',
+    created_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    INDEX idx_audit_source (source_id),
+    INDEX idx_audit_source_url (source_url_id),
+    INDEX idx_audit_page (page_id),
+    INDEX idx_audit_run (run_id),
+    INDEX idx_audit_publish_record (publish_record_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_created (created_at),
+    FOREIGN KEY (source_id) REFERENCES web_sources (id) ON DELETE SET NULL,
+    FOREIGN KEY (source_url_id) REFERENCES web_source_urls (id) ON DELETE SET NULL,
+    FOREIGN KEY (page_id) REFERENCES web_pages (id) ON DELETE SET NULL,
+    FOREIGN KEY (run_id) REFERENCES knowledge_ingestion_runs (id) ON DELETE SET NULL,
+    FOREIGN KEY (publish_record_id) REFERENCES knowledge_publish_records (id) ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT = 'Web Ingestion 审计日志表';

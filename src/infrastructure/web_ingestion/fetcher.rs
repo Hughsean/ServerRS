@@ -2,16 +2,17 @@
 //!
 //! Guards: only http/https, blocks private/localhost/link-local/multicast IPs,
 //! blocks metadata IPs (169.254.169.254), Content-Type allowlist, body size limit,
-//! no automatic redirect following.
+//! and revalidates every hop while following redirects manually.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CONTENT_TYPE, LOCATION};
 
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::shared::config::WebIngestionConfig;
 
+const MAX_REDIRECTS: usize = 5;
 const ALLOWED_CONTENT_TYPES: &[&str] = &[
     "text/html",
     "text/plain",
@@ -35,9 +36,32 @@ pub struct WebFetcher {
 
 impl WebFetcher {
     pub fn new(config: &WebIngestionConfig) -> Result<Self, WebIngestionError> {
+        // Browser-like headers plus native TLS improve compatibility with sites
+        // that reject rustls/browser-fingerprint mismatches (Baidu etc).
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            reqwest::header::HeaderValue::from_static(
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            ),
+        );
+        headers.insert(
+            ACCEPT_LANGUAGE,
+            reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+        );
+        headers.insert(
+            ACCEPT_ENCODING,
+            reqwest::header::HeaderValue::from_static("gzip, deflate"),
+        );
+
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(config.fetch_timeout_secs))
+            .use_native_tls()
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            .default_headers(headers)
             .build()
             .map_err(|e| {
                 WebIngestionError::Internal(format!("failed to build HTTP client: {e}"))
@@ -58,73 +82,55 @@ impl WebFetcher {
         url: &str,
         allowed_domains: Option<&[String]>,
     ) -> Result<FetchResult, WebIngestionError> {
-        // 1. Parse URL — simple parsing to extract host and scheme
-        let (scheme, host, _port) = parse_url_parts(url)?;
-
-        // 2. Scheme check
-        if scheme != "http" && scheme != "https" {
-            return Err(WebIngestionError::SsrfRejected {
-                url: url.to_string(),
-                reason: format!("scheme not allowed: {scheme}"),
-            });
-        }
-
-        // 3. Validate hostname against allowed_domains (if configured)
-        if let Some(ref allowed) = allowed_domains {
-            if !allowed.is_empty() {
-                if !is_hostname_allowed(&host, allowed) {
-                    return Err(WebIngestionError::SsrfRejected {
-                        url: url.to_string(),
-                        reason: format!(
-                            "hostname '{host}' not in allowed_domains: {}",
-                            allowed.join(", ")
-                        ),
-                    });
-                }
-            }
-        }
-
-        // 4. Validate no userinfo / fragment bypasses
-        if host.is_empty() || host.starts_with('[') || host.contains('@') {
-            return Err(WebIngestionError::SsrfRejected {
-                url: url.to_string(),
-                reason: format!("suspicious hostname: {host}"),
-            });
-        }
-
-        // 5. Resolve host and validate IP
-        let port = if scheme == "https" { 443 } else { 80 };
-        let addr_str = format!("{host}:{port}");
-        let ips = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
-            WebIngestionError::SsrfRejected {
-                url: url.to_string(),
-                reason: format!("DNS resolution failed: {e}"),
-            }
-        })?;
-
-        for addr in ips {
-            validate_ip(addr.ip()).map_err(|e| {
-                if let WebIngestionError::SsrfRejected { reason, .. } = e {
-                    WebIngestionError::SsrfRejected {
-                        url: url.to_string(),
-                        reason,
-                    }
-                } else {
-                    e
-                }
-            })?;
-        }
-
-        // 6. Fetch
-        let response =
-            self.client
-                .get(url)
+        let mut current_url = url.to_string();
+        let mut redirects_followed = 0usize;
+        let response = loop {
+            let parsed_url = validate_fetch_url(&current_url, allowed_domains).await?;
+            let response = self
+                .client
+                .get(parsed_url.clone())
                 .send()
                 .await
                 .map_err(|e| WebIngestionError::FetchFailed {
-                    url: url.to_string(),
+                    url: current_url.clone(),
                     reason: e.to_string(),
                 })?;
+
+            let status = response.status();
+            if is_followable_redirect(status) {
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .ok_or_else(|| WebIngestionError::FetchFailed {
+                        url: current_url.clone(),
+                        reason: format!("HTTP {status} without Location header"),
+                    })?
+                    .to_str()
+                    .map_err(|e| WebIngestionError::FetchFailed {
+                        url: current_url.clone(),
+                        reason: format!("invalid redirect Location header: {e}"),
+                    })?;
+                let next_url =
+                    parsed_url
+                        .join(location)
+                        .map_err(|e| WebIngestionError::FetchFailed {
+                            url: current_url.clone(),
+                            reason: format!("invalid redirect target '{location}': {e}"),
+                        })?;
+
+                if redirects_followed >= MAX_REDIRECTS {
+                    return Err(WebIngestionError::FetchFailed {
+                        url: current_url,
+                        reason: format!("too many redirects (max {MAX_REDIRECTS})"),
+                    });
+                }
+                redirects_followed += 1;
+                current_url = next_url.to_string();
+                continue;
+            }
+
+            break response;
+        };
 
         let final_url = response.url().to_string();
         let status = response.status();
@@ -135,7 +141,7 @@ impl WebFetcher {
             });
         }
 
-        // 5. Content-Type check
+        // Content-Type check
         let content_type = response
             .headers()
             .get(CONTENT_TYPE)
@@ -154,7 +160,7 @@ impl WebFetcher {
             });
         }
 
-        // 6. Read body with size limit
+        // Read body with size limit
         let content_length = response.content_length();
         if let Some(cl) = content_length {
             if cl > self.max_body_bytes {
@@ -194,48 +200,115 @@ impl WebFetcher {
     }
 }
 
-/// Minimal URL parsing to extract scheme, host, and port.
-/// Avoids adding the `url` crate dependency.
-fn parse_url_parts(raw: &str) -> Result<(String, String, u16), WebIngestionError> {
-    let url = raw.trim();
-    // Find scheme
-    let (scheme, rest) = if let Some(idx) = url.find("://") {
-        (url[..idx].to_lowercase(), &url[idx + 3..])
-    } else {
+async fn validate_fetch_url(
+    raw: &str,
+    allowed_domains: Option<&[String]>,
+) -> Result<reqwest::Url, WebIngestionError> {
+    let parsed = reqwest::Url::parse(raw.trim()).map_err(|e| WebIngestionError::SsrfRejected {
+        url: raw.to_string(),
+        reason: format!("invalid URL: {e}"),
+    })?;
+    let (scheme, host, port) = url_parts(&parsed, raw)?;
+
+    if scheme != "http" && scheme != "https" {
         return Err(WebIngestionError::SsrfRejected {
             url: raw.to_string(),
-            reason: "no scheme in URL".into(),
+            reason: format!("scheme not allowed: {scheme}"),
         });
-    };
-
-    // Find host (stop at first /, :, ?, or #)
-    let host_end = rest
-        .find(|c: char| c == '/' || c == ':' || c == '?' || c == '#')
-        .unwrap_or(rest.len());
-    let host = rest[..host_end].to_lowercase();
-
-    if host.is_empty() {
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(WebIngestionError::SsrfRejected {
             url: raw.to_string(),
-            reason: "no host in URL".into(),
+            reason: "URL userinfo is not allowed".into(),
         });
     }
 
-    // Extract port if present
-    let port = if host_end < rest.len() && rest.as_bytes()[host_end] == b':' {
-        let port_start = host_end + 1;
-        let port_end = rest[port_start..]
-            .find(|c: char| c == '/' || c == '?' || c == '#')
-            .map(|p| port_start + p)
-            .unwrap_or(rest.len());
-        rest[port_start..port_end]
-            .parse::<u16>()
-            .unwrap_or(if scheme == "https" { 443 } else { 80 })
-    } else if scheme == "https" {
-        443
-    } else {
-        80
-    };
+    if let Some(allowed) = allowed_domains {
+        if !allowed.is_empty() && !is_hostname_allowed(&host, allowed) {
+            return Err(WebIngestionError::SsrfRejected {
+                url: raw.to_string(),
+                reason: format!(
+                    "hostname '{host}' not in allowed_domains: {}",
+                    allowed.join(", ")
+                ),
+            });
+        }
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_ip_for_url(ip, raw)?;
+        return Ok(parsed);
+    }
+
+    let mut ips = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| WebIngestionError::SsrfRejected {
+            url: raw.to_string(),
+            reason: format!("DNS resolution failed: {e}"),
+        })?;
+    let mut resolved_any = false;
+    for addr in ips.by_ref() {
+        resolved_any = true;
+        validate_ip_for_url(addr.ip(), raw)?;
+    }
+    if !resolved_any {
+        return Err(WebIngestionError::SsrfRejected {
+            url: raw.to_string(),
+            reason: "DNS resolution returned no addresses".into(),
+        });
+    }
+
+    Ok(parsed)
+}
+
+fn validate_ip_for_url(ip: IpAddr, url: &str) -> Result<(), WebIngestionError> {
+    validate_ip(ip).map_err(|e| {
+        if let WebIngestionError::SsrfRejected { reason, .. } = e {
+            WebIngestionError::SsrfRejected {
+                url: url.to_string(),
+                reason,
+            }
+        } else {
+            e
+        }
+    })
+}
+
+fn is_followable_redirect(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+}
+
+/// Parse a URL with reqwest's structured URL implementation.
+#[cfg(test)]
+fn parse_url_parts(raw: &str) -> Result<(String, String, u16), WebIngestionError> {
+    let parsed = reqwest::Url::parse(raw.trim()).map_err(|e| WebIngestionError::SsrfRejected {
+        url: raw.to_string(),
+        reason: format!("invalid URL: {e}"),
+    })?;
+    url_parts(&parsed, raw)
+}
+
+fn url_parts(parsed: &reqwest::Url, raw: &str) -> Result<(String, String, u16), WebIngestionError> {
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    let host = parsed
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| WebIngestionError::SsrfRejected {
+            url: raw.to_string(),
+            reason: "no host in URL".into(),
+        })?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| WebIngestionError::SsrfRejected {
+            url: raw.to_string(),
+            reason: format!("URL has no known port for scheme '{scheme}'"),
+        })?;
 
     Ok((scheme, host, port))
 }
@@ -402,7 +475,52 @@ mod tests {
         assert_eq!(port, 8443);
     }
 
-    // ── allowed_domains tests ──────────────────────────────────────────────
+    #[test]
+    fn test_parse_url_parts_ipv6() {
+        let (scheme, host, port) =
+            parse_url_parts("https://[2606:4700:4700::1111]:8443/path").unwrap();
+        assert_eq!(scheme, "https");
+        assert_eq!(host, "2606:4700:4700::1111");
+        assert_eq!(port, 8443);
+    }
+
+    #[test]
+    fn test_parse_url_parts_rejects_invalid_port() {
+        assert!(parse_url_parts("https://example.com:not-a-port/path").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_rejects_userinfo() {
+        let error = validate_fetch_url("https://user:secret@example.com/path", None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("userinfo"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_applies_allowlist_before_dns() {
+        let allowed = vec!["example.com".to_string()];
+        let error = validate_fetch_url("https://example.com.evil.invalid/path", Some(&allowed))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not in allowed_domains"));
+    }
+
+    #[test]
+    fn test_followable_redirect_statuses() {
+        for status in [301, 302, 303, 307, 308] {
+            assert!(is_followable_redirect(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
+        for status in [200, 300, 304, 400] {
+            assert!(!is_followable_redirect(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
+    }
+
+    // allowed_domains tests
 
     #[test]
     fn test_allowed_domains_exact_match() {

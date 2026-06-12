@@ -15,17 +15,22 @@ lettre = { version = "0.11.22", default-features = false, features = ["tokio1-ru
 mime = "0.3.17"
 quick-xml = "0.40.1"
 regex = "1.12.3"
-reqwest = { version = "0.13.3", features = ["json", "gzip", "deflate", "brotli"] }
+reqwest = { version = "0.13.3", features = ["json", "gzip", "deflate", "brotli", "native-tls"] }
 rss = "2.0.13"
 scraper = "0.27.0"
 sea-orm = { version = "2.0.0-rc.38", features = [ "runtime-tokio", "sqlx-mysql"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.11.0"
+dotenvy = "0.15"
 # sqlx = { version = "0.9.0", default-features = false, features = ["mysql-rsa"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 toml = "1.1.2"
+# time 0.3.48 introduces blanket impls that conflict with sea-query 1.0.1
+# and sqlx-core 0.9.0 on Rust >=1.96 (E0119). Pin to 0.3.47 until upstream
+# resolves the conflict. Remove this pin after upgrading sea-orm >rc.40.
+time = ">=0.3.47, <0.3.48"
 tower-http = { version = "0.6.11", features = ["cors", "trace", "timeout", "compression-br"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
