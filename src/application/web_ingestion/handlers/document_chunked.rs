@@ -69,7 +69,19 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     // ── Build chunker inputs from the distilled document ───────────────────
     let title = distilled["title"].as_str().unwrap_or("").to_string();
     let summary = distilled["summary"].as_str().unwrap_or("").to_string();
-    let source_url = format!("source:{}:page:{}", run.source_id, run.page_id);
+    let page = ctx
+        .page_repo
+        .find_by_id(run.page_id)
+        .await?
+        .ok_or_else(|| WebIngestionError::NotFound {
+            entity: "web_page".into(),
+            id: run.page_id,
+        })?;
+    let source_url = page
+        .canonical_url
+        .as_deref()
+        .unwrap_or(page.url.as_str())
+        .to_string();
     let sections: Vec<SectionInput> = distilled["sections"]
         .as_array()
         .map(|arr| {
@@ -119,7 +131,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
     // ── Staged document + publish record (active=0) + chunks ──────────────
     // Order: document → publish record (needs document_id) → chunks → manifest.
-    let document_id = ensure_staged_document(ctx, &run).await?;
+    let document_id = ensure_staged_document(ctx, &run, &source_url).await?;
     let publish_record_id = ensure_publish_record(ctx, &run, document_id).await?;
     let saved_chunks = ensure_chunks(ctx, document_id, &chunk_outputs).await?;
 
@@ -250,6 +262,7 @@ async fn ensure_publish_record(
 async fn ensure_staged_document(
     ctx: &PipelineContext,
     run: &KnowledgeIngestionRun,
+    source_url: &str,
 ) -> Result<u64, WebIngestionError> {
     if let Some(existing) = ctx
         .rag_repo
@@ -276,6 +289,7 @@ async fn ensure_staged_document(
                 "version_key": run.version_key,
                 "page_id": run.page_id,
                 "web_source_id": run.source_id,
+                "source_url": source_url,
             })),
             // Staged → status=0 so RetrievalService (requires status==1) cannot
             // surface it until publish flips it to 1.

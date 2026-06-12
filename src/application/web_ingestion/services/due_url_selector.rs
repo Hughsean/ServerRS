@@ -26,6 +26,18 @@ pub fn select_due(urls: Vec<WebSourceUrl>, now: DateTime<Utc>) -> Vec<WebSourceU
     urls.into_iter().filter(|u| is_due(u, now)).collect()
 }
 
+/// Select at most `limit` due URLs so a scheduler tick cannot flood the outbox.
+pub fn select_due_limited(
+    urls: Vec<WebSourceUrl>,
+    now: DateTime<Utc>,
+    limit: usize,
+) -> Vec<WebSourceUrl> {
+    urls.into_iter()
+        .filter(|u| is_due(u, now))
+        .take(limit)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +82,12 @@ mod tests {
         let now = Utc::now();
         let last = now - Duration::seconds(90000);
         assert!(is_due(&url(true, Some(last), 86400), now));
+    }
+
+    #[test]
+    fn limited_selection_caps_due_urls() {
+        let now = Utc::now();
+        let urls = (0..5).map(|_| url(true, None, 86400)).collect();
+        assert_eq!(select_due_limited(urls, now, 2).len(), 2);
     }
 }

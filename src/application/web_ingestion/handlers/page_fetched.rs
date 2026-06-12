@@ -113,6 +113,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             .await?;
         terminal_events::emit_rejected(&ctx.outbox_repo, run_id, &run.version_key, "too_short")
             .await?;
+        ctx.run_repo.mark_finished(run_id).await?;
         return Ok(());
     }
 

@@ -236,6 +236,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         );
         return Ok(());
     }
+    ctx.run_repo.mark_started(run.id).await?;
 
     // Persist the fetched body BEFORE marking fetched, so resume always finds it.
     ctx.run_repo

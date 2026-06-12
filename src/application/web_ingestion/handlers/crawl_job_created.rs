@@ -79,15 +79,28 @@ pub async fn handle(
     // ── Discover only due, enabled URLs ────────────────────────────────────
     let now = Utc::now();
     let urls = ctx.source_url_repo.list_by_source(source_id).await?;
-    let due = due_url_selector::select_due(urls, now);
+    let due =
+        due_url_selector::select_due_limited(urls, now, ctx.config.max_urls_per_source_per_job);
+    tracing::info!(
+        source_id,
+        job_id,
+        selected_urls = due.len(),
+        max_urls = ctx.config.max_urls_per_source_per_job,
+        "crawl job URL batch selected"
+    );
 
     for url in due {
+        let dedupe_version = enqueue_dedupe_version(
+            &url.url_hash,
+            now.timestamp(),
+            ctx.config.url_enqueue_dedupe_secs,
+        );
         let event_key = hash::event_key(
             ev::URL_DISCOVERED,
-            aggregate::WEB_CRAWL_JOB,
-            job_id,
+            aggregate::WEB_SOURCE_URL,
             url.id,
-            &url.url_hash,
+            0,
+            &dedupe_version,
         );
         ctx.outbox_repo
             .insert_event(NewOutboxEvent {
@@ -111,4 +124,27 @@ pub async fn handle(
         .mark_finished(job_id, "succeeded")
         .await?;
     Ok(())
+}
+
+fn enqueue_dedupe_version(url_hash: &str, timestamp: i64, window_secs: u64) -> String {
+    let window = i64::try_from(window_secs.max(1)).unwrap_or(i64::MAX);
+    let bucket = timestamp.div_euclid(window);
+    format!("{url_hash}|{bucket}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enqueue_key_is_stable_within_dedupe_window() {
+        assert_eq!(
+            enqueue_dedupe_version("abc", 123_456, 86_400),
+            enqueue_dedupe_version("abc", 123_999, 86_400)
+        );
+        assert_ne!(
+            enqueue_dedupe_version("abc", 123_456, 86_400),
+            enqueue_dedupe_version("abc", 200_000, 86_400)
+        );
+    }
 }

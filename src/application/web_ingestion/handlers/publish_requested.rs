@@ -10,9 +10,10 @@ use crate::application::web_ingestion::event_types::{aggregate, event as ev};
 use crate::application::web_ingestion::hash;
 use crate::application::web_ingestion::pipeline_context::PipelineContext;
 use crate::application::web_ingestion::services::qdrant_activation_service;
+use crate::application::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::{DomainEvent, NewAuditLog, NewOutboxEvent};
-use crate::domain::web_ingestion::status::{audit_action, publish_status};
+use crate::domain::web_ingestion::status::{audit_action, publish_status, run_stage, run_status};
 
 pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), WebIngestionError> {
     let publish_record_id = event.payload["publish_record_id"]
@@ -37,6 +38,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     match record.publish_status.as_str() {
         publish_status::STAGED => {}
         publish_status::PUBLISHED if record.active => {
+            reconcile_published_run(ctx, record.run_id).await?;
             tracing::info!(publish_record_id, "publish: already active — idempotent");
             return Ok(());
         }
@@ -47,8 +49,9 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         }
     }
 
-    // ── Verify the run's quality verdict permits publishing (§12.1 #3) ─────
-    // high-risk / rejected runs must never be published, even by manual request.
+    // Rejected runs can never publish. Staged decisions may be published only
+    // through an explicit manual request; automatic requests are emitted only
+    // for a persisted publishable decision.
     let run = ctx
         .run_repo
         .find_by_id(record.run_id)
@@ -61,6 +64,29 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         return Err(WebIngestionError::Internal(format!(
             "publish: run {} is rejected — cannot publish",
             record.run_id
+        )));
+    }
+
+    if run.status == run_status::STAGED && run.stage == run_stage::STAGING {
+        if !sm::transition(
+            &ctx.run_repo,
+            run.id,
+            run_status::STAGED,
+            run_stage::STAGING,
+            run_status::RUNNING,
+            run_stage::PUBLISHING,
+            None,
+        )
+        .await?
+        .applied()
+        {
+            tracing::info!(run_id = run.id, "publish: run state changed concurrently");
+            return Ok(());
+        }
+    } else if !(run.status == run_status::RUNNING && run.stage == run_stage::PUBLISHING) {
+        return Err(WebIngestionError::Internal(format!(
+            "publish: run {} is in unexpected state ({},{})",
+            run.id, run.status, run.stage
         )));
     }
 
@@ -82,6 +108,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let outcome = ctx.publish_repo.publish_in_tx(publish_record_id).await?;
 
     if outcome.was_already_active {
+        reconcile_published_run(ctx, record.run_id).await?;
         tracing::info!(publish_record_id, "publish: idempotent (already active)");
         return Ok(());
     }
@@ -119,6 +146,8 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             .await?;
     }
     sync_qdrant(ctx, record.id, dimension, true, "publish").await;
+
+    reconcile_published_run(ctx, record.run_id).await?;
 
     ctx.audit_repo
         .insert(NewAuditLog {
@@ -162,6 +191,49 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .await?;
 
     Ok(())
+}
+
+async fn reconcile_published_run(
+    ctx: &PipelineContext,
+    run_id: u64,
+) -> Result<(), WebIngestionError> {
+    let run =
+        ctx.run_repo
+            .find_by_id(run_id)
+            .await?
+            .ok_or_else(|| WebIngestionError::NotFound {
+                entity: "knowledge_ingestion_run".into(),
+                id: run_id,
+            })?;
+
+    if run.status == run_status::PUBLISHED && run.stage == run_stage::PUBLISHED {
+        return Ok(());
+    }
+
+    if run.status == run_status::STAGED && run.stage == run_stage::STAGING {
+        let _ = sm::transition(
+            &ctx.run_repo,
+            run_id,
+            run_status::STAGED,
+            run_stage::STAGING,
+            run_status::RUNNING,
+            run_stage::PUBLISHING,
+            None,
+        )
+        .await?;
+    }
+
+    let _ = sm::transition(
+        &ctx.run_repo,
+        run_id,
+        run_status::RUNNING,
+        run_stage::PUBLISHING,
+        run_status::PUBLISHED,
+        run_stage::PUBLISHED,
+        None,
+    )
+    .await?;
+    ctx.run_repo.mark_finished(run_id).await
 }
 
 /// Re-sync a publish record's Qdrant points to `active`. Failures are audited

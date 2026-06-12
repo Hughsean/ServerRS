@@ -73,6 +73,7 @@ pub async fn init_web_ingestion(
         scheduler = wc.scheduler_enabled,
         dispatcher = wc.dispatcher_enabled,
         auto_publish = wc.auto_publish,
+        proxy_enabled = !wc.fetch_proxy_url.trim().is_empty(),
         "web ingestion infrastructure initialised"
     );
 
@@ -82,7 +83,7 @@ pub async fn init_web_ingestion(
         let crawl_job_repo = Arc::clone(&ctx.crawl_job_repo);
         let outbox_repo = Arc::clone(&ctx.outbox_repo);
         let pipeline_version = wc.pipeline_version.clone();
-        let sched_interval = wc.scheduler_interval_secs;
+        let sched_interval = wc.scheduler_interval_secs.max(1);
 
         background.spawn(tokio::spawn(async move {
             let mut interval =
@@ -107,7 +108,7 @@ pub async fn init_web_ingestion(
     // ── Dispatcher loop ──────────────────────────────────────────────────────
     if gate.dispatcher {
         let ctx = ctx.clone();
-        let disp_interval = wc.dispatcher_interval_secs;
+        let disp_interval = wc.dispatcher_interval_secs.max(1);
         background.spawn(tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(tokio::time::Duration::from_secs(disp_interval));

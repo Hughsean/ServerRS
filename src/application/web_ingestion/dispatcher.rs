@@ -4,11 +4,14 @@
 //! and mark published / failed / dead based on the handler result. No business
 //! logic lives here — that is in `handlers/`.
 
+use crate::application::web_ingestion::event_types::aggregate;
 use crate::application::web_ingestion::event_types::event as ev;
 use crate::application::web_ingestion::handlers;
 use crate::application::web_ingestion::pipeline_context::PipelineContext;
+use crate::application::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::DomainEvent;
+use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 use crate::shared::error::AppError;
 
 /// Run one dispatcher tick: claim a batch and process each event.
@@ -78,21 +81,30 @@ async fn finalize(
         },
         Err(e) => {
             let is_dead = event.retry_count + 1 >= event.max_retries;
-            let delay = ctx
+            let exponential_delay = ctx
                 .config
                 .retry_base_delay_secs
                 .saturating_mul(2u64.saturating_pow(event.retry_count))
                 .min(ctx.config.retry_max_delay_secs);
+            let delay = e
+                .retry_after_secs()
+                .map(|retry_after| retry_after.max(exponential_delay))
+                .unwrap_or(exponential_delay);
             let next_retry = chrono::Utc::now() + chrono::Duration::seconds(delay as i64);
             match ctx
                 .outbox_repo
                 .mark_failed_or_dead(event.id, claim_token, &e.to_string(), next_retry, is_dead)
                 .await
             {
-                Ok(true) => tracing::warn!(
-                    event_id = event.id, event_type = %event.event_type, is_dead,
-                    error = %e, "event handler failed"
-                ),
+                Ok(true) => {
+                    if is_dead {
+                        mark_run_dead(ctx, event, &e.to_string()).await;
+                    }
+                    tracing::warn!(
+                        event_id = event.id, event_type = %event.event_type, is_dead,
+                        retry_delay_secs = delay, error = %e, "event handler failed"
+                    );
+                }
                 Ok(false) => tracing::warn!(
                     event_id = event.id,
                     "mark_failed_or_dead: 0 rows — lock stolen or already processed"
@@ -103,6 +115,48 @@ async fn finalize(
                 ),
             }
         }
+    }
+}
+
+async fn mark_run_dead(ctx: &PipelineContext, event: &DomainEvent, error: &str) {
+    if event.aggregate_type != aggregate::KNOWLEDGE_INGESTION_RUN {
+        return;
+    }
+
+    let run = match ctx.run_repo.find_by_id(event.aggregate_id).await {
+        Ok(Some(run)) => run,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::error!(
+                run_id = event.aggregate_id,
+                error = %e,
+                "failed to load ingestion run while marking dead"
+            );
+            return;
+        }
+    };
+    if is_terminal_run_status(&run.status) {
+        return;
+    }
+
+    match sm::transition(
+        &ctx.run_repo,
+        run.id,
+        &run.status,
+        &run.stage,
+        run_status::DEAD,
+        run_stage::DEAD,
+        Some(error),
+    )
+    .await
+    {
+        Ok(outcome) if outcome.applied() => {
+            if let Err(e) = ctx.run_repo.mark_finished(run.id).await {
+                tracing::error!(run_id = run.id, error = %e, "failed to set run finished_at");
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::error!(run_id = run.id, error = %e, "failed to mark ingestion run dead"),
     }
 }
 

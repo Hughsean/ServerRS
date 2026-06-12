@@ -4,10 +4,14 @@
 //! blocks metadata IPs (169.254.169.254), Content-Type allowlist, body size limit,
 //! and revalidates every hop while following redirects manually.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CONTENT_TYPE, LOCATION};
+use reqwest::header::{
+    ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CONTENT_TYPE, LOCATION, RETRY_AFTER,
+};
 
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::shared::config::WebIngestionConfig;
@@ -32,12 +36,13 @@ pub struct FetchResult {
 pub struct WebFetcher {
     client: reqwest::Client,
     max_body_bytes: u64,
+    min_request_interval: Duration,
+    request_jitter_ms: u64,
+    next_request_at: Arc<tokio::sync::Mutex<HashMap<String, tokio::time::Instant>>>,
 }
 
 impl WebFetcher {
     pub fn new(config: &WebIngestionConfig) -> Result<Self, WebIngestionError> {
-        // Browser-like headers plus native TLS improve compatibility with sites
-        // that reject rustls/browser-fingerprint mismatches (Baidu etc).
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -54,21 +59,30 @@ impl WebFetcher {
             reqwest::header::HeaderValue::from_static("gzip, deflate"),
         );
 
-        let client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(config.fetch_timeout_secs))
             .use_native_tls()
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
+            .user_agent(config.fetch_user_agent.as_str())
             .default_headers(headers)
-            .build()
-            .map_err(|e| {
-                WebIngestionError::Internal(format!("failed to build HTTP client: {e}"))
+            .no_proxy();
+
+        if !config.fetch_proxy_url.trim().is_empty() {
+            let proxy = reqwest::Proxy::all(config.fetch_proxy_url.trim()).map_err(|e| {
+                WebIngestionError::Internal(format!("invalid web ingestion proxy URL: {e}"))
             })?;
+            client_builder = client_builder.proxy(proxy);
+        }
+
+        let client = client_builder.build().map_err(|e| {
+            WebIngestionError::Internal(format!("failed to build HTTP client: {e}"))
+        })?;
         Ok(Self {
             client,
             max_body_bytes: config.max_body_bytes,
+            min_request_interval: Duration::from_millis(config.min_request_interval_ms),
+            request_jitter_ms: config.request_jitter_ms,
+            next_request_at: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -86,6 +100,7 @@ impl WebFetcher {
         let mut redirects_followed = 0usize;
         let response = loop {
             let parsed_url = validate_fetch_url(&current_url, allowed_domains).await?;
+            self.wait_for_host(&parsed_url).await;
             let response = self
                 .client
                 .get(parsed_url.clone())
@@ -134,6 +149,13 @@ impl WebFetcher {
 
         let final_url = response.url().to_string();
         let status = response.status();
+        if matches!(status.as_u16(), 429 | 503) {
+            return Err(WebIngestionError::RateLimited {
+                url: final_url,
+                status: status.as_u16(),
+                retry_after_secs: parse_retry_after(response.headers().get(RETRY_AFTER)),
+            });
+        }
         if !status.is_success() {
             return Err(WebIngestionError::FetchFailed {
                 url: final_url,
@@ -198,6 +220,50 @@ impl WebFetcher {
             content_length,
         })
     }
+
+    async fn wait_for_host(&self, url: &reqwest::Url) {
+        let Some(host) = url.host_str() else {
+            return;
+        };
+        let host = host.to_ascii_lowercase();
+        let now = tokio::time::Instant::now();
+        let mut schedule = self.next_request_at.lock().await;
+        let request_at = schedule.get(&host).copied().unwrap_or(now).max(now);
+        let jitter = Duration::from_millis(jitter_ms(time_seed(), self.request_jitter_ms));
+        schedule.insert(host, request_at + self.min_request_interval + jitter);
+        drop(schedule);
+
+        if request_at > now {
+            tokio::time::sleep_until(request_at).await;
+        }
+    }
+}
+
+fn time_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+fn jitter_ms(seed: u64, maximum_ms: u64) -> u64 {
+    if maximum_ms == 0 {
+        return 0;
+    }
+    seed % maximum_ms.saturating_add(1)
+}
+
+fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let raw = value?.to_str().ok()?.trim();
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(seconds);
+    }
+
+    let retry_at = chrono::DateTime::parse_from_rfc2822(raw)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    let seconds = (retry_at - chrono::Utc::now()).num_seconds();
+    Some(seconds.max(0) as u64)
 }
 
 async fn validate_fetch_url(
@@ -518,6 +584,33 @@ mod tests {
                 reqwest::StatusCode::from_u16(status).unwrap()
             ));
         }
+    }
+
+    #[test]
+    fn jitter_is_bounded_and_can_be_disabled() {
+        assert_eq!(jitter_ms(123, 0), 0);
+        assert!(jitter_ms(u64::MAX, 1_000) <= 1_000);
+    }
+
+    #[test]
+    fn retry_after_parses_seconds() {
+        let value = reqwest::header::HeaderValue::from_static("120");
+        assert_eq!(parse_retry_after(Some(&value)), Some(120));
+    }
+
+    #[test]
+    fn retry_after_rejects_invalid_value() {
+        let value = reqwest::header::HeaderValue::from_static("later");
+        assert_eq!(parse_retry_after(Some(&value)), None);
+    }
+
+    #[test]
+    fn fetcher_accepts_http_proxy_configuration() {
+        let config = WebIngestionConfig {
+            fetch_proxy_url: "http://127.0.0.1:7890".into(),
+            ..WebIngestionConfig::default()
+        };
+        assert!(WebFetcher::new(&config).is_ok());
     }
 
     // allowed_domains tests

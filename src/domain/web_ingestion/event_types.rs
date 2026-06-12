@@ -32,6 +32,7 @@ pub mod event {
 /// Aggregate type strings used in `domain_event_outbox.aggregate_type`.
 pub mod aggregate {
     pub const WEB_CRAWL_JOB: &str = "web_crawl_job";
+    pub const WEB_SOURCE_URL: &str = "web_source_url";
     pub const WEB_PAGE: &str = "web_page";
     pub const KNOWLEDGE_INGESTION_RUN: &str = "knowledge_ingestion_run";
     pub const KNOWLEDGE_PUBLISH_RECORD: &str = "knowledge_publish_record";

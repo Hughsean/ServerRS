@@ -514,6 +514,18 @@ pub struct WebIngestionConfig {
     pub max_body_bytes: u64,
     #[serde(default = "default_web_ingestion_fetch_timeout_secs")]
     pub fetch_timeout_secs: u64,
+    #[serde(default = "default_web_ingestion_fetch_user_agent")]
+    pub fetch_user_agent: String,
+    #[serde(default)]
+    pub fetch_proxy_url: String,
+    #[serde(default = "default_web_ingestion_min_request_interval_ms")]
+    pub min_request_interval_ms: u64,
+    #[serde(default = "default_web_ingestion_request_jitter_ms")]
+    pub request_jitter_ms: u64,
+    #[serde(default = "default_web_ingestion_max_urls_per_source_per_job")]
+    pub max_urls_per_source_per_job: usize,
+    #[serde(default = "default_web_ingestion_url_enqueue_dedupe_secs")]
+    pub url_enqueue_dedupe_secs: u64,
     #[serde(default = "default_web_ingestion_chunk_target_min")]
     pub chunk_target_min: usize,
     #[serde(default = "default_web_ingestion_chunk_target_max")]
@@ -554,6 +566,12 @@ impl Default for WebIngestionConfig {
             qdrant_collection: default_web_ingestion_qdrant_collection(),
             max_body_bytes: default_web_ingestion_max_body_bytes(),
             fetch_timeout_secs: default_web_ingestion_fetch_timeout_secs(),
+            fetch_user_agent: default_web_ingestion_fetch_user_agent(),
+            fetch_proxy_url: String::new(),
+            min_request_interval_ms: default_web_ingestion_min_request_interval_ms(),
+            request_jitter_ms: default_web_ingestion_request_jitter_ms(),
+            max_urls_per_source_per_job: default_web_ingestion_max_urls_per_source_per_job(),
+            url_enqueue_dedupe_secs: default_web_ingestion_url_enqueue_dedupe_secs(),
             chunk_target_min: default_web_ingestion_chunk_target_min(),
             chunk_target_max: default_web_ingestion_chunk_target_max(),
             chunk_overlap_min: default_web_ingestion_chunk_overlap_min(),
@@ -649,6 +667,21 @@ fn default_web_ingestion_max_body_bytes() -> u64 {
 }
 fn default_web_ingestion_fetch_timeout_secs() -> u64 {
     30
+}
+fn default_web_ingestion_fetch_user_agent() -> String {
+    "ServerRSKnowledgeBot/0.1".into()
+}
+fn default_web_ingestion_min_request_interval_ms() -> u64 {
+    2_000
+}
+fn default_web_ingestion_request_jitter_ms() -> u64 {
+    1_000
+}
+fn default_web_ingestion_max_urls_per_source_per_job() -> usize {
+    20
+}
+fn default_web_ingestion_url_enqueue_dedupe_secs() -> u64 {
+    86_400
 }
 fn default_web_ingestion_chunk_target_min() -> usize {
     500
@@ -1125,6 +1158,34 @@ impl AppConfig {
         if let Ok(val) = std::env::var("WEB_INGESTION_FETCH_TIMEOUT") {
             if let Ok(n) = val.parse::<u64>() {
                 self.web_ingestion.fetch_timeout_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_FETCH_USER_AGENT") {
+            if !val.is_empty() {
+                self.web_ingestion.fetch_user_agent = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_FETCH_PROXY_URL") {
+            self.web_ingestion.fetch_proxy_url = val;
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_MIN_REQUEST_INTERVAL_MS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.min_request_interval_ms = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_REQUEST_JITTER_MS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.request_jitter_ms = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_MAX_URLS_PER_SOURCE_PER_JOB") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.web_ingestion.max_urls_per_source_per_job = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_URL_ENQUEUE_DEDUPE_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.url_enqueue_dedupe_secs = n;
             }
         }
         if let Ok(val) = std::env::var("WEB_INGESTION_MAX_BODY_BYTES") {

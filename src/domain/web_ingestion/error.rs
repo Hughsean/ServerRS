@@ -9,6 +9,12 @@ pub enum WebIngestionError {
     SsrfRejected { url: String, reason: String },
     /// HTTP fetch failed.
     FetchFailed { url: String, reason: String },
+    /// Remote server asked the crawler to slow down.
+    RateLimited {
+        url: String,
+        status: u16,
+        retry_after_secs: Option<u64>,
+    },
     /// Content type not allowed.
     ContentTypeNotAllowed { content_type: String },
     /// Body exceeds the configured maximum size.
@@ -51,6 +57,17 @@ impl fmt::Display for WebIngestionError {
             Self::FetchFailed { url, reason } => {
                 write!(f, "fetch failed for {url}: {reason}")
             }
+            Self::RateLimited {
+                url,
+                status,
+                retry_after_secs,
+            } => match retry_after_secs {
+                Some(seconds) => write!(
+                    f,
+                    "fetch rate limited for {url}: HTTP {status}, retry after {seconds}s"
+                ),
+                None => write!(f, "fetch rate limited for {url}: HTTP {status}"),
+            },
             Self::ContentTypeNotAllowed { content_type } => {
                 write!(f, "content-type not allowed: {content_type}")
             }
@@ -107,6 +124,17 @@ impl fmt::Display for WebIngestionError {
 }
 
 impl std::error::Error for WebIngestionError {}
+
+impl WebIngestionError {
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Self::RateLimited {
+                retry_after_secs, ..
+            } => *retry_after_secs,
+            _ => None,
+        }
+    }
+}
 
 // ── Conversion into the shared AppError ─────────────────────────────────────
 

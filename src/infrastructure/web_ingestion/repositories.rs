@@ -152,6 +152,8 @@ impl WebSourceUrlRepository for SeaOrmWebSourceUrlRepository {
         let rows = web_source_urls::Entity::find()
             .filter(web_source_urls::Column::SourceId.eq(source_id))
             .filter(web_source_urls::Column::DeletedAt.is_null())
+            .order_by_asc(web_source_urls::Column::LastCrawledAt)
+            .order_by_asc(web_source_urls::Column::Id)
             .all(&self.db)
             .await
             .map_err(map_db_err)?;
