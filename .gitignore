@@ -1,9 +1,9 @@
 Server
+
 database/.idea
-
 database/mysql8
-
 database/qdrant
-
-
 data
+
+*.zip
+*.7z

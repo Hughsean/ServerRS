@@ -552,8 +552,6 @@ impl AgentRuntime {
                     result: result_string.clone(),
                 });
 
-                let redacted_args = redact_tool_arguments(&normalized_arguments);
-                let redacted_raw = redact_tool_arguments(&tc.arguments);
                 self.log_event(
                     &session_id,
                     user_id,
@@ -562,8 +560,8 @@ impl AgentRuntime {
                     Some(tc.name.clone()),
                     serde_json::json!({
                         "tool": tc.name,
-                        "arguments": redacted_args,
-                        "raw_arguments_redacted": redacted_raw,
+                        "arguments": normalized_arguments,
+                        "raw_arguments": tc.arguments,
                         "ok": result.is_ok(),
                         "result_preview": result_preview,
                         "error": result.as_ref().err().map(|e| e.to_string()),
@@ -1150,104 +1148,6 @@ fn normalize_final_content(content: String) -> String {
     }
 }
 
-/// Redact sensitive values from tool arguments before persisting to agent_events.
-/// Recursively processes objects, arrays, and strings.
-fn redact_tool_arguments(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut redacted = serde_json::Map::new();
-            for (k, v) in map {
-                let key_lower = k.to_lowercase();
-                let should_redact = [
-                    "key",
-                    "api_key",
-                    "apikey",
-                    "token",
-                    "access_token",
-                    "refresh_token",
-                    "jwt",
-                    "secret",
-                    "password",
-                    "passwd",
-                    "authorization",
-                    "bearer",
-                    "cookie",
-                    "set-cookie",
-                    "database_url",
-                    "db_url",
-                    "dsn",
-                ]
-                .iter()
-                .any(|kw| key_lower.contains(kw));
-
-                if should_redact {
-                    redacted.insert(k.clone(), serde_json::Value::String("[REDACTED]".into()));
-                } else {
-                    redacted.insert(k.clone(), redact_tool_arguments(v));
-                }
-            }
-            serde_json::Value::Object(redacted)
-        }
-        serde_json::Value::Array(arr) => {
-            let redacted: Vec<_> = arr.iter().map(redact_tool_arguments).collect();
-            serde_json::Value::Array(redacted)
-        }
-        serde_json::Value::String(s) => {
-            // If the string looks like a URL, redact query parameters
-            if s.contains("://") {
-                serde_json::Value::String(redact_url_query_params(s))
-            } else {
-                value.clone()
-            }
-        }
-        _ => value.clone(),
-    }
-}
-
-/// Redact sensitive query parameter values from a URL string.
-fn redact_url_query_params(url: &str) -> String {
-    // Conservative regex-based replacement of sensitive params
-    let sensitive_param_re = regex::Regex::new(
-        r"(?i)(\b(?:key|api_key|apikey|token|access_token|refresh_token|jwt|secret|password|passwd|authorization|bearer|cookie)\b)=[^&\s#]+",
-    );
-    match sensitive_param_re {
-        Ok(re) => re.replace_all(url, "$1=[REDACTED]").to_string(),
-        Err(_) => {
-            // Fallback: simple string search for token=, key=
-            let mut result = url.to_string();
-            for param in &[
-                "token",
-                "key",
-                "api_key",
-                "apikey",
-                "access_token",
-                "refresh_token",
-                "jwt",
-                "secret",
-                "password",
-                "passwd",
-                "authorization",
-                "bearer",
-                "cookie",
-            ] {
-                let prefix = format!("{}=", param);
-                if let Some(start) = result
-                    .to_lowercase()
-                    .find(&format!("{}=", param.to_lowercase()))
-                {
-                    let value_start = start + prefix.len();
-                    let value_end = result[value_start..]
-                        .find('&')
-                        .map(|p| value_start + p)
-                        .unwrap_or(result.len());
-                    result.replace_range(start..value_end, &format!("{}[REDACTED]", param));
-                }
-            }
-            result
-        }
-    }
-}
-
 impl AgentRuntime {
     fn message_text(content: &str) -> String {
         serde_json::from_str::<Value>(content)
@@ -1411,56 +1311,6 @@ mod tests {
     #[test]
     fn preserves_non_empty_content() {
         assert_eq!(normalize_final_content("你好".into()), "你好");
-    }
-
-    // ── redact_tool_arguments ─────────────────────────────────────────
-
-    #[test]
-    fn redacts_api_key_in_object() {
-        let input = json!({"api_key": "secret123", "city": "杭州"});
-        let result = redact_tool_arguments(&input);
-        assert_eq!(result["api_key"], "[REDACTED]");
-        assert_eq!(result["city"], "杭州");
-    }
-
-    #[test]
-    fn redacts_authorization_case_insensitive() {
-        let input = json!({"Authorization": "Bearer token123"});
-        let result = redact_tool_arguments(&input);
-        assert_eq!(result["Authorization"], "[REDACTED]");
-    }
-
-    #[test]
-    fn redacts_token_in_url() {
-        let input = json!("https://example.com/a?token=abc123&x=1&api_key=def456");
-        let result = redact_tool_arguments(&input);
-        let s = result.as_str().unwrap();
-        assert!(!s.contains("abc123"));
-        assert!(!s.contains("def456"));
-        assert!(s.contains("token=[REDACTED]"));
-        assert!(s.contains("api_key=[REDACTED]"));
-        assert!(s.contains("x=1"));
-    }
-
-    #[test]
-    fn redacts_nested_password() {
-        let input = json!({
-            "auth": {"password": "hunter2", "user": "admin"},
-            "nested": [{"secret": "hidden"}]
-        });
-        let result = redact_tool_arguments(&input);
-        assert_eq!(result["auth"]["password"], "[REDACTED]");
-        assert_eq!(result["auth"]["user"], "admin");
-        assert_eq!(result["nested"][0]["secret"], "[REDACTED]");
-    }
-
-    #[test]
-    fn preserves_plain_fields() {
-        let input = json!({"city": "杭州", "count": 42, "active": true});
-        let result = redact_tool_arguments(&input);
-        assert_eq!(result["city"], "杭州");
-        assert_eq!(result["count"], 42);
-        assert_eq!(result["active"], true);
     }
 
     // ── Runtime behavior tests (via integration test helpers) ─────────
