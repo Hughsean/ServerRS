@@ -456,4 +456,70 @@ mod tests {
         let doc = make_doc(1, false, "classified", None);
         assert!(!can_read_document(&doc, 42));
     }
+
+    // ── Web‑ingestion active‑filter tests (§16.4, §13) ────────────────
+    // These prove that the EXISTING status‑1 gate in can_read_document
+    // already excludes staged/superseded/rejected web content. Publish
+    // flips knowledge_documents.status 0→1; supersede/rollback 1→0.
+    // Legacy docs (source_type≠"web_ingestion") keep status=1 and are
+    // never affected.
+
+    #[test]
+    fn web_staged_not_retrievable() {
+        // §16.4 #1: staged (status=0) web document is invisible.
+        let mut doc = make_doc(0, false, "public", None);
+        doc.source_type = "web_ingestion".into();
+        doc.source_id = Some(42);
+        assert!(
+            !can_read_document(&doc, 1),
+            "staged web doc must not be retrievable"
+        );
+    }
+
+    #[test]
+    fn web_published_retrievable() {
+        // §16.4 #4: published (status=1) web document is visible.
+        let mut doc = make_doc(1, false, "public", None);
+        doc.source_type = "web_ingestion".into();
+        doc.source_id = Some(42);
+        assert!(
+            can_read_document(&doc, 1),
+            "published web doc must be retrievable"
+        );
+    }
+
+    #[test]
+    fn legacy_rag_unaffected_by_web_filter() {
+        // §16.4 #11: a legacy doc (source_type≠"web_ingestion") with
+        // status=1 remains retrievable — no regression.
+        let mut doc = make_doc(1, false, "public", None);
+        doc.source_type = "psychology_article".into();
+        doc.source_id = Some(100);
+        assert!(
+            can_read_document(&doc, 1),
+            "legacy RAG doc must be retrievable"
+        );
+    }
+
+    #[test]
+    fn legacy_disabled_still_filtered() {
+        // Legacy docs with status=0 should still be filtered — the
+        // status gate is source-type-agnostic.
+        let mut doc = make_doc(0, false, "public", None);
+        doc.source_type = "psychology_article".into();
+        doc.source_id = Some(100);
+        assert!(!can_read_document(&doc, 1));
+    }
+
+    #[test]
+    fn web_superseded_not_retrievable() {
+        // §16.4 #3/#6: supersede flips status to 0 → invisible.
+        let mut doc = make_doc(0, false, "public", None);
+        doc.source_type = "web_ingestion".into();
+        doc.source_id = Some(42);
+        assert!(
+            !can_read_document(&doc, 1),
+            "superseded web doc must not be retrievable"
+        );
+    }
 }
