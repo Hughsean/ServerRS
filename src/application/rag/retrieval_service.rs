@@ -4,7 +4,7 @@ use tracing::{debug, warn};
 
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepository};
-use crate::domain::vector_store::{VectorFilter, VectorStore};
+use crate::domain::vector_store::{VectorCondition, VectorFilter, VectorStore};
 use crate::shared::error::AppError;
 
 use super::vector_index_service::payload_chunk_id;
@@ -32,11 +32,25 @@ fn can_read_document(document: &KnowledgeDocument, user_id: u64) -> bool {
 /// Strategy (Qdrant-first):
 /// 1. Qdrant vector search  →  MySQL second validation  →  permission filter.
 /// 2. Fallback: MySQL keyword search  →  same MySQL + permission validation.
+///
+/// Web-ingestion content lives in a SEPARATE Qdrant collection and is only
+/// surfaced when its publish version is active. Two layers enforce this
+/// (task-book §13):
+///   - The Qdrant query against the web collection carries an `active=true`
+///     payload filter, so staged/superseded points are not returned.
+///   - The shared MySQL re-validation requires `knowledge_documents.status==1`;
+///     publish flips a web document to status=1, supersede/rollback back to 0.
+///     Legacy RAG documents have no web manifest and keep status=1, so they are
+///     never affected by the web active filter.
 pub struct RetrievalService {
     repo: Arc<dyn RAGRepository>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_store: Option<Arc<dyn VectorStore>>,
     rag_collection: String,
+    /// Optional web-ingestion collection. When set, retrieval also searches it
+    /// with an `active=true` payload filter. None → web ingestion not searched
+    /// (legacy-only behaviour, unchanged).
+    web_collection: Option<String>,
 }
 
 impl RetrievalService {
@@ -49,12 +63,21 @@ impl RetrievalService {
             embedding,
             vector_store: None,
             rag_collection: "rag_chunks".into(),
+            web_collection: None,
         }
     }
 
     pub fn with_vector_store(mut self, vs: Arc<dyn VectorStore>, collection: String) -> Self {
         self.vector_store = Some(vs);
         self.rag_collection = collection;
+        self
+    }
+
+    /// Enable retrieval of published web-ingestion content from its own Qdrant
+    /// collection (task-book §13). Only points with payload `active=true` are
+    /// returned, and they are still MySQL-revalidated.
+    pub fn with_web_collection(mut self, collection: String) -> Self {
+        self.web_collection = Some(collection);
         self
     }
 
@@ -103,15 +126,33 @@ impl RetrievalService {
             .next()
             .ok_or_else(|| AppError::Internal("embedding returned empty vector".to_string()))?;
 
-        let hits = vs
+        // Legacy RAG collection — unfiltered (legacy behaviour preserved).
+        let mut hits = vs
             .search(
                 &self.rag_collection,
-                query_vec,
+                query_vec.clone(),
                 VectorFilter::default(),
                 top_k as usize,
             )
             .await
             .map_err(|e| AppError::internal(format!("Qdrant search failed: {e}")))?;
+
+        // Web-ingestion collection — ONLY active points (task-book §13). A
+        // failure here must not break legacy retrieval, so it is logged and
+        // skipped rather than propagated.
+        if let Some(web_collection) = &self.web_collection {
+            let active_filter = VectorFilter::new().with_condition(VectorCondition::MatchBool {
+                key: "active".into(),
+                value: true,
+            });
+            match vs
+                .search(web_collection, query_vec, active_filter, top_k as usize)
+                .await
+            {
+                Ok(web_hits) => hits.extend(web_hits),
+                Err(e) => warn!(error = %e, "web-ingestion Qdrant search failed; skipping"),
+            }
+        }
 
         self.validate_hits(&hits, user_id).await
     }

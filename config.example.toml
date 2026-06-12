@@ -59,7 +59,8 @@ cleanup_interval_secs = 20
 # ── Plugins (weather, news, etc.) ──
 
 [plugins.weather]
-api_key = "fb3df76f71774a998a5579ed1ffcf3b0"
+# Inject via WEATHER_API_KEY env var — do NOT commit a real key here.
+api_key = ""
 default_location = "合肥"
 city_lookup_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/geo/v2/city/lookup"
 weather_now_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/v7/weather/now"
@@ -113,7 +114,9 @@ retry_max_delay_secs = 1800
 provider = "deepseek"
 base_url = "https://api.deepseek.com"
 chat_model = "deepseek-v4-flash"
-api_key = "sk-d7468b67078d469eace602aa894baecb"
+# Inject via WEB_INGESTION_DISTILL_LLM_API_KEY (or DEEPSEEK_API_KEY) env var.
+# Never commit a real key here.
+api_key = ""
 temperature = 0.1
 top_p = 0.9
 timeout_secs = 120

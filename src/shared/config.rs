@@ -491,12 +491,25 @@ pub struct WebIngestionConfig {
     pub scheduler_enabled: bool,
     #[serde(default)]
     pub dispatcher_enabled: bool,
+    /// Global master switch for auto-publish. Default false. When false, the
+    /// quality gate never returns Publishable — everything stops at staged and
+    /// requires a manual publish request. §5.1 / §15.
+    #[serde(default)]
+    pub auto_publish: bool,
     #[serde(default = "default_true")]
     pub staging_required: bool,
     #[serde(default = "default_web_ingestion_auto_publish_min_score")]
     pub auto_publish_min_score: f64,
     #[serde(default = "default_web_ingestion_pipeline_version")]
     pub pipeline_version: String,
+    #[serde(default = "default_web_ingestion_llm_prompt_version")]
+    pub llm_prompt_version: String,
+    #[serde(default = "default_web_ingestion_chunker_version")]
+    pub chunker_version: String,
+    #[serde(default = "default_web_ingestion_embedding_batch_size")]
+    pub embedding_batch_size: usize,
+    #[serde(default = "default_web_ingestion_qdrant_collection")]
+    pub qdrant_collection: String,
     #[serde(default = "default_web_ingestion_max_body_bytes")]
     pub max_body_bytes: u64,
     #[serde(default = "default_web_ingestion_fetch_timeout_secs")]
@@ -531,9 +544,14 @@ impl Default for WebIngestionConfig {
             enabled: default_web_ingestion_enabled(),
             scheduler_enabled: false,
             dispatcher_enabled: false,
+            auto_publish: false,
             staging_required: true,
             auto_publish_min_score: default_web_ingestion_auto_publish_min_score(),
             pipeline_version: default_web_ingestion_pipeline_version(),
+            llm_prompt_version: default_web_ingestion_llm_prompt_version(),
+            chunker_version: default_web_ingestion_chunker_version(),
+            embedding_batch_size: default_web_ingestion_embedding_batch_size(),
+            qdrant_collection: default_web_ingestion_qdrant_collection(),
             max_body_bytes: default_web_ingestion_max_body_bytes(),
             fetch_timeout_secs: default_web_ingestion_fetch_timeout_secs(),
             chunk_target_min: default_web_ingestion_chunk_target_min(),
@@ -613,6 +631,18 @@ fn default_web_ingestion_auto_publish_min_score() -> f64 {
 }
 fn default_web_ingestion_pipeline_version() -> String {
     "20260612".into()
+}
+fn default_web_ingestion_llm_prompt_version() -> String {
+    "20260612_v1".into()
+}
+fn default_web_ingestion_chunker_version() -> String {
+    "20260612".into()
+}
+fn default_web_ingestion_embedding_batch_size() -> usize {
+    32
+}
+fn default_web_ingestion_qdrant_collection() -> String {
+    "web_ingestion".into()
 }
 fn default_web_ingestion_max_body_bytes() -> u64 {
     5 * 1024 * 1024
@@ -1057,6 +1087,11 @@ impl AppConfig {
                 self.web_ingestion.dispatcher_enabled = b;
             }
         }
+        if let Ok(val) = std::env::var("WEB_INGESTION_AUTO_PUBLISH") {
+            if let Ok(b) = val.parse::<bool>() {
+                self.web_ingestion.auto_publish = b;
+            }
+        }
         if let Ok(val) = std::env::var("WEB_INGESTION_STAGING_REQUIRED") {
             if let Ok(b) = val.parse::<bool>() {
                 self.web_ingestion.staging_required = b;
@@ -1070,6 +1105,36 @@ impl AppConfig {
         if let Ok(val) = std::env::var("WEB_INGESTION_PIPELINE_VERSION") {
             if !val.is_empty() {
                 self.web_ingestion.pipeline_version = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_LLM_PROMPT_VERSION") {
+            if !val.is_empty() {
+                self.web_ingestion.llm_prompt_version = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_CHUNKER_VERSION") {
+            if !val.is_empty() {
+                self.web_ingestion.chunker_version = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_FETCH_TIMEOUT") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.fetch_timeout_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_MAX_BODY_BYTES") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.max_body_bytes = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_BATCH_SIZE") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.web_ingestion.embedding_batch_size = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_QDRANT_COLLECTION") {
+            if !val.is_empty() {
+                self.web_ingestion.qdrant_collection = val;
             }
         }
         if let Ok(val) = std::env::var("WEB_INGESTION_SCHEDULER_INTERVAL_SECS") {

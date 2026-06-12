@@ -246,6 +246,13 @@ async fn run() -> Result<(), std::io::Error> {
         retrieval_svc =
             retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
     }
+    // Surface published web-ingestion content (only when web ingestion is on).
+    // Staged/superseded versions are excluded by the active filter + MySQL
+    // status re-validation; legacy RAG is unaffected.
+    if config.web_ingestion.enabled {
+        retrieval_svc =
+            retrieval_svc.with_web_collection(config.web_ingestion.qdrant_collection.clone());
+    }
     let retrieval: Arc<RetrievalService> = Arc::new(retrieval_svc);
 
     let chunking = ChunkingService::new();
@@ -391,12 +398,15 @@ async fn run() -> Result<(), std::io::Error> {
     };
 
     // ── Web Ingestion ──────────────────────────────────────────────────
+    // The init function enforces the master switch internally (§5.1); the
+    // outer guard simply avoids constructing it when disabled.
     if config.web_ingestion.enabled {
         bootstrap::web_ingestion::init_web_ingestion(
             &config,
             &db,
             &vector_store,
             &embedding_provider,
+            &rag_repo,
             &mut background,
         )
         .await

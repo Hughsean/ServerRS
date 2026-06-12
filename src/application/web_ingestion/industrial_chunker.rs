@@ -29,12 +29,19 @@ pub enum ChunkType {
 }
 
 impl ChunkType {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             ChunkType::DocumentSummary => "document_summary",
             ChunkType::SectionSummary => "section_summary",
             ChunkType::Atomic => "atomic",
         }
+    }
+}
+
+impl ChunkOutput {
+    /// The chunk type as a stable string (matches `knowledge_chunk_manifests.chunk_type`).
+    pub fn chunk_type_str(&self) -> &'static str {
+        self.chunk_type.as_str()
     }
 }
 
@@ -520,7 +527,6 @@ mod tests {
 
     #[test]
     fn test_chunker_handles_oversized_single_paragraph() {
-        // A single paragraph that's too long for one chunk
         let mut long_para = String::new();
         for i in 0..50 {
             long_para.push_str(&format!("这是第{i}个句子。一些额外的内容来增加长度。"));
@@ -548,5 +554,51 @@ mod tests {
             atomic_count >= 2,
             "oversized paragraph should produce multiple atomic chunks"
         );
+    }
+
+    #[test]
+    fn test_chunker_empty_section_body() {
+        // Empty section body must not panic or loop; doc summary still produced.
+        let sections = vec![SectionInput {
+            heading: "空".into(),
+            body: String::new(),
+            summary: None,
+        }];
+        let chunks = chunk_document(
+            "标题",
+            "摘要",
+            "https://example.com",
+            &sections,
+            "vk",
+            &ChunkerConfig::default(),
+        );
+        // Document summary chunk is always produced; empty body adds no atomics.
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].chunk_type, ChunkType::DocumentSummary);
+    }
+
+    #[test]
+    fn test_chunker_no_separator_text() {
+        // Text with no sentence separators and no paragraph breaks, under hard
+        // max, must still produce exactly one atomic chunk (no loop, no panic).
+        let body = "这是一段没有任何标点符号的连续文本内容".repeat(3);
+        let sections = vec![SectionInput {
+            heading: "无分隔".into(),
+            body,
+            summary: None,
+        }];
+        let chunks = chunk_document(
+            "标题",
+            "摘要",
+            "https://example.com",
+            &sections,
+            "vk",
+            &ChunkerConfig::default(),
+        );
+        let atomic_count = chunks
+            .iter()
+            .filter(|c| c.chunk_type == ChunkType::Atomic)
+            .count();
+        assert!(atomic_count >= 1, "no-separator text should still chunk");
     }
 }

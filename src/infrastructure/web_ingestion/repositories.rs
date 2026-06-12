@@ -4,13 +4,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, Unchanged,
-    Value,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    TransactionTrait, Unchanged, Value,
 };
 use serde_json::Value as JsonValue;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::*;
+use crate::domain::web_ingestion::status::publish_status;
 use crate::infrastructure::persistence::entities::*;
 
 fn map_db_err(e: sea_orm::DbErr) -> WebIngestionError {
@@ -871,6 +872,228 @@ impl PublishRecordRepository for SeaOrmPublishRecordRepository {
         self.db.execute_raw(stmt).await.map_err(map_db_err)?;
         Ok(())
     }
+
+    async fn publish_in_tx(
+        &self,
+        publish_record_id: u64,
+    ) -> Result<PublishOutcome, WebIngestionError> {
+        let txn = self.db.begin().await.map_err(map_db_err)?;
+
+        // 1. Load target record.
+        let target = knowledge_publish_records::Entity::find_by_id(publish_record_id)
+            .one(&txn)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| WebIngestionError::NotFound {
+                entity: "knowledge_publish_record".into(),
+                id: publish_record_id,
+            })?;
+
+        // 2. Page lock — meaningful because it is inside this transaction.
+        lock_page_in(&txn, target.page_id).await?;
+
+        // Idempotent: already the active record.
+        if target.active != 0 && target.publish_status == publish_status::PUBLISHED {
+            txn.commit().await.map_err(map_db_err)?;
+            return Ok(PublishOutcome {
+                activated_record_id: target.id,
+                activated_document_id: target.document_id,
+                deactivated_record_id: None,
+                deactivated_document_id: None,
+                was_already_active: true,
+            });
+        }
+
+        if target.publish_status != publish_status::STAGED {
+            txn.rollback().await.ok();
+            return Err(WebIngestionError::Internal(format!(
+                "cannot publish record {} in '{}' status",
+                target.id, target.publish_status
+            )));
+        }
+
+        // 3. Supersede the current active record for this page (if any/different).
+        let active_key = format!("{}:{}", target.source_id, target.page_id);
+        let current = knowledge_publish_records::Entity::find()
+            .filter(knowledge_publish_records::Column::ActivePageKey.eq(active_key))
+            .one(&txn)
+            .await
+            .map_err(map_db_err)?;
+
+        let (deactivated_record_id, deactivated_document_id) = match current {
+            Some(ref cur) if cur.id != target.id => {
+                deactivate_record_in(&txn, cur, publish_status::SUPERSEDED).await?;
+                (Some(cur.id), Some(cur.document_id))
+            }
+            _ => (None, None),
+        };
+
+        // 4. Activate target.
+        activate_record_in(&txn, &target).await?;
+
+        txn.commit().await.map_err(map_db_err)?;
+        Ok(PublishOutcome {
+            activated_record_id: target.id,
+            activated_document_id: target.document_id,
+            deactivated_record_id,
+            deactivated_document_id,
+            was_already_active: false,
+        })
+    }
+
+    async fn rollback_in_tx(
+        &self,
+        current_record_id: u64,
+        target_record_id: u64,
+    ) -> Result<PublishOutcome, WebIngestionError> {
+        let txn = self.db.begin().await.map_err(map_db_err)?;
+
+        let current = knowledge_publish_records::Entity::find_by_id(current_record_id)
+            .one(&txn)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| WebIngestionError::NotFound {
+                entity: "knowledge_publish_record (current)".into(),
+                id: current_record_id,
+            })?;
+        let target = knowledge_publish_records::Entity::find_by_id(target_record_id)
+            .one(&txn)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| WebIngestionError::NotFound {
+                entity: "knowledge_publish_record (target)".into(),
+                id: target_record_id,
+            })?;
+
+        if current.source_id != target.source_id || current.page_id != target.page_id {
+            txn.rollback().await.ok();
+            return Err(WebIngestionError::Internal(
+                "rollback: current and target must belong to the same page".into(),
+            ));
+        }
+        if current.active == 0 {
+            txn.rollback().await.ok();
+            return Err(WebIngestionError::Internal(
+                "rollback: current record is not active".into(),
+            ));
+        }
+        // Cannot roll back TO a rejected/failed/dead version.
+        if matches!(
+            target.publish_status.as_str(),
+            publish_status::FAILED | "rejected" | "dead"
+        ) {
+            txn.rollback().await.ok();
+            return Err(WebIngestionError::Internal(format!(
+                "rollback: target record {} is in '{}' status — not a rollback candidate",
+                target.id, target.publish_status
+            )));
+        }
+
+        lock_page_in(&txn, current.page_id).await?;
+
+        deactivate_record_in(&txn, &current, publish_status::ROLLED_BACK).await?;
+        activate_record_in(&txn, &target).await?;
+
+        txn.commit().await.map_err(map_db_err)?;
+        Ok(PublishOutcome {
+            activated_record_id: target.id,
+            activated_document_id: target.document_id,
+            deactivated_record_id: Some(current.id),
+            deactivated_document_id: Some(current.document_id),
+            was_already_active: false,
+        })
+    }
+}
+
+/// FOR UPDATE lock on a web_pages row, inside a transaction.
+async fn lock_page_in<C: ConnectionTrait>(txn: &C, page_id: u64) -> Result<(), WebIngestionError> {
+    let stmt = Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT id FROM web_pages WHERE id = ? FOR UPDATE",
+        vec![Value::BigUnsigned(Some(page_id))],
+    );
+    txn.execute_raw(stmt).await.map_err(map_db_err)?;
+    Ok(())
+}
+
+/// Deactivate a publish record + its document + its manifests, inside a tx.
+async fn deactivate_record_in<C: ConnectionTrait>(
+    txn: &C,
+    record: &knowledge_publish_records::Model,
+    new_status: &str,
+) -> Result<(), WebIngestionError> {
+    let mut am: knowledge_publish_records::ActiveModel = record.clone().into();
+    am.active = Set(0);
+    am.publish_status = Set(new_status.to_string());
+    am.superseded_at = Set(Some(Utc::now().naive_utc()));
+    am.update(txn).await.map_err(map_db_err)?;
+
+    set_document_status_in(txn, record.document_id, 0).await?;
+    set_manifests_active_in(txn, record.id, false).await?;
+    Ok(())
+}
+
+/// Activate a publish record + its document + its manifests, inside a tx.
+async fn activate_record_in<C: ConnectionTrait>(
+    txn: &C,
+    record: &knowledge_publish_records::Model,
+) -> Result<(), WebIngestionError> {
+    let mut am: knowledge_publish_records::ActiveModel = record.clone().into();
+    am.active = Set(1);
+    am.publish_status = Set(publish_status::PUBLISHED.to_string());
+    am.activated_at = Set(Some(Utc::now().naive_utc()));
+    // active_page_key is maintained by DB triggers from active — do NOT set it.
+    am.update(txn).await.map_err(map_db_err)?;
+
+    set_document_status_in(txn, record.document_id, 1).await?;
+    set_manifests_active_in(txn, record.id, true).await?;
+    Ok(())
+}
+
+/// Flip knowledge_documents.status (1=active/visible, 0=staged/hidden), in a tx.
+async fn set_document_status_in<C: ConnectionTrait>(
+    txn: &C,
+    document_id: u64,
+    status: i8,
+) -> Result<(), WebIngestionError> {
+    let stmt = Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE knowledge_documents SET status = ?, updated_at = NOW() WHERE document_id = ?",
+        vec![
+            Value::TinyInt(Some(status)),
+            Value::BigUnsigned(Some(document_id)),
+        ],
+    );
+    txn.execute_raw(stmt).await.map_err(map_db_err)?;
+    Ok(())
+}
+
+/// Flip chunk + vector manifest active flags for a publish record, in a tx.
+async fn set_manifests_active_in<C: ConnectionTrait>(
+    txn: &C,
+    publish_record_id: u64,
+    active: bool,
+) -> Result<(), WebIngestionError> {
+    let a = if active { 1i8 } else { 0i8 };
+    let chunk_stmt = Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE knowledge_chunk_manifests SET active = ?, updated_at = NOW() WHERE publish_record_id = ?",
+        vec![
+            Value::TinyInt(Some(a)),
+            Value::BigUnsigned(Some(publish_record_id)),
+        ],
+    );
+    txn.execute_raw(chunk_stmt).await.map_err(map_db_err)?;
+    let vec_stmt = Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE knowledge_vector_manifests SET active = ?, updated_at = NOW() WHERE publish_record_id = ?",
+        vec![
+            Value::TinyInt(Some(a)),
+            Value::BigUnsigned(Some(publish_record_id)),
+        ],
+    );
+    txn.execute_raw(vec_stmt).await.map_err(map_db_err)?;
+    Ok(())
 }
 
 fn model_to_pr(m: knowledge_publish_records::Model) -> KnowledgePublishRecord {

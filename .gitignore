@@ -7,3 +7,9 @@ data
 
 *.zip
 *.7z
+
+# Local secrets — never commit. Use config.example.toml / .env.example as templates.
+config.toml
+.env
+.env.*
+!.env.example

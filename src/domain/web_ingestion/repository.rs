@@ -362,6 +362,46 @@ pub trait PublishRecordRepository: Send + Sync {
         source_id: u64,
         page_id: u64,
     ) -> Result<(), WebIngestionError>;
+
+    /// Atomically publish a staged record (task-book §12.1, §12.6-8).
+    ///
+    /// In ONE DB transaction with a `web_pages` FOR UPDATE lock:
+    ///   1. verify the target record is staged
+    ///   2. supersede the current active record (active=0, status=superseded,
+    ///      its knowledge_documents.status→0, its manifests active=0)
+    ///   3. activate the target (active=1, status=published, activated_at,
+    ///      its knowledge_documents.status→1, its manifests active=1)
+    ///
+    /// Returns the publish outcome (which record was superseded, if any).
+    /// DB state is authoritative; the caller re-syncs Qdrant afterwards.
+    async fn publish_in_tx(
+        &self,
+        publish_record_id: u64,
+    ) -> Result<PublishOutcome, WebIngestionError>;
+
+    /// Atomically roll back to a previous version (task-book §12.3).
+    ///
+    /// In ONE DB transaction with a page lock: deactivate `current_record_id`
+    /// (status=rolled_back, doc.status→0, manifests active=0) and reactivate
+    /// `target_record_id` (status=published, doc.status→1, manifests active=1).
+    async fn rollback_in_tx(
+        &self,
+        current_record_id: u64,
+        target_record_id: u64,
+    ) -> Result<PublishOutcome, WebIngestionError>;
+}
+
+/// Outcome of a transactional publish / rollback.
+#[derive(Debug, Clone)]
+pub struct PublishOutcome {
+    /// The record that became active.
+    pub activated_record_id: u64,
+    pub activated_document_id: u64,
+    /// The record that was deactivated/superseded (None on a first publish).
+    pub deactivated_record_id: Option<u64>,
+    pub deactivated_document_id: Option<u64>,
+    /// True when the target was already active (idempotent no-op publish).
+    pub was_already_active: bool,
 }
 
 // ── knowledge_chunk_manifests ────────────────────────────────────────────────
