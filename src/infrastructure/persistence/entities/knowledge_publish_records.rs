@@ -23,13 +23,13 @@ pub struct Model {
     pub content_hash: String,
     pub publish_status: String,
     pub active: i8,
+    pub active_page_key: Option<String>,
     pub activated_at: Option<DateTime>,
     pub superseded_at: Option<DateTime>,
     pub superseded_by_record_id: Option<u64>,
     pub rolled_back_from_record_id: Option<u64>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
-    pub active_page_key: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -43,13 +43,13 @@ pub enum Column {
     ContentHash,
     PublishStatus,
     Active,
+    ActivePageKey,
     ActivatedAt,
     SupersededAt,
     SupersededByRecordId,
     RolledBackFromRecordId,
     CreatedAt,
     UpdatedAt,
-    ActivePageKey,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
@@ -88,16 +88,16 @@ impl ColumnTrait for Column {
             Self::ContentHash => ColumnType::Char(Some(64u32)).def(),
             Self::PublishStatus => ColumnType::String(StringLen::N(32u32)).def(),
             Self::Active => ColumnType::TinyInteger.def(),
+            Self::ActivePageKey => ColumnType::String(StringLen::N(128u32))
+                .def()
+                .null()
+                .unique(),
             Self::ActivatedAt => ColumnType::DateTime.def().null(),
             Self::SupersededAt => ColumnType::DateTime.def().null(),
             Self::SupersededByRecordId => ColumnType::BigUnsigned.def().null(),
             Self::RolledBackFromRecordId => ColumnType::BigUnsigned.def().null(),
             Self::CreatedAt => ColumnType::DateTime.def(),
             Self::UpdatedAt => ColumnType::DateTime.def(),
-            Self::ActivePageKey => ColumnType::String(StringLen::N(128u32))
-                .def()
-                .null()
-                .unique(),
         }
     }
 }

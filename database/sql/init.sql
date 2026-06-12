@@ -1,17 +1,12 @@
 -- ============================================================================
 -- init.sql — Complete database initialization for Digital Companion (ServerRS)
 --
--- Generated from:
---   database/sql/1-create.sql                    (base tables)
---   database/patches/20260611_001_auth_role_refresh_likes.sql
---   database/patches/20260611_002_agent_rag_memory.sql
---   database/patches/20260611_003_qdrant_vector_index.sql
---   database/patches/20260611_004_agent_vector_lifecycle.sql
---   database/patches/20260611_005_stored_objects.sql
---   database/sql/20260612_web_ingestion_final.sql
---   database/sql/20260612_web_ingestion_fix_p0.sql
---   database/sql/20260613_artifact_persistence.sql
---   database/sql/20260613_expand_ingestion_artifacts.sql
+-- Squashed schema includes:
+--   - authentication, refresh tokens, roles, and content likes
+--   - agent, RAG, memory, Qdrant lifecycle, and stored objects
+--   - complete web ingestion, publishing, outbox, and audit pipeline
+--   - P0 web-ingestion index/trigger corrections
+--   - MEDIUMTEXT/JSON mid-pipeline artifact persistence
 --
 -- All patch columns, indexes, constraints, and triggers are folded into the
 -- final CREATE TABLE / CREATE TRIGGER statements below. No follow-up migration
