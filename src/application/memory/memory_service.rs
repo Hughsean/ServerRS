@@ -71,8 +71,34 @@ impl MemoryService {
             return Ok(Vec::new());
         }
 
+        // Defensive filtering (belt-and-suspenders with MemoryExtractor)
+        let allowed_types: [&str; 6] = [
+            "preference",
+            "profile",
+            "fact",
+            "emotional_pattern",
+            "goal",
+            "safety_note",
+        ];
+
         let mut saved = Vec::with_capacity(memories.len());
         for mut memory in memories {
+            // Skip empty content
+            if memory.content.trim().is_empty() {
+                continue;
+            }
+            // Skip low confidence
+            if memory.confidence < 0.7 {
+                continue;
+            }
+            // Normalize memory_type
+            if !allowed_types.contains(&memory.memory_type.as_str()) {
+                memory.memory_type = "fact".to_string();
+            }
+            // Truncate
+            if memory.content.chars().count() > 300 {
+                memory.content = memory.content.chars().take(300).collect::<String>() + "...";
+            }
             memory.source_conversation_id = Some(conversation_id);
             memory.source_message_id = Some(message_id);
             saved.push(self.repo.save_memory(memory).await?);

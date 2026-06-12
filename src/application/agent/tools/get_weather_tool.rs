@@ -36,7 +36,7 @@ impl AgentTool for GetWeatherTool {
     }
 
     fn description(&self) -> &str {
-        "当用户询问天气、气温、天气情况、适合穿什么、是否带伞、当前城市天气、某地实时天气时，必须使用此工具获取实时天气。支持全球各地天气查询，可根据用户语言返回对应描述。若用户未提供地点，则使用默认配置或用户所在城市。"
+        "当用户询问实时天气、气温、是否带伞、穿衣建议且有地点可解析时使用。地点优先来自用户本轮参数，其次来自会话 location，最后来自默认配置。"
     }
 
     fn parameters(&self) -> Value {
@@ -45,18 +45,18 @@ impl AgentTool for GetWeatherTool {
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "地点名，例如杭州。可选参数，如不提供则使用默认地点。"
+                    "description": "可选。查询地点，例如北京、上海、杭州。未提供时优先使用会话 location，其次使用默认地点。"
                 },
                 "lang": {
                     "type": "string",
-                    "description": "返回语言代码，例如 zh_CN、zh_HK、en_US、ja_JP，默认 zh_CN。"
+                    "description": "可选。语言代码，默认 zh_CN。",
+                    "default": "zh_CN"
                 }
-            },
-            "required": ["lang"]
+            }
         })
     }
 
-    async fn execute(&self, _context: &AgentContext, args: Value) -> Result<String, AppError> {
+    async fn execute(&self, context: &AgentContext, args: Value) -> Result<String, AppError> {
         tracing::info!(tool = "get_weather", "executing agent tool");
 
         // Check API key
@@ -65,7 +65,7 @@ impl AgentTool for GetWeatherTool {
         }
 
         // Resolve location
-        let query_location = resolve_location(&args, &self.config);
+        let query_location = resolve_location(&args, context, &self.config);
         let query_location = match query_location {
             Some(loc) => loc,
             None => return Ok("未提供有效的查询地点。".to_string()),
@@ -108,7 +108,11 @@ impl AgentTool for GetWeatherTool {
 
 // ── Location resolution ───────────────────────────────────────────────────────
 
-fn resolve_location(args: &Value, config: &WeatherPluginConfig) -> Option<String> {
+fn resolve_location(
+    args: &Value,
+    context: &AgentContext,
+    config: &WeatherPluginConfig,
+) -> Option<String> {
     // Priority 1: args.location
     if let Some(loc) = args.get("location").and_then(|v| v.as_str()) {
         let trimmed = loc.trim();
@@ -117,13 +121,46 @@ fn resolve_location(args: &Value, config: &WeatherPluginConfig) -> Option<String
         }
     }
 
-    // Priority 3 (skipping 2 - AgentContext doesn't have location field): config default_location
+    // Priority 2: context.location — try multiple field names
+    if let Some(ref loc) = context.location {
+        let location_str = extract_location_string(loc);
+        if !location_str.is_empty() {
+            return Some(location_str);
+        }
+    }
+
+    // Priority 3: config.default_location
     let default = config.default_location.trim();
     if !default.is_empty() {
         return Some(default.to_string());
     }
 
     None
+}
+
+/// Extract a human-readable location string from a location JSON value.
+/// Tries common field names in order of preference.
+fn extract_location_string(location: &Value) -> String {
+    let field_names = [
+        "city",
+        "district",
+        "county",
+        "name",
+        "address",
+        "formatted_address",
+        "province",
+    ];
+
+    for field in &field_names {
+        if let Some(v) = location.get(field).and_then(|v| v.as_str()) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    String::new()
 }
 
 // ── Lang normalization ────────────────────────────────────────────────────────
@@ -751,7 +788,8 @@ mod tests {
             ..WeatherPluginConfig::default()
         };
         let args = json!({"lang": "zh_CN"});
-        let loc = resolve_location(&args, &config);
+        let ctx = test_context();
+        let loc = resolve_location(&args, &ctx, &config);
         assert_eq!(loc, Some("合肥".to_string()));
     }
 
@@ -762,8 +800,35 @@ mod tests {
             ..WeatherPluginConfig::default()
         };
         let args = json!({"location": "上海", "lang": "zh_CN"});
-        let loc = resolve_location(&args, &config);
+        let ctx = test_context();
+        let loc = resolve_location(&args, &ctx, &config);
         assert_eq!(loc, Some("上海".to_string()));
+    }
+
+    #[test]
+    fn uses_context_location_city_field() {
+        let config = WeatherPluginConfig {
+            default_location: "北京".to_string(),
+            ..WeatherPluginConfig::default()
+        };
+        let args = json!({"lang": "zh_CN"});
+        let mut ctx = test_context();
+        ctx.location = Some(json!({"city": "杭州", "province": "浙江"}));
+        let loc = resolve_location(&args, &ctx, &config);
+        assert_eq!(loc, Some("杭州".to_string()));
+    }
+
+    #[test]
+    fn falls_back_to_default_when_context_location_has_no_valid_field() {
+        let config = WeatherPluginConfig {
+            default_location: "合肥".to_string(),
+            ..WeatherPluginConfig::default()
+        };
+        let args = json!({"lang": "zh_CN"});
+        let mut ctx = test_context();
+        ctx.location = Some(json!({"foo": "bar"}));
+        let loc = resolve_location(&args, &ctx, &config);
+        assert_eq!(loc, Some("合肥".to_string()));
     }
 
     // ── Lang normalization ─────────────────────────────────────────────
@@ -1012,6 +1077,7 @@ mod tests {
             memories: vec![],
             rag_chunks: vec![],
             user_profile: None,
+            location: None,
             tools: vec![ToolDefinition {
                 name: "get_weather".into(),
                 description: "get weather".into(),
@@ -1019,9 +1085,8 @@ mod tests {
                     "type": "object",
                     "properties": {
                         "location": {"type": "string"},
-                        "lang": {"type": "string"}
-                    },
-                    "required": ["lang"]
+                        "lang": {"type": "string", "default": "zh_CN"}
+                    }
                 }),
             }],
         }

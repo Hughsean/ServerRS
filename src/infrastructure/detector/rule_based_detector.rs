@@ -32,7 +32,7 @@ impl RuleBasedRiskDetector {
 impl RiskDetector for RuleBasedRiskDetector {
     fn evaluate(&self, text: &str) -> DetectionResult {
         let original = text.trim();
-        if original.is_empty() || !has_chinese(original) {
+        if original.is_empty() {
             return DetectionResult {
                 risk_level: RiskLevel::Unknown,
                 polarity: Polarity::Unknown,
@@ -206,11 +206,6 @@ fn may_be_info_query(text: &str) -> bool {
     contains_any(text, &PH_INFO_QUERY)
 }
 
-fn has_chinese(s: &str) -> bool {
-    s.chars()
-        .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c) || ('\u{3400}'..='\u{4DBF}').contains(&c))
-}
-
 // ── Keyword lists (mirrored from Java) ──
 
 static PH_CRISES_SELF: &[&str] = &[
@@ -252,6 +247,30 @@ static PH_CRISES_SELF: &[&str] = &[
     "重开",
     "人生重开",
     "寻短见",
+    // English crisis self-harm phrases
+    "kill myself",
+    "suicide",
+    "end my life",
+    "take my own life",
+    "i want to die",
+    "i wanna die",
+    "i don't want to live",
+    "i do not want to live",
+    "can't go on living",
+    "cut myself",
+    "hurt myself",
+    "self harm",
+    "overdose",
+    "hang myself",
+    "jump off",
+    // Pinyin / mixed expressions
+    "zi sha",
+    "zisha",
+    "qing sheng",
+    "qingsheng",
+    "xiang si",
+    "想die",
+    "想s",
 ];
 
 static PH_CRISES_OTHER: &[&str] = &[
@@ -269,6 +288,13 @@ static PH_CRISES_OTHER: &[&str] = &[
     "弄死",
     "毁了他",
     "废了他",
+    // English
+    "kill him",
+    "kill her",
+    "kill them",
+    "hurt someone",
+    "hurt people",
+    "mass revenge",
 ];
 
 static PH_HIGH: &[&str] = &[
@@ -298,6 +324,15 @@ static PH_HIGH: &[&str] = &[
     "彻夜难眠",
     "精神恍惚",
     "精神崩溃",
+    // English high risk
+    "hopeless",
+    "no hope",
+    "can't go on",
+    "cannot go on",
+    "worthless",
+    "life is meaningless",
+    "nothing matters",
+    "i give up",
 ];
 
 static PH_MEDIUM: &[&str] = &[
@@ -530,3 +565,76 @@ static PH_GROUP: &[&str] = &[
     "他们", "公司", "学校", "组织", "政府", "团队", "社会", "我们", "大家", "集体", "家人", "朋友",
     "同事", "同学",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn english_crisis_self_harm_detected() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("I want to kill myself");
+        assert_eq!(result.risk_level, RiskLevel::Crisis);
+        assert_eq!(result.intent, IntentLabel::CrisisSelfHarm);
+        assert_eq!(result.target, TargetLabel::SelfTarget);
+    }
+
+    #[test]
+    fn english_dont_want_to_live_detected() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("I don't want to live anymore");
+        assert_eq!(result.risk_level, RiskLevel::Crisis);
+    }
+
+    #[test]
+    fn english_high_risk_detected() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("I feel hopeless and can't go on");
+        assert!(result.risk_level == RiskLevel::High || result.risk_level == RiskLevel::Crisis);
+    }
+
+    #[test]
+    fn english_greeting_is_none_not_unknown() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("hello, how are you");
+        assert_eq!(result.risk_level, RiskLevel::None);
+    }
+
+    #[test]
+    fn chinese_suicide_still_detected() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("我真的想自杀");
+        assert_eq!(result.risk_level, RiskLevel::Crisis);
+    }
+
+    #[test]
+    fn pinyin_zisha_detected() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("我想zisha");
+        // At minimum High or Crisis
+        assert!(
+            result.risk_level == RiskLevel::Crisis || result.risk_level == RiskLevel::High,
+            "expected Crisis or High for '我想zisha', got {:?}",
+            result.risk_level
+        );
+    }
+
+    #[test]
+    fn empty_string_returns_unknown() {
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("");
+        assert_eq!(result.risk_level, RiskLevel::Unknown);
+    }
+
+    #[test]
+    fn crisis_response_does_not_contain_us_hotlines() {
+        // We test the crisis response via the agent runtime
+        // but we can at least verify the keywords are not in the detection
+        let det = RuleBasedRiskDetector::new();
+        let result = det.evaluate("I want to kill myself");
+        let evidence_str = result.evidence.join(" ");
+        assert!(!evidence_str.contains("988"));
+        assert!(!evidence_str.contains("741741"));
+        assert!(!evidence_str.contains("911"));
+    }
+}

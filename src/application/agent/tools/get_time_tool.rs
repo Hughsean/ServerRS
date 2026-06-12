@@ -80,6 +80,7 @@ mod tests {
             memories: vec![],
             rag_chunks: vec![],
             user_profile: None,
+            location: None,
             tools: vec![ToolDefinition {
                 name: "get_time".into(),
                 description: "get current time".into(),

@@ -7,12 +7,12 @@ port = 8080
 
 [database]
 # MySQL connection (aligns with Java's datasource.url)
-url = "mysql://root:passwd@127.0.0.1:3306/digital_companion"
+url = "mysql://user:password@127.0.0.1:3306/digital_companion"
 max_connections = 10
 
 [jwt]
 # Must match Java's jwt.secret for token compatibility
-secret = "xNbA/ysbmriMqzBp7UIOxU7RgGQlUIJw7yyvQZaUwfw="
+secret = "CHANGE_ME_USE_A_LONG_RANDOM_SECRET"
 # Access/refresh token expiration in seconds
 access_ttl_secs = 86400
 refresh_ttl_secs = 604800
@@ -23,6 +23,28 @@ base_url = "http://127.0.0.1:11434/v1"
 model = "qwen2.5:14b"
 temperature = 0.5
 top_p = 0.9
+
+# ── LLM configuration ──
+[llm]
+provider = "openai"
+base_url = "http://127.0.0.1:11434/v1"
+chat_model = "qwen2.5:14b"
+temperature = 0.7
+top_p = 0.9
+timeout_secs = 120
+max_tool_depth = 10
+
+# ── Agent configuration ──
+[agent]
+enabled = true
+memory_enabled = true
+rag_enabled = true
+summary_enabled = true
+max_context_messages = 30
+max_memory_items = 10
+max_rag_chunks = 5
+memory_extraction_async = true
+summary_async = true
 
 # ── Risk Detector (used in Phase 4) ──
 [detector]
@@ -37,7 +59,7 @@ cleanup_interval_secs = 20
 # ── Plugins (weather, news, etc.) ──
 
 [plugins.weather]
-api_key = "fb3df76f71774a998a5579ed1ffcf3b0"
+api_key = ""
 default_location = "合肥"
 city_lookup_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/geo/v2/city/lookup"
 weather_now_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/v7/weather/now"

@@ -132,12 +132,12 @@ async fn run() -> Result<(), std::io::Error> {
         config.ollama.temperature,
         config.ollama.top_p,
     ));
-    // ── Chat LLM provider ──
+    // ── Chat LLM provider (Agent uses config.llm.*) ──
     let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::new(
-        config.ollama.base_url.clone(),
-        config.ollama.model.clone(),
-        config.ollama.temperature,
-        config.ollama.top_p,
+        config.llm.base_url.clone(),
+        config.llm.chat_model.clone(),
+        config.llm.temperature,
+        config.llm.top_p,
     ));
     // ── Dedicated embedding provider (separate from chat LLM) ──
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -301,8 +301,23 @@ async fn run() -> Result<(), std::io::Error> {
         plugins: config.plugins.clone(),
     };
 
-    let agent_tools = build_default_agent_tools(&tool_deps)
+    let agent_tools = build_default_agent_tools(&tool_deps, config.agent.enabled)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    let agent_settings = application::agent::agent_runtime::AgentRuntimeSettings {
+        agent_enabled: config.agent.enabled,
+        memory_enabled: config.agent.memory_enabled,
+        rag_enabled: config.agent.rag_enabled,
+        summary_enabled: config.agent.summary_enabled,
+        max_context_messages: config.agent.max_context_messages as usize,
+        max_memory_items: config.agent.max_memory_items,
+        max_rag_chunks: config.agent.max_rag_chunks as u64,
+        memory_extraction_async: config.agent.memory_extraction_async,
+        summary_async: config.agent.summary_async,
+        max_tool_depth: config.llm.max_tool_depth as usize,
+        temperature: config.llm.temperature,
+        top_p: config.llm.top_p,
+    };
 
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&ollama_provider),
@@ -314,7 +329,7 @@ async fn run() -> Result<(), std::io::Error> {
         context_builder,
         Arc::clone(&summary_service),
         agent_tools,
-        10,
+        agent_settings,
     ));
 
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(

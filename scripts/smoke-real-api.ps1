@@ -133,7 +133,7 @@ Write-Host "PASS" -ForegroundColor Green
 # ── Step 9: Web content question (fetch_web_content tool) ────────────────
 
 Write-Step "Step 9: POST fetch web content question"
-$body = @{ text = "请调用 fetch_web_content 工具读取 https://example.com/ 的网页内容，并告诉我页面大意。" } | ConvertTo-Json
+$body = @{ text = "请调用 fetch_web_content 工具读取 https://javaguide.cn/ 的网页内容，并告诉我页面大意。" } | ConvertTo-Json
 $r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
 Assert-Ok $r "fetch web content question"
 if (-not $r.reply) { throw "no reply for fetch web content question" }

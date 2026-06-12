@@ -34,7 +34,7 @@ pub async fn create_session(
     Ok(Json(SessionCreateResponse {
         session_id: sess.id,
         prompt: sess.prompt,
-        location: payload.location,
+        location: sess.location.clone(),
         user_profile: None,
         timeout_seconds: state.session.timeout_seconds(),
         dialogue_id: sess.dialogue_id,

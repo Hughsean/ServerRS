@@ -44,6 +44,7 @@ pub struct SessionState {
     pub user_id: u64,
     pub dialogue_id: Option<u64>,
     pub last_active: Instant,
+    pub location: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl SessionState {
@@ -67,6 +68,7 @@ struct SessionSnapshot {
     user_id: u64,
     dialogue_id: Option<u64>,
     is_first_turn: bool,
+    location: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl SessionManager {
@@ -130,6 +132,7 @@ impl SessionManager {
             user_id,
             dialogue_id,
             last_active: Instant::now(),
+            location: location.cloned(),
         };
 
         self.sessions
@@ -188,6 +191,7 @@ impl SessionManager {
                 user_id: state.user_id,
                 dialogue_id: state.dialogue_id,
                 is_first_turn: !state.messages.iter().any(|m| m.role == "user"),
+                location: state.location.clone(),
             }
         };
 
@@ -218,6 +222,10 @@ impl SessionManager {
 
         // ── Delegate to AgentRuntime ──────────────────────────────
         let emotion_owned = emotion.map(|e| e.to_string());
+        let location_value = snapshot
+            .location
+            .as_ref()
+            .and_then(|loc| serde_json::to_value(loc).ok());
         let response = self
             .agent_runtime
             .respond(
@@ -226,7 +234,7 @@ impl SessionManager {
                 Some(conv_id),
                 text.to_string(),
                 emotion_owned,
-                None,
+                location_value,
                 turn_messages.clone(),
                 Some(snapshot.prompt.clone()),
             )

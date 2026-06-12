@@ -20,6 +20,18 @@ pub struct AgentContextBuilder {
     user_profile_repo: Arc<dyn UserProfileRepository>,
 }
 
+/// Returns the content of the most recent user message from the slice,
+/// or an empty string if there are no user messages.
+pub fn latest_user_query(messages: &[ChatMessage]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 impl AgentContextBuilder {
     pub fn new(
         memory_service: Arc<MemoryService>,
@@ -45,54 +57,52 @@ impl AgentContextBuilder {
         recent_messages: Vec<ChatMessage>,
         user_profile: Option<UserProfile>,
         tools: Vec<ToolDefinition>,
+        location: Option<Value>,
+        max_memory_items: u32,
+        max_rag_chunks: u64,
+        summary_enabled: bool,
+        memory_enabled: bool,
+        rag_enabled: bool,
     ) -> AgentContext {
-        let summary = if let Some(cid) = conversation_id {
-            self.summary_service
-                .latest_for_conversation(cid)
-                .await
-                .unwrap_or(None)
-                .map(|s| s.content)
+        let summary = if summary_enabled {
+            if let Some(cid) = conversation_id {
+                self.summary_service
+                    .latest_for_conversation(cid)
+                    .await
+                    .unwrap_or(None)
+                    .map(|s| s.content)
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        let query_text: String = recent_messages
-            .iter()
-            .filter(|m| m.role == "user" || m.role == "assistant")
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let recall_query = if query_text.is_empty() {
-            "user conversation context".to_string()
+        let recall_query = latest_user_query(&recent_messages);
+
+        let memories = if !memory_enabled || max_memory_items == 0 {
+            Vec::new()
         } else {
-            query_text
+            self.memory_service
+                .recall(user_id, &recall_query, max_memory_items)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| {
+                    format!(
+                        "[{}] {} (confidence: {:.2})",
+                        m.memory_type, m.content, m.confidence
+                    )
+                })
+                .collect()
         };
 
-        let memories = self
-            .memory_service
-            .recall(user_id, &recall_query, 10)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| {
-                format!(
-                    "[{}] {} (confidence: {:.2})",
-                    m.memory_type, m.content, m.confidence
-                )
-            })
-            .collect();
-
-        let rag_query = recent_messages
-            .iter()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.as_str())
-            .unwrap_or("")
-            .to_string();
-        let rag_chunks = if rag_query.is_empty() {
+        let rag_query = latest_user_query(&recent_messages);
+        let rag_chunks = if !rag_enabled || rag_query.is_empty() || max_rag_chunks == 0 {
             Vec::new()
         } else {
             self.retrieval_service
-                .retrieve(&rag_query, user_id, 5)
+                .retrieve(&rag_query, user_id, max_rag_chunks)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -121,6 +131,58 @@ impl AgentContextBuilder {
             rag_chunks,
             user_profile: profile,
             tools,
+            location,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_user_query_returns_most_recent() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "第一轮问题".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "回答".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "第二轮问题".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+        assert_eq!(latest_user_query(&messages), "第二轮问题");
+    }
+
+    #[test]
+    fn latest_user_query_empty_on_no_user() {
+        let messages = vec![ChatMessage {
+            role: "assistant".into(),
+            content: "only assistant".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
+        assert_eq!(latest_user_query(&messages), "");
+    }
+
+    #[test]
+    fn latest_user_query_empty_on_empty_slice() {
+        let messages: Vec<ChatMessage> = vec![];
+        assert_eq!(latest_user_query(&messages), "");
     }
 }

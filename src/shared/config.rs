@@ -761,7 +761,7 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load() -> Self {
         let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".into());
-        match std::fs::read_to_string(&path) {
+        let mut cfg = match std::fs::read_to_string(&path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(cfg) => {
                     tracing::info!(path = %path, "configuration loaded");
@@ -775,6 +775,53 @@ impl AppConfig {
             Err(e) => {
                 tracing::warn!(path = %path, error = %e, "config file not found, using defaults");
                 Self::default()
+            }
+        };
+        cfg.apply_env_overrides();
+        cfg
+    }
+
+    /// Override configuration fields with environment variables.
+    /// Does NOT log the actual values for security.
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("DATABASE_URL") {
+            if !val.is_empty() {
+                self.database.url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("JWT_SECRET") {
+            if !val.is_empty() {
+                self.jwt.secret = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEATHER_API_KEY") {
+            if !val.is_empty() {
+                self.plugins.weather.api_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("QDRANT_API_KEY") {
+            if !val.is_empty() {
+                self.qdrant.api_key = Some(val);
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_BASE_URL") {
+            if !val.is_empty() {
+                self.llm.base_url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_CHAT_MODEL") {
+            if !val.is_empty() {
+                self.llm.chat_model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_BASE_URL") {
+            if !val.is_empty() {
+                self.embedding.base_url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_MODEL") {
+            if !val.is_empty() {
+                self.embedding.model = val;
             }
         }
     }

@@ -130,7 +130,13 @@ pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
 
 pub fn build_default_agent_tools(
     deps: &AgentToolDeps,
+    agent_enabled: bool,
 ) -> Result<Vec<Arc<dyn AgentTool>>, AppError> {
+    if !agent_enabled {
+        info!("agent is disabled — returning empty tool list");
+        return Ok(Vec::new());
+    }
+
     let mut registrations = default_agent_tool_registrations();
 
     registrations.sort_by_key(|registration| registration.order);
@@ -143,6 +149,22 @@ pub fn build_default_agent_tools(
         .into_iter()
         .filter(|registration| registration.enabled_by_default)
     {
+        // Conditional filtering based on config
+        let should_register = match registration.key {
+            "fetch_web_content" => deps.plugins.fetch_web_content.enabled,
+            "get_baidu_baike" => deps.plugins.baidu_baike.enabled,
+            "get_weather" => !deps.plugins.weather.api_key.trim().is_empty(),
+            _ => true,
+        };
+
+        if !should_register {
+            info!(
+                tool = registration.key,
+                "tool skipped — disabled or not configured"
+            );
+            continue;
+        }
+
         let tool = (registration.factory)(deps);
         tools.push(tool);
     }

@@ -36,7 +36,7 @@ impl AgentTool for BaiduBaikeTool {
     }
 
     fn description(&self) -> &str {
-        "优先查询百度百科。适用：1. 名词、概念、人物、历史事件介绍。2. 查询某职位的现任担任者，例如「现任日本首相」。3. 查询某人物当前状态。4. 即使问题包含「现任」「是谁」等词，只要涉及百科类实体，都应优先尝试此工具。5. 如果无法找到结果，再使用网页搜索。"
+        "用于查询相对稳定的百科类实体介绍，例如人物生平、概念解释、历史事件、机构简介。它不是实时信息源，不适合查询「现任/最新/今天/当前状态/价格/法规/新闻」等可能变化的信息。若用户问题涉及实时性，只能说明百科信息可能滞后，不得声称已验证最新情况。"
     }
 
     fn parameters(&self) -> Value {
@@ -45,7 +45,7 @@ impl AgentTool for BaiduBaikeTool {
             "properties": {
                 "keyword": {
                     "type": "string",
-                    "description": "搜索关键词。请去除「现任」「最新」「是谁」等修饰词，仅使用核心名词或实体名称。例如用户问「现任日本首相」，关键词应为「日本首相」或「日本内阁总理大臣」。"
+                    "description": "要查询的核心名词或实体名称，例如「日本首相」「量子力学」「长城」。直接使用用户关心的实体名称即可。"
                 }
             },
             "required": ["keyword"]
@@ -433,6 +433,7 @@ mod tests {
             memories: vec![],
             rag_chunks: vec![],
             user_profile: None,
+            location: None,
             tools: vec![ToolDefinition {
                 name: "get_baidu_baike".into(),
                 description: "search baidu baike".into(),

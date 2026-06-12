@@ -46,6 +46,7 @@ pub struct AgentContext {
     pub rag_chunks: Vec<String>,
     pub user_profile: Option<Value>,
     pub tools: Vec<ToolDefinition>,
+    pub location: Option<Value>,
 }
 
 /// Description of a tool as presented to the agent (and to the LLM).

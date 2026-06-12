@@ -1637,7 +1637,7 @@ fn build_test_state() -> api::AppState {
     // ── Mock repos (in-memory, no stub_repositories) ──
     // These must be constructed BEFORE SessionManager since SessionManager now needs AgentRuntime
     use ServerRS::application::agent::agent_context::AgentContextBuilder;
-    use ServerRS::application::agent::agent_runtime::AgentRuntime;
+    use ServerRS::application::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings};
     use ServerRS::application::memory::memory_extractor::MemoryExtractor;
     use ServerRS::application::memory::memory_service::MemoryService;
     use ServerRS::application::rag::chunking::ChunkingService;
@@ -1955,7 +1955,7 @@ fn build_test_state() -> api::AppState {
         context_builder,
         Arc::clone(&summary_service),
         Vec::new(),
-        10,
+        AgentRuntimeSettings::default(),
     ));
 
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
