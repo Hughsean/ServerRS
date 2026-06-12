@@ -66,8 +66,10 @@ impl PrimaryKeyTrait for PrimaryKey {
 
 #[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
+    KnowledgeChunkManifests,
     KnowledgeDocuments,
     KnowledgeEmbeddings,
+    KnowledgeVectorManifests,
 }
 
 impl ColumnTrait for Column {
@@ -100,6 +102,9 @@ impl ColumnTrait for Column {
 impl RelationTrait for Relation {
     fn def(&self) -> RelationDef {
         match self {
+            Self::KnowledgeChunkManifests => {
+                Entity::has_one(super::knowledge_chunk_manifests::Entity).into()
+            }
             Self::KnowledgeDocuments => Entity::belongs_to(super::knowledge_documents::Entity)
                 .from(Column::DocumentId)
                 .to(super::knowledge_documents::Column::DocumentId)
@@ -107,7 +112,16 @@ impl RelationTrait for Relation {
             Self::KnowledgeEmbeddings => {
                 Entity::has_many(super::knowledge_embeddings::Entity).into()
             }
+            Self::KnowledgeVectorManifests => {
+                Entity::has_many(super::knowledge_vector_manifests::Entity).into()
+            }
         }
+    }
+}
+
+impl Related<super::knowledge_chunk_manifests::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgeChunkManifests.def()
     }
 }
 
@@ -120,6 +134,12 @@ impl Related<super::knowledge_documents::Entity> for Entity {
 impl Related<super::knowledge_embeddings::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::KnowledgeEmbeddings.def()
+    }
+}
+
+impl Related<super::knowledge_vector_manifests::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgeVectorManifests.def()
     }
 }
 

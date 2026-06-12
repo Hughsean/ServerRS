@@ -62,7 +62,10 @@ impl PrimaryKeyTrait for PrimaryKey {
 
 #[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
+    KnowledgeChunkManifests,
     KnowledgeChunks,
+    KnowledgePublishRecords,
+    KnowledgeVectorManifests,
     Users,
 }
 
@@ -91,7 +94,16 @@ impl ColumnTrait for Column {
 impl RelationTrait for Relation {
     fn def(&self) -> RelationDef {
         match self {
+            Self::KnowledgeChunkManifests => {
+                Entity::has_many(super::knowledge_chunk_manifests::Entity).into()
+            }
             Self::KnowledgeChunks => Entity::has_many(super::knowledge_chunks::Entity).into(),
+            Self::KnowledgePublishRecords => {
+                Entity::has_many(super::knowledge_publish_records::Entity).into()
+            }
+            Self::KnowledgeVectorManifests => {
+                Entity::has_many(super::knowledge_vector_manifests::Entity).into()
+            }
             Self::Users => Entity::belongs_to(super::users::Entity)
                 .from(Column::OwnerUserId)
                 .to(super::users::Column::Id)
@@ -100,9 +112,27 @@ impl RelationTrait for Relation {
     }
 }
 
+impl Related<super::knowledge_chunk_manifests::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgeChunkManifests.def()
+    }
+}
+
 impl Related<super::knowledge_chunks::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::KnowledgeChunks.def()
+    }
+}
+
+impl Related<super::knowledge_publish_records::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgePublishRecords.def()
+    }
+}
+
+impl Related<super::knowledge_vector_manifests::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::KnowledgeVectorManifests.def()
     }
 }
 

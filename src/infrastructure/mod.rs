@@ -5,3 +5,4 @@ pub mod persistence;
 pub mod storage;
 pub mod tasks;
 pub mod vector_store;
+pub mod web_ingestion;

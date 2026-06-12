@@ -59,7 +59,7 @@ cleanup_interval_secs = 20
 # ── Plugins (weather, news, etc.) ──
 
 [plugins.weather]
-api_key = ""
+api_key = "fb3df76f71774a998a5579ed1ffcf3b0"
 default_location = "合肥"
 city_lookup_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/geo/v2/city/lookup"
 weather_now_endpoint = "https://mk4ky3n4am.re.qweatherapi.com/v7/weather/now"
@@ -81,14 +81,6 @@ enabled = true
 [plugins.baidu_baike]
 enabled = true
 
-# ── Embedding Provider ──────────────────────────────────────────────────────
-# Separate from the chat LLM — embedding uses its own model.
-[embedding]
-provider = "ollama"
-base_url = "http://127.0.0.1:11434/v1"
-model = "nomic-embed-text"
-dimension = 768
-
 # ── Qdrant VectorStore ────────────────────────────────────────────────────────
 # Qdrant is an optional vector index for RAG / Memory / Summary search.
 # When disabled (default), vector search falls back to MySQL keyword search.
@@ -99,3 +91,41 @@ url = "http://127.0.0.1:6334"
 rag_collection = "rag_chunks"
 memory_collection = "user_memories"
 summary_collection = "conversation_summaries"
+
+# ── Web Ingestion Configuration ────────────────────────────────────────────
+# ALL DISABLED BY DEFAULT. Enable only after all P0 fixes are complete.
+
+[web_ingestion]
+enabled = false
+scheduler_enabled = false
+dispatcher_enabled = false
+staging_required = true
+auto_publish_min_score = 0.85
+pipeline_version = "20260612"
+scheduler_interval_secs = 300
+dispatcher_interval_secs = 5
+outbox_batch_size = 20
+outbox_lock_ttl_secs = 300
+retry_base_delay_secs = 30
+retry_max_delay_secs = 1800
+
+[web_ingestion.distill_llm]
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+chat_model = "deepseek-v4-flash"
+api_key = "sk-d7468b67078d469eace602aa894baecb"
+temperature = 0.1
+top_p = 0.9
+timeout_secs = 120
+
+# ── Embedding Provider (separate from distill LLM) ────────────────────────
+
+[embedding]
+provider = "ollama"
+base_url = "http://127.0.0.1:11434/v1"
+model = "nomic-embed-text"
+# api_key = ""
+dimension = 768
+batch_size = 32
+timeout_secs = 120
+qdrant_collection = "rag_default"

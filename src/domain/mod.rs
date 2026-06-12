@@ -17,3 +17,4 @@ pub mod tasks;
 pub mod user;
 pub mod vector_index;
 pub mod vector_store;
+pub mod web_ingestion;

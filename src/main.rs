@@ -390,6 +390,19 @@ async fn run() -> Result<(), std::io::Error> {
         agent_runtime,
     };
 
+    // ── Web Ingestion ──────────────────────────────────────────────────
+    if config.web_ingestion.enabled {
+        bootstrap::web_ingestion::init_web_ingestion(
+            &config,
+            &db,
+            &vector_store,
+            &embedding_provider,
+            &mut background,
+        )
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    }
+
     let state = bootstrap::state::build_state(&services);
     let app = api::router::build_router(state);
 

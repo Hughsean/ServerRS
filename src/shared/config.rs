@@ -36,6 +36,8 @@ pub struct AppConfig {
     pub qdrant: QdrantConfig,
     #[serde(default)]
     pub embedding: EmbeddingConfig,
+    #[serde(default)]
+    pub web_ingestion: WebIngestionConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -452,8 +454,16 @@ pub struct EmbeddingConfig {
     pub base_url: String,
     #[serde(default = "default_embedding_model")]
     pub model: String,
+    #[serde(default = "default_embedding_api_key")]
+    pub api_key: String,
     #[serde(default = "default_embedding_dimension")]
     pub dimension: usize,
+    #[serde(default = "default_embedding_batch_size")]
+    pub batch_size: usize,
+    #[serde(default = "default_embedding_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_qdrant_rag_collection")]
+    pub qdrant_collection: String,
 }
 
 impl Default for EmbeddingConfig {
@@ -462,7 +472,113 @@ impl Default for EmbeddingConfig {
             provider: default_embedding_provider(),
             base_url: default_embedding_base_url(),
             model: default_embedding_model(),
+            api_key: default_embedding_api_key(),
             dimension: default_embedding_dimension(),
+            batch_size: default_embedding_batch_size(),
+            timeout_secs: default_embedding_timeout_secs(),
+            qdrant_collection: default_qdrant_rag_collection(),
+        }
+    }
+}
+
+// ── WebIngestionConfig ──
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebIngestionConfig {
+    #[serde(default = "default_web_ingestion_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub scheduler_enabled: bool,
+    #[serde(default)]
+    pub dispatcher_enabled: bool,
+    #[serde(default = "default_true")]
+    pub staging_required: bool,
+    #[serde(default = "default_web_ingestion_auto_publish_min_score")]
+    pub auto_publish_min_score: f64,
+    #[serde(default = "default_web_ingestion_pipeline_version")]
+    pub pipeline_version: String,
+    #[serde(default = "default_web_ingestion_max_body_bytes")]
+    pub max_body_bytes: u64,
+    #[serde(default = "default_web_ingestion_fetch_timeout_secs")]
+    pub fetch_timeout_secs: u64,
+    #[serde(default = "default_web_ingestion_chunk_target_min")]
+    pub chunk_target_min: usize,
+    #[serde(default = "default_web_ingestion_chunk_target_max")]
+    pub chunk_target_max: usize,
+    #[serde(default = "default_web_ingestion_chunk_overlap_min")]
+    pub chunk_overlap_min: usize,
+    #[serde(default = "default_web_ingestion_chunk_overlap_max")]
+    pub chunk_overlap_max: usize,
+    #[serde(default = "default_web_ingestion_scheduler_interval_secs")]
+    pub scheduler_interval_secs: u64,
+    #[serde(default = "default_web_ingestion_dispatcher_interval_secs")]
+    pub dispatcher_interval_secs: u64,
+    #[serde(default = "default_web_ingestion_outbox_batch_size")]
+    pub outbox_batch_size: u64,
+    #[serde(default = "default_web_ingestion_outbox_lock_ttl_secs")]
+    pub outbox_lock_ttl_secs: u32,
+    #[serde(default = "default_web_ingestion_retry_base_delay_secs")]
+    pub retry_base_delay_secs: u64,
+    #[serde(default = "default_web_ingestion_retry_max_delay_secs")]
+    pub retry_max_delay_secs: u64,
+    #[serde(default)]
+    pub distill_llm: DistillLlmConfig,
+}
+
+impl Default for WebIngestionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_web_ingestion_enabled(),
+            scheduler_enabled: false,
+            dispatcher_enabled: false,
+            staging_required: true,
+            auto_publish_min_score: default_web_ingestion_auto_publish_min_score(),
+            pipeline_version: default_web_ingestion_pipeline_version(),
+            max_body_bytes: default_web_ingestion_max_body_bytes(),
+            fetch_timeout_secs: default_web_ingestion_fetch_timeout_secs(),
+            chunk_target_min: default_web_ingestion_chunk_target_min(),
+            chunk_target_max: default_web_ingestion_chunk_target_max(),
+            chunk_overlap_min: default_web_ingestion_chunk_overlap_min(),
+            chunk_overlap_max: default_web_ingestion_chunk_overlap_max(),
+            scheduler_interval_secs: default_web_ingestion_scheduler_interval_secs(),
+            dispatcher_interval_secs: default_web_ingestion_dispatcher_interval_secs(),
+            outbox_batch_size: default_web_ingestion_outbox_batch_size(),
+            outbox_lock_ttl_secs: default_web_ingestion_outbox_lock_ttl_secs(),
+            retry_base_delay_secs: default_web_ingestion_retry_base_delay_secs(),
+            retry_max_delay_secs: default_web_ingestion_retry_max_delay_secs(),
+            distill_llm: DistillLlmConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DistillLlmConfig {
+    #[serde(default = "default_distill_llm_provider")]
+    pub provider: String,
+    #[serde(default = "default_distill_llm_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_distill_llm_chat_model")]
+    pub chat_model: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_distill_llm_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_distill_llm_top_p")]
+    pub top_p: f64,
+    #[serde(default = "default_distill_llm_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for DistillLlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_distill_llm_provider(),
+            base_url: default_distill_llm_base_url(),
+            chat_model: default_distill_llm_chat_model(),
+            api_key: String::new(),
+            temperature: default_distill_llm_temperature(),
+            top_p: default_distill_llm_top_p(),
+            timeout_secs: default_distill_llm_timeout_secs(),
         }
     }
 }
@@ -476,8 +592,82 @@ fn default_embedding_base_url() -> String {
 fn default_embedding_model() -> String {
     "nomic-embed-text".into()
 }
+fn default_embedding_api_key() -> String {
+    String::new()
+}
 fn default_embedding_dimension() -> usize {
     768
+}
+fn default_embedding_batch_size() -> usize {
+    32
+}
+fn default_embedding_timeout_secs() -> u64 {
+    120
+}
+
+fn default_web_ingestion_enabled() -> bool {
+    false
+}
+fn default_web_ingestion_auto_publish_min_score() -> f64 {
+    0.85
+}
+fn default_web_ingestion_pipeline_version() -> String {
+    "20260612".into()
+}
+fn default_web_ingestion_max_body_bytes() -> u64 {
+    5 * 1024 * 1024
+}
+fn default_web_ingestion_fetch_timeout_secs() -> u64 {
+    30
+}
+fn default_web_ingestion_chunk_target_min() -> usize {
+    500
+}
+fn default_web_ingestion_chunk_target_max() -> usize {
+    1000
+}
+fn default_web_ingestion_chunk_overlap_min() -> usize {
+    80
+}
+fn default_web_ingestion_chunk_overlap_max() -> usize {
+    120
+}
+fn default_web_ingestion_scheduler_interval_secs() -> u64 {
+    300
+}
+fn default_web_ingestion_dispatcher_interval_secs() -> u64 {
+    5
+}
+fn default_web_ingestion_outbox_batch_size() -> u64 {
+    20
+}
+fn default_web_ingestion_outbox_lock_ttl_secs() -> u32 {
+    300
+}
+fn default_web_ingestion_retry_base_delay_secs() -> u64 {
+    30
+}
+fn default_web_ingestion_retry_max_delay_secs() -> u64 {
+    1800
+}
+
+fn default_distill_llm_provider() -> String {
+    "deepseek".into()
+}
+fn default_distill_llm_base_url() -> String {
+    "https://api.deepseek.com".into()
+}
+fn default_distill_llm_chat_model() -> String {
+    "deepseek-chat".into()
+}
+fn default_distill_llm_temperature() -> f64 {
+    0.1
+}
+fn default_distill_llm_top_p() -> f64 {
+    0.9
+}
+fn default_distill_llm_timeout_secs() -> u64 {
+    120
 }
 
 // ── QdrantConfig ──
@@ -754,6 +944,7 @@ impl Default for AppConfig {
             rag: Default::default(),
             qdrant: Default::default(),
             embedding: Default::default(),
+            web_ingestion: Default::default(),
         }
     }
 }
@@ -822,6 +1013,150 @@ impl AppConfig {
         if let Ok(val) = std::env::var("EMBEDDING_MODEL") {
             if !val.is_empty() {
                 self.embedding.model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_API_KEY") {
+            if !val.is_empty() {
+                self.embedding.api_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_DIMENSION") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.embedding.dimension = n;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_BATCH_SIZE") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.embedding.batch_size = n;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.embedding.timeout_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("QDRANT_COLLECTION") {
+            if !val.is_empty() {
+                self.embedding.qdrant_collection = val;
+            }
+        }
+
+        // ── Web Ingestion ──
+        if let Ok(val) = std::env::var("WEB_INGESTION_ENABLED") {
+            if let Ok(b) = val.parse::<bool>() {
+                self.web_ingestion.enabled = b;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_SCHEDULER_ENABLED") {
+            if let Ok(b) = val.parse::<bool>() {
+                self.web_ingestion.scheduler_enabled = b;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISPATCHER_ENABLED") {
+            if let Ok(b) = val.parse::<bool>() {
+                self.web_ingestion.dispatcher_enabled = b;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_STAGING_REQUIRED") {
+            if let Ok(b) = val.parse::<bool>() {
+                self.web_ingestion.staging_required = b;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_AUTO_PUBLISH_MIN_SCORE") {
+            if let Ok(n) = val.parse::<f64>() {
+                self.web_ingestion.auto_publish_min_score = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_PIPELINE_VERSION") {
+            if !val.is_empty() {
+                self.web_ingestion.pipeline_version = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_SCHEDULER_INTERVAL_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.scheduler_interval_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISPATCHER_INTERVAL_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.dispatcher_interval_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_OUTBOX_BATCH_SIZE") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.outbox_batch_size = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_OUTBOX_LOCK_TTL_SECS") {
+            if let Ok(n) = val.parse::<u32>() {
+                self.web_ingestion.outbox_lock_ttl_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_RETRY_BASE_DELAY_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.retry_base_delay_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_RETRY_MAX_DELAY_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.retry_max_delay_secs = n;
+            }
+        }
+        // ── Distill LLM ──
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_PROVIDER") {
+            if !val.is_empty() {
+                self.web_ingestion.distill_llm.provider = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_BASE_URL") {
+            if !val.is_empty() {
+                self.web_ingestion.distill_llm.base_url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_CHAT_MODEL") {
+            if !val.is_empty() {
+                self.web_ingestion.distill_llm.chat_model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_API_KEY") {
+            if !val.is_empty() {
+                self.web_ingestion.distill_llm.api_key = val;
+            }
+        } else if let Ok(val) = std::env::var("DEEPSEEK_API_KEY") {
+            // DEEPSEEK_API_KEY is a fallback for distill_llm ONLY, never for embedding
+            if !val.is_empty() {
+                self.web_ingestion.distill_llm.api_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_TEMPERATURE") {
+            if let Ok(n) = val.parse::<f64>() {
+                self.web_ingestion.distill_llm.temperature = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_TOP_P") {
+            if let Ok(n) = val.parse::<f64>() {
+                self.web_ingestion.distill_llm.top_p = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.web_ingestion.distill_llm.timeout_secs = n;
+            }
+        }
+        // ── Embedding (separate from distill_llm — DEEPSEEK_API_KEY must NOT leak here) ──
+        if let Ok(val) = std::env::var("EMBEDDING_PROVIDER") {
+            if !val.is_empty() {
+                self.embedding.provider = val;
+            }
+        }
+        if let Ok(val) = std::env::var("EMBEDDING_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.embedding.timeout_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("QDRANT_COLLECTION") {
+            if !val.is_empty() {
+                self.embedding.qdrant_collection = val;
             }
         }
     }

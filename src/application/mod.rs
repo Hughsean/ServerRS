@@ -11,3 +11,4 @@ pub mod session;
 pub mod storage;
 pub mod summary;
 pub mod user;
+pub mod web_ingestion;
