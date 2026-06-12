@@ -44,6 +44,8 @@ pub enum WebIngestionError {
     NotFound { entity: String, id: u64 },
     /// Duplicate event / run key detected (idempotency violation).
     DuplicateKey { key_type: String, key: String },
+    /// The requested review action conflicts with current persisted state.
+    ReviewConflict { reason: String },
     /// Generic internal error.
     Internal(String),
 }
@@ -118,6 +120,9 @@ impl fmt::Display for WebIngestionError {
             Self::DuplicateKey { key_type, key } => {
                 write!(f, "duplicate {key_type}: {key}")
             }
+            Self::ReviewConflict { reason } => {
+                write!(f, "knowledge review conflict: {reason}")
+            }
             Self::Internal(msg) => write!(f, "web ingestion internal error: {msg}"),
         }
     }
@@ -133,13 +138,5 @@ impl WebIngestionError {
             } => *retry_after_secs,
             _ => None,
         }
-    }
-}
-
-// ── Conversion into the shared AppError ─────────────────────────────────────
-
-impl From<WebIngestionError> for crate::shared::error::AppError {
-    fn from(e: WebIngestionError) -> Self {
-        crate::shared::error::AppError::internal(e.to_string())
     }
 }

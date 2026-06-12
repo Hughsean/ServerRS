@@ -14,6 +14,7 @@ use reqwest::header::{
 };
 
 use crate::domain::web_ingestion::error::WebIngestionError;
+use crate::domain::web_ingestion::fetcher::{FetchResult, WebContentFetcher};
 use crate::shared::config::WebIngestionConfig;
 
 const MAX_REDIRECTS: usize = 5;
@@ -23,15 +24,6 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &[
     "application/xhtml+xml",
     "application/xml",
 ];
-
-#[derive(Debug, Clone)]
-pub struct FetchResult {
-    pub final_url: String,
-    pub content_type: Option<String>,
-    pub body: Vec<u8>,
-    pub body_text: String,
-    pub content_length: Option<u64>,
-}
 
 pub struct WebFetcher {
     client: reqwest::Client,
@@ -91,7 +83,7 @@ impl WebFetcher {
     /// `allowed_domains` — when non-empty, the hostname must match one of the
     /// allowed domains (exact or subdomain).  Domain matching uses suffix-match:
     /// `sub.example.com` matches allowed `.example.com` or `example.com`.
-    pub async fn fetch(
+    async fn fetch_inner(
         &self,
         url: &str,
         allowed_domains: Option<&[String]>,
@@ -236,6 +228,17 @@ impl WebFetcher {
         if request_at > now {
             tokio::time::sleep_until(request_at).await;
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl WebContentFetcher for WebFetcher {
+    async fn fetch(
+        &self,
+        url: &str,
+        allowed_domains: Option<&[String]>,
+    ) -> Result<FetchResult, WebIngestionError> {
+        self.fetch_inner(url, allowed_domains).await
     }
 }
 

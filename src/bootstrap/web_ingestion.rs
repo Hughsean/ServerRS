@@ -10,13 +10,16 @@ use sea_orm::DatabaseConnection;
 use tracing::info;
 
 use crate::application::web_ingestion::pipeline_context::PipelineContext;
+use crate::application::web_ingestion::review_service::KnowledgeReviewService;
 use crate::application::web_ingestion::{dispatcher, scheduler};
 use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::RAGRepository;
 use crate::domain::vector_store::VectorStore;
+use crate::infrastructure::web_ingestion::distiller::OpenAiKnowledgeDistiller;
 use crate::infrastructure::web_ingestion::fetcher::WebFetcher;
 use crate::infrastructure::web_ingestion::repositories::*;
+use crate::infrastructure::web_ingestion::review_repository::SeaOrmKnowledgeReviewRepository;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 
@@ -27,8 +30,12 @@ pub async fn init_web_ingestion(
     embedding_provider: &Arc<dyn EmbeddingProvider>,
     rag_repo: &Arc<dyn RAGRepository>,
     background: &mut BackgroundTasks,
-) -> Result<(), AppError> {
+) -> Result<Arc<KnowledgeReviewService>, AppError> {
     let wc = &config.web_ingestion;
+    let review_service = Arc::new(KnowledgeReviewService::new(
+        Arc::new(SeaOrmKnowledgeReviewRepository::new(db.clone())),
+        wc.enabled && wc.dispatcher_enabled,
+    ));
 
     // ── Master switch (§5.1) ───────────────────────────────────────────────
     // Even if scheduler_enabled / dispatcher_enabled are true, nothing starts
@@ -41,12 +48,16 @@ pub async fn init_web_ingestion(
             enabled = wc.enabled,
             "web ingestion: no workers to start (master switch off or both workers disabled)"
         );
-        return Ok(());
+        return Ok(review_service);
     }
 
     let fetcher = Arc::new(
         WebFetcher::new(wc)
             .map_err(|e| AppError::internal(format!("web ingestion fetcher init: {e}")))?,
+    );
+    let distiller = Arc::new(
+        OpenAiKnowledgeDistiller::new(wc.distill_llm.clone())
+            .map_err(|e| AppError::internal(format!("web ingestion distiller init: {e}")))?,
     );
 
     let ctx = PipelineContext {
@@ -62,6 +73,7 @@ pub async fn init_web_ingestion(
         audit_repo: Arc::new(SeaOrmAuditLogRepository::new(db.clone())),
         rag_repo: Arc::clone(rag_repo),
         fetcher,
+        distiller,
         embedding_provider: Arc::clone(embedding_provider),
         vector_store: vector_store.as_ref().map(Arc::clone),
         config: wc.clone(),
@@ -122,7 +134,7 @@ pub async fn init_web_ingestion(
         info!("web ingestion outbox dispatcher started");
     }
 
-    Ok(())
+    Ok(review_service)
 }
 
 /// Resolved decision of which workers may start, after applying the master

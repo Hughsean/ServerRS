@@ -20,7 +20,9 @@ const HIGH_RISK_FLAGS: &[&str] = &[
     "self_harm_crisis",
     "medication_dosage",
     "diagnosis_criteria",
+    "medical_claim",
     "legal_policy",
+    "financial_advice",
     "minors_high_risk",
     "emergency_advice",
 ];
@@ -154,7 +156,9 @@ fn is_known_risk_flag(flag: &str) -> bool {
         "self_harm_crisis"
             | "medication_dosage"
             | "diagnosis_criteria"
+            | "medical_claim"
             | "legal_policy"
+            | "financial_advice"
             | "minors_high_risk"
             | "emergency_advice"
             | "general_health"

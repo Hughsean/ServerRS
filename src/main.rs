@@ -379,6 +379,20 @@ async fn run() -> Result<(), std::io::Error> {
         config.storage.clone(),
     ));
 
+    // ── Web Ingestion ──────────────────────────────────────────────────
+    // The review service remains available for inspection when workers are
+    // disabled; submitting a publish request then returns a conflict.
+    let knowledge_review = bootstrap::web_ingestion::init_web_ingestion(
+        &config,
+        &db,
+        &vector_store,
+        &embedding_provider,
+        &rag_repo,
+        &mut background,
+    )
+    .await
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
     // ── API ──
     let services = bootstrap::state::ServiceGraph {
         auth,
@@ -395,23 +409,8 @@ async fn run() -> Result<(), std::io::Error> {
         ingestion,
         memory: memory_svc,
         agent_runtime,
+        knowledge_review,
     };
-
-    // ── Web Ingestion ──────────────────────────────────────────────────
-    // The init function enforces the master switch internally (§5.1); the
-    // outer guard simply avoids constructing it when disabled.
-    if config.web_ingestion.enabled {
-        bootstrap::web_ingestion::init_web_ingestion(
-            &config,
-            &db,
-            &vector_store,
-            &embedding_provider,
-            &rag_repo,
-            &mut background,
-        )
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-    }
 
     let state = bootstrap::state::build_state(&services);
     let app = api::router::build_router(state);

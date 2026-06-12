@@ -18,12 +18,12 @@ pub mod dispatcher;
 pub mod event_types;
 pub mod handlers;
 pub mod pipeline_context;
+pub mod review_service;
 pub mod scheduler;
 pub mod services;
 pub mod state_machine_adapter;
 
 // Stateless domain services used across handlers.
-pub mod distill_service;
 pub mod extractor;
 pub mod hash;
 pub mod industrial_chunker;

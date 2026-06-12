@@ -18,6 +18,7 @@ use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
+use crate::application::web_ingestion::review_service::KnowledgeReviewService;
 
 #[derive(Clone)]
 pub struct ServiceGraph {
@@ -35,6 +36,7 @@ pub struct ServiceGraph {
     pub ingestion: Arc<IngestionService>,
     pub memory: Arc<MemoryService>,
     pub agent_runtime: Arc<AgentRuntime>,
+    pub knowledge_review: Arc<KnowledgeReviewService>,
 }
 
 pub fn build_state(services: &ServiceGraph) -> AppState {
@@ -70,6 +72,7 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
         admin: AdminState {
             user: Arc::clone(&services.user),
             query: Arc::clone(&services.query),
+            knowledge_review: Arc::clone(&services.knowledge_review),
         },
         internal: InternalState {
             retrieval: Arc::clone(&services.retrieval),

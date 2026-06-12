@@ -63,16 +63,16 @@ foreach ($line in Get-Content -LiteralPath $sourcePath) {
         throw "Only absolute HTTPS URLs are accepted: $candidate"
     }
 
-    $host = $uri.DnsSafeHost.ToLowerInvariant()
+    $urlHost = $uri.DnsSafeHost.ToLowerInvariant()
     $allowed = $false
     foreach ($domain in $normalizedDomains) {
-        if ($host -eq $domain -or $host.EndsWith(".$domain")) {
+        if ($urlHost -eq $domain -or $urlHost.EndsWith(".$domain")) {
             $allowed = $true
             break
         }
     }
     if (-not $allowed) {
-        throw "URL host '$host' is outside AllowedDomains: $candidate"
+        throw "URL host '$urlHost' is outside AllowedDomains: $candidate"
     }
 
     $urls.Add($uri.AbsoluteUri)

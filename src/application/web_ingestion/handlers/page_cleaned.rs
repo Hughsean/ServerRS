@@ -4,7 +4,6 @@
 //! system prompt). Validates structured JSON, persists distilled_json + usage,
 //! and emits `PageDistilled`. Idempotent + resumable per §5.8.
 
-use crate::application::web_ingestion::distill_service;
 use crate::application::web_ingestion::event_types::event as ev;
 use crate::application::web_ingestion::pipeline_context::PipelineContext;
 use crate::application::web_ingestion::services::{artifact_service, terminal_events};
@@ -73,31 +72,39 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         return Ok(());
     }
 
-    // Untrusted content goes in as user data (distill_service enforces this).
-    let url = format!("source:{}:page:{}", run.source_id, run.page_id);
-    let distill_result =
-        match distill_service::distill(&clean_text, &url, &ctx.config.distill_llm).await {
-            Ok(r) => r,
-            Err(WebIngestionError::DistillJsonParseFailed { error }) => {
-                // Retry already happened inside distill(); failing now means the
-                // model could not produce valid JSON. Do NOT fake success — fail.
-                ctx.audit_repo
-                    .insert(NewAuditLog {
-                        source_id: Some(run.source_id),
-                        source_url_id: run.source_url_id,
-                        page_id: Some(run.page_id),
-                        run_id: Some(run_id),
-                        publish_record_id: None,
-                        action: "distill_failed".into(),
-                        status: "error".into(),
-                        message: format!("distill JSON parse failed after retry: {error}"),
-                        metadata: None,
-                    })
-                    .await?;
-                return Err(WebIngestionError::DistillJsonParseFailed { error });
-            }
-            Err(e) => return Err(e),
-        };
+    // Untrusted content goes in as user data; the infrastructure adapter
+    // enforces prompt-injection guards.
+    let page = ctx
+        .page_repo
+        .find_by_id(run.page_id)
+        .await?
+        .ok_or_else(|| WebIngestionError::NotFound {
+            entity: "web_page".into(),
+            id: run.page_id,
+        })?;
+    let url = page.canonical_url.as_deref().unwrap_or(&page.url);
+    let distill_result = match ctx.distiller.distill(&clean_text, &url).await {
+        Ok(r) => r,
+        Err(WebIngestionError::DistillJsonParseFailed { error }) => {
+            // Retry already happened inside distill(); failing now means the
+            // model could not produce valid JSON. Do NOT fake success — fail.
+            ctx.audit_repo
+                .insert(NewAuditLog {
+                    source_id: Some(run.source_id),
+                    source_url_id: run.source_url_id,
+                    page_id: Some(run.page_id),
+                    run_id: Some(run_id),
+                    publish_record_id: None,
+                    action: "distill_failed".into(),
+                    status: "error".into(),
+                    message: format!("distill JSON parse failed after retry: {error}"),
+                    metadata: None,
+                })
+                .await?;
+            return Err(WebIngestionError::DistillJsonParseFailed { error });
+        }
+        Err(e) => return Err(e),
+    };
 
     let distilled_value = serde_json::to_value(&distill_result.distilled)
         .map_err(|e| WebIngestionError::Internal(format!("serialize distilled: {e}")))?;

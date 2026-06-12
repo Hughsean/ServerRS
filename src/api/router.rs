@@ -22,6 +22,7 @@ use super::handlers::depression_handler::{
 use super::handlers::diary_handler::{
     create_diary, delete_diary, get_diary, list_diaries, update_diary,
 };
+use super::handlers::knowledge_review_handler::{get_review, list_reviews, publish_reviewed};
 use super::handlers::music_handler::{
     admin_create_track, admin_delete_track, admin_update_track, get_track, list_tracks,
     stream_track,
@@ -153,13 +154,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/admin/music", post(admin_create_track))
         .route("/api/v1/admin/music/{id}", patch(admin_update_track))
         .route("/api/v1/admin/music/{id}", delete(admin_delete_track))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_bearer_auth,
-        ))
+        .route("/api/v1/admin/web-ingestion/reviews", get(list_reviews))
+        .route(
+            "/api/v1/admin/web-ingestion/reviews/{publish_record_id}",
+            get(get_review),
+        )
+        .route(
+            "/api/v1/admin/web-ingestion/reviews/{publish_record_id}/publish",
+            post(publish_reviewed),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_role,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer_auth,
         ));
 
     // ── Assemble everything into a single Router ───────────────────────────────

@@ -5,5 +5,7 @@
 //! - HTTP fetcher with SSRF protection
 //! - (LLM/embedding providers live in their own infrastructure modules)
 
+pub mod distiller;
 pub mod fetcher;
 pub mod repositories;
+pub mod review_repository;

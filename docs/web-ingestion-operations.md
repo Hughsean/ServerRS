@@ -256,8 +256,58 @@ pwsh -File .\scripts\create-wikipedia-knowledge-tasks.ps1 `
 
 ## 发布人工审核内容
 
-专业知识和未通过自动发布门槛的内容会停留在暂存状态。审核完成后，明确指定
-`knowledge_publish_records.id` 创建发布事件：
+专业知识和未通过自动发布门槛的内容会停留在暂存状态。系统提供管理员审核
+API，接口需要有效的 `ADMIN` 或 `SUPER_ADMIN` Bearer Token。
+
+查询待审核记录：
+
+```http
+GET /api/v1/admin/web-ingestion/reviews?page=1&pageSize=20&status=staged
+Authorization: Bearer <access-token>
+```
+
+可选参数：
+
+- `status`：默认 `staged`，也支持 `all`、`published`、`superseded`、
+  `rolled_back`、`failed`。
+- `sourceId`：只查看指定 `web_sources.id`。
+- `page`、`pageSize`：页码与每页数量，`pageSize` 最大为 100。
+
+查看审核详情：
+
+```http
+GET /api/v1/admin/web-ingestion/reviews/101
+Authorization: Bearer <access-token>
+```
+
+详情包含来源 URL、质量结论、风险标记、清洗正文、蒸馏结果和审核日志。
+
+审核通过后提交发布：
+
+```http
+POST /api/v1/admin/web-ingestion/reviews/101/publish
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{
+  "notes": "已核对来源、关键事实和风险内容，可以发布"
+}
+```
+
+接口返回 `202 Accepted`，表示幂等的 `KnowledgePublishRequested` 事件已经进入
+outbox。服务器 dispatcher 随后完成数据库事务发布、旧版本替换和 Qdrant
+向量激活。重复提交同一版本不会创建重复事件。
+
+需要满足：
+
+```toml
+[web_ingestion]
+enabled = true
+dispatcher_enabled = true
+```
+
+命令行脚本保留为数据库维护备用入口。审核完成后可明确指定
+`knowledge_publish_records.id` 创建相同的发布事件：
 
 ```powershell
 pwsh -File .\scripts\publish-reviewed-web-knowledge.ps1 `

@@ -9,8 +9,9 @@ use std::sync::Arc;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::RAGRepository;
 use crate::domain::vector_store::VectorStore;
+use crate::domain::web_ingestion::distiller::KnowledgeDistiller;
+use crate::domain::web_ingestion::fetcher::WebContentFetcher;
 use crate::domain::web_ingestion::repository::*;
-use crate::infrastructure::web_ingestion::fetcher::WebFetcher;
 use crate::shared::config::{EmbeddingConfig, WebIngestionConfig};
 
 /// All dependencies a handler may need. Cheap to clone (everything is `Arc`).
@@ -28,7 +29,8 @@ pub struct PipelineContext {
     pub audit_repo: Arc<dyn AuditLogRepository>,
     /// RAG knowledge store (knowledge_documents / knowledge_chunks / embeddings).
     pub rag_repo: Arc<dyn RAGRepository>,
-    pub fetcher: Arc<WebFetcher>,
+    pub fetcher: Arc<dyn WebContentFetcher>,
+    pub distiller: Arc<dyn KnowledgeDistiller>,
     /// Embedding provider — MUST be separate from the distill chat LLM.
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
     /// Optional Qdrant-backed vector store. None → Qdrant disabled.

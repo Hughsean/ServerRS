@@ -16,6 +16,7 @@ use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
+use crate::application::web_ingestion::review_service::KnowledgeReviewService;
 
 #[derive(Clone, FromRef)]
 pub struct AppState {
@@ -82,6 +83,7 @@ pub struct CommunityState {
 pub struct AdminState {
     pub user: Arc<UserService>,
     pub query: Arc<SessionService>,
+    pub knowledge_review: Arc<KnowledgeReviewService>,
 }
 
 #[derive(Clone)]
