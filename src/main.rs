@@ -476,7 +476,7 @@ fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(f)
         .with_target(true)
-        .with_file(true)
+        // .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
         .compact()

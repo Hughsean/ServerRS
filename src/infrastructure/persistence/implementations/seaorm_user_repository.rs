@@ -140,6 +140,9 @@ impl UserRepository for SeaOrmUserRepository {
         if let Some(status) = update.status {
             active.status = Set(status.to_i32() as i8);
         }
+        if let Some(role) = update.role {
+            active.role = Set(role.as_str().to_string());
+        }
         active.updated_at = Set(chrono::Utc::now());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;

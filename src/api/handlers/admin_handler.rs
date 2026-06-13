@@ -10,7 +10,7 @@ use crate::api::AdminState;
 use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::domain::risk::detection_types::RiskLevel;
-use crate::domain::user::user::{UserStatus, UserUpdate};
+use crate::domain::user::user::{UserRole, UserStatus, UserUpdate};
 use crate::shared::error::AppError;
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -23,6 +23,7 @@ pub struct UserDto {
     pub phone: Option<String>,
     pub nickname: Option<String>,
     pub status: String,
+    pub role: String,
     pub created_at: String,
     pub updated_at: String,
     pub last_login_at: Option<String>,
@@ -124,6 +125,7 @@ pub async fn list_users(
             phone: u.phone,
             nickname: u.nickname,
             status: u.status.as_str().to_string(),
+            role: u.role.as_str().to_string(),
             created_at: u.created_at.to_rfc3339(),
             updated_at: u.updated_at.to_rfc3339(),
             last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
@@ -155,6 +157,7 @@ pub async fn get_user(
         phone: u.phone,
         nickname: u.nickname,
         status: u.status.as_str().to_string(),
+        role: u.role.as_str().to_string(),
         created_at: u.created_at.to_rfc3339(),
         updated_at: u.updated_at.to_rfc3339(),
         last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
@@ -169,13 +172,20 @@ pub async fn patch_user(
     let status = body
         .status
         .map(|s| UserStatus::from_i32(s).unwrap_or(UserStatus::Disabled));
+    let role = body
+        .role
+        .map(|role| {
+            UserRole::from_str(&role)
+                .ok_or_else(|| AppError::Validation(format!("invalid user role: {role}")))
+        })
+        .transpose()?;
 
     let update = UserUpdate {
         email: None,
         phone: None,
         nickname: None,
         status,
-        role: None,
+        role,
     };
 
     let u = state.user.admin_update_user(id, update).await?;
@@ -187,6 +197,7 @@ pub async fn patch_user(
         phone: u.phone,
         nickname: u.nickname,
         status: u.status.as_str().to_string(),
+        role: u.role.as_str().to_string(),
         created_at: u.created_at.to_rfc3339(),
         updated_at: u.updated_at.to_rfc3339(),
         last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
