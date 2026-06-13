@@ -24,3 +24,6 @@ config.toml
 # Logs
 logs
 *.log
+
+.venv
+__pycache__

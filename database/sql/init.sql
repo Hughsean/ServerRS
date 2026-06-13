@@ -84,6 +84,8 @@ CREATE TABLE user_profiles
     interaction_preferences JSON COMMENT '交互偏好',
     emotional_tendency      JSON COMMENT '情感倾向',
     learning_records        JSON COMMENT '学习记录',
+    personalization_enabled TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '个性化是否启用',
+    personalization_reset_at DATETIME(6)    NULL COMMENT '最近一次重置时间',
     created_at              TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at              TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -113,25 +115,29 @@ CREATE TABLE user_diaries
 
 -- ============================================================================
 -- 5. conversations — 会话元数据表
+-- 5. conversations — 用户唯一长期对话表
 -- ============================================================================
 CREATE TABLE conversations
 (
-    id                 BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '会话ID',
-    user_id            BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
-    title              VARCHAR(100) COMMENT '对话标题，大模型生成',
-    is_title_generated TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '标题是否生成',
-    last_message_at    TIMESTAMP       NULL COMMENT '最近一条消息时间',
-    message_count      INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '消息数量',
-    created_at         TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id),
-    INDEX idx_created_at (created_at)
+    id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '会话ID',
+    user_id         BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+    title           VARCHAR(100)    NULL COMMENT '最近主题展示名，由 milestone summary 周期性更新',
+    message_count   BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '消息数量',
+    last_message_at DATETIME(6)     NULL COMMENT '最近一条消息时间',
+    created_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+
+    CONSTRAINT uk_conversations_user_id UNIQUE (user_id),
+    CONSTRAINT fk_conversations_user
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci COMMENT = '会话元数据表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '用户唯一长期对话表';
 
 -- ============================================================================
 -- 6. conversation_messages — 会话消息表
+-- 6. conversation_messages — 对话原始消息表
 -- ============================================================================
 CREATE TABLE conversation_messages
 (
@@ -142,13 +148,14 @@ CREATE TABLE conversation_messages
     message_type    VARCHAR(32)     NOT NULL DEFAULT 'text' COMMENT 'text|image|event 等',
     content         JSON            NOT NULL COMMENT '消息内容（结构自由）',
     token_count     INT UNSIGNED    NULL COMMENT '可选：token 数',
-    created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE,
-    INDEX idx_conv_created (conversation_id, created_at),
-    INDEX idx_conv_sender (conversation_id, sender_role)
+    created_at      DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    INDEX idx_conv_id (conversation_id, id),
+    INDEX idx_conv_created (conversation_id, created_at)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci COMMENT = '会话消息表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '对话原始消息表';
 
 -- ============================================================================
 -- 7. community_posts — 用户交流社区帖子表
@@ -583,40 +590,71 @@ CREATE TABLE knowledge_embeddings
 -- ============================================================================
 CREATE TABLE user_memories
 (
-    memory_id              BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-    user_id                BIGINT UNSIGNED NOT NULL,
-    memory_type            VARCHAR(64)     NOT NULL,
-    memory_key             CHAR(64)        NULL,
-    content                TEXT            NOT NULL,
-    confidence             DOUBLE          NOT NULL DEFAULT 0.7,
-    salience               DOUBLE          NOT NULL DEFAULT 0.5,
-    source_conversation_id BIGINT UNSIGNED NULL,
-    source_message_id      BIGINT UNSIGNED NULL,
-    status                 TINYINT         NOT NULL DEFAULT 1,
-    metadata               JSON            NULL,
-    created_at             DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at             DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    last_accessed_at       DATETIME(6)     NULL,
-    access_count           INT UNSIGNED    NOT NULL DEFAULT 0,
-    expires_at             DATETIME(6)     NULL,
-    vector_id              VARCHAR(128)    NULL,
-    embedding_provider     VARCHAR(64)     NULL,
-    embedding_model        VARCHAR(128)    NULL,
-    embedding_dimension    INT UNSIGNED    NULL,
-    indexed_at             DATETIME(6)     NULL,
-    UNIQUE KEY uk_user_memories_vector_id (vector_id),
-    INDEX idx_user_memories_user_status (user_id, status),
-    INDEX idx_user_memories_user_key (user_id, memory_key),
-    INDEX idx_user_memories_user_salience (user_id, status, salience),
-    INDEX idx_user_memories_expires_at (expires_at),
-    INDEX idx_user_memories_vector_id (vector_id),
-    FULLTEXT KEY ft_user_memories_content (content),
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    FOREIGN KEY (source_conversation_id) REFERENCES conversations (id) ON DELETE SET NULL,
-    FOREIGN KEY (source_message_id) REFERENCES conversation_messages (id) ON DELETE SET NULL
+    memory_id               BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id                 BIGINT UNSIGNED NOT NULL,
+
+    memory_key              CHAR(64)        NULL COMMENT 'SHA256(canonical_form)',
+    canonical_form          TEXT            NULL COMMENT '规范化表述',
+
+    memory_type             VARCHAR(64)     NOT NULL
+        COMMENT 'preference|fact|emotional_pattern|goal',
+
+    content                 TEXT            NOT NULL,
+
+    source_confidence       DECIMAL(3,2)    NOT NULL DEFAULT 0.50
+        COMMENT 'LLM 提取时的原始置信度',
+    confidence              DOUBLE          NOT NULL DEFAULT 0.7
+        COMMENT '当前综合置信度（由 evidence 更新）',
+    salience                DOUBLE          NOT NULL DEFAULT 0.5
+        COMMENT '重要性 0-1',
+
+    source_conversation_id  BIGINT UNSIGNED NULL,
+    source_message_id       BIGINT UNSIGNED NULL,
+
+    reinforced_at           DATETIME(6)     NULL
+        COMMENT '最近一次被独立新证据加强',
+    reinforce_count         INT UNSIGNED    NOT NULL DEFAULT 0
+        COMMENT '被独立证据加强的次数',
+
+    contradicted_at         DATETIME(6)     NULL,
+    superseded_by           BIGINT UNSIGNED NULL,
+
+    status                  TINYINT         NOT NULL DEFAULT 1
+        COMMENT '1=active 0=disabled -1=contradicted',
+
+    canonicalizer_version   VARCHAR(64)     NULL,
+    merge_decision          VARCHAR(32)     NULL
+        COMMENT 'same|related|new_evidence|contradiction|new',
+    merge_reason            TEXT            NULL,
+
+    metadata                JSON            NULL,
+    last_accessed_at        DATETIME(6)     NULL,
+    access_count            INT UNSIGNED    NOT NULL DEFAULT 0,
+
+    vector_id               VARCHAR(128)    NULL,
+    embedding_provider      VARCHAR(64)     NULL,
+    embedding_model         VARCHAR(128)    NULL,
+    embedding_dimension     INT UNSIGNED    NULL,
+    indexed_at              DATETIME(6)     NULL,
+
+    created_at              DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at              DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_conversation_id) REFERENCES conversations(id)
+        ON DELETE SET NULL,
+    FOREIGN KEY (source_message_id) REFERENCES conversation_messages(id)
+        ON DELETE SET NULL,
+
+    UNIQUE INDEX uk_user_memory_key (user_id, memory_key),
+    UNIQUE INDEX uk_memory_vector_id (vector_id),
+    INDEX idx_user_status_salience (user_id, status, salience DESC),
+    FULLTEXT INDEX ft_memory_content (content)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci;
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '用户长期记忆表';
 
 -- ============================================================================
 -- 25. user_memory_embeddings — 用户记忆嵌入向量表 (from patch 002)
@@ -642,37 +680,46 @@ CREATE TABLE user_memory_embeddings
 --      +vector_id/+embedding_provider/+embedding_model/+embedding_dimension/
 --      +indexed_at from patch 003,
 --      +status/+summary_version/+source_message_count from patch 004)
+-- 26. conversation_summaries — 对话 general 摘要表
 -- ============================================================================
 CREATE TABLE conversation_summaries
 (
-    summary_id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-    conversation_id       BIGINT UNSIGNED NOT NULL,
-    user_id               BIGINT UNSIGNED NOT NULL,
-    summary_type          VARCHAR(64)     NOT NULL DEFAULT 'rolling',
-    content               TEXT            NOT NULL,
-    message_start_id      BIGINT UNSIGNED NULL,
-    message_end_id        BIGINT UNSIGNED NULL,
-    token_count           INT UNSIGNED    NULL,
-    status                TINYINT         NOT NULL DEFAULT 1,
-    summary_version       INT UNSIGNED    NOT NULL DEFAULT 1,
-    source_message_count  INT UNSIGNED    NULL,
-    created_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    vector_id             VARCHAR(128)    NULL,
-    embedding_provider    VARCHAR(64)     NULL,
-    embedding_model       VARCHAR(128)    NULL,
-    embedding_dimension   INT UNSIGNED    NULL,
-    indexed_at            DATETIME(6)     NULL,
-    UNIQUE KEY uk_conversation_summaries_vector_id (vector_id),
-    INDEX idx_conversation_summaries_conversation (conversation_id),
-    INDEX idx_conversation_summaries_user (user_id),
-    INDEX idx_conversation_summaries_conv_status (conversation_id, status, updated_at),
-    INDEX idx_conversation_summaries_vector_id (vector_id),
-    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    summary_id          BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    conversation_id     BIGINT UNSIGNED NOT NULL,
+    user_id             BIGINT UNSIGNED NOT NULL,
+
+    summary_type        VARCHAR(32)     NOT NULL
+        COMMENT 'rolling_general|milestone_general',
+    content             TEXT            NOT NULL,
+
+    message_start_id    BIGINT UNSIGNED NOT NULL,
+    message_end_id      BIGINT UNSIGNED NOT NULL,
+
+    supersedes_id       BIGINT UNSIGNED NULL,
+
+    token_count         INT UNSIGNED    NULL,
+
+    vector_id           VARCHAR(128)    NULL,
+    embedding_provider  VARCHAR(64)     NULL,
+    embedding_model     VARCHAR(128)    NULL,
+    embedding_dimension INT UNSIGNED    NULL,
+    indexed_at          DATETIME(6)     NULL,
+
+    status              TINYINT         NOT NULL DEFAULT 1 COMMENT '1=active 0=disabled',
+
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+
+    INDEX idx_conv_status_end (conversation_id, status, message_end_id),
+    INDEX idx_vector_id (vector_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci;
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '对话 general 摘要表';
 
 -- ============================================================================
 -- 27. agent_events — Agent 事件追踪表
@@ -1128,3 +1175,192 @@ CREATE TABLE web_ingestion_audit_logs
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = 'Web Ingestion 审计日志表';
+
+-- ============================================================================
+-- 40. user_memory_evidence — 记忆证据关系表（新增）
+-- ============================================================================
+CREATE TABLE user_memory_evidence
+(
+    evidence_id         BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    memory_id           BIGINT UNSIGNED NOT NULL,
+
+    source_type         VARCHAR(32)     NOT NULL
+        COMMENT 'message|summary|manual',
+    source_ref_id       BIGINT UNSIGNED NOT NULL
+        COMMENT '原始来源 ID；即使 FK 清空也保留，用于审计和去重',
+
+    message_id          BIGINT UNSIGNED NULL,
+    summary_id          BIGINT UNSIGNED NULL,
+    source_deleted      TINYINT(1)      NOT NULL DEFAULT 0,
+
+    evidence_type       VARCHAR(32)     NOT NULL
+        COMMENT 'source|reinforcement|contradiction|manual',
+
+    confidence          DECIMAL(4,3)    NULL,
+    extractor_version   VARCHAR(64)     NULL,
+
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    UNIQUE KEY uk_memory_source_type (
+        memory_id,
+        source_type,
+        source_ref_id,
+        evidence_type
+    ),
+
+    INDEX idx_memory_id (memory_id),
+    INDEX idx_message_id (message_id),
+    INDEX idx_summary_id (summary_id),
+
+    FOREIGN KEY (memory_id) REFERENCES user_memories(memory_id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES conversation_messages(id)
+        ON DELETE SET NULL,
+    FOREIGN KEY (summary_id) REFERENCES conversation_summaries(summary_id)
+        ON DELETE SET NULL
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '记忆证据关系表（全链路审计）';
+
+-- ============================================================================
+-- 41. user_persona_snapshots — 用户画像派生快照表（新增）
+-- ============================================================================
+CREATE TABLE user_persona_snapshots
+(
+    snapshot_id         BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id             BIGINT UNSIGNED NOT NULL,
+
+    status              VARCHAR(32)     NOT NULL DEFAULT 'active'
+        COMMENT 'active|superseded|expired|error',
+
+    -- MySQL 8: 用 active_marker 保证每个用户最多一条 active。
+    -- 不让生成列依赖 user_id（user_id 同时参与 ON DELETE CASCADE 外键），
+    -- 避免 InnoDB 在生成列 + 唯一索引 + 外键组合下报 ERROR 1215。
+    active_marker       TINYINT
+        GENERATED ALWAYS AS (
+            CASE WHEN status = 'active' THEN 1 ELSE NULL END
+        ) STORED,
+
+    snapshot_data       JSON            NOT NULL,
+
+    source_memory_ids   JSON            NOT NULL,
+    source_summary_ids  JSON            NULL,
+    source_recent_message_ids JSON      NULL,
+
+    input_hash          CHAR(64)        NOT NULL,
+
+    model_name          VARCHAR(128)    NOT NULL,
+    prompt_version      VARCHAR(64)     NOT NULL,
+    schema_version      VARCHAR(64)     NOT NULL,
+    generation_ms       INT UNSIGNED    NOT NULL,
+
+    supersedes_id       BIGINT UNSIGNED NULL,
+    error_message       TEXT            NULL,
+
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    expires_at          DATETIME(6)     NULL,
+
+    UNIQUE KEY uk_active_persona_user (user_id, active_marker),
+
+    INDEX idx_user_status_created (user_id, status, created_at),
+    INDEX idx_persona_supersedes_id (supersedes_id),
+    INDEX idx_input_hash (input_hash),
+
+    CONSTRAINT fk_user_persona_snapshots_user
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '用户画像派生快照表（纯缓存，1:N，最多一条 active）';
+
+-- ============================================================================
+-- 42. user_context_versions — 用户上下文版本号（新增）
+-- ============================================================================
+CREATE TABLE user_context_versions
+(
+    user_id     BIGINT UNSIGNED PRIMARY KEY,
+    version     BIGINT UNSIGNED NOT NULL DEFAULT 1,
+    updated_at  DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+
+    CONSTRAINT fk_user_context_versions_user
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '用户上下文版本号（bump on memory/persona/safety/summary change）';
+
+-- ============================================================================
+-- 43. post_conversation_risk_audits — 对话关闭后置 Risk 审计表（新增）
+-- ============================================================================
+CREATE TABLE post_conversation_risk_audits
+(
+    audit_id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id             BIGINT UNSIGNED NOT NULL,
+    conversation_id     BIGINT UNSIGNED NOT NULL,
+
+    audit_scope         VARCHAR(32)     NOT NULL
+        COMMENT 'turn|recent_window|manual_recheck',
+
+    user_message_ref_id BIGINT UNSIGNED NULL,
+    assistant_message_ref_id BIGINT UNSIGNED NULL,
+
+    user_message_id     BIGINT UNSIGNED NULL,
+    assistant_message_id BIGINT UNSIGNED NULL,
+
+    status              VARCHAR(32)     NOT NULL DEFAULT 'pending'
+        COMMENT 'pending|running|completed|failed|discarded',
+
+    risk_level          VARCHAR(32)     NULL
+        COMMENT 'none|low|medium|high|crisis',
+    risk_categories     JSON            NULL,
+    confidence          DECIMAL(4,3)    NULL,
+
+    input_hash          CHAR(64)        NULL,
+    detector_name       VARCHAR(128)    NULL,
+    detector_version    VARCHAR(64)     NULL,
+    model_name          VARCHAR(128)    NULL,
+
+    checked_at          DATETIME(6)     NULL,
+    error_message       TEXT            NULL,
+    metadata            JSON            NULL,
+
+    source_deleted      TINYINT(1)      NOT NULL DEFAULT 0,
+
+    created_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at          DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_message_id) REFERENCES conversation_messages(id)
+        ON DELETE SET NULL,
+    FOREIGN KEY (assistant_message_id) REFERENCES conversation_messages(id)
+        ON DELETE SET NULL,
+
+    INDEX idx_user_status (user_id, status),
+    INDEX idx_conv_created (conversation_id, created_at),
+    INDEX idx_status (status),
+    INDEX idx_risk_level (risk_level),
+    INDEX idx_source_deleted (source_deleted)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '对话关闭后置 Risk 审计表（独立于对话生成链路）';
+
+-- ============================================================================
+-- 44. ALTER TABLE statements for self-referencing foreign keys
+-- ============================================================================
+ALTER TABLE conversation_summaries
+    ADD FOREIGN KEY (supersedes_id) REFERENCES conversation_summaries(summary_id)
+        ON DELETE SET NULL;
+
+ALTER TABLE user_persona_snapshots
+    ADD CONSTRAINT fk_user_persona_snapshots_supersedes
+    FOREIGN KEY (supersedes_id) REFERENCES user_persona_snapshots(snapshot_id)
+        ON DELETE SET NULL;
+
+ALTER TABLE user_memories
+    ADD FOREIGN KEY (superseded_by) REFERENCES user_memories(memory_id)
+        ON DELETE SET NULL;

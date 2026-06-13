@@ -16,50 +16,66 @@ impl EntityName for Entity {
 pub struct Model {
     pub memory_id: u64,
     pub user_id: u64,
-    pub memory_type: String,
     pub memory_key: Option<String>,
+    pub canonical_form: Option<String>,
+    pub memory_type: String,
     pub content: String,
+    pub source_confidence: Decimal,
     pub confidence: f64,
     pub salience: f64,
     pub source_conversation_id: Option<u64>,
     pub source_message_id: Option<u64>,
+    pub reinforced_at: Option<DateTime>,
+    pub reinforce_count: u32,
+    pub contradicted_at: Option<DateTime>,
+    pub superseded_by: Option<u64>,
     pub status: i8,
+    pub canonicalizer_version: Option<String>,
+    pub merge_decision: Option<String>,
+    pub merge_reason: Option<String>,
     pub metadata: Option<Json>,
-    pub created_at: DateTime,
-    pub updated_at: DateTime,
     pub last_accessed_at: Option<DateTime>,
     pub access_count: u32,
-    pub expires_at: Option<DateTime>,
     pub vector_id: Option<String>,
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_dimension: Option<u32>,
     pub indexed_at: Option<DateTime>,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
 pub enum Column {
     MemoryId,
     UserId,
-    MemoryType,
     MemoryKey,
+    CanonicalForm,
+    MemoryType,
     Content,
+    SourceConfidence,
     Confidence,
     Salience,
     SourceConversationId,
     SourceMessageId,
+    ReinforcedAt,
+    ReinforceCount,
+    ContradictedAt,
+    SupersededBy,
     Status,
+    CanonicalizerVersion,
+    MergeDecision,
+    MergeReason,
     Metadata,
-    CreatedAt,
-    UpdatedAt,
     LastAccessedAt,
     AccessCount,
-    ExpiresAt,
     VectorId,
     EmbeddingProvider,
     EmbeddingModel,
     EmbeddingDimension,
     IndexedAt,
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
@@ -78,7 +94,9 @@ impl PrimaryKeyTrait for PrimaryKey {
 pub enum Relation {
     ConversationMessages,
     Conversations,
+    SelfRef,
     UserMemoryEmbeddings,
+    UserMemoryEvidence,
     Users,
 }
 
@@ -88,20 +106,26 @@ impl ColumnTrait for Column {
         match self {
             Self::MemoryId => ColumnType::BigUnsigned.def(),
             Self::UserId => ColumnType::BigUnsigned.def(),
-            Self::MemoryType => ColumnType::String(StringLen::N(64u32)).def(),
             Self::MemoryKey => ColumnType::Char(Some(64u32)).def().null(),
+            Self::CanonicalForm => ColumnType::Text.def().null(),
+            Self::MemoryType => ColumnType::String(StringLen::N(64u32)).def(),
             Self::Content => ColumnType::Text.def(),
+            Self::SourceConfidence => ColumnType::Decimal(Some((3u32, 2u32))).def(),
             Self::Confidence => ColumnType::Double.def(),
             Self::Salience => ColumnType::Double.def(),
             Self::SourceConversationId => ColumnType::BigUnsigned.def().null(),
             Self::SourceMessageId => ColumnType::BigUnsigned.def().null(),
+            Self::ReinforcedAt => ColumnType::DateTime.def().null(),
+            Self::ReinforceCount => ColumnType::Unsigned.def(),
+            Self::ContradictedAt => ColumnType::DateTime.def().null(),
+            Self::SupersededBy => ColumnType::BigUnsigned.def().null(),
             Self::Status => ColumnType::TinyInteger.def(),
+            Self::CanonicalizerVersion => ColumnType::String(StringLen::N(64u32)).def().null(),
+            Self::MergeDecision => ColumnType::String(StringLen::N(32u32)).def().null(),
+            Self::MergeReason => ColumnType::Text.def().null(),
             Self::Metadata => ColumnType::Json.def().null(),
-            Self::CreatedAt => ColumnType::DateTime.def(),
-            Self::UpdatedAt => ColumnType::DateTime.def(),
             Self::LastAccessedAt => ColumnType::DateTime.def().null(),
             Self::AccessCount => ColumnType::Unsigned.def(),
-            Self::ExpiresAt => ColumnType::DateTime.def().null(),
             Self::VectorId => ColumnType::String(StringLen::N(128u32))
                 .def()
                 .null()
@@ -110,6 +134,8 @@ impl ColumnTrait for Column {
             Self::EmbeddingModel => ColumnType::String(StringLen::N(128u32)).def().null(),
             Self::EmbeddingDimension => ColumnType::Unsigned.def().null(),
             Self::IndexedAt => ColumnType::DateTime.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }
@@ -125,8 +151,15 @@ impl RelationTrait for Relation {
                 .from(Column::SourceConversationId)
                 .to(super::conversations::Column::Id)
                 .into(),
+            Self::SelfRef => Entity::belongs_to(Entity)
+                .from(Column::SupersededBy)
+                .to(Column::MemoryId)
+                .into(),
             Self::UserMemoryEmbeddings => {
                 Entity::has_many(super::user_memory_embeddings::Entity).into()
+            }
+            Self::UserMemoryEvidence => {
+                Entity::has_many(super::user_memory_evidence::Entity).into()
             }
             Self::Users => Entity::belongs_to(super::users::Entity)
                 .from(Column::UserId)
@@ -151,6 +184,12 @@ impl Related<super::conversations::Entity> for Entity {
 impl Related<super::user_memory_embeddings::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UserMemoryEmbeddings.def()
+    }
+}
+
+impl Related<super::user_memory_evidence::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::UserMemoryEvidence.def()
     }
 }
 

@@ -8,49 +8,33 @@ pub struct Entity;
 
 impl EntityName for Entity {
     fn table_name(&self) -> &'static str {
-        "user_profiles"
+        "user_context_versions"
     }
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq, Serialize, Deserialize)]
 pub struct Model {
-    pub id: u64,
     pub user_id: u64,
-    pub interests: Option<Json>,
-    pub personality_traits: Option<Json>,
-    pub interaction_preferences: Option<Json>,
-    pub emotional_tendency: Option<Json>,
-    pub learning_records: Option<Json>,
-    pub personalization_enabled: i8,
-    pub personalization_reset_at: Option<DateTime>,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub version: u64,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
 pub enum Column {
-    Id,
     UserId,
-    Interests,
-    PersonalityTraits,
-    InteractionPreferences,
-    EmotionalTendency,
-    LearningRecords,
-    PersonalizationEnabled,
-    PersonalizationResetAt,
-    CreatedAt,
+    Version,
     UpdatedAt,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
 pub enum PrimaryKey {
-    Id,
+    UserId,
 }
 
 impl PrimaryKeyTrait for PrimaryKey {
     type ValueType = u64;
     fn auto_increment() -> bool {
-        true
+        false
     }
 }
 
@@ -63,17 +47,9 @@ impl ColumnTrait for Column {
     type EntityName = Entity;
     fn def(&self) -> ColumnDef {
         match self {
-            Self::Id => ColumnType::BigUnsigned.def(),
-            Self::UserId => ColumnType::BigUnsigned.def().unique(),
-            Self::Interests => ColumnType::Json.def().null(),
-            Self::PersonalityTraits => ColumnType::Json.def().null(),
-            Self::InteractionPreferences => ColumnType::Json.def().null(),
-            Self::EmotionalTendency => ColumnType::Json.def().null(),
-            Self::LearningRecords => ColumnType::Json.def().null(),
-            Self::PersonalizationEnabled => ColumnType::TinyInteger.def(),
-            Self::PersonalizationResetAt => ColumnType::DateTime.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::Version => ColumnType::BigUnsigned.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

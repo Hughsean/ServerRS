@@ -66,12 +66,15 @@ pub enum Relation {
     Conversations,
     DepressionAssessments,
     KnowledgeDocuments,
+    PostConversationRiskAudits,
     RefreshTokens,
     RiskDetectionResults,
     StoredObjects,
+    UserContextVersions,
     UserDiaries,
     UserKnowledgeFavorites,
     UserMemories,
+    UserPersonaSnapshots,
     UserProfiles,
     VectorIndexRecords,
 }
@@ -112,21 +115,30 @@ impl RelationTrait for Relation {
             Self::ConversationSummaries => {
                 Entity::has_many(super::conversation_summaries::Entity).into()
             }
-            Self::Conversations => Entity::has_many(super::conversations::Entity).into(),
+            Self::Conversations => Entity::has_one(super::conversations::Entity).into(),
             Self::DepressionAssessments => {
                 Entity::has_many(super::depression_assessments::Entity).into()
             }
             Self::KnowledgeDocuments => Entity::has_many(super::knowledge_documents::Entity).into(),
+            Self::PostConversationRiskAudits => {
+                Entity::has_many(super::post_conversation_risk_audits::Entity).into()
+            }
             Self::RefreshTokens => Entity::has_many(super::refresh_tokens::Entity).into(),
             Self::RiskDetectionResults => {
                 Entity::has_many(super::risk_detection_results::Entity).into()
             }
             Self::StoredObjects => Entity::has_many(super::stored_objects::Entity).into(),
+            Self::UserContextVersions => {
+                Entity::has_one(super::user_context_versions::Entity).into()
+            }
             Self::UserDiaries => Entity::has_many(super::user_diaries::Entity).into(),
             Self::UserKnowledgeFavorites => {
                 Entity::has_many(super::user_knowledge_favorites::Entity).into()
             }
             Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
+            Self::UserPersonaSnapshots => {
+                Entity::has_many(super::user_persona_snapshots::Entity).into()
+            }
             Self::UserProfiles => Entity::has_one(super::user_profiles::Entity).into(),
             Self::VectorIndexRecords => {
                 Entity::has_many(super::vector_index_records::Entity).into()
@@ -183,6 +195,12 @@ impl Related<super::knowledge_documents::Entity> for Entity {
     }
 }
 
+impl Related<super::post_conversation_risk_audits::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PostConversationRiskAudits.def()
+    }
+}
+
 impl Related<super::refresh_tokens::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::RefreshTokens.def()
@@ -201,6 +219,12 @@ impl Related<super::stored_objects::Entity> for Entity {
     }
 }
 
+impl Related<super::user_context_versions::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::UserContextVersions.def()
+    }
+}
+
 impl Related<super::user_diaries::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UserDiaries.def()
@@ -216,6 +240,12 @@ impl Related<super::user_knowledge_favorites::Entity> for Entity {
 impl Related<super::user_memories::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UserMemories.def()
+    }
+}
+
+impl Related<super::user_persona_snapshots::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::UserPersonaSnapshots.def()
     }
 }
 

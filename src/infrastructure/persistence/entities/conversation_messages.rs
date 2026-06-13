@@ -21,7 +21,7 @@ pub struct Model {
     pub message_type: String,
     pub content: Json,
     pub token_count: Option<u32>,
-    pub created_at: DateTimeUtc,
+    pub created_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -53,6 +53,7 @@ pub enum Relation {
     Conversations,
     RiskDetectionResults,
     UserMemories,
+    UserMemoryEvidence,
 }
 
 impl ColumnTrait for Column {
@@ -66,7 +67,7 @@ impl ColumnTrait for Column {
             Self::MessageType => ColumnType::String(StringLen::N(32u32)).def(),
             Self::Content => ColumnType::Json.def(),
             Self::TokenCount => ColumnType::Unsigned.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
         }
     }
 }
@@ -82,6 +83,9 @@ impl RelationTrait for Relation {
                 Entity::has_many(super::risk_detection_results::Entity).into()
             }
             Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
+            Self::UserMemoryEvidence => {
+                Entity::has_many(super::user_memory_evidence::Entity).into()
+            }
         }
     }
 }
@@ -101,6 +105,12 @@ impl Related<super::risk_detection_results::Entity> for Entity {
 impl Related<super::user_memories::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UserMemories.def()
+    }
+}
+
+impl Related<super::user_memory_evidence::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::UserMemoryEvidence.def()
     }
 }
 

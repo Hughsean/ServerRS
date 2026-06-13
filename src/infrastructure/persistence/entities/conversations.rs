@@ -17,10 +17,10 @@ pub struct Model {
     pub id: u64,
     pub user_id: u64,
     pub title: Option<String>,
-    pub is_title_generated: i8,
-    pub last_message_at: Option<DateTimeUtc>,
-    pub message_count: u32,
-    pub created_at: DateTimeUtc,
+    pub message_count: u64,
+    pub last_message_at: Option<DateTime>,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -28,10 +28,10 @@ pub enum Column {
     Id,
     UserId,
     Title,
-    IsTitleGenerated,
-    LastMessageAt,
     MessageCount,
+    LastMessageAt,
     CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
@@ -51,6 +51,7 @@ pub enum Relation {
     AgentEvents,
     ConversationMessages,
     ConversationSummaries,
+    PostConversationRiskAudits,
     RiskDetectionResults,
     UserMemories,
     Users,
@@ -61,12 +62,12 @@ impl ColumnTrait for Column {
     fn def(&self) -> ColumnDef {
         match self {
             Self::Id => ColumnType::BigUnsigned.def(),
-            Self::UserId => ColumnType::BigUnsigned.def(),
+            Self::UserId => ColumnType::BigUnsigned.def().unique(),
             Self::Title => ColumnType::String(StringLen::N(100u32)).def().null(),
-            Self::IsTitleGenerated => ColumnType::TinyInteger.def(),
-            Self::LastMessageAt => ColumnType::Timestamp.def().null(),
-            Self::MessageCount => ColumnType::Unsigned.def(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::MessageCount => ColumnType::BigUnsigned.def(),
+            Self::LastMessageAt => ColumnType::DateTime.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }
@@ -80,6 +81,9 @@ impl RelationTrait for Relation {
             }
             Self::ConversationSummaries => {
                 Entity::has_many(super::conversation_summaries::Entity).into()
+            }
+            Self::PostConversationRiskAudits => {
+                Entity::has_many(super::post_conversation_risk_audits::Entity).into()
             }
             Self::RiskDetectionResults => {
                 Entity::has_many(super::risk_detection_results::Entity).into()
@@ -108,6 +112,12 @@ impl Related<super::conversation_messages::Entity> for Entity {
 impl Related<super::conversation_summaries::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ConversationSummaries.def()
+    }
+}
+
+impl Related<super::post_conversation_risk_audits::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PostConversationRiskAudits.def()
     }
 }
 
