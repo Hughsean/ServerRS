@@ -23,7 +23,7 @@ pub async fn require_bearer_auth(
         .ok_or(AppError::Unauthorized)?;
 
     let token = extract_bearer_token(auth_header).ok_or(AppError::Unauthorized)?;
-    let auth_user = state.auth.verify(token)?;
+    let auth_user = state.auth.authenticate(token).await?;
 
     request.extensions_mut().insert(auth_user);
     Ok(next.run(request).await)

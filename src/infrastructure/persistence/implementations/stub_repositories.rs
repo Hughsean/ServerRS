@@ -110,6 +110,16 @@ impl MusicRepository for StubMusicRepo {
     ) -> Result<(Vec<MusicTrack>, u64), AppError> {
         Ok((vec![], 0))
     }
+    async fn find_all_admin(
+        &self,
+        _: Option<String>,
+        _: Option<String>,
+        _: Option<i8>,
+        _: u64,
+        _: u64,
+    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+        Ok((vec![], 0))
+    }
     async fn update(&self, _: u64, _: MusicTrackUpdate) -> Result<MusicTrack, AppError> {
         stub_err!()
     }
@@ -125,6 +135,9 @@ impl PsychologyRepository for StubPsychologyRepo {
         Ok(None)
     }
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError> {
+        Ok(vec![])
+    }
+    async fn list_categories_admin(&self) -> Result<Vec<PsychologyCategory>, AppError> {
         Ok(vec![])
     }
     async fn create_category(
@@ -147,6 +160,22 @@ impl PsychologyRepository for StubPsychologyRepo {
         Ok(None)
     }
     async fn list_articles(
+        &self,
+        _: u64,
+        _: u64,
+        _: Option<String>,
+        _: Option<u64>,
+        _: Option<bool>,
+    ) -> Result<(Vec<PsychologyArticle>, u64), AppError> {
+        Ok((vec![], 0))
+    }
+    async fn find_article_by_id_admin(
+        &self,
+        _: u64,
+    ) -> Result<Option<PsychologyArticle>, AppError> {
+        Ok(None)
+    }
+    async fn list_articles_admin(
         &self,
         _: u64,
         _: u64,
@@ -181,6 +210,19 @@ impl PsychologyRepository for StubPsychologyRepo {
     ) -> Result<(Vec<PsychologyQna>, u64), AppError> {
         Ok((vec![], 0))
     }
+    async fn find_qna_by_id_admin(&self, _: u64) -> Result<Option<PsychologyQna>, AppError> {
+        Ok(None)
+    }
+    async fn list_qnas_admin(
+        &self,
+        _: u64,
+        _: u64,
+        _: Option<u64>,
+        _: Option<bool>,
+        _: Option<bool>,
+    ) -> Result<(Vec<PsychologyQna>, u64), AppError> {
+        Ok((vec![], 0))
+    }
     async fn create_qna(&self, _: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
         stub_err!()
     }
@@ -199,6 +241,22 @@ impl PsychologyRepository for StubPsychologyRepo {
         _: u64,
         _: Option<u64>,
         _: Option<String>,
+    ) -> Result<(Vec<PsychologyResource>, u64), AppError> {
+        Ok((vec![], 0))
+    }
+    async fn find_resource_by_id_admin(
+        &self,
+        _: u64,
+    ) -> Result<Option<PsychologyResource>, AppError> {
+        Ok(None)
+    }
+    async fn list_resources_admin(
+        &self,
+        _: u64,
+        _: u64,
+        _: Option<u64>,
+        _: Option<String>,
+        _: Option<bool>,
     ) -> Result<(Vec<PsychologyResource>, u64), AppError> {
         Ok((vec![], 0))
     }

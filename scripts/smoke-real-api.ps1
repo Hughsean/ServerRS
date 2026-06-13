@@ -25,8 +25,16 @@ function Assert-Ok {
     if ($null -eq $Response) {
         throw "$StepName : no response"
     }
+    if (
+        $Response.PSObject.Properties.Name -contains "reply" -and
+        $Response.reply -match "(?i)(</?tool_call>|<\|/?tool_call\|>|_icall_)"
+    ) {
+        throw "$StepName : model reply leaked tool-call markup: $($Response.reply)"
+    }
+    $displayBody = $Response | ConvertTo-Json -Depth 5 -Compress
+    $displayBody = $displayBody -replace '"(accessToken|refreshToken)":"[^"]+"', '"$1":"<redacted>"'
     Write-Host "  status: $($Response.status ?? 'N/A')" -ForegroundColor Gray
-    Write-Host "  body: $($Response | ConvertTo-Json -Depth 5 -Compress)" -ForegroundColor DarkGray
+    Write-Host "  body: $displayBody" -ForegroundColor DarkGray
 }
 
 # ── Step 1: Health ─────────────────────────────────────────────────────────
@@ -101,6 +109,10 @@ $body = @{ text = "现在几点？请告诉我当前日期时间。" } | Convert
 $r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
 Assert-Ok $r "time question"
 if (-not $r.reply) { throw "no reply for time question" }
+$expectedWeekday = @("星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六")[[int](Get-Date).DayOfWeek]
+if ($r.reply -match "星期[一二三四五六日天]" -and $r.reply -notmatch $expectedWeekday) {
+    throw "time question returned incorrect weekday; expected ${expectedWeekday}: $($r.reply)"
+}
 Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
 Write-Host "PASS" -ForegroundColor Green
 
@@ -127,6 +139,9 @@ if (-not $r.reply) { throw "no reply for baidu baike question" }
 if ($r.reply -match "Sorry, I encountered an error") {
     throw "baidu baike question returned generic error: $($r.reply)"
 }
+if ($r.reply -match "技术问题|无法.*百科|发生错误|未找到") {
+    throw "baidu baike tool returned a degraded response: $($r.reply)"
+}
 Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
 Write-Host "PASS" -ForegroundColor Green
 
@@ -139,6 +154,9 @@ Assert-Ok $r "fetch web content question"
 if (-not $r.reply) { throw "no reply for fetch web content question" }
 if ($r.reply -match "Sorry, I encountered an error") {
     throw "fetch web content question returned generic error: $($r.reply)"
+}
+if ($r.reply -match "不能直接访问|无法获取网页|无法访问外部") {
+    throw "fetch web content tool was not used successfully: $($r.reply)"
 }
 Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
 Write-Host "PASS" -ForegroundColor Green

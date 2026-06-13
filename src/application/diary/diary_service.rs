@@ -23,6 +23,9 @@ impl DiaryService {
         title: String,
         content: String,
     ) -> Result<UserDiary, AppError> {
+        if content.trim().is_empty() {
+            return Err(AppError::Validation("diary content cannot be empty".into()));
+        }
         let title = if title.trim().is_empty() {
             "无标题".to_string()
         } else {
@@ -38,36 +41,7 @@ impl DiaryService {
             })
             .await?;
 
-        if let Some(llm) = self.llm.clone() {
-            let diary_id = diary.id;
-            let repo = self.repo.clone();
-            let content_clone = diary.content.clone();
-            tokio::spawn(async move {
-                let prompt = format!(
-                    "请分析以下日记的情绪，返回JSON格式 {{\"mood_description\": \"...\"}}。\n\n{content_clone}"
-                );
-                let messages = vec![ChatMessage {
-                    role: "user".to_string(),
-                    content: prompt,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                }];
-                let response = llm.chat(&messages).await;
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-                    let mood_description = parsed
-                        .get("mood_description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-                    if let Err(e) = repo.update_mood(diary_id, mood_description).await {
-                        tracing::warn!("mood update failed for diary {diary_id}: {e}");
-                    }
-                } else {
-                    tracing::warn!("mood analysis parse failed for diary {diary_id}");
-                }
-            });
-        }
+        self.schedule_mood_analysis(diary.id, diary.content.clone());
 
         Ok(diary)
     }
@@ -101,22 +75,83 @@ impl DiaryService {
         title: Option<String>,
         content: Option<String>,
     ) -> Result<UserDiary, AppError> {
+        if title.is_none() && content.is_none() {
+            return Err(AppError::Validation(
+                "at least one diary field must be provided".into(),
+            ));
+        }
+        if content
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(AppError::Validation("diary content cannot be empty".into()));
+        }
         let diary = self.get(user_id, id).await?;
-        self.repo
+        let content_for_analysis = content.clone();
+        let updated = self
+            .repo
             .update(
                 diary.id,
                 UserDiaryUpdate {
-                    title,
+                    title: title.map(|value| {
+                        if value.trim().is_empty() {
+                            "无标题".to_string()
+                        } else {
+                            value
+                        }
+                    }),
                     content,
-                    mood_description: None,
+                    mood_description: content_for_analysis.as_ref().map(|_| None),
                 },
             )
-            .await
+            .await?;
+        if let Some(content) = content_for_analysis {
+            self.schedule_mood_analysis(updated.id, content);
+        }
+        Ok(updated)
     }
 
     pub async fn delete(&self, user_id: u64, id: u64) -> Result<(), AppError> {
         let diary = self.get(user_id, id).await?;
         let _ = self.repo.delete_by_id(diary.id).await?;
         Ok(())
+    }
+
+    fn schedule_mood_analysis(&self, diary_id: u64, content: String) {
+        let Some(llm) = self.llm.clone() else {
+            return;
+        };
+        let repo = self.repo.clone();
+        tokio::spawn(async move {
+            let prompt = format!(
+                "请分析以下日记的情绪，返回JSON格式 {{\"mood_description\": \"...\"}}。\n\n{content}"
+            );
+            let messages = vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            }];
+            let response = llm.chat(&messages).await;
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                if let Some(mood_description) = parsed
+                    .get("mood_description")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    if let Err(e) = repo
+                        .update_mood(diary_id, mood_description.to_string())
+                        .await
+                    {
+                        tracing::warn!("mood update failed for diary {diary_id}: {e}");
+                    }
+                } else {
+                    tracing::warn!("mood analysis missing mood_description for diary {diary_id}");
+                }
+            } else {
+                tracing::warn!("mood analysis parse failed for diary {diary_id}");
+            }
+        });
     }
 }

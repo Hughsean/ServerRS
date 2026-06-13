@@ -57,9 +57,12 @@ fn map_article(m: psychology_articles::Model) -> PsychologyArticle {
         title: m.title,
         summary: m.summary,
         content: m.content,
+        author: m.author,
+        source: m.source,
         tags: tags_to_string(m.tags),
         view_count: m.view_count as i64,
         like_count: m.like_count as i64,
+        is_featured: m.is_featured != 0,
         is_published: m.is_published != 0,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -72,9 +75,12 @@ fn map_qna(m: psychology_qna::Model) -> PsychologyQna {
         category_id: Some(m.category_id as u64),
         question: m.question,
         answer: m.answer,
+        expert_name: m.expert_name,
+        expert_title: m.expert_title,
         tags: tags_to_string(m.tags),
         view_count: m.view_count as i64,
         like_count: m.like_count as i64,
+        is_verified: m.is_verified != 0,
         is_published: m.status != 0,
         created_at: m.created_at,
     }
@@ -89,6 +95,9 @@ fn map_resource(m: psychology_resources::Model) -> PsychologyResource {
         resource_type: m.resource_type,
         object_id: None,
         external_url: m.external_url,
+        file_size: m.file_size,
+        mime_type: m.mime_type,
+        duration: m.duration,
         tags: tags_to_string(m.tags),
         view_count: m.view_count as i64,
         like_count: m.like_count as i64,
@@ -128,16 +137,19 @@ where
 {
     let exists = match content_type {
         "article" => psychology_articles::Entity::find_by_id(content_id)
+            .filter(psychology_articles::Column::IsPublished.eq(1_i8))
             .one(db)
             .await
             .map_err(map_err)?
             .is_some(),
         "qna" => psychology_qna::Entity::find_by_id(content_id)
+            .filter(psychology_qna::Column::Status.eq(1_i8))
             .one(db)
             .await
             .map_err(map_err)?
             .is_some(),
         "resource" => psychology_resources::Entity::find_by_id(content_id)
+            .filter(psychology_resources::Column::Status.eq(1_i8))
             .one(db)
             .await
             .map_err(map_err)?
@@ -193,6 +205,16 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
     // ── Categories ──
 
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError> {
+        psychology_categories::Entity::find()
+            .filter(psychology_categories::Column::Status.eq(1_i8))
+            .order_by_asc(psychology_categories::Column::SortOrder)
+            .all(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|v| v.into_iter().map(map_category).collect())
+    }
+
+    async fn list_categories_admin(&self) -> Result<Vec<PsychologyCategory>, AppError> {
         psychology_categories::Entity::find()
             .order_by_asc(psychology_categories::Column::SortOrder)
             .all(&self.db)
@@ -305,6 +327,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
 
     async fn find_article_by_id(&self, id: u64) -> Result<Option<PsychologyArticle>, AppError> {
         let opt = psychology_articles::Entity::find_by_id(id)
+            .filter(psychology_articles::Column::IsPublished.eq(1_i8))
             .one(&self.db)
             .await
             .map_err(map_err)?;
@@ -328,6 +351,54 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         }
     }
 
+    async fn find_article_by_id_admin(
+        &self,
+        id: u64,
+    ) -> Result<Option<PsychologyArticle>, AppError> {
+        psychology_articles::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|item| item.map(map_article))
+    }
+
+    async fn list_articles_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        search: Option<String>,
+        category_id: Option<u64>,
+        is_published: Option<bool>,
+    ) -> Result<(Vec<PsychologyArticle>, u64), AppError> {
+        let mut base = psychology_articles::Entity::find();
+        if let Some(cid) = category_id {
+            base = base.filter(psychology_articles::Column::CategoryId.eq(cid as u16));
+        }
+        if let Some(published) = is_published {
+            base = base.filter(psychology_articles::Column::IsPublished.eq(if published {
+                1_i8
+            } else {
+                0_i8
+            }));
+        }
+        if let Some(q) = search.filter(|value| !value.trim().is_empty()) {
+            base = base.filter(
+                sea_orm::Condition::any()
+                    .add(psychology_articles::Column::Title.contains(&q))
+                    .add(psychology_articles::Column::Summary.contains(&q)),
+            );
+        }
+        let paginator = base
+            .order_by_desc(psychology_articles::Column::CreatedAt)
+            .paginate(&self.db, page_size);
+        let total = paginator.num_items().await.map_err(map_err)?;
+        let models = paginator
+            .fetch_page(page.max(1) - 1)
+            .await
+            .map_err(map_err)?;
+        Ok((models.into_iter().map(map_article).collect(), total))
+    }
+
     async fn create_article(
         &self,
         new: NewPsychologyArticle,
@@ -335,39 +406,23 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         let now = chrono::Utc::now();
         let am = psychology_articles::ActiveModel {
             category_id: Set(new.category_id.unwrap_or(0) as u16),
-            title: Set(new.title.clone()),
-            summary: Set(new.summary.clone()),
-            author: Set(None),
-            source: Set(None),
-            tags: Set(string_to_json(new.tags.clone())),
+            title: Set(new.title),
+            summary: Set(new.summary),
+            content: Set(new.content),
+            author: Set(new.author),
+            source: Set(new.source),
+            tags: Set(string_to_json(new.tags)),
             cover_image: Set(None),
             view_count: Set(0_u32),
             like_count: Set(0_u32),
-            is_featured: Set(0_i8),
+            is_featured: Set(if new.is_featured { 1_i8 } else { 0_i8 }),
             is_published: Set(if new.is_published { 1_i8 } else { 0_i8 }),
             publish_date: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
         };
-        let result = am.insert(&self.db).await.map_err(map_err)?;
-        let inserted_id = result.article_id;
-
-        // content is ignore-marked (LONGTEXT alias); set via raw SQL
-        let escaped_content = new.content.replace('\'', "''");
-        let sql = format!(
-            "UPDATE psychology_articles SET content = '{}' WHERE article_id = {}",
-            escaped_content, inserted_id
-        );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
-
-        // Re-fetch to return the complete model
-        let final_article = psychology_articles::Entity::find_by_id(inserted_id)
-            .one(&self.db)
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| AppError::Internal("created article not found".into()))?;
-        Ok(map_article(final_article))
+        am.insert(&self.db).await.map_err(map_err).map(map_article)
     }
 
     async fn update_article(
@@ -375,41 +430,23 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         id: u64,
         new: NewPsychologyArticle,
     ) -> Result<PsychologyArticle, AppError> {
-        // Use raw SQL update for content (ignore-marked) + standard fields
-        // We build the SQL manually to set content alongside other fields.
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S%.f")
-            .to_string();
-        let escaped_title = new.title.replace('\'', "''");
-        let escaped_summary = new.summary.as_ref().map(|s| s.replace('\'', "''"));
-        let escaped_content = new.content.replace('\'', "''");
-        let summary_sql = match &escaped_summary {
-            Some(s) => format!("'{}'", s),
-            None => "NULL".to_string(),
-        };
-        let tags_sql = match &new.tags {
-            Some(t) => format!("'{}'", t.replace('\'', "''")),
-            None => "NULL".to_string(),
-        };
-        let is_pub = if new.is_published { 1_i8 } else { 0_i8 };
-        let cat_id = new.category_id.unwrap_or(0);
-
-        let sql = format!(
-            "UPDATE psychology_articles SET \
-             category_id = {}, title = '{}', summary = {}, content = '{}', \
-             tags = {}, is_published = {}, updated_at = '{}' \
-             WHERE article_id = {}",
-            cat_id, escaped_title, summary_sql, escaped_content, tags_sql, is_pub, now, id
-        );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
-
-        // Re-fetch to return complete model
-        let updated = psychology_articles::Entity::find_by_id(id)
+        let existing = psychology_articles::Entity::find_by_id(id)
             .one(&self.db)
             .await
             .map_err(map_err)?
             .ok_or_else(|| AppError::NotFound("article not found".into()))?;
-        Ok(map_article(updated))
+        let mut am: psychology_articles::ActiveModel = existing.into();
+        am.category_id = Set(new.category_id.unwrap_or(0) as u16);
+        am.title = Set(new.title);
+        am.summary = Set(new.summary);
+        am.content = Set(new.content);
+        am.author = Set(new.author);
+        am.source = Set(new.source);
+        am.tags = Set(string_to_json(new.tags));
+        am.is_featured = Set(if new.is_featured { 1_i8 } else { 0_i8 });
+        am.is_published = Set(if new.is_published { 1_i8 } else { 0_i8 });
+        am.updated_at = Set(chrono::Utc::now());
+        am.update(&self.db).await.map_err(map_err).map(map_article)
     }
 
     async fn delete_article(&self, id: u64) -> Result<bool, AppError> {
@@ -459,6 +496,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
 
     async fn find_qna_by_id(&self, id: u64) -> Result<Option<PsychologyQna>, AppError> {
         let opt = psychology_qna::Entity::find_by_id(id)
+            .filter(psychology_qna::Column::Status.eq(1_i8))
             .one(&self.db)
             .await
             .map_err(map_err)?;
@@ -480,67 +518,85 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         }
     }
 
+    async fn find_qna_by_id_admin(&self, id: u64) -> Result<Option<PsychologyQna>, AppError> {
+        psychology_qna::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|item| item.map(map_qna))
+    }
+
+    async fn list_qnas_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        category_id: Option<u64>,
+        is_verified: Option<bool>,
+        is_published: Option<bool>,
+    ) -> Result<(Vec<PsychologyQna>, u64), AppError> {
+        let mut base = psychology_qna::Entity::find();
+        if let Some(cid) = category_id {
+            base = base.filter(psychology_qna::Column::CategoryId.eq(cid as u16));
+        }
+        if let Some(verified) = is_verified {
+            base = base.filter(psychology_qna::Column::IsVerified.eq(if verified {
+                1_i8
+            } else {
+                0_i8
+            }));
+        }
+        if let Some(published) = is_published {
+            base =
+                base.filter(psychology_qna::Column::Status.eq(if published { 1_i8 } else { 0_i8 }));
+        }
+        let paginator = base
+            .order_by_desc(psychology_qna::Column::CreatedAt)
+            .paginate(&self.db, page_size);
+        let total = paginator.num_items().await.map_err(map_err)?;
+        let models = paginator
+            .fetch_page(page.max(1) - 1)
+            .await
+            .map_err(map_err)?;
+        Ok((models.into_iter().map(map_qna).collect(), total))
+    }
+
     async fn create_qna(&self, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
         let now = chrono::Utc::now();
         let am = psychology_qna::ActiveModel {
             category_id: Set(new.category_id.unwrap_or(0) as u16),
-            question: Set(new.question.clone()),
-            tags: Set(string_to_json(new.tags.clone())),
+            question: Set(new.question),
+            answer: Set(new.answer),
+            expert_name: Set(new.expert_name),
+            expert_title: Set(new.expert_title),
+            tags: Set(string_to_json(new.tags)),
             view_count: Set(0_u32),
             like_count: Set(0_u32),
-            is_verified: Set(0_i8),
+            is_verified: Set(if new.is_verified { 1_i8 } else { 0_i8 }),
             status: Set(if new.is_published { 1_i8 } else { 0_i8 }),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
         };
-        let result = am.insert(&self.db).await.map_err(map_err)?;
-        let inserted_id = result.qna_id;
-
-        // answer is ignore-marked (LONGTEXT alias); set via raw SQL
-        let escaped_answer = new.answer.replace('\'', "''");
-        let sql = format!(
-            "UPDATE psychology_qna SET answer = '{}' WHERE qna_id = {}",
-            escaped_answer, inserted_id
-        );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
-
-        let final_qna = psychology_qna::Entity::find_by_id(inserted_id)
-            .one(&self.db)
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| AppError::Internal("created qna not found".into()))?;
-        Ok(map_qna(final_qna))
+        am.insert(&self.db).await.map_err(map_err).map(map_qna)
     }
 
     async fn update_qna(&self, id: u64, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S%.f")
-            .to_string();
-        let escaped_question = new.question.replace('\'', "''");
-        let escaped_answer = new.answer.replace('\'', "''");
-        let tags_sql = match &new.tags {
-            Some(t) => format!("'{}'", t.replace('\'', "''")),
-            None => "NULL".to_string(),
-        };
-        let is_pub = if new.is_published { 1_i8 } else { 0_i8 };
-        let cat_id = new.category_id.unwrap_or(0);
-
-        let sql = format!(
-            "UPDATE psychology_qna SET \
-             category_id = {}, question = '{}', answer = '{}', \
-             tags = {}, status = {}, updated_at = '{}' \
-             WHERE qna_id = {}",
-            cat_id, escaped_question, escaped_answer, tags_sql, is_pub, now, id
-        );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
-
-        let updated = psychology_qna::Entity::find_by_id(id)
+        let existing = psychology_qna::Entity::find_by_id(id)
             .one(&self.db)
             .await
             .map_err(map_err)?
             .ok_or_else(|| AppError::NotFound("qna not found".into()))?;
-        Ok(map_qna(updated))
+        let mut am: psychology_qna::ActiveModel = existing.into();
+        am.category_id = Set(new.category_id.unwrap_or(0) as u16);
+        am.question = Set(new.question);
+        am.answer = Set(new.answer);
+        am.expert_name = Set(new.expert_name);
+        am.expert_title = Set(new.expert_title);
+        am.tags = Set(string_to_json(new.tags));
+        am.is_verified = Set(if new.is_verified { 1_i8 } else { 0_i8 });
+        am.status = Set(if new.is_published { 1_i8 } else { 0_i8 });
+        am.updated_at = Set(chrono::Utc::now());
+        am.update(&self.db).await.map_err(map_err).map(map_qna)
     }
 
     async fn delete_qna(&self, id: u64) -> Result<bool, AppError> {
@@ -588,6 +644,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
 
     async fn find_resource_by_id(&self, id: u64) -> Result<Option<PsychologyResource>, AppError> {
         let opt = psychology_resources::Entity::find_by_id(id)
+            .filter(psychology_resources::Column::Status.eq(1_i8))
             .one(&self.db)
             .await
             .map_err(map_err)?;
@@ -607,6 +664,50 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         } else {
             Ok(None)
         }
+    }
+
+    async fn find_resource_by_id_admin(
+        &self,
+        id: u64,
+    ) -> Result<Option<PsychologyResource>, AppError> {
+        psychology_resources::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|item| item.map(map_resource))
+    }
+
+    async fn list_resources_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        category_id: Option<u64>,
+        resource_type: Option<String>,
+        is_published: Option<bool>,
+    ) -> Result<(Vec<PsychologyResource>, u64), AppError> {
+        let mut base = psychology_resources::Entity::find();
+        if let Some(cid) = category_id {
+            base = base.filter(psychology_resources::Column::CategoryId.eq(cid as u16));
+        }
+        if let Some(resource_type) = resource_type.filter(|value| !value.trim().is_empty()) {
+            base = base.filter(psychology_resources::Column::ResourceType.eq(resource_type));
+        }
+        if let Some(published) = is_published {
+            base = base.filter(psychology_resources::Column::Status.eq(if published {
+                1_i8
+            } else {
+                0_i8
+            }));
+        }
+        let paginator = base
+            .order_by_desc(psychology_resources::Column::CreatedAt)
+            .paginate(&self.db, page_size);
+        let total = paginator.num_items().await.map_err(map_err)?;
+        let models = paginator
+            .fetch_page(page.max(1) - 1)
+            .await
+            .map_err(map_err)?;
+        Ok((models.into_iter().map(map_resource).collect(), total))
     }
 
     async fn create_resource(
@@ -668,9 +769,11 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
     // ── Favorites ──
 
     async fn toggle_favorite(&self, new: NewKnowledgeFavorite) -> Result<bool, AppError> {
+        let content_type = normalize_psychology_content_type(&new.content_type)?;
+        ensure_content_exists(&self.db, content_type, new.content_id).await?;
         let existing = user_knowledge_favorites::Entity::find()
             .filter(user_knowledge_favorites::Column::UserId.eq(new.user_id))
-            .filter(user_knowledge_favorites::Column::ContentType.eq(new.content_type.clone()))
+            .filter(user_knowledge_favorites::Column::ContentType.eq(content_type))
             .filter(user_knowledge_favorites::Column::ContentId.eq(new.content_id))
             .one(&self.db)
             .await
@@ -687,9 +790,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             let sql = format!(
                 "INSERT INTO user_knowledge_favorites (user_id, content_type, content_id, created_at) \
                  VALUES ({}, '{}', {}, NOW())",
-                new.user_id,
-                new.content_type.replace('\'', "''"),
-                new.content_id
+                new.user_id, content_type, new.content_id
             );
             self.db.execute_unprepared(&sql).await.map_err(map_err)?;
             Ok(true)
@@ -702,6 +803,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         content_type: &str,
         content_id: u64,
     ) -> Result<bool, AppError> {
+        let content_type = normalize_psychology_content_type(content_type)?;
         user_knowledge_favorites::Entity::find()
             .filter(user_knowledge_favorites::Column::UserId.eq(user_id))
             .filter(user_knowledge_favorites::Column::ContentType.eq(content_type))
@@ -721,6 +823,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             .filter(user_knowledge_favorites::Column::UserId.eq(user_id))
             .order_by_desc(user_knowledge_favorites::Column::CreatedAt);
         if let Some(ct) = content_type {
+            let ct = normalize_psychology_content_type(ct)?;
             q = q.filter(user_knowledge_favorites::Column::ContentType.eq(ct));
         }
         q.all(&self.db)

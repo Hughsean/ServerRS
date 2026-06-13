@@ -184,16 +184,38 @@ pub struct WebSearchPluginConfig {
     pub timeout_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FetchWebContentPluginConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub proxy_url: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+impl Default for FetchWebContentPluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            proxy_url: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct BaiduBaikePluginConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub proxy_url: String,
+}
+
+impl Default for BaiduBaikePluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            proxy_url: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1026,10 +1048,7 @@ impl AppConfig {
                     tracing::info!(path = %path, "configuration loaded");
                     cfg
                 }
-                Err(e) => {
-                    tracing::warn!(path = %path, error = %e, "failed to parse config, using defaults");
-                    Self::default()
-                }
+                Err(e) => panic!("failed to parse configuration file {path}: {e}"),
             },
             Err(e) => {
                 tracing::warn!(path = %path, error = %e, "config file not found, using defaults");
@@ -1037,7 +1056,52 @@ impl AppConfig {
             }
         };
         cfg.apply_env_overrides();
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("invalid application configuration: {e}"));
         cfg
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.database.url.trim().is_empty() {
+            return Err("database.url cannot be empty".into());
+        }
+        if self.database.max_connections == 0 {
+            return Err("database.max_connections must be at least 1".into());
+        }
+        if self.jwt.secret == default_jwt_secret() || self.jwt.secret.len() < 32 {
+            return Err(
+                "jwt.secret must be replaced with a random value of at least 32 characters".into(),
+            );
+        }
+        if self.jwt.access_ttl_secs == 0 || self.jwt.refresh_ttl_secs == 0 {
+            return Err("JWT TTL values must be greater than zero".into());
+        }
+        if self.rag.chunk_size == 0 || self.rag.chunk_overlap >= self.rag.chunk_size {
+            return Err("rag.chunk_overlap must be smaller than rag.chunk_size".into());
+        }
+        if self.llm.timeout_secs == 0 {
+            return Err("llm.timeout_secs must be greater than zero".into());
+        }
+        if self.embedding.batch_size == 0 || self.embedding.timeout_secs == 0 {
+            return Err(
+                "embedding.batch_size and embedding.timeout_secs must be greater than zero".into(),
+            );
+        }
+        if !self.rag.hybrid_vector_weight.is_finite()
+            || !self.rag.hybrid_keyword_weight.is_finite()
+            || self.rag.hybrid_vector_weight < 0.0
+            || self.rag.hybrid_keyword_weight < 0.0
+            || self.rag.hybrid_vector_weight + self.rag.hybrid_keyword_weight <= 0.0
+        {
+            return Err("RAG hybrid weights must be non-negative and have a positive sum".into());
+        }
+        if !self.storage.backend.eq_ignore_ascii_case("LOCAL") {
+            return Err(format!(
+                "storage.backend={} is not implemented; use LOCAL",
+                self.storage.backend
+            ));
+        }
+        Ok(())
     }
 
     /// Override configuration fields with environment variables.
@@ -1047,6 +1111,10 @@ impl AppConfig {
             if !val.is_empty() {
                 self.database.url = val;
             }
+        }
+        if let Ok(val) = std::env::var("AGENT_HTTP_PROXY") {
+            self.plugins.fetch_web_content.proxy_url = val.clone();
+            self.plugins.baidu_baike.proxy_url = val;
         }
         if let Ok(val) = std::env::var("JWT_SECRET") {
             if !val.is_empty() {
@@ -1071,6 +1139,11 @@ impl AppConfig {
         if let Ok(val) = std::env::var("LLM_CHAT_MODEL") {
             if !val.is_empty() {
                 self.llm.chat_model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.llm.timeout_secs = n;
             }
         }
         if let Ok(val) = std::env::var("EMBEDDING_BASE_URL") {

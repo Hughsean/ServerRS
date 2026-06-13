@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 
 use crate::domain::risk::detection_types::RiskLevel;
@@ -153,6 +153,54 @@ impl RiskRepository for SeaOrmRiskRepository {
         let page_num = offset / limit;
         let items = paginator.fetch_page(page_num).await.map_err(map_err)?;
         Ok((items.into_iter().map(map).collect(), count))
+    }
+
+    async fn find_conversation_ids_paginated(
+        &self,
+        limit: u64,
+        offset: u64,
+        risk_level: Option<RiskLevel>,
+    ) -> Result<(Vec<u64>, u64), AppError> {
+        let (filter, values) = match risk_level {
+            Some(level) => (
+                " AND risk_level = ?",
+                vec![Value::String(Some(enum_to_str(&level)))],
+            ),
+            None => ("", Vec::new()),
+        };
+        let backend = self.db.get_database_backend();
+        let count_sql = format!(
+            "SELECT COUNT(DISTINCT conversation_id) AS total \
+             FROM risk_detection_results WHERE conversation_id <> 0{filter}"
+        );
+        let count_statement = Statement::from_sql_and_values(backend, count_sql, values.clone());
+        let total = self
+            .db
+            .query_one_raw(count_statement)
+            .await
+            .map_err(map_err)?
+            .map(|row| row.try_get::<u64>("", "total"))
+            .transpose()
+            .map_err(map_err)?
+            .unwrap_or(0);
+
+        let page_sql = format!(
+            "SELECT conversation_id, MAX(created_at) AS latest \
+             FROM risk_detection_results \
+             WHERE conversation_id <> 0{filter} \
+             GROUP BY conversation_id ORDER BY latest DESC \
+             LIMIT {limit} OFFSET {offset}"
+        );
+        let page_statement = Statement::from_sql_and_values(backend, page_sql, values);
+        let ids = self
+            .db
+            .query_all_raw(page_statement)
+            .await
+            .map_err(map_err)?
+            .into_iter()
+            .map(|row| row.try_get::<u64>("", "conversation_id").map_err(map_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((ids, total))
     }
 
     async fn mark_processed(

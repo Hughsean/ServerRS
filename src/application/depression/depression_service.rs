@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::domain::depression::{
@@ -37,7 +38,13 @@ impl DepressionService {
     ) -> Result<AssessmentDetail, AppError> {
         let scale = self.get_scale(scale_id).await?;
 
-        let total_score = compute_score(&answers);
+        let total_score = compute_score(&answers)?;
+        if total_score < scale.min_score as i32 || total_score > scale.max_score as i32 {
+            return Err(AppError::Validation(format!(
+                "assessment score {total_score} is outside scale range {}..={}",
+                scale.min_score, scale.max_score
+            )));
+        }
         let severity_level = determine_severity(&scale.severity_ranges, total_score);
 
         let assessment = self
@@ -64,18 +71,44 @@ impl DepressionService {
         user_id: u64,
         page: u64,
         size: u64,
-    ) -> Result<(Vec<DepressionAssessment>, u64), AppError> {
+    ) -> Result<(Vec<AssessmentDetail>, u64), AppError> {
+        let page = page.max(1);
+        let size = size.clamp(1, 100);
         let offset = page.saturating_sub(1) * size;
-        self.repo
+        let (assessments, total) = self
+            .repo
             .find_assessments_by_user_id(user_id, size, offset)
-            .await
+            .await?;
+        let scales: HashMap<u16, DepressionScale> = self
+            .repo
+            .list_scales()
+            .await?
+            .into_iter()
+            .map(|scale| (scale.scale_id, scale))
+            .collect();
+        let items = assessments
+            .into_iter()
+            .map(|assessment| {
+                let severity_level = scales
+                    .get(&assessment.scale_id)
+                    .map(|scale| {
+                        determine_severity(&scale.severity_ranges, assessment.total_score as i32)
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+                AssessmentDetail {
+                    assessment,
+                    severity_level,
+                }
+            })
+            .collect();
+        Ok((items, total))
     }
 
     pub async fn get_assessment(
         &self,
         user_id: u64,
         assessment_id: u64,
-    ) -> Result<DepressionAssessment, AppError> {
+    ) -> Result<AssessmentDetail, AppError> {
         let a = self
             .repo
             .find_assessment_by_id(assessment_id)
@@ -84,7 +117,12 @@ impl DepressionService {
         if a.user_id != user_id {
             return Err(AppError::Forbidden("not your assessment".into()));
         }
-        Ok(a)
+        let scale = self.get_scale(a.scale_id).await?;
+        let severity_level = determine_severity(&scale.severity_ranges, a.total_score as i32);
+        Ok(AssessmentDetail {
+            assessment: a,
+            severity_level,
+        })
     }
 
     pub async fn delete_assessment(
@@ -112,20 +150,27 @@ pub struct AssessmentDetail {
     pub severity_level: String,
 }
 
-fn compute_score(answers: &serde_json::Value) -> i32 {
-    match answers {
-        serde_json::Value::Object(map) => map
-            .values()
-            .filter_map(|v| v.as_i64())
-            .map(|v| v as i32)
-            .sum(),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_i64())
-            .map(|v| v as i32)
-            .sum(),
-        _ => 0,
-    }
+fn compute_score(answers: &serde_json::Value) -> Result<i32, AppError> {
+    let values: Vec<&serde_json::Value> = match answers {
+        serde_json::Value::Object(map) if !map.is_empty() => map.values().collect(),
+        serde_json::Value::Array(arr) if !arr.is_empty() => arr.iter().collect(),
+        _ => {
+            return Err(AppError::Validation(
+                "answers must be a non-empty object or array".into(),
+            ));
+        }
+    };
+
+    values.into_iter().try_fold(0_i32, |total, value| {
+        let score = value.as_i64().ok_or_else(|| {
+            AppError::Validation("every assessment answer must be an integer".into())
+        })?;
+        let score = i32::try_from(score)
+            .map_err(|_| AppError::Validation("assessment answer is out of range".into()))?;
+        total
+            .checked_add(score)
+            .ok_or_else(|| AppError::Validation("assessment score overflow".into()))
+    })
 }
 
 fn determine_severity(severity_ranges: &serde_json::Value, score: i32) -> String {

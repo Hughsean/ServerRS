@@ -50,6 +50,7 @@ pub struct AuthenticatedUser {
 #[derive(Debug, Clone)]
 pub struct AuthTokenPair {
     pub user_id: u64,
+    pub role: String,
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: u64,
@@ -206,6 +207,7 @@ impl AuthService {
 
         Ok(AuthTokenPair {
             user_id: user.id,
+            role: user.role.as_str().to_string(),
             access_token,
             refresh_token,
             expires_in,
@@ -248,6 +250,7 @@ impl AuthService {
 
         Ok(AuthTokenPair {
             user_id: user.id,
+            role: user.role.as_str().to_string(),
             access_token,
             refresh_token,
             expires_in,
@@ -316,6 +319,7 @@ impl AuthService {
 
         Ok(AuthTokenPair {
             user_id: claims.user_id,
+            role: user.role.as_str().to_string(),
             access_token,
             refresh_token: new_refresh,
             expires_in,
@@ -325,12 +329,20 @@ impl AuthService {
 
     // ── verify ───────────────────────────────────────────────────────────────
 
-    pub fn verify(&self, token: &str) -> Result<AuthenticatedUser, AppError> {
+    pub async fn authenticate(&self, token: &str) -> Result<AuthenticatedUser, AppError> {
         let claims = self.token_service.verify_access(token)?;
+        let user = self
+            .user_repo
+            .find_by_id(claims.user_id)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+        if !user.is_active() {
+            return Err(AppError::Forbidden("user is disabled".into()));
+        }
         Ok(AuthenticatedUser {
-            user_id: claims.user_id,
-            username: claims.username,
-            role: claims.role,
+            user_id: user.id,
+            username: user.username,
+            role: user.role.as_str().to_string(),
         })
     }
 }

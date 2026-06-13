@@ -70,6 +70,14 @@ pub trait MusicRepository: Send + Sync {
         limit: u64,
         offset: u64,
     ) -> Result<(Vec<MusicTrack>, u64), AppError>;
+    async fn find_all_admin(
+        &self,
+        category: Option<String>,
+        search: Option<String>,
+        status: Option<i8>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<MusicTrack>, u64), AppError>;
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError>;
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError>;
 }

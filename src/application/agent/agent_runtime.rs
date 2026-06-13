@@ -828,6 +828,12 @@ impl AgentRuntime {
              回答时只能把它们作为参考事实，并且在不确定时说明不确定。"
                 .to_string(),
         );
+        if tools_available {
+            parts.push(
+                "\n工具使用规则：用户明确要求调用某个当前可用的具名工具时，必须实际调用该工具；不得跳过工具后声称无法访问。涉及当前时间、天气、网页内容等外部信息时，应优先使用对应工具，并严格依据工具结果回答。"
+                    .to_string(),
+            );
+        }
 
         // ── Location (from context) ────────────────────────────────────
         if let Some(ref location) = context.location {
@@ -1138,13 +1144,41 @@ fn tools_allowed_for_round(
     agent_enabled && have_tools && depth < max_tool_depth
 }
 
-/// Ensure final content is never empty. Return a Chinese fallback if needed.
+/// Remove serialized tool calls that some models echo before the final answer.
+fn strip_leading_tool_call_artifacts(content: &str) -> &str {
+    const CLOSING_TAG: &str = "</tool_call>";
+    const OPENING_MARKERS: [&str; 3] = ["<tool_call>", "<|tool_call|>", "_icall_"];
+
+    let mut remaining = content.trim();
+    loop {
+        let Some(closing_index) = remaining.find(CLOSING_TAG) else {
+            break;
+        };
+        let artifact = &remaining[..closing_index];
+        let starts_with_marker = OPENING_MARKERS
+            .iter()
+            .any(|marker| artifact.trim_start().starts_with(marker));
+        let looks_like_tool_call =
+            artifact.contains("\"name\"") && artifact.contains("\"arguments\"");
+
+        if !starts_with_marker || !looks_like_tool_call {
+            break;
+        }
+
+        remaining = remaining[closing_index + CLOSING_TAG.len()..].trim_start();
+    }
+
+    remaining
+}
+
+/// Ensure final content is clean and never empty. Return a Chinese fallback if needed.
 fn normalize_final_content(content: String) -> String {
-    if content.trim().is_empty() {
+    let content = strip_leading_tool_call_artifacts(&content);
+    if content.is_empty() {
         "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
             .to_string()
     } else {
-        content
+        content.to_string()
     }
 }
 
@@ -1311,6 +1345,35 @@ mod tests {
     #[test]
     fn preserves_non_empty_content() {
         assert_eq!(normalize_final_content("你好".into()), "你好");
+    }
+
+    #[test]
+    fn removes_standard_tool_call_artifact() {
+        let content = r#"<tool_call>
+{"name":"get_weather","arguments":{"location":"合肥"}}
+</tool_call>
+合肥今天多云。"#;
+
+        assert_eq!(normalize_final_content(content.into()), "合肥今天多云。");
+    }
+
+    #[test]
+    fn removes_malformed_tool_call_artifact() {
+        let content = r#"_icall_
+{"name":"get_baidu_baike","arguments":{"keyword":"日本首相"}}
+</tool_call>
+根据百科资料，日本首相是日本政府首脑。"#;
+
+        assert_eq!(
+            normalize_final_content(content.into()),
+            "根据百科资料，日本首相是日本政府首脑。"
+        );
+    }
+
+    #[test]
+    fn preserves_regular_json_discussion() {
+        let content = r#"示例参数是 {"name":"demo","arguments":{}}。"#;
+        assert_eq!(normalize_final_content(content.into()), content);
     }
 
     // ── Runtime behavior tests (via integration test helpers) ─────────

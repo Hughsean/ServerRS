@@ -15,6 +15,8 @@ pub struct IngestionService {
     chunking: ChunkingService,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_index: Option<Arc<VectorIndexService>>,
+    chunk_size: usize,
+    chunk_overlap: usize,
 }
 
 impl IngestionService {
@@ -28,7 +30,15 @@ impl IngestionService {
             chunking,
             embedding,
             vector_index: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
         }
+    }
+
+    pub fn with_chunking_config(mut self, chunk_size: usize, chunk_overlap: usize) -> Self {
+        self.chunk_size = chunk_size;
+        self.chunk_overlap = chunk_overlap;
+        self
     }
 
     pub fn with_vector_index(mut self, vi: Arc<VectorIndexService>) -> Self {
@@ -64,7 +74,9 @@ impl IngestionService {
             .await?;
 
         // 3. chunk the content
-        let chunks_raw = self.chunking.chunk_text(content, 512, 64);
+        let chunks_raw = self
+            .chunking
+            .chunk_text(content, self.chunk_size, self.chunk_overlap);
 
         // 4. persist chunks
         let new_chunks: Vec<NewChunk> = chunks_raw

@@ -21,8 +21,7 @@ use crate::domain::llm::{
 pub struct OllamaProvider {
     base_url: String,
     model: String,
-    temperature: f64,
-    top_p: f64,
+    timeout_secs: u64,
     client: reqwest::Client,
 }
 
@@ -131,11 +130,15 @@ impl OllamaProvider {
     /// both can coexist during the migration:
     ///   `http://127.0.0.1:11434/v1`
     pub fn new(base_url: String, model: String, temperature: f64, top_p: f64) -> Self {
+        let _ = (temperature, top_p);
+        Self::with_timeout(base_url, model, DEFAULT_TIMEOUT_SECS)
+    }
+
+    pub fn with_timeout(base_url: String, model: String, timeout_secs: u64) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model,
-            temperature,
-            top_p,
+            timeout_secs,
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
@@ -163,13 +166,14 @@ impl OllamaProvider {
             .client
             .post(url)
             .json(body)
-            .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(self.timeout_secs))
             .send()
             .await
             .map_err(|e| {
                 if e.is_timeout() {
                     LlmError::Timeout(format!(
-                        "request to {url} timed out after {DEFAULT_TIMEOUT_SECS}s"
+                        "request to {url} timed out after {}s",
+                        self.timeout_secs
                     ))
                 } else if e.is_connect() {
                     LlmError::Connection(format!("cannot connect to {url}: {e}"))

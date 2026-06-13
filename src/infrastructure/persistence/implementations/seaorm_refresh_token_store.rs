@@ -9,11 +9,15 @@ use super::super::entities::refresh_tokens;
 
 pub struct SeaOrmRefreshTokenStore {
     db: DatabaseConnection,
+    refresh_ttl_secs: u64,
 }
 
 impl SeaOrmRefreshTokenStore {
-    pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+    pub fn new(db: DatabaseConnection, refresh_ttl_secs: u64) -> Self {
+        Self {
+            db,
+            refresh_ttl_secs,
+        }
     }
 }
 
@@ -37,7 +41,10 @@ impl RefreshTokenStore for SeaOrmRefreshTokenStore {
     async fn store(&self, user_id: u64, token_hash: String) -> Result<(), AppError> {
         let token_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().naive_utc();
-        let expires_at = (now.and_utc().timestamp() + 7 * 24 * 3600) as u64;
+        let expires_at = now
+            .and_utc()
+            .timestamp()
+            .saturating_add_unsigned(self.refresh_ttl_secs) as u64;
 
         refresh_tokens::ActiveModel {
             refresh_token_id: Set(0), // auto-increment
@@ -101,7 +108,6 @@ impl RefreshTokenStore for SeaOrmRefreshTokenStore {
     async fn cleanup_expired(&self, now_seconds: u64) -> Result<usize, AppError> {
         let result = refresh_tokens::Entity::delete_many()
             .filter(refresh_tokens::Column::ExpiresAt.lt(now_seconds))
-            .filter(refresh_tokens::Column::RevokedAt.is_not_null())
             .exec(&self.db)
             .await
             .map_err(map_db_err)?;

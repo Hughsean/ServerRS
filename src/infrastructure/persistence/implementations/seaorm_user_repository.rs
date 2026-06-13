@@ -109,6 +109,7 @@ impl UserRepository for SeaOrmUserRepository {
             phone: Set(new_user.phone),
             nickname: Set(new_user.nickname),
             status: Set(new_user.status.to_i32() as i8),
+            role: Set(new_user.role.as_str().to_string()),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()

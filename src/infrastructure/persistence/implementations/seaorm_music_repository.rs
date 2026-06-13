@@ -129,6 +129,41 @@ impl MusicRepository for SeaOrmMusicRepository {
         Ok((items.into_iter().map(map).collect(), count))
     }
 
+    async fn find_all_admin(
+        &self,
+        category: Option<String>,
+        search: Option<String>,
+        status: Option<i8>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+        let mut query = music::Entity::find();
+        if let Some(category) = category {
+            query = query.filter(music::Column::Category.eq(category));
+        }
+        if let Some(search) = search {
+            let pattern = format!("%{search}%");
+            query = query.filter(
+                sea_orm::Condition::any()
+                    .add(music::Column::Title.like(&pattern))
+                    .add(music::Column::Artist.like(&pattern))
+                    .add(music::Column::Album.like(&pattern)),
+            );
+        }
+        if let Some(status) = status {
+            query = query.filter(music::Column::Status.eq(status));
+        }
+        let paginator = query
+            .order_by_desc(music::Column::CreatedAt)
+            .paginate(&self.db, limit);
+        let count = paginator.num_items().await.map_err(map_err)?;
+        let items = paginator
+            .fetch_page(offset / limit)
+            .await
+            .map_err(map_err)?;
+        Ok((items.into_iter().map(map).collect(), count))
+    }
+
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError> {
         let existing = music::Entity::find_by_id(id)
             .one(&self.db)

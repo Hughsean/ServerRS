@@ -82,7 +82,7 @@ export interface UpsertProfileRequest {
 }
 
 export interface SessionCreateRequest {
-  user_id: number
+  user_id?: number
   dialogue_id?: number
   location?: Record<string, JsonValue>
 }
@@ -159,40 +159,107 @@ export interface Category {
   categoryId: number
   categoryName: string
   parentId: number | null
+  description: string | null
+  sortOrder: number
+  isEnabled: boolean
   children: Category[]
 }
 
 export interface Article {
   articleId: number
+  categoryId: number | null
   title: string
   summary: string | null
+  content: string
   author: string | null
+  source: string | null
   tags: string | null
   viewCount: number
   likeCount: number
   isFeatured: boolean
+  isPublished: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 export interface Qna {
   qnaId: number
+  categoryId: number | null
   question: string
   answer: string
   expertName: string | null
+  expertTitle: string | null
+  tags: string | null
+  viewCount: number
+  likeCount: number
   isVerified: boolean
+  isPublished: boolean
+  createdAt: string
 }
 
 export interface PsychologyResource {
   resourceId: number
+  categoryId: number | null
   resourceType: string
   title: string
+  description: string | null
+  objectId: number | null
+  externalUrl: string | null
   fileSize: number | null
   mimeType: string | null
+  duration: number | null
+  tags: string | null
+  viewCount: number
+  likeCount: number
+  isPublished: boolean
+  createdAt: string
+}
+
+export interface CategoryWriteRequest {
+  parentId?: number
+  name: string
+  description?: string
+  sortOrder?: number
+  isEnabled?: boolean
+}
+
+export interface ArticleWriteRequest {
+  categoryId: number
+  title: string
+  summary?: string
+  content: string
+  author?: string
+  source?: string
+  tags?: JsonValue
+  isFeatured?: boolean
+  isPublished?: boolean
+}
+
+export interface QnaWriteRequest {
+  categoryId: number
+  question: string
+  answer: string
+  expertName?: string
+  expertTitle?: string
+  tags?: JsonValue
+  isVerified?: boolean
+  isPublished?: boolean
+}
+
+export interface PsychologyResourceWriteRequest {
+  categoryId: number
+  title: string
+  description?: string
+  resourceType: 'VIDEO' | 'AUDIO' | 'PDF' | 'LINK' | 'TOOL'
+  externalUrl?: string
+  tags?: JsonValue
+  isPublished?: boolean
 }
 
 export interface Paginated<T> {
   items: T[]
   page: number
-  page_size: number
+  pageSize: number
   total: number
 }
 
@@ -315,6 +382,7 @@ export interface MusicTrack {
   lyrics: string | null
   tags: JsonValue | null
   moodTags: JsonValue | null
+  status: number
 }
 
 export interface MusicTrackPage {

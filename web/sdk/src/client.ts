@@ -9,8 +9,10 @@ import type {
   AdminRiskDetection,
   AdminUser,
   Article,
+  ArticleWriteRequest,
   AuthUser,
   Category,
+  CategoryWriteRequest,
   CommunityComment,
   CommunityPage,
   CommunityPost,
@@ -43,7 +45,9 @@ import type {
   PaginatedRiskConversations,
   PatchMeRequest,
   PsychologyResource,
+  PsychologyResourceWriteRequest,
   Qna,
+  QnaWriteRequest,
   RefreshResponse,
   RegisterRequest,
   ReviewPublishRequest,
@@ -82,6 +86,14 @@ export interface KnowledgeReviewQuery extends PageQuery {
 
 export interface RiskConversationQuery extends PageQuery {
   riskLevel?: string
+}
+
+export interface AdminPsychologyQuery extends PageQuery {
+  search?: string
+  categoryId?: number
+  resourceType?: string
+  isVerified?: boolean
+  isPublished?: boolean
 }
 
 export class ServerRsClient {
@@ -156,14 +168,17 @@ class AuthApi {
   }
 
   async logout(reason?: string): Promise<void> {
-    const refreshToken = await this.http.tokenStore?.getRefreshToken?.()
-    if (refreshToken) {
-      await this.http.request<void>('POST', '/api/v1/auth/logout', {
-        auth: false,
-        body: { refresh_token: refreshToken, reason },
-      })
+    try {
+      const refreshToken = await this.http.tokenStore?.getRefreshToken?.()
+      if (refreshToken) {
+        await this.http.request<void>('POST', '/api/v1/auth/logout', {
+          auth: false,
+          body: { refresh_token: refreshToken, reason },
+        })
+      }
+    } finally {
+      await this.http.tokenStore?.clear()
     }
-    await this.http.tokenStore?.clear()
   }
 
   me(): Promise<AuthUser> {
@@ -434,7 +449,11 @@ class ObjectApi {
 
   upload(file: Blob, bucket?: string, filename?: string): Promise<StoredObject> {
     const form = new FormData()
-    form.append('file', file, filename)
+    if (filename) {
+      form.append('file', file, filename)
+    } else {
+      form.append('file', file)
+    }
     return this.http.request('POST', '/api/v1/objects/upload', {
       query: { bucket },
       body: form,
@@ -491,12 +510,101 @@ class AdminApi {
     return this.http.request('POST', '/api/v1/admin/music', { body: payload })
   }
 
+  tracks(query: MusicListQuery & { status?: 0 | 1 } = {}): Promise<MusicTrackPage> {
+    return this.http.request('GET', '/api/v1/admin/music', { query })
+  }
+
   updateTrack(id: number, payload: UpdateMusicTrackRequest): Promise<MusicTrack> {
     return this.http.request('PATCH', `/api/v1/admin/music/${id}`, { body: payload })
   }
 
   deleteTrack(id: number): Promise<DeletedResponse> {
     return this.http.request('DELETE', `/api/v1/admin/music/${id}`)
+  }
+
+  psychologyCategories(): Promise<Category[]> {
+    return this.http.request('GET', '/api/v1/admin/psychology/categories')
+  }
+
+  psychologyCategory(id: number): Promise<Category> {
+    return this.http.request('GET', `/api/v1/admin/psychology/categories/${id}`)
+  }
+
+  createPsychologyCategory(payload: CategoryWriteRequest): Promise<Category> {
+    return this.http.request('POST', '/api/v1/admin/psychology/categories', { body: payload })
+  }
+
+  updatePsychologyCategory(id: number, payload: CategoryWriteRequest): Promise<Category> {
+    return this.http.request('PUT', `/api/v1/admin/psychology/categories/${id}`, { body: payload })
+  }
+
+  deletePsychologyCategory(id: number): Promise<DeletedResponse> {
+    return this.http.request('DELETE', `/api/v1/admin/psychology/categories/${id}`)
+  }
+
+  psychologyArticles(query: AdminPsychologyQuery = {}): Promise<Paginated<Article>> {
+    return this.http.request('GET', '/api/v1/admin/psychology/articles', { query })
+  }
+
+  psychologyArticle(id: number): Promise<Article> {
+    return this.http.request('GET', `/api/v1/admin/psychology/articles/${id}`)
+  }
+
+  createPsychologyArticle(payload: ArticleWriteRequest): Promise<Article> {
+    return this.http.request('POST', '/api/v1/admin/psychology/articles', { body: payload })
+  }
+
+  updatePsychologyArticle(id: number, payload: ArticleWriteRequest): Promise<Article> {
+    return this.http.request('PUT', `/api/v1/admin/psychology/articles/${id}`, { body: payload })
+  }
+
+  deletePsychologyArticle(id: number): Promise<DeletedResponse> {
+    return this.http.request('DELETE', `/api/v1/admin/psychology/articles/${id}`)
+  }
+
+  psychologyQna(query: AdminPsychologyQuery = {}): Promise<Paginated<Qna>> {
+    return this.http.request('GET', '/api/v1/admin/psychology/qna', { query })
+  }
+
+  psychologyQnaItem(id: number): Promise<Qna> {
+    return this.http.request('GET', `/api/v1/admin/psychology/qna/${id}`)
+  }
+
+  createPsychologyQna(payload: QnaWriteRequest): Promise<Qna> {
+    return this.http.request('POST', '/api/v1/admin/psychology/qna', { body: payload })
+  }
+
+  updatePsychologyQna(id: number, payload: QnaWriteRequest): Promise<Qna> {
+    return this.http.request('PUT', `/api/v1/admin/psychology/qna/${id}`, { body: payload })
+  }
+
+  deletePsychologyQna(id: number): Promise<DeletedResponse> {
+    return this.http.request('DELETE', `/api/v1/admin/psychology/qna/${id}`)
+  }
+
+  psychologyResources(query: AdminPsychologyQuery = {}): Promise<Paginated<PsychologyResource>> {
+    return this.http.request('GET', '/api/v1/admin/psychology/resources', { query })
+  }
+
+  psychologyResource(id: number): Promise<PsychologyResource> {
+    return this.http.request('GET', `/api/v1/admin/psychology/resources/${id}`)
+  }
+
+  createPsychologyResource(
+    payload: PsychologyResourceWriteRequest,
+  ): Promise<PsychologyResource> {
+    return this.http.request('POST', '/api/v1/admin/psychology/resources', { body: payload })
+  }
+
+  updatePsychologyResource(
+    id: number,
+    payload: PsychologyResourceWriteRequest,
+  ): Promise<PsychologyResource> {
+    return this.http.request('PUT', `/api/v1/admin/psychology/resources/${id}`, { body: payload })
+  }
+
+  deletePsychologyResource(id: number): Promise<DeletedResponse> {
+    return this.http.request('DELETE', `/api/v1/admin/psychology/resources/${id}`)
   }
 
   knowledgeReviews(query: KnowledgeReviewQuery = {}): Promise<KnowledgeReviewPage> {

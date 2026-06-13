@@ -111,23 +111,26 @@ pub async fn list_assessments(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedAssessments>, AppError> {
-    let (assessments, total) = state
+    let (details, total) = state
         .depression
         .list_assessments(auth_user.user_id, params.page, params.size)
         .await?;
-    let items: Vec<AssessmentDto> = assessments
+    let items: Vec<AssessmentDto> = details
         .into_iter()
-        .map(|a| AssessmentDto {
-            assessment_id: a.assessment_id,
-            user_id: a.user_id,
-            scale_id: a.scale_id,
-            assessment_date: a.assessment_date.to_string(),
-            answers: a.answers,
-            total_score: a.total_score,
-            severity_level: String::new(),
-            notes: a.notes,
-            created_at: a.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
-            updated_at: a.updated_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+        .map(|detail| {
+            let a = detail.assessment;
+            AssessmentDto {
+                assessment_id: a.assessment_id,
+                user_id: a.user_id,
+                scale_id: a.scale_id,
+                assessment_date: a.assessment_date.to_string(),
+                answers: a.answers,
+                total_score: a.total_score,
+                severity_level: detail.severity_level,
+                notes: a.notes,
+                created_at: a.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                updated_at: a.updated_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            }
         })
         .collect();
     Ok(Json(PaginatedAssessments { items, total }))
@@ -139,10 +142,11 @@ pub async fn get_assessment(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(assessment_id): Path<u64>,
 ) -> Result<Json<AssessmentDto>, AppError> {
-    let a = state
+    let detail = state
         .depression
         .get_assessment(auth_user.user_id, assessment_id)
         .await?;
+    let a = detail.assessment;
     Ok(Json(AssessmentDto {
         assessment_id: a.assessment_id,
         user_id: a.user_id,
@@ -150,7 +154,7 @@ pub async fn get_assessment(
         assessment_date: a.assessment_date.to_string(),
         answers: a.answers,
         total_score: a.total_score,
-        severity_level: String::new(),
+        severity_level: detail.severity_level,
         notes: a.notes,
         created_at: a.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
         updated_at: a.updated_at.map(|t| t.to_rfc3339()).unwrap_or_default(),

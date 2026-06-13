@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  BookOpen,
   BookOpenCheck,
   ChevronLeft,
   ChevronRight,
@@ -27,6 +28,7 @@ const navigation = [
   { to: '/users', label: '用户管理', icon: Users },
   { to: '/risks', label: '风险会话', icon: ShieldAlert },
   { to: '/knowledge', label: '知识审核', icon: BookOpenCheck },
+  { to: '/psychology', label: '心理内容', icon: BookOpen },
   { to: '/music', label: '音乐资源', icon: Music2 },
 ]
 

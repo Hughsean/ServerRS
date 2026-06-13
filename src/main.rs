@@ -1,13 +1,7 @@
-mod api;
-mod application;
-mod bootstrap;
-mod domain;
-mod infrastructure;
-mod shared;
-
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ServerRS::{api, application, bootstrap, domain, infrastructure, shared};
 use application::agent::agent_context::AgentContextBuilder;
 use application::agent::agent_runtime::AgentRuntime;
 use application::community::community_service::CommunityService;
@@ -26,7 +20,7 @@ use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
 use application::storage::object_service::ObjectService;
 use application::user::user_service::UserService;
-use domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
+use domain::auth::refresh_token_store::RefreshTokenStore;
 use domain::conversation::conversation_repository::ConversationRepository;
 use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider, PromptProvider};
 use domain::risk::risk_detector::RiskDetector;
@@ -52,15 +46,17 @@ use application::agent::tool_registry::{AgentToolDeps, build_default_agent_tools
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
-    if let Err(err) = run().await {
+    let config = AppConfig::load();
+    init_tracing(&config.logging.level);
+    if let Err(err) = run(config).await {
         tracing::error!(error = %err, "server stopped with error");
     }
 }
 
-async fn run() -> Result<(), std::io::Error> {
-    let config = AppConfig::load();
-    let db = init_db(&config.database.url).await.expect("db init");
+async fn run(config: AppConfig) -> Result<(), std::io::Error> {
+    let db = init_db(&config.database.url, config.database.max_connections)
+        .await
+        .expect("db init");
 
     // ── Repositories ──
     let repos = bootstrap::repos::build_repos(&db);
@@ -123,6 +119,10 @@ async fn run() -> Result<(), std::io::Error> {
     // ── Auth infra ──
     let auth_graph =
         bootstrap::auth::build_auth(&db, &config.jwt, &config.auth, &user_repo, &task_publisher);
+    background.spawn({
+        let store = Arc::clone(&auth_graph.refresh_token_store);
+        tokio::spawn(periodic_revocation(store))
+    });
 
     // ── LLM (infrastructure → domain trait) ──
     // Legacy LlmClient (used by ConversationOrchestrator and DiaryService)
@@ -133,18 +133,19 @@ async fn run() -> Result<(), std::io::Error> {
         config.ollama.top_p,
     ));
     // ── Chat LLM provider (Agent uses config.llm.*) ──
-    let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::new(
+    let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::with_timeout(
         config.llm.base_url.clone(),
         config.llm.chat_model.clone(),
-        config.llm.temperature,
-        config.llm.top_p,
+        config.llm.timeout_secs,
     ));
     // ── Dedicated embedding provider (separate from chat LLM) ──
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
-        infrastructure::llm::ollama_embedding_provider::OllamaEmbeddingProvider::new(
+        infrastructure::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
             config.embedding.base_url.clone(),
             config.embedding.model.clone(),
             config.embedding.dimension,
+            config.embedding.batch_size,
+            config.embedding.timeout_secs,
         ),
     );
     let prompt_provider: Arc<dyn PromptProvider> = Arc::new(InfraPromptProvider::new(None));
@@ -241,7 +242,11 @@ async fn run() -> Result<(), std::io::Error> {
 
     // ── RAG & Memory services (constructed early — needed by AgentContextBuilder) ──
     let mut retrieval_svc =
-        RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&embedding_provider)));
+        RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&embedding_provider)))
+            .with_hybrid_weights(
+                config.rag.hybrid_vector_weight,
+                config.rag.hybrid_keyword_weight,
+            );
     if let Some(ref vs) = vector_store {
         retrieval_svc =
             retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
@@ -260,7 +265,8 @@ async fn run() -> Result<(), std::io::Error> {
         Arc::clone(&rag_repo),
         chunking,
         Some(Arc::clone(&embedding_provider)),
-    );
+    )
+    .with_chunking_config(config.rag.chunk_size, config.rag.chunk_overlap);
     if let Some(ref vi) = vector_index {
         ingestion_svc = ingestion_svc.with_vector_index(Arc::clone(vi));
     }
@@ -413,7 +419,8 @@ async fn run() -> Result<(), std::io::Error> {
     };
 
     let state = bootstrap::state::build_state(&services);
-    let app = api::router::build_router(state);
+    let app = api::router::build_router_with_origins(state, &config.cors.allowed_origins)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -426,7 +433,7 @@ async fn run() -> Result<(), std::io::Error> {
     r
 }
 
-async fn periodic_revocation(repo: Arc<dyn RefreshTokenRevocationRepository>) {
+async fn periodic_revocation(repo: Arc<dyn RefreshTokenStore>) {
     let mut t = tokio::time::interval(tokio::time::Duration::from_secs(60));
     loop {
         t.tick().await;
@@ -461,10 +468,10 @@ async fn shutdown_signal() {
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
 }
 
-fn init_tracing() {
+fn init_tracing(configured_level: &str) {
     let env_filter = std::env::var("RUST_LOG").unwrap_or_default();
     let combined = if env_filter.is_empty() {
-        "info,sqlx=warn".to_string()
+        format!("{configured_level},sqlx=warn")
     } else if env_filter.contains("sqlx") {
         // User explicitly set sqlx level — respect it.
         env_filter

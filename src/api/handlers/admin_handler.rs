@@ -109,7 +109,7 @@ pub async fn list_users(
     Query(q): Query<PageQuery>,
 ) -> Result<Json<PaginatedUsers>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
-    let page_size = q.page_size.unwrap_or(20).min(100);
+    let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
 
     let all = state.user.list_users().await?;
     let total = all.len() as u64;
@@ -166,12 +166,17 @@ pub async fn get_user(
 
 pub async fn patch_user(
     State(state): State<AdminState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
     Json(body): Json<AdminPatchUser>,
 ) -> Result<Json<UserDto>, AppError> {
     let status = body
         .status
-        .map(|s| UserStatus::from_i32(s).unwrap_or(UserStatus::Disabled));
+        .map(|s| {
+            UserStatus::from_i32(s)
+                .ok_or_else(|| AppError::Validation(format!("invalid user status: {s}")))
+        })
+        .transpose()?;
     let role = body
         .role
         .map(|role| {
@@ -179,6 +184,13 @@ pub async fn patch_user(
                 .ok_or_else(|| AppError::Validation(format!("invalid user role: {role}")))
         })
         .transpose()?;
+    if id == auth.user_id
+        && (matches!(status, Some(UserStatus::Disabled)) || matches!(role, Some(UserRole::User)))
+    {
+        return Err(AppError::Validation(
+            "administrators cannot disable or demote their own account".into(),
+        ));
+    }
 
     let update = UserUpdate {
         email: None,
@@ -206,8 +218,14 @@ pub async fn patch_user(
 
 pub async fn delete_user(
     State(state): State<AdminState>,
+    Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
+    if id == auth.user_id {
+        return Err(AppError::Validation(
+            "administrators cannot delete their own account".into(),
+        ));
+    }
     state.user.admin_delete_user(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -217,7 +235,7 @@ pub async fn list_risk_conversations(
     Query(q): Query<RiskConvQuery>,
 ) -> Result<Json<PaginatedRiskConversations>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
-    let page_size = q.page_size.unwrap_or(20).min(100);
+    let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
 
     let (items, total) = state
         .query

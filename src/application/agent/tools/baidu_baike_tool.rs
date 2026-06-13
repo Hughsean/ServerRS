@@ -15,12 +15,18 @@ pub struct BaiduBaikeTool {
 
 impl BaiduBaikeTool {
     pub fn new(config: BaiduBaikePluginConfig) -> Self {
-        let http_client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::limited(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .no_proxy();
+        if !config.proxy_url.trim().is_empty() {
+            builder = builder.proxy(
+                reqwest::Proxy::all(config.proxy_url.trim())
+                    .expect("invalid baidu_baike proxy URL"),
+            );
+        }
+        let http_client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
             config,
@@ -74,7 +80,7 @@ impl AgentTool for BaiduBaikeTool {
 
         // Build URL
         let encoded = urlencoding::encode(&keyword);
-        let url = format!("https://baike.baidu.com/item/{encoded}");
+        let url = format!("https://wapbaike.baidu.com/item/{encoded}");
 
         // Fetch page
         let response = match self
@@ -82,8 +88,10 @@ impl AgentTool for BaiduBaikeTool {
             .get(&url)
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
             )
+            .header("Accept", "text/html,application/xhtml+xml")
+            .header("Accept-Language", "zh-CN,zh;q=0.9")
             .send()
             .await
         {
@@ -270,7 +278,10 @@ mod tests {
 
     #[test]
     fn empty_keyword_returns_message() {
-        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig { enabled: true });
+        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig {
+            enabled: true,
+            ..Default::default()
+        });
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -281,7 +292,10 @@ mod tests {
 
     #[test]
     fn disabled_returns_message() {
-        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig { enabled: false });
+        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig {
+            enabled: false,
+            ..Default::default()
+        });
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt

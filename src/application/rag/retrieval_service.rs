@@ -29,9 +29,10 @@ fn can_read_document(document: &KnowledgeDocument, user_id: u64) -> bool {
 
 /// Hybrid retrieval service.
 ///
-/// Strategy (Qdrant-first):
+/// Strategy:
 /// 1. Qdrant vector search  →  MySQL second validation  →  permission filter.
-/// 2. Fallback: MySQL keyword search  →  same MySQL + permission validation.
+/// 2. MySQL keyword search  →  the same permission and lifecycle validation.
+/// 3. Normalize and merge both result sets using configured hybrid weights.
 ///
 /// Web-ingestion content lives in a SEPARATE Qdrant collection and is only
 /// surfaced when its publish version is active. Two layers enforce this
@@ -47,6 +48,8 @@ pub struct RetrievalService {
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_store: Option<Arc<dyn VectorStore>>,
     rag_collection: String,
+    hybrid_vector_weight: f64,
+    hybrid_keyword_weight: f64,
     /// Optional web-ingestion collection. When set, retrieval also searches it
     /// with an `active=true` payload filter. None → web ingestion not searched
     /// (legacy-only behaviour, unchanged).
@@ -63,6 +66,8 @@ impl RetrievalService {
             embedding,
             vector_store: None,
             rag_collection: "rag_chunks".into(),
+            hybrid_vector_weight: 0.6,
+            hybrid_keyword_weight: 0.4,
             web_collection: None,
         }
     }
@@ -70,6 +75,13 @@ impl RetrievalService {
     pub fn with_vector_store(mut self, vs: Arc<dyn VectorStore>, collection: String) -> Self {
         self.vector_store = Some(vs);
         self.rag_collection = collection;
+        self
+    }
+
+    pub fn with_hybrid_weights(mut self, vector_weight: f64, keyword_weight: f64) -> Self {
+        let total = vector_weight + keyword_weight;
+        self.hybrid_vector_weight = vector_weight / total;
+        self.hybrid_keyword_weight = keyword_weight / total;
         self
     }
 
@@ -83,26 +95,44 @@ impl RetrievalService {
 
     /// Retrieve top-k relevant chunks, scoped to `user_id`.
     ///
-    /// Qdrant is preferred; keyword is a fallback with the same validation.
+    /// Qdrant and keyword results are merged when vector search is available.
+    /// Either side can fail independently without discarding valid results.
     pub async fn retrieve(
         &self,
         query: &str,
         user_id: u64,
         top_k: u64,
     ) -> Result<Vec<(KnowledgeChunk, f64)>, AppError> {
-        // ── Qdrant path ─────────────────────────────────────────
         if let (Some(vs), Some(ep)) = (&self.vector_store, &self.embedding) {
-            match self.qdrant_retrieve(vs, ep, query, user_id, top_k).await {
-                Ok(results) if !results.is_empty() => {
-                    debug!(count = results.len(), "Qdrant retrieval succeeded");
-                    return Ok(results);
+            let vector_results = self.qdrant_retrieve(vs, ep, query, user_id, top_k).await;
+            let keyword_results = self
+                .keyword_retrieve_with_validation(query, user_id, top_k)
+                .await;
+
+            return match (vector_results, keyword_results) {
+                (Ok(vector), Ok(keyword)) => {
+                    debug!(
+                        vector_count = vector.len(),
+                        keyword_count = keyword.len(),
+                        "hybrid retrieval succeeded"
+                    );
+                    Ok(self.hybrid_merge(keyword, vector, top_k))
                 }
-                Ok(_) => debug!("Qdrant returned empty; fallback to keyword"),
-                Err(e) => warn!(error = %e, "Qdrant retrieval failed; fallback to keyword"),
-            }
+                (Ok(vector), Err(e)) if !vector.is_empty() => {
+                    warn!(error = %e, "keyword retrieval failed; using vector results");
+                    Ok(vector)
+                }
+                (Err(e), Ok(keyword)) => {
+                    warn!(error = %e, "Qdrant retrieval failed; using keyword results");
+                    Ok(keyword)
+                }
+                (Ok(_), Err(e)) => Err(e),
+                (Err(vector_error), Err(keyword_error)) => Err(AppError::internal(format!(
+                    "vector retrieval failed: {vector_error}; keyword retrieval failed: {keyword_error}"
+                ))),
+            };
         }
 
-        // ── Fallback: MySQL keyword  →  same validation ────────
         self.keyword_retrieve_with_validation(query, user_id, top_k)
             .await
     }
@@ -288,7 +318,7 @@ impl RetrievalService {
                 return Ok(keyword_results);
             }
         };
-        Ok(Self::hybrid_merge(keyword_results, vec_results, top_k))
+        Ok(self.hybrid_merge(keyword_results, vec_results, top_k))
     }
 
     async fn legacy_vector_search(
@@ -319,6 +349,7 @@ impl RetrievalService {
     }
 
     fn hybrid_merge(
+        &self,
         keyword: Vec<(KnowledgeChunk, f64)>,
         vector: Vec<(KnowledgeChunk, f64)>,
         top_k: u64,
@@ -353,7 +384,10 @@ impl RetrievalService {
             .map(|id| {
                 let kw = kw_map.get(&id).copied().unwrap_or(0.0);
                 let vec = vec_map.get(&id).copied().unwrap_or(0.0);
-                (id, 0.6 * vec + 0.4 * kw)
+                (
+                    id,
+                    self.hybrid_vector_weight * vec + self.hybrid_keyword_weight * kw,
+                )
             })
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

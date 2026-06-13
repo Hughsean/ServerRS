@@ -30,9 +30,12 @@ pub struct PsychologyArticle {
     pub title: String,
     pub summary: Option<String>,
     pub content: String,
+    pub author: Option<String>,
+    pub source: Option<String>,
     pub tags: Option<String>,
     pub view_count: i64,
     pub like_count: i64,
+    pub is_featured: bool,
     pub is_published: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -44,7 +47,10 @@ pub struct NewPsychologyArticle {
     pub title: String,
     pub summary: Option<String>,
     pub content: String,
+    pub author: Option<String>,
+    pub source: Option<String>,
     pub tags: Option<String>,
+    pub is_featured: bool,
     pub is_published: bool,
 }
 
@@ -54,9 +60,12 @@ pub struct PsychologyQna {
     pub category_id: Option<u64>,
     pub question: String,
     pub answer: String,
+    pub expert_name: Option<String>,
+    pub expert_title: Option<String>,
     pub tags: Option<String>,
     pub view_count: i64,
     pub like_count: i64,
+    pub is_verified: bool,
     pub is_published: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -66,7 +75,10 @@ pub struct NewPsychologyQna {
     pub category_id: Option<u64>,
     pub question: String,
     pub answer: String,
+    pub expert_name: Option<String>,
+    pub expert_title: Option<String>,
     pub tags: Option<String>,
+    pub is_verified: bool,
     pub is_published: bool,
 }
 
@@ -79,6 +91,9 @@ pub struct PsychologyResource {
     pub resource_type: String,
     pub object_id: Option<u64>,
     pub external_url: Option<String>,
+    pub file_size: Option<u64>,
+    pub mime_type: Option<String>,
+    pub duration: Option<u32>,
     pub tags: Option<String>,
     pub view_count: i64,
     pub like_count: i64,
@@ -135,6 +150,7 @@ pub trait PsychologyRepository: Send + Sync {
     // Categories
     async fn find_category_by_id(&self, id: u64) -> Result<Option<PsychologyCategory>, AppError>;
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError>;
+    async fn list_categories_admin(&self) -> Result<Vec<PsychologyCategory>, AppError>;
     async fn create_category(
         &self,
         new: NewPsychologyCategory,
@@ -156,6 +172,18 @@ pub trait PsychologyRepository: Send + Sync {
         category_id: Option<u64>,
         is_featured: Option<bool>,
     ) -> Result<(Vec<PsychologyArticle>, u64), AppError>;
+    async fn find_article_by_id_admin(
+        &self,
+        id: u64,
+    ) -> Result<Option<PsychologyArticle>, AppError>;
+    async fn list_articles_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        search: Option<String>,
+        category_id: Option<u64>,
+        is_published: Option<bool>,
+    ) -> Result<(Vec<PsychologyArticle>, u64), AppError>;
     async fn create_article(
         &self,
         new: NewPsychologyArticle,
@@ -176,6 +204,15 @@ pub trait PsychologyRepository: Send + Sync {
         category_id: Option<u64>,
         is_verified: Option<bool>,
     ) -> Result<(Vec<PsychologyQna>, u64), AppError>;
+    async fn find_qna_by_id_admin(&self, id: u64) -> Result<Option<PsychologyQna>, AppError>;
+    async fn list_qnas_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        category_id: Option<u64>,
+        is_verified: Option<bool>,
+        is_published: Option<bool>,
+    ) -> Result<(Vec<PsychologyQna>, u64), AppError>;
     async fn create_qna(&self, new: NewPsychologyQna) -> Result<PsychologyQna, AppError>;
     async fn update_qna(&self, id: u64, new: NewPsychologyQna) -> Result<PsychologyQna, AppError>;
     async fn delete_qna(&self, id: u64) -> Result<bool, AppError>;
@@ -188,6 +225,18 @@ pub trait PsychologyRepository: Send + Sync {
         page_size: u64,
         category_id: Option<u64>,
         resource_type: Option<String>,
+    ) -> Result<(Vec<PsychologyResource>, u64), AppError>;
+    async fn find_resource_by_id_admin(
+        &self,
+        id: u64,
+    ) -> Result<Option<PsychologyResource>, AppError>;
+    async fn list_resources_admin(
+        &self,
+        page: u64,
+        page_size: u64,
+        category_id: Option<u64>,
+        resource_type: Option<String>,
+        is_published: Option<bool>,
     ) -> Result<(Vec<PsychologyResource>, u64), AppError>;
     async fn create_resource(
         &self,

@@ -76,8 +76,11 @@ impl UserService {
     }
 
     pub async fn admin_delete_user(&self, user_id: u64) -> Result<(), AppError> {
-        let _ = self.user_repo.delete_by_id(user_id).await?;
-        Ok(())
+        if self.user_repo.delete_by_id(user_id).await? {
+            Ok(())
+        } else {
+            Err(AppError::NotFound(format!("user {user_id} not found")))
+        }
     }
 
     pub async fn delete_user(&self, actor_user_id: u64, user_id: u64) -> Result<bool, AppError> {

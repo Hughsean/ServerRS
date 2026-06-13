@@ -187,11 +187,11 @@ pub async fn create_comment(
 pub async fn delete_comment(
     State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
-    Path((_post_id, comment_id)): Path<(u64, u64)>,
+    Path((post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
     state
         .community
-        .delete_comment(comment_id, auth.user_id)
+        .delete_comment(post_id, comment_id, auth.user_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -219,11 +219,11 @@ pub async fn unlike_post(
 pub async fn like_comment(
     State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
-    Path((_post_id, comment_id)): Path<(u64, u64)>,
+    Path((post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
     state
         .community
-        .like_comment(comment_id, auth.user_id)
+        .like_comment(post_id, comment_id, auth.user_id)
         .await?;
     Ok(StatusCode::OK)
 }
@@ -231,11 +231,11 @@ pub async fn like_comment(
 pub async fn unlike_comment(
     State(state): State<CommunityState>,
     Extension(auth): Extension<AuthenticatedUser>,
-    Path((_post_id, comment_id)): Path<(u64, u64)>,
+    Path((post_id, comment_id)): Path<(u64, u64)>,
 ) -> Result<StatusCode, AppError> {
     state
         .community
-        .unlike_comment(comment_id, auth.user_id)
+        .unlike_comment(post_id, comment_id, auth.user_id)
         .await?;
     Ok(StatusCode::OK)
 }

@@ -62,7 +62,7 @@ pub async fn list_diaries(
     Query(q): Query<DiaryListQuery>,
 ) -> Result<Json<Vec<DiaryDto>>, AppError> {
     let page = q.page.unwrap_or(1).max(1);
-    let page_size = q.page_size.unwrap_or(20).min(100);
+    let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
 
     let (diaries, _total) = state.diaries.list(auth.user_id, page, page_size).await?;
 

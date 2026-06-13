@@ -71,20 +71,16 @@ impl SessionService {
         page_size: u64,
         risk_level: Option<RiskLevel>,
     ) -> Result<(Vec<Conversation>, u64), AppError> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
         let offset = (page.saturating_sub(1)) * page_size;
-        let (detections, total) = self
+        let (conv_ids, total) = self
             .risk_repo
-            .find_all_paginated(page_size, offset, risk_level)
+            .find_conversation_ids_paginated(page_size, offset, risk_level)
             .await?;
-        let mut conv_ids: Vec<u64> = detections
-            .iter()
-            .filter_map(|d| d.conversation_id)
-            .collect();
-        conv_ids.sort();
-        conv_ids.dedup();
 
         let mut convs = Vec::new();
-        for &cid in &conv_ids {
+        for cid in conv_ids {
             if let Some(c) = self.conv_repo.find_by_id(cid).await? {
                 convs.push(c);
             }

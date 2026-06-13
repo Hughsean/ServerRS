@@ -150,7 +150,7 @@ pub async fn list_risk_detections(
     Query(query): Query<RiskListQuery>,
 ) -> Result<Json<RiskDetectionPage>, AppError> {
     let page = query.page.unwrap_or(1).max(1);
-    let size = query.size.unwrap_or(10).min(100);
+    let size = query.size.unwrap_or(10).clamp(1, 100);
     let (items, total) = state
         .query
         .list_risk_detections(auth_user.user_id, page, size)

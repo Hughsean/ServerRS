@@ -109,7 +109,12 @@ pub async fn get_profile(
     State(state): State<UserState>,
 ) -> Result<Json<UserProfileDto>, AppError> {
     let profile = state.user.get_profile(auth_user.user_id).await?;
-    Ok(Json(to_profile_dto(profile, None)))
+    let nickname = state
+        .user
+        .admin_get_user(auth_user.user_id)
+        .await?
+        .and_then(|user| user.nickname);
+    Ok(Json(to_profile_dto(profile, nickname)))
 }
 
 pub async fn put_profile(
@@ -117,6 +122,26 @@ pub async fn put_profile(
     State(state): State<UserState>,
     Json(payload): Json<UpsertProfileRequest>,
 ) -> Result<Json<UserProfileDto>, AppError> {
+    let nickname = if let Some(nickname) = payload.nickname {
+        state
+            .user
+            .update_user(
+                auth_user.user_id,
+                auth_user.user_id,
+                None,
+                None,
+                Some(Some(nickname)),
+                None,
+            )
+            .await?
+            .nickname
+    } else {
+        state
+            .user
+            .admin_get_user(auth_user.user_id)
+            .await?
+            .and_then(|user| user.nickname)
+    };
     let profile = state
         .user
         .upsert_profile(
@@ -128,7 +153,7 @@ pub async fn put_profile(
             payload.learning_records,
         )
         .await?;
-    Ok(Json(to_profile_dto(profile, payload.nickname)))
+    Ok(Json(to_profile_dto(profile, nickname)))
 }
 
 // ── Legacy handlers (kept for existing router.rs routes) ─────────────────────

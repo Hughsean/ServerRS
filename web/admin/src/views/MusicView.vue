@@ -12,6 +12,7 @@ const saving = ref(false)
 const error = ref('')
 const search = ref('')
 const category = ref('')
+const statusFilter = ref<'' | '0' | '1'>('')
 const page = ref(1)
 const pageSize = 20
 const total = ref(0)
@@ -42,11 +43,12 @@ async function load(reset = false) {
   loading.value = true
   error.value = ''
   try {
-    const result = await api.music.tracks({
+    const result = await api.admin.tracks({
       page: page.value,
       pageSize,
       search: search.value || undefined,
       category: category.value || undefined,
+      status: statusFilter.value === '' ? undefined : Number(statusFilter.value) as 0 | 1,
     })
     tracks.value = result.items
     total.value = result.total
@@ -147,6 +149,21 @@ async function removeTrack(trackId: number, title: string) {
   }
 }
 
+async function toggleTrackStatus(track: MusicTrack) {
+  saving.value = true
+  error.value = ''
+  try {
+    const updated = await api.admin.updateTrack(track.musicId, {
+      status: track.status === 1 ? 0 : 1,
+    })
+    Object.assign(track, updated)
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
 async function turnPage(next: number) {
   page.value = next
   await load()
@@ -177,6 +194,11 @@ onMounted(() => load())
       <div class="toolbar">
         <input v-model="search" class="input search-input" placeholder="标题或作者" @keyup.enter="load(true)" />
         <input v-model="category" class="input category-input" placeholder="分类" @keyup.enter="load(true)" />
+        <select v-model="statusFilter" class="select" @change="load(true)">
+          <option value="">全部状态</option>
+          <option value="1">已启用</option>
+          <option value="0">已停用</option>
+        </select>
         <button class="button" @click="load(true)">搜索</button>
         <button class="button primary" @click="showCreate = true"><Plus :size="16" />新增音乐</button>
       </div>
@@ -192,7 +214,7 @@ onMounted(() => load())
       <div v-else class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>音乐</th><th>专辑</th><th>分类</th><th>时长</th><th>格式</th><th>大小</th><th>操作</th></tr>
+            <tr><th>音乐</th><th>专辑</th><th>分类</th><th>状态</th><th>时长</th><th>格式</th><th>大小</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="track in tracks" :key="track.musicId">
@@ -204,11 +226,15 @@ onMounted(() => load())
               </td>
               <td>{{ track.album || '-' }}</td>
               <td><span class="badge">{{ track.category || '未分类' }}</span></td>
+              <td><span class="badge">{{ track.status === 1 ? '已启用' : '已停用' }}</span></td>
               <td>{{ track.duration == null ? '-' : `${Math.floor(track.duration / 60)}:${String(track.duration % 60).padStart(2, '0')}` }}</td>
               <td>{{ track.mimeType }}</td>
               <td>{{ (track.fileSize / 1024 / 1024).toFixed(2) }} MB</td>
               <td>
                 <div class="row-actions">
+                  <button class="button small" :disabled="saving" @click="toggleTrackStatus(track)">
+                    {{ track.status === 1 ? '停用' : '启用' }}
+                  </button>
                   <button class="button small" @click="startEdit(track.musicId)"><Pencil :size="13" />编辑</button>
                   <button class="button small danger" :disabled="saving" @click="removeTrack(track.musicId, track.title)"><Trash2 :size="13" />删除</button>
                 </div>

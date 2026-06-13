@@ -31,6 +31,11 @@ const router = createRouter({
           name: 'knowledge-detail',
           component: () => import('@/views/KnowledgeReviewDetailView.vue'),
         },
+        {
+          path: 'psychology',
+          name: 'psychology',
+          component: () => import('@/views/PsychologyView.vue'),
+        },
         { path: 'music', name: 'music', component: () => import('@/views/MusicView.vue') },
       ],
     },

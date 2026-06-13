@@ -18,6 +18,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "smoke:real": "pnpm build && node scripts/smoke-real.mjs",
+    "smoke:admin": "pnpm build && node scripts/smoke-admin-psychology.mjs",
     "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

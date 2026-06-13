@@ -47,12 +47,12 @@ pub struct HealthResponse {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn pair_to_login(pair: AuthTokenPair, username: String, role: &str) -> LoginResponse {
+fn pair_to_login(pair: AuthTokenPair, username: String) -> LoginResponse {
     LoginResponse {
         user: UserInfo {
             id: pair.user_id,
             username,
-            role: role.to_string(),
+            role: pair.role,
         },
         access_token: pair.access_token,
         refresh_token: pair.refresh_token,
@@ -80,11 +80,7 @@ pub async fn register(
         .auth
         .register(payload.username, payload.password, payload.device_id)
         .await?;
-    let authenticated = state.auth.verify(&pair.access_token)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(pair_to_login(pair, username, &authenticated.role)),
-    ))
+    Ok((StatusCode::CREATED, Json(pair_to_login(pair, username))))
 }
 
 pub async fn login(
@@ -101,8 +97,7 @@ pub async fn login(
             device_id: payload.device_id,
         })
         .await?;
-    let authenticated = state.auth.verify(&pair.access_token)?;
-    Ok(Json(pair_to_login(pair, username, &authenticated.role)))
+    Ok(Json(pair_to_login(pair, username)))
 }
 
 pub async fn refresh_token(

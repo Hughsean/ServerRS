@@ -23,6 +23,12 @@ pub trait RiskRepository: Send + Sync {
         offset: u64,
         risk_level: Option<RiskLevel>,
     ) -> Result<(Vec<RiskDetectionResult>, u64), AppError>;
+    async fn find_conversation_ids_paginated(
+        &self,
+        limit: u64,
+        offset: u64,
+        risk_level: Option<RiskLevel>,
+    ) -> Result<(Vec<u64>, u64), AppError>;
     async fn mark_processed(
         &self,
         id: u64,

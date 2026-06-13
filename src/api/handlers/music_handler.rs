@@ -45,6 +45,16 @@ pub struct UpdateTrackRequest {
     pub status: Option<i8>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminTrackListQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub category: Option<String>,
+    pub search: Option<String>,
+    pub status: Option<i8>,
+}
+
 pub async fn list_tracks(
     State(state): State<MusicState>,
     Query(params): Query<TrackListQuery>,
@@ -72,6 +82,7 @@ pub async fn list_tracks(
             lyrics: t.lyrics,
             tags: t.tags,
             mood_tags: t.mood_tags,
+            status: t.status,
         })
         .collect();
 
@@ -102,7 +113,33 @@ pub async fn get_track(
         lyrics: track.lyrics,
         tags: track.tags,
         mood_tags: track.mood_tags,
+        status: track.status,
     }))
+}
+
+pub async fn admin_list_tracks(
+    State(state): State<MusicState>,
+    Query(params): Query<AdminTrackListQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = params.page.unwrap_or(1).max(1) as u64;
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 100) as u64;
+    let (tracks, total) = state
+        .music
+        .admin_list(
+            params.category,
+            params.search,
+            params.status,
+            page,
+            page_size,
+        )
+        .await?;
+    let items: Vec<TrackDto> = tracks.into_iter().map(track_to_dto).collect();
+    Ok(Json(json!({
+        "items": items,
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+    })))
 }
 
 pub async fn stream_track(
@@ -207,5 +244,6 @@ fn track_to_dto(track: crate::domain::music::MusicTrack) -> TrackDto {
         lyrics: track.lyrics,
         tags: track.tags,
         mood_tags: track.mood_tags,
+        status: track.status,
     }
 }

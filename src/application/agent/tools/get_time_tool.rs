@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Local;
+use chrono::{Datelike, Local};
 use serde_json::{Value, json};
 
 use crate::application::agent::agent_runtime::AgentTool;
@@ -39,8 +39,24 @@ impl AgentTool for GetTimeTool {
     }
 
     async fn execute(&self, _context: &AgentContext, _args: Value) -> Result<String, AppError> {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-        Ok(format!("当前日期时间为: {}", now))
+        let now = Local::now();
+        let weekday = match now.weekday() {
+            chrono::Weekday::Mon => "星期一",
+            chrono::Weekday::Tue => "星期二",
+            chrono::Weekday::Wed => "星期三",
+            chrono::Weekday::Thu => "星期四",
+            chrono::Weekday::Fri => "星期五",
+            chrono::Weekday::Sat => "星期六",
+            chrono::Weekday::Sun => "星期日",
+        };
+        Ok(json!({
+            "date": now.format("%Y-%m-%d").to_string(),
+            "time": now.format("%H:%M:%S").to_string(),
+            "weekday": weekday,
+            "timezone": now.format("%:z").to_string(),
+            "instruction": "回答日期、时间和星期时必须严格使用这些字段，不得自行换算。"
+        })
+        .to_string())
     }
 }
 
@@ -94,14 +110,14 @@ mod tests {
 
         let output = tool.execute(&context, serde_json::json!({})).await.unwrap();
 
-        let prefix = "当前日期时间为: ";
-        assert!(
-            output.starts_with(prefix),
-            "output should start with '{prefix}', got: {output}"
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let combined = format!(
+            "{} {}",
+            value["date"].as_str().unwrap(),
+            value["time"].as_str().unwrap()
         );
-
-        let time_part = output.trim_start_matches(prefix);
-        NaiveDateTime::parse_from_str(time_part, "%Y-%m-%d %H:%M:%S")
-            .expect("time should match yyyy-MM-dd HH:mm:ss");
+        NaiveDateTime::parse_from_str(&combined, "%Y-%m-%d %H:%M:%S")
+            .expect("time fields should match yyyy-MM-dd HH:mm:ss");
+        assert!(value["weekday"].as_str().unwrap().starts_with("星期"));
     }
 }

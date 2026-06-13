@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 
 use crate::domain::community::{
@@ -181,6 +181,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
     ) -> Result<Vec<Comment>, AppError> {
         let paginator = community_comments::Entity::find()
             .filter(community_comments::Column::PostId.eq(post_id))
+            .filter(community_comments::Column::Status.eq(1_i8))
             .order_by_desc(community_comments::Column::CreatedAt)
             .paginate(&self.db, limit);
         let page_num = if limit > 0 { offset / limit } else { 0 };
@@ -191,6 +192,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
     async fn count_comments_by_post(&self, post_id: u64) -> Result<u64, AppError> {
         community_comments::Entity::find()
             .filter(community_comments::Column::PostId.eq(post_id))
+            .filter(community_comments::Column::Status.eq(1_i8))
             .count(&self.db)
             .await
             .map_err(map_err)
@@ -206,8 +208,9 @@ impl CommunityRepository for SeaOrmCommunityRepository {
 
     async fn save_comment(&self, new_comment: NewComment) -> Result<Comment, AppError> {
         let now = chrono::Utc::now();
+        let post_id = new_comment.post_id;
         let am = community_comments::ActiveModel {
-            post_id: Set(new_comment.post_id),
+            post_id: Set(post_id),
             user_id: Set(new_comment.user_id),
             parent_comment_id: Set(new_comment.parent_comment_id),
             content: Set(new_comment.content),
@@ -218,8 +221,14 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             updated_at: Set(now.into()),
             ..Default::default()
         };
-        let comment = map_comment(am.insert(&self.db).await.map_err(map_err)?);
-        self.incr_comments_count(new_comment.post_id).await?;
+        let txn = self.db.begin().await.map_err(map_err)?;
+        let comment = map_comment(am.insert(&txn).await.map_err(map_err)?);
+        let sql = format!(
+            "UPDATE community_posts SET comments_count = comments_count + 1 WHERE post_id = {}",
+            post_id
+        );
+        txn.execute_unprepared(&sql).await.map_err(map_err)?;
+        txn.commit().await.map_err(map_err)?;
         Ok(comment)
     }
 
@@ -246,8 +255,9 @@ impl CommunityRepository for SeaOrmCommunityRepository {
     }
 
     async fn delete_comment(&self, comment_id: u64) -> Result<bool, AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
         let existing = community_comments::Entity::find_by_id(comment_id)
-            .one(&self.db)
+            .one(&txn)
             .await
             .map_err(map_err)?;
         let post_id = match existing {
@@ -255,14 +265,20 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             None => return Ok(false),
         };
         let ok = community_comments::Entity::delete_by_id(comment_id)
-            .exec(&self.db)
+            .exec(&txn)
             .await
             .map_err(map_err)?
             .rows_affected
             > 0;
         if ok {
-            self.decr_comments_count(post_id).await?;
+            let sql = format!(
+                "UPDATE community_posts SET comments_count = GREATEST(comments_count - 1, 0) \
+                 WHERE post_id = {}",
+                post_id
+            );
+            txn.execute_unprepared(&sql).await.map_err(map_err)?;
         }
+        txn.commit().await.map_err(map_err)?;
         Ok(ok)
     }
 
@@ -283,6 +299,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             post_id: Set(new_media.post_id),
             media_type: Set(new_media.media_type),
             mime_type: Set(new_media.mime_type),
+            media_data: Set(new_media.media_data),
             created_at: Set(now.into()),
             ..Default::default()
         };
@@ -292,14 +309,16 @@ impl CommunityRepository for SeaOrmCommunityRepository {
     // -- Likes ----------------------------------------------------------------
 
     async fn like_post(&self, post_id: u64, user_id: u64) -> Result<(), AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
         let existing = content_likes::Entity::find()
             .filter(content_likes::Column::UserId.eq(user_id))
             .filter(content_likes::Column::ContentType.eq("community_post"))
             .filter(content_likes::Column::ContentId.eq(post_id))
-            .one(&self.db)
+            .one(&txn)
             .await
             .map_err(map_err)?;
         if existing.is_some() {
+            txn.rollback().await.map_err(map_err)?;
             return Ok(()); // already liked – idempotent
         }
         let now = chrono::Utc::now().naive_utc();
@@ -310,23 +329,25 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             created_at: Set(now),
             ..Default::default()
         };
-        am.insert(&self.db).await.map_err(map_err)?;
+        am.insert(&txn).await.map_err(map_err)?;
 
         // bump the denormalized counter
         let sql = format!(
             "UPDATE community_posts SET likes_count = likes_count + 1 WHERE post_id = {}",
             post_id
         );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
+        txn.execute_unprepared(&sql).await.map_err(map_err)?;
+        txn.commit().await.map_err(map_err)?;
         Ok(())
     }
 
     async fn unlike_post(&self, post_id: u64, user_id: u64) -> Result<(), AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
         let deleted = content_likes::Entity::delete_many()
             .filter(content_likes::Column::UserId.eq(user_id))
             .filter(content_likes::Column::ContentType.eq("community_post"))
             .filter(content_likes::Column::ContentId.eq(post_id))
-            .exec(&self.db)
+            .exec(&txn)
             .await
             .map_err(map_err)?
             .rows_affected;
@@ -335,20 +356,23 @@ impl CommunityRepository for SeaOrmCommunityRepository {
                 "UPDATE community_posts SET likes_count = GREATEST(likes_count - 1, 0) WHERE post_id = {}",
                 post_id
             );
-            self.db.execute_unprepared(&sql).await.map_err(map_err)?;
+            txn.execute_unprepared(&sql).await.map_err(map_err)?;
         }
+        txn.commit().await.map_err(map_err)?;
         Ok(())
     }
 
     async fn like_comment(&self, comment_id: u64, user_id: u64) -> Result<(), AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
         let existing = content_likes::Entity::find()
             .filter(content_likes::Column::UserId.eq(user_id))
             .filter(content_likes::Column::ContentType.eq("community_comment"))
             .filter(content_likes::Column::ContentId.eq(comment_id))
-            .one(&self.db)
+            .one(&txn)
             .await
             .map_err(map_err)?;
         if existing.is_some() {
+            txn.rollback().await.map_err(map_err)?;
             return Ok(());
         }
         let now = chrono::Utc::now().naive_utc();
@@ -359,22 +383,24 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             created_at: Set(now),
             ..Default::default()
         };
-        am.insert(&self.db).await.map_err(map_err)?;
+        am.insert(&txn).await.map_err(map_err)?;
 
         let sql = format!(
             "UPDATE community_comments SET likes_count = likes_count + 1 WHERE comment_id = {}",
             comment_id
         );
-        self.db.execute_unprepared(&sql).await.map_err(map_err)?;
+        txn.execute_unprepared(&sql).await.map_err(map_err)?;
+        txn.commit().await.map_err(map_err)?;
         Ok(())
     }
 
     async fn unlike_comment(&self, comment_id: u64, user_id: u64) -> Result<(), AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
         let deleted = content_likes::Entity::delete_many()
             .filter(content_likes::Column::UserId.eq(user_id))
             .filter(content_likes::Column::ContentType.eq("community_comment"))
             .filter(content_likes::Column::ContentId.eq(comment_id))
-            .exec(&self.db)
+            .exec(&txn)
             .await
             .map_err(map_err)?
             .rows_affected;
@@ -383,8 +409,9 @@ impl CommunityRepository for SeaOrmCommunityRepository {
                 "UPDATE community_comments SET likes_count = GREATEST(likes_count - 1, 0) WHERE comment_id = {}",
                 comment_id
             );
-            self.db.execute_unprepared(&sql).await.map_err(map_err)?;
+            txn.execute_unprepared(&sql).await.map_err(map_err)?;
         }
+        txn.commit().await.map_err(map_err)?;
         Ok(())
     }
 }

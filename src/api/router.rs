@@ -1,8 +1,11 @@
 use axum::{
-    Router, middleware,
+    Router,
+    extract::DefaultBodyLimit,
+    http::{HeaderValue, Method},
+    middleware,
     routing::{delete, get, patch, post, put},
 };
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use super::AppState;
@@ -24,15 +27,20 @@ use super::handlers::diary_handler::{
 };
 use super::handlers::knowledge_review_handler::{get_review, list_reviews, publish_reviewed};
 use super::handlers::music_handler::{
-    admin_create_track, admin_delete_track, admin_update_track, get_track, list_tracks,
-    stream_track,
+    admin_create_track, admin_delete_track, admin_list_tracks, admin_update_track, get_track,
+    list_tracks, stream_track,
 };
 use super::handlers::object_handler::{
     delete_object, get_object, get_object_metadata, upload_object,
 };
 use super::handlers::psychology_handler::{
-    check_favorite, get_article, get_category_tree, get_qna, get_resource, list_articles,
-    list_categories, list_favorites, list_qna, list_resources, toggle_favorite, toggle_like,
+    admin_create_article, admin_create_category, admin_create_qna, admin_create_resource,
+    admin_delete_article, admin_delete_category, admin_delete_qna, admin_delete_resource,
+    admin_get_article, admin_get_category, admin_get_qna, admin_get_resource, admin_list_articles,
+    admin_list_categories, admin_list_qna, admin_list_resources, admin_update_article,
+    admin_update_category, admin_update_qna, admin_update_resource, check_favorite, get_article,
+    get_category_tree, get_qna, get_resource, list_articles, list_categories, list_favorites,
+    list_qna, list_resources, toggle_favorite, toggle_like,
 };
 use super::handlers::session_handler::{
     create_session, get_session_status, list_conversation_messages, list_conversations,
@@ -42,6 +50,17 @@ use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, pu
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
 pub fn build_router(state: AppState) -> Router {
+    build_router_with_origins(state, &["http://localhost:3000".to_string()])
+        .expect("default CORS origin must be valid")
+}
+
+pub fn build_router_with_origins(
+    state: AppState,
+    allowed_origins: &[String],
+) -> Result<Router, String> {
+    let cors = build_cors_layer(allowed_origins)?;
+    let max_upload_bytes = state.object.objects.max_upload_bytes();
+
     // ── Protected routes (require valid Bearer token) ──────────────────────────
     let protected = Router::new()
         // Auth
@@ -151,9 +170,52 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/risk-detections/{id}/process",
             post(process_risk_detection),
         )
-        .route("/api/v1/admin/music", post(admin_create_track))
+        .route(
+            "/api/v1/admin/music",
+            get(admin_list_tracks).post(admin_create_track),
+        )
         .route("/api/v1/admin/music/{id}", patch(admin_update_track))
         .route("/api/v1/admin/music/{id}", delete(admin_delete_track))
+        .route(
+            "/api/v1/admin/psychology/categories",
+            get(admin_list_categories).post(admin_create_category),
+        )
+        .route(
+            "/api/v1/admin/psychology/categories/{id}",
+            get(admin_get_category)
+                .put(admin_update_category)
+                .delete(admin_delete_category),
+        )
+        .route(
+            "/api/v1/admin/psychology/articles",
+            get(admin_list_articles).post(admin_create_article),
+        )
+        .route(
+            "/api/v1/admin/psychology/articles/{id}",
+            get(admin_get_article)
+                .put(admin_update_article)
+                .delete(admin_delete_article),
+        )
+        .route(
+            "/api/v1/admin/psychology/qna",
+            get(admin_list_qna).post(admin_create_qna),
+        )
+        .route(
+            "/api/v1/admin/psychology/qna/{id}",
+            get(admin_get_qna)
+                .put(admin_update_qna)
+                .delete(admin_delete_qna),
+        )
+        .route(
+            "/api/v1/admin/psychology/resources",
+            get(admin_list_resources).post(admin_create_resource),
+        )
+        .route(
+            "/api/v1/admin/psychology/resources/{id}",
+            get(admin_get_resource)
+                .put(admin_update_resource)
+                .delete(admin_delete_resource),
+        )
         .route("/api/v1/admin/web-ingestion/reviews", get(list_reviews))
         .route(
             "/api/v1/admin/web-ingestion/reviews/{publish_record_id}",
@@ -173,7 +235,7 @@ pub fn build_router(state: AppState) -> Router {
         ));
 
     // ── Assemble everything into a single Router ───────────────────────────────
-    Router::new()
+    Ok(Router::new()
         // Health
         .route("/health", get(health))
         // Auth public endpoints
@@ -208,12 +270,42 @@ pub fn build_router(state: AppState) -> Router {
         .merge(protected)
         .merge(admin)
         // Global layers
-        .layer(
-            CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
+        .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state))
+}
+
+fn build_cors_layer(allowed_origins: &[String]) -> Result<CorsLayer, String> {
+    let origins: Vec<&str> = allowed_origins
+        .iter()
+        .map(String::as_str)
+        .filter(|origin| !origin.trim().is_empty())
+        .collect();
+
+    let allow_origin = if origins.iter().any(|origin| *origin == "*") {
+        AllowOrigin::any()
+    } else {
+        let parsed = origins
+            .into_iter()
+            .map(|origin| {
+                origin
+                    .parse::<HeaderValue>()
+                    .map_err(|e| format!("invalid CORS origin {origin:?}: {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        AllowOrigin::list(parsed)
+    };
+
+    Ok(CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers(Any))
 }

@@ -16,10 +16,18 @@ pub struct FetchWebContentTool {
 
 impl FetchWebContentTool {
     pub fn new(config: FetchWebContentPluginConfig) -> Self {
-        let http_client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy();
+        if !config.proxy_url.trim().is_empty() {
+            builder = builder.proxy(
+                reqwest::Proxy::all(config.proxy_url.trim())
+                    .expect("invalid fetch_web_content proxy URL"),
+            );
+        }
+        let http_client = builder
             .build()
             .expect("failed to build secure fetch_web_content HTTP client");
 
@@ -365,7 +373,10 @@ mod tests {
 
     #[test]
     fn rejects_empty_url() {
-        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig { enabled: true });
+        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig {
+            enabled: true,
+            ..Default::default()
+        });
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(tool.execute(&ctx, json!({"url": ""}))).unwrap();
@@ -422,7 +433,10 @@ mod tests {
 
     #[test]
     fn disabled_returns_message() {
-        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig { enabled: false });
+        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig {
+            enabled: false,
+            ..Default::default()
+        });
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt

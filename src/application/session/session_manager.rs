@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::Local;
+use chrono::{Datelike, Local};
 use tokio::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
@@ -112,7 +112,21 @@ impl SessionManager {
             }
         }
 
-        let date_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = Local::now();
+        let weekday = match now.weekday() {
+            chrono::Weekday::Mon => "星期一",
+            chrono::Weekday::Tue => "星期二",
+            chrono::Weekday::Wed => "星期三",
+            chrono::Weekday::Thu => "星期四",
+            chrono::Weekday::Fri => "星期五",
+            chrono::Weekday::Sat => "星期六",
+            chrono::Weekday::Sun => "星期日",
+        };
+        let date_time = format!(
+            "{} {weekday} {}",
+            now.format("%Y-%m-%d"),
+            now.format("%H:%M:%S")
+        );
         let final_prompt = self
             .orchestrator
             .build_persona(user_id, location, &date_time)

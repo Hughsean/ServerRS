@@ -11,8 +11,6 @@ use crate::api::ObjectState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
-const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
-
 #[derive(Deserialize)]
 pub struct UploadQuery {
     pub bucket: Option<String>,
@@ -56,13 +54,6 @@ pub async fn upload_object(
             .await
             .map_err(|e| AppError::Validation(e.to_string()))?;
 
-        if bytes.len() > MAX_UPLOAD_BYTES {
-            return Err(AppError::Validation(format!(
-                "file exceeds maximum size of {} bytes",
-                MAX_UPLOAD_BYTES
-            )));
-        }
-
         let result = state
             .objects
             .upload(
@@ -92,9 +83,13 @@ pub async fn upload_object(
 
 pub async fn get_object(
     State(state): State<ObjectState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
     Path(object_id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let obj = state.objects.get_bytes(object_id).await?;
+    let obj = state
+        .objects
+        .get_bytes(auth_user.user_id, object_id)
+        .await?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -108,9 +103,13 @@ pub async fn get_object(
 
 pub async fn get_object_metadata(
     State(state): State<ObjectState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
     Path(object_id): Path<u64>,
 ) -> Result<Json<StoredObjectDto>, AppError> {
-    let result = state.objects.get_metadata(object_id).await?;
+    let result = state
+        .objects
+        .get_metadata(auth_user.user_id, object_id)
+        .await?;
 
     Ok(Json(StoredObjectDto {
         id: result.id,

@@ -235,6 +235,15 @@ mod tests {
             Ok((vec![], 0))
         }
 
+        async fn find_conversation_ids_paginated(
+            &self,
+            _: u64,
+            _: u64,
+            _: Option<RiskLevel>,
+        ) -> Result<(Vec<u64>, u64), AppError> {
+            Ok((vec![], 0))
+        }
+
         async fn mark_processed(
             &self,
             _: u64,

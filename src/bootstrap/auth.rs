@@ -15,6 +15,7 @@ use crate::shared::config::{AuthConfig as AppAuthConfig, JwtConfig};
 
 pub struct AuthGraph {
     pub auth_service: Arc<AuthService>,
+    pub refresh_token_store: Arc<dyn RefreshTokenStore>,
 }
 
 pub fn build_auth(
@@ -25,19 +26,22 @@ pub fn build_auth(
     task_publisher: &Arc<dyn TaskPublisher>,
 ) -> AuthGraph {
     let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
-    let revoke_repo: Arc<SeaOrmRefreshTokenStore> =
-        Arc::new(SeaOrmRefreshTokenStore::new(db.clone()));
+    let revoke_repo: Arc<SeaOrmRefreshTokenStore> = Arc::new(SeaOrmRefreshTokenStore::new(
+        db.clone(),
+        jwt_config.refresh_ttl_secs,
+    ));
     let jwt: Arc<JwtTokenService> = Arc::new(JwtTokenService::new_with_ttls(
         &jwt_config.secret,
         jwt_config.access_ttl_secs,
         jwt_config.refresh_ttl_secs,
     ));
 
+    let refresh_token_store: Arc<dyn RefreshTokenStore> = revoke_repo;
     let auth_service: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(user_repo),
         password_service as Arc<dyn PasswordService>,
         jwt as Arc<dyn TokenService>,
-        revoke_repo as Arc<dyn RefreshTokenStore>,
+        Arc::clone(&refresh_token_store),
         Arc::clone(task_publisher),
         AuthConfig {
             max_attempts: auth_config.max_login_attempts,
@@ -46,5 +50,8 @@ pub fn build_auth(
         },
     ));
 
-    AuthGraph { auth_service }
+    AuthGraph {
+        auth_service,
+        refresh_token_store,
+    }
 }

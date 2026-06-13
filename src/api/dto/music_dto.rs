@@ -24,4 +24,5 @@ pub struct TrackDto {
     pub lyrics: Option<String>,
     pub tags: Option<serde_json::Value>,
     pub mood_tags: Option<serde_json::Value>,
+    pub status: i8,
 }

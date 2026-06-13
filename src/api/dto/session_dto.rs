@@ -3,6 +3,7 @@ use validator::Validate;
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct SessionCreateRequest {
+    #[serde(default)]
     #[validate(range(min = 0))]
     pub user_id: u64,
     pub dialogue_id: Option<u64>,

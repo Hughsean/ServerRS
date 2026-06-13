@@ -25,6 +25,21 @@ impl ObjectService {
         }
     }
 
+    pub fn max_upload_bytes(&self) -> usize {
+        [
+            self.config.max_avatar_bytes,
+            self.config.max_image_bytes,
+            self.config.max_audio_bytes,
+            self.config.max_document_bytes,
+            self.config.max_video_bytes,
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1024 * 1024)
+        .min(usize::MAX as u64) as usize
+    }
+
     pub async fn upload(
         &self,
         created_by: Option<u64>,
@@ -69,20 +84,28 @@ impl ObjectService {
         }
     }
 
-    pub async fn get_bytes(&self, object_id: u64) -> Result<ObjectBytes, AppError> {
+    pub async fn get_bytes(&self, user_id: u64, object_id: u64) -> Result<ObjectBytes, AppError> {
         let object = self
             .repo
             .find_by_id(object_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))?;
+        ensure_owner(&object, user_id)?;
         self.storage.get(&object).await
     }
 
-    pub async fn get_metadata(&self, object_id: u64) -> Result<StoredObject, AppError> {
-        self.repo
+    pub async fn get_metadata(
+        &self,
+        user_id: u64,
+        object_id: u64,
+    ) -> Result<StoredObject, AppError> {
+        let object = self
+            .repo
             .find_by_id(object_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))
+            .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))?;
+        ensure_owner(&object, user_id)?;
+        Ok(object)
     }
 
     pub async fn delete(&self, user_id: u64, object_id: u64) -> Result<(), AppError> {
@@ -92,11 +115,17 @@ impl ObjectService {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("object {object_id} not found")))?;
 
-        if object.created_by != Some(user_id) {
-            return Err(AppError::Forbidden("not your object".into()));
-        }
+        ensure_owner(&object, user_id)?;
 
         self.storage.delete(&object).await?;
         self.repo.delete_by_id(object_id).await
+    }
+}
+
+fn ensure_owner(object: &StoredObject, user_id: u64) -> Result<(), AppError> {
+    if object.created_by == Some(user_id) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden("not your object".into()))
     }
 }
