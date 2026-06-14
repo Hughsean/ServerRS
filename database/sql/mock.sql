@@ -596,50 +596,60 @@ VALUES
 -- ─────────────────────────────────────────────────────────────────────────────
 -- User Memories (4 memories for alice + 3 for bruce = 7)
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT INTO user_memories (memory_id, user_id, memory_type, memory_key, content, confidence, salience, source_conversation_id, source_message_id, status, metadata, created_at, updated_at, last_accessed_at, access_count, expires_at, vector_id, embedding_provider, embedding_model, embedding_dimension, indexed_at)
+INSERT INTO user_memories (memory_id, user_id, memory_type, memory_key, content, confidence, salience, source_conversation_id, source_message_id, status, metadata, created_at, updated_at, last_accessed_at, access_count, vector_id, embedding_provider, embedding_model, embedding_dimension, indexed_at)
 VALUES
-(1, 1, 'emotion_pattern', 'evening_anxiety',
+(1, 1, 'emotional_pattern', 'evening_anxiety',
  '用户在夜间独处时容易出现胸闷和情绪低落的模式。呼吸练习对缓解有效。',
  0.85, 0.9, 1, 1, 1,
  '{"pattern":"recurring","triggers":["nighttime","solitude"],"effective_coping":["deep_breathing"]}',
- '2026-06-11 21:52:00', '2026-06-11 21:55:00', '2026-06-11 21:55:00', 2, NULL,
+ '2026-06-11 21:52:00', '2026-06-11 21:55:00', '2026-06-11 21:55:00', 2,
  'vec_mem_1_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 21:52:05'),
 (2, 1, 'preference', 'morning_routine',
  '用户喜欢在早晨进行瑜伽和手帐记录，对结构化晨间例行有积极反馈。',
  0.92, 0.7, 2, 5, 1,
  '{"routine":["yoga","journaling"],"preferred_time":"morning","response_style":"encouraging"}',
- '2026-06-11 07:12:00', '2026-06-11 07:14:00', '2026-06-11 10:05:00', 1, NULL,
+ '2026-06-11 07:12:00', '2026-06-11 07:14:00', '2026-06-11 10:05:00', 1,
  'vec_mem_2_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 07:12:05'),
-(3, 1, 'coping_strategy', 'body_scan_effective',
+(3, 1, 'fact', 'body_scan_effective',
  '身体扫描放松法在用户夜间焦虑时被推荐并收到好的反馈。',
  0.78, 0.6, 1, 4, 1,
  '{"strategy":"body_scan","context":"bedtime","effectiveness":"positive_feedback"}',
- '2026-06-11 21:55:05', '2026-06-11 21:55:05', '2026-06-11 21:55:05', 1, NULL,
+ '2026-06-11 21:55:05', '2026-06-11 21:55:05', '2026-06-11 21:55:05', 1,
  'vec_mem_3_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 21:55:10'),
 (4, 1, 'fact', 'music_preference',
  '用户喜欢温柔的钢琴曲，尤其是慢节奏的古典钢琴作品用于放松和助眠。',
  0.70, 0.5, NULL, NULL, 1,
  '{"music_genres":["classical","piano"],"use_case":"sleep_aid"}',
- '2026-06-10 09:30:00', '2026-06-11 10:05:00', '2026-06-11 21:30:00', 1, NULL,
+ '2026-06-10 09:30:00', '2026-06-11 10:05:00', '2026-06-11 21:30:00', 1,
  NULL, NULL, NULL, NULL, NULL),
-(5, 2, 'emotion_pattern', 'pre_meeting_anxiety',
+(5, 2, 'emotional_pattern', 'pre_meeting_anxiety',
  '用户在会议等社交-表现情境前出现手心出汗等躯体焦虑症状，握拳放松法有较好的即时缓解效果。',
  0.88, 0.85, 3, 9, 1,
  '{"pattern":"recurring","triggers":["meetings","performance"],"effective_coping":["fist_relaxation"]}',
- '2026-06-11 15:28:00', '2026-06-11 15:30:00', '2026-06-11 15:30:00', 3, NULL,
+ '2026-06-11 15:28:00', '2026-06-11 15:30:00', '2026-06-11 15:30:00', 3,
  'vec_mem_5_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 15:28:05'),
-(6, 2, 'coping_strategy', 'ocean_anchor',
+(6, 2, 'fact', 'ocean_anchor',
  '用户在海边散步时将海浪节奏作为心理锚点，在紧张时可回忆此画面放松。',
  0.80, 0.75, 4, 15, 1,
  '{"strategy":"mental_imagery","anchor":"ocean_waves","context":"stress_relief"}',
- '2026-06-10 18:39:30', '2026-06-10 18:40:00', '2026-06-11 15:21:00', 2, NULL,
+ '2026-06-10 18:39:30', '2026-06-10 18:40:00', '2026-06-11 15:21:00', 2,
  'vec_mem_6_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-10 18:40:05'),
 (7, 2, 'fact', 'support_group_positive',
  '用户首次参加线上互助小组后反馈积极，感受到了团体的支持。',
  0.82, 0.6, NULL, NULL, 1,
  '{"activity":"online_support_group","sentiment":"positive","first_time":true}',
- '2026-06-11 16:00:00', '2026-06-11 16:00:00', '2026-06-11 16:00:00', 1, NULL,
+ '2026-06-11 16:00:00', '2026-06-11 16:00:00', '2026-06-11 16:00:00', 1,
  NULL, NULL, NULL, NULL, NULL);
+
+INSERT INTO user_memory_evidence
+    (evidence_id, memory_id, source_type, source_ref_id, message_id, summary_id,
+     source_deleted, evidence_type, confidence, extractor_version, created_at)
+VALUES
+(1, 1, 'message', 1, 1, NULL, 0, 'source', 0.850, 'memory-extractor-v1', '2026-06-11 21:52:00'),
+(2, 2, 'message', 5, 5, NULL, 0, 'source', 0.920, 'memory-extractor-v1', '2026-06-11 07:12:00'),
+(3, 3, 'message', 4, 4, NULL, 0, 'source', 0.780, 'memory-extractor-v1', '2026-06-11 21:55:05'),
+(4, 5, 'message', 9, 9, NULL, 0, 'source', 0.880, 'memory-extractor-v1', '2026-06-11 15:28:00'),
+(5, 6, 'message', 15, 15, NULL, 0, 'source', 0.800, 'memory-extractor-v1', '2026-06-10 18:39:30');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- User Memory Embeddings (for the 5 indexed memories)
@@ -665,47 +675,47 @@ VALUES
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Conversation Summaries (1 per conversation = 10)
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT INTO conversation_summaries (summary_id, conversation_id, user_id, summary_type, content, message_start_id, message_end_id, token_count, status, summary_version, source_message_count, created_at, updated_at, vector_id, embedding_provider, embedding_model, embedding_dimension, indexed_at)
+INSERT INTO conversation_summaries (summary_id, conversation_id, user_id, summary_type, content, message_start_id, message_end_id, token_count, status, created_at, updated_at, vector_id, embedding_provider, embedding_model, embedding_dimension, indexed_at)
 VALUES
-(1, 1, 1, 'rolling',
+(1, 1, 1, 'rolling_general',
  '用户Alice在夜间表达了胸闷和情绪低落，AI引导了三次深呼吸练习，用户反馈胸口紧张感有所缓解。AI随后建议尝试身体扫描放松法帮助入睡。',
- 1, 4, 45, 1, 1, 4, '2026-06-11 21:55:06', '2026-06-11 21:55:06',
+ 1, 4, 45, 1, '2026-06-11 21:55:06', '2026-06-11 21:55:06',
  'vec_summary_1_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 21:55:10'),
-(2, 2, 1, 'rolling',
+(2, 2, 1, 'rolling_general',
  '晨间对话，Alice计划做瑜伽和手帐，AI鼓励并陪伴完成瑜伽后，引导她写下三个小目标。整体情绪积极向上。',
- 5, 8, 35, 1, 1, 4, '2026-06-11 07:14:06', '2026-06-11 07:14:06',
+ 5, 8, 35, 1, '2026-06-11 07:14:06', '2026-06-11 07:14:06',
  'vec_summary_2_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 07:14:10'),
-(3, 3, 2, 'rolling',
+(3, 3, 2, 'rolling_general',
  'Bruce在会议前经历手心出汗的焦虑症状，AI引导了握拳放松法，用户报告症状缓解并认可该方法的有效性。',
- 9, 11, 38, 1, 1, 3, '2026-06-11 15:30:01', '2026-06-11 15:30:01',
+ 9, 11, 38, 1, '2026-06-11 15:30:01', '2026-06-11 15:30:01',
  'vec_summary_3_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 15:30:05'),
-(4, 4, 2, 'rolling',
+(4, 4, 2, 'rolling_general',
  'Bruce在海边散步时与AI分享体验，海浪节奏被作为心理锚点记下，推荐在紧张时用以回忆放松。',
- 12, 16, 40, 1, 1, 5, '2026-06-10 18:40:01', '2026-06-10 18:40:01',
+ 12, 16, 40, 1, '2026-06-10 18:40:01', '2026-06-10 18:40:01',
  'vec_summary_4_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-10 18:40:05'),
-(5, 5, 3, 'rolling',
+(5, 5, 3, 'rolling_general',
  'Chloe首次尝试医生建议的「吸两步呼两步」跑步呼吸法，反馈跑步变得可持续，不再那么气喘。',
- 17, 19, 30, 1, 1, 3, '2026-06-11 06:45:01', '2026-06-11 06:45:01',
+ 17, 19, 30, 1, '2026-06-11 06:45:01', '2026-06-11 06:45:01',
  'vec_summary_5_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 06:45:05'),
-(6, 6, 3, 'rolling',
+(6, 6, 3, 'rolling_general',
  'Chloe分享制作小狐狸布偶的手工体验，AI引导她感受「心流」状态并肯定了手作的不完美之美。',
- 20, 23, 36, 1, 1, 4, '2026-06-10 14:30:01', '2026-06-10 14:30:01',
+ 20, 23, 36, 1, '2026-06-10 14:30:01', '2026-06-10 14:30:01',
  NULL, NULL, NULL, NULL, NULL),
-(7, 7, 4, 'rolling',
+(7, 7, 4, 'rolling_general',
  'Dylan在森林散步后分享了阳光透过树叶的美景，AI引导他关注森林的气味和触感，增强了接地感。',
- 24, 26, 32, 1, 1, 3, '2026-06-11 08:10:01', '2026-06-11 08:10:01',
+ 24, 26, 32, 1, '2026-06-11 08:10:01', '2026-06-11 08:10:01',
  NULL, NULL, NULL, NULL, NULL),
-(8, 8, 4, 'rolling',
+(8, 8, 4, 'rolling_general',
  'Dylan给三年前的自己写了信，在分享信中内容时情绪释放流泪。AI以温柔共情的方式回应，强调了自我关怀的重要性，用户报告感到慰藉。',
- 27, 31, 55, 1, 1, 5, '2026-06-10 22:33:01', '2026-06-10 22:33:01',
+ 27, 31, 55, 1, '2026-06-10 22:33:01', '2026-06-10 22:33:01',
  NULL, NULL, NULL, NULL, NULL),
-(9, 9, 5, 'rolling',
+(9, 9, 5, 'rolling_general',
  'Elena虽然失眠但看到了猎户座，AI引导了星空冥想，结合薰衣草精油的香气进行睡前放松仪式。',
- 32, 35, 38, 1, 1, 4, '2026-06-11 23:20:01', '2026-06-11 23:20:01',
+ 32, 35, 38, 1, '2026-06-11 23:20:01', '2026-06-11 23:20:01',
  'vec_summary_9_ollama_nomic_768', 'ollama', 'nomic-embed-text', 768, '2026-06-11 23:20:05'),
-(10, 10, 5, 'rolling',
+(10, 10, 5, 'rolling_general',
  'Elena夜跑前需要音乐推荐，AI推荐了Lo-Fi慢节拍，用户试用后反馈心跳稳定、体验良好。',
- 36, 38, 32, 1, 1, 3, '2026-06-10 20:55:01', '2026-06-10 20:55:01',
+ 36, 38, 32, 1, '2026-06-10 20:55:01', '2026-06-10 20:55:01',
  NULL, NULL, NULL, NULL, NULL);
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -729,7 +739,7 @@ VALUES
  '{"model":"qwen2.5:14b","input_tokens":120}',
  '2026-06-11 21:54:01'),
 (6,  1, 1, 'sess_alice_night_001', 'trace_20260611_215400', 'turn_2', 'memory_save',        'debug',   'memory_upsert',
- '{"memory_type":"coping_strategy","key":"body_scan_effective","confidence":0.78}',
+ '{"memory_type":"fact","key":"body_scan_effective","confidence":0.78}',
  '2026-06-11 21:55:03'),
 (7,  1, 1, 'sess_alice_night_001', 'trace_20260611_215400', 'turn_2', 'llm_call_end',       'info',    NULL,
  '{"model":"qwen2.5:14b","output_tokens":22,"latency_ms":1100}',
@@ -744,8 +754,8 @@ VALUES
 (2, 'vec_doc1_chunk1_ollama_nomic_768', 'rag_chunks',            'knowledge_chunk',      2, NULL, 'knowledge_chunks',       'i1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2', 'ollama', 'nomic-embed-text', 768, '{"chunk_index":1,"document_id":1}', 'indexed', '2026-06-01 08:01:01', NULL, NULL, '2026-06-01 08:01:01', '2026-06-01 08:01:01'),
 (3, 'vec_doc2_chunk0_ollama_nomic_768', 'rag_chunks',            'knowledge_chunk',      3, NULL, 'knowledge_chunks',       'j1c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3', 'ollama', 'nomic-embed-text', 768, '{"chunk_index":0,"document_id":2}', 'indexed', '2026-06-02 09:01:00', NULL, NULL, '2026-06-02 09:01:00', '2026-06-02 09:01:00'),
 (4, 'vec_doc2_chunk1_ollama_nomic_768', 'rag_chunks',            'knowledge_chunk',      4, NULL, 'knowledge_chunks',       'k2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4', 'ollama', 'nomic-embed-text', 768, '{"chunk_index":1,"document_id":2}', 'indexed', '2026-06-02 09:01:01', NULL, NULL, '2026-06-02 09:01:01', '2026-06-02 09:01:01'),
-(5, 'vec_mem_1_ollama_nomic_768',       'user_memories',         'user_memory',          1, 1,    'user_memories',          'a0000000000000000000000000000000000000000000000000000000000001', 'ollama', 'nomic-embed-text', 768, '{"memory_type":"emotion_pattern"}', 'indexed', '2026-06-11 21:52:05', NULL, NULL, '2026-06-11 21:52:05', '2026-06-11 21:52:05'),
-(6, 'vec_summary_1_ollama_nomic_768',   'conversation_summaries', 'conversation_summary', 1, 1,    'conversation_summaries', 's00000000000000000000000000000000000000000000000000000000000001', 'ollama', 'nomic-embed-text', 768, '{"summary_type":"rolling"}', 'indexed', '2026-06-11 21:55:10', NULL, NULL, '2026-06-11 21:55:10', '2026-06-11 21:55:10');
+(5, 'vec_mem_1_ollama_nomic_768',       'user_memories',         'user_memory',          1, 1,    'user_memories',          'a0000000000000000000000000000000000000000000000000000000000001', 'ollama', 'nomic-embed-text', 768, '{"memory_type":"emotional_pattern"}', 'indexed', '2026-06-11 21:52:05', NULL, NULL, '2026-06-11 21:52:05', '2026-06-11 21:52:05'),
+(6, 'vec_summary_1_ollama_nomic_768',   'conversation_summaries', 'conversation_summary', 1, 1,    'conversation_summaries', 's00000000000000000000000000000000000000000000000000000000000001', 'ollama', 'nomic-embed-text', 768, '{"summary_type":"rolling_general"}', 'indexed', '2026-06-11 21:55:10', NULL, NULL, '2026-06-11 21:55:10', '2026-06-11 21:55:10');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Vector Index Jobs (2 pending + 1 completed)

@@ -15,6 +15,12 @@ pub trait SummaryRepository: Send + Sync {
         conversation_id: u64,
     ) -> Result<Option<ConversationSummary>, AppError>;
 
+    /// Load the active rolling general summary for incremental refresh.
+    async fn find_latest_rolling_general(
+        &self,
+        conversation_id: u64,
+    ) -> Result<Option<ConversationSummary>, AppError>;
+
     /// Persist a new summary and return the saved record.
     async fn save_summary(&self, summary: NewSummary) -> Result<ConversationSummary, AppError>;
 

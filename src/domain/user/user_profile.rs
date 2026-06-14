@@ -12,6 +12,10 @@ pub struct UserProfile {
     pub interaction_preferences: Option<Vec<String>>,
     pub emotional_tendency: Option<Vec<String>>,
     pub learning_records: Option<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub personalization_enabled: bool,
+    #[serde(skip_serializing)]
+    pub personalization_reset_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

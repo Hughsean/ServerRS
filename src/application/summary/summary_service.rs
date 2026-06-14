@@ -37,6 +37,15 @@ impl SummaryService {
                     "failed to index conversation summary"
                 );
             }
+            if let Some(superseded_id) = saved.supersedes_id
+                && let Err(e) = vi.delete_summary_index(superseded_id).await
+            {
+                warn!(
+                    summary_id = superseded_id,
+                    error = %e,
+                    "failed to delete superseded conversation summary index"
+                );
+            }
         }
 
         Ok(saved)
@@ -49,6 +58,16 @@ impl SummaryService {
     ) -> Result<Option<ConversationSummary>, AppError> {
         self.summary_repo
             .find_latest_by_conversation(conversation_id)
+            .await
+    }
+
+    /// Return the active rolling general summary used as the next refresh base.
+    pub async fn latest_rolling_general(
+        &self,
+        conversation_id: u64,
+    ) -> Result<Option<ConversationSummary>, AppError> {
+        self.summary_repo
+            .find_latest_rolling_general(conversation_id)
             .await
     }
 }

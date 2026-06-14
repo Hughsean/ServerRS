@@ -635,9 +635,26 @@ mod tests {
     struct MockMemRepo;
     #[async_trait::async_trait]
     impl MemoryRepository for MockMemRepo {
-        async fn save_memory(
+        async fn save_memory_with_evidence(
             &self,
             _: crate::domain::memory::NewMemory,
+            _: crate::domain::memory::NewMemoryEvidence,
+        ) -> Result<UserMemory, AppError> {
+            Err(AppError::internal("mock"))
+        }
+        async fn reinforce_memory_with_evidence(
+            &self,
+            _: u64,
+            _: crate::domain::memory::NewMemoryEvidence,
+            _: f64,
+        ) -> Result<UserMemory, AppError> {
+            Err(AppError::internal("mock"))
+        }
+        async fn save_contradicting_memory_with_evidence(
+            &self,
+            _: crate::domain::memory::NewMemory,
+            _: crate::domain::memory::NewMemoryEvidence,
+            _: u64,
         ) -> Result<UserMemory, AppError> {
             Err(AppError::internal("mock"))
         }
@@ -709,6 +726,12 @@ mod tests {
     #[async_trait::async_trait]
     impl crate::domain::summary::SummaryRepository for MockSumRepo {
         async fn find_latest_by_conversation(
+            &self,
+            _: u64,
+        ) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> {
+            Ok(None)
+        }
+        async fn find_latest_rolling_general(
             &self,
             _: u64,
         ) -> Result<Option<crate::domain::memory::ConversationSummary>, AppError> {

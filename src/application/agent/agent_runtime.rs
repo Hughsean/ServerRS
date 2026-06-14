@@ -7,14 +7,12 @@ use super::agent_context::AgentContextBuilder;
 use super::prompt_builder::PromptBuilder;
 use crate::application::memory::memory_service::MemoryService;
 use crate::application::session::risk_detection_service::RiskDetectionService;
-use crate::application::summary::summary_service::SummaryService;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
 };
-use crate::domain::memory::NewSummary;
 use crate::domain::risk::detection_types::DetectionResult;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
@@ -32,7 +30,6 @@ pub struct AgentRuntimeSettings {
     pub max_memory_items: u32,
     pub max_rag_chunks: u64,
     pub memory_extraction_async: bool,
-    pub summary_async: bool,
     pub max_tool_depth: usize,
     pub temperature: f64,
     pub top_p: f64,
@@ -49,7 +46,6 @@ impl Default for AgentRuntimeSettings {
             max_memory_items: 10,
             max_rag_chunks: 5,
             memory_extraction_async: true,
-            summary_async: true,
             max_tool_depth: 10,
             temperature: 0.7,
             top_p: 0.9,
@@ -183,7 +179,7 @@ pub fn is_tool_call_argument_error(msg: &str) -> bool {
 /// 5. Extract tool calls from the LLM response and execute them.
 /// 6. Feed tool results back to the LLM for a final response.
 /// 7. Persist messages.
-/// 8. Spawn async tasks for memory extraction and risk persistence.
+/// 8. Spawn async memory extraction.
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     memory_service: Arc<MemoryService>,
@@ -192,7 +188,6 @@ pub struct AgentRuntime {
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
     context_builder: Arc<AgentContextBuilder>,
-    summary_service: Arc<SummaryService>,
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn AgentTool>>,
     settings: AgentRuntimeSettings,
@@ -208,7 +203,6 @@ impl AgentRuntime {
         conversation_repo: Arc<dyn ConversationRepository>,
         user_profile_repo: Arc<dyn UserProfileRepository>,
         context_builder: Arc<AgentContextBuilder>,
-        summary_service: Arc<SummaryService>,
         tools: Vec<Arc<dyn AgentTool>>,
         settings: AgentRuntimeSettings,
     ) -> Self {
@@ -220,7 +214,6 @@ impl AgentRuntime {
             conversation_repo,
             user_profile_repo,
             context_builder,
-            summary_service,
             prompt_builder: PromptBuilder::new(),
             tools,
             settings,
@@ -565,13 +558,6 @@ impl AgentRuntime {
             );
         }
 
-        if self.settings.agent_enabled
-            && self.settings.summary_enabled
-            && self.settings.summary_async
-        {
-            self.spawn_summary_refresh(user_id, conversation_id);
-        }
-
         Ok(AgentResponse {
             reply: final_content,
             tool_calls: tool_traces,
@@ -837,108 +823,6 @@ impl AgentRuntime {
                 {
                     warn!(user_id, conversation_id = cid, error = %e, "memory extraction failed");
                 }
-            }
-        });
-    }
-
-    fn spawn_summary_refresh(&self, user_id: u64, conversation_id: Option<u64>) {
-        let Some(cid) = conversation_id else {
-            return;
-        };
-
-        let conversation_repo = Arc::clone(&self.conversation_repo);
-        let summary_service = Arc::clone(&self.summary_service);
-        let llm = Arc::clone(&self.llm);
-
-        tokio::spawn(async move {
-            let messages = match conversation_repo
-                .find_messages_by_conversation_id(cid)
-                .await
-            {
-                Ok(messages) => messages,
-                Err(e) => {
-                    warn!(conversation_id = cid, error = %e, "failed to load messages for summary");
-                    return;
-                }
-            };
-
-            let dialogue: Vec<_> = messages
-                .iter()
-                .filter(|m| m.sender_role == "user" || m.sender_role == "assistant")
-                .collect();
-
-            if dialogue.len() < 8 || dialogue.len() % 6 != 0 {
-                return;
-            }
-
-            let window: Vec<String> = dialogue
-                .iter()
-                .rev()
-                .take(24)
-                .rev()
-                .map(|m| format!("{}: {}", m.sender_role, Self::message_text(&m.content)))
-                .collect();
-
-            let summary_prompt = format!(
-                "Summarize this mental-health support conversation for future continuity. \
-                 Keep it concise, factual, and useful. Include user concerns, preferences, \
-                 current goals, and any safety-relevant context. Do not invent details.\n\n{}",
-                window.join("\n")
-            );
-
-            let request = ChatCompletionRequest {
-                messages: vec![
-                    ChatMessage {
-                        role: "system".into(),
-                        content: "You write concise rolling conversation summaries.".into(),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        name: None,
-                    },
-                    ChatMessage {
-                        role: "user".into(),
-                        content: summary_prompt,
-                        tool_calls: None,
-                        tool_call_id: None,
-                        name: None,
-                    },
-                ],
-                temperature: 0.2,
-                top_p: 1.0,
-                max_tokens: Some(512),
-                tools: None,
-            };
-
-            let summary = match llm.chat(request).await {
-                Ok(resp) => resp.content.trim().to_string(),
-                Err(e) => {
-                    warn!(conversation_id = cid, error = %e, "failed to generate conversation summary");
-                    return;
-                }
-            };
-
-            if summary.is_empty() {
-                return;
-            }
-
-            let message_start_id = dialogue.first().map(|m| m.id);
-            let message_end_id = dialogue.last().map(|m| m.id);
-            let token_count =
-                Some(summary.split_whitespace().count().min(u32::MAX as usize) as u32);
-
-            if let Err(e) = summary_service
-                .save_summary(NewSummary {
-                    conversation_id: cid,
-                    user_id,
-                    summary_type: "rolling".into(),
-                    content: summary,
-                    message_start_id,
-                    message_end_id,
-                    token_count,
-                })
-                .await
-            {
-                warn!(conversation_id = cid, error = %e, "failed to save conversation summary");
             }
         });
     }

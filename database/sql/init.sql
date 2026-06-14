@@ -616,7 +616,9 @@ CREATE TABLE user_memories
     UNIQUE INDEX uk_user_memory_key (user_id, memory_key),
     UNIQUE INDEX uk_memory_vector_id (vector_id),
     INDEX idx_user_status_salience (user_id, status, salience DESC),
-    FULLTEXT INDEX ft_memory_content (content)
+    FULLTEXT INDEX ft_memory_content (content),
+    CONSTRAINT chk_user_memories_type
+        CHECK (memory_type IN ('preference','fact','emotional_pattern','goal'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
@@ -628,7 +630,6 @@ CREATE TABLE user_memories
 --     (base from patch 002,
 --      +vector_id/+embedding_provider/+embedding_model/+embedding_dimension/
 --      +indexed_at from patch 003,
---      +status/+summary_version/+source_message_count from patch 004)
 -- 26. conversation_summaries — 对话 general 摘要表
 -- ============================================================================
 CREATE TABLE conversation_summaries
@@ -663,9 +664,18 @@ CREATE TABLE conversation_summaries
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 
+    -- Functional index avoids MySQL's generated-column + cascading-FK restriction.
+    UNIQUE KEY uk_active_rolling_general ((
+        CASE WHEN status = 1 AND summary_type = 'rolling_general'
+             THEN conversation_id ELSE NULL END
+    )),
     INDEX idx_conv_type_status_end (conversation_id, summary_type, status, message_end_id),
     INDEX idx_user_status (user_id, status),
-    INDEX idx_vector_id (vector_id)
+    INDEX idx_vector_id (vector_id),
+    CONSTRAINT chk_conversation_summaries_type
+        CHECK (summary_type IN ('rolling_general','milestone_general')),
+    CONSTRAINT chk_conversation_summaries_range
+        CHECK (message_start_id <= message_end_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci

@@ -1,14 +1,18 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
+use std::str::FromStr;
 use tracing::warn;
 
-use super::super::entities::user_memories;
+use super::super::entities::{user_memories, user_memory_evidence};
 
-use crate::domain::memory::{MemoryRepository, NewMemory, UserMemory};
+use crate::domain::memory::{
+    ALLOWED_MEMORY_TYPES, MemoryRepository, NewMemory, NewMemoryEvidence, UserMemory,
+    is_allowed_memory_type,
+};
 use crate::shared::error::AppError;
 
 pub struct SeaOrmMemoryRepository {
@@ -37,40 +41,249 @@ fn map_memory(m: user_memories::Model) -> UserMemory {
     }
 }
 
+fn validate_memory(memory: &NewMemory) -> Result<(), AppError> {
+    if !is_allowed_memory_type(&memory.memory_type) {
+        return Err(AppError::Validation(format!(
+            "unsupported memory type: {}",
+            memory.memory_type
+        )));
+    }
+    if memory.content.trim().is_empty() {
+        return Err(AppError::Validation(
+            "memory content must not be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_evidence(evidence: &NewMemoryEvidence) -> Result<(), AppError> {
+    let valid_source = match evidence.source_type.as_str() {
+        "message" => evidence.message_id == Some(evidence.source_ref_id),
+        "summary" => evidence.summary_id == Some(evidence.source_ref_id),
+        "manual" => evidence.message_id.is_none() && evidence.summary_id.is_none(),
+        _ => false,
+    };
+    if !valid_source {
+        return Err(AppError::Validation(
+            "memory evidence source is invalid".into(),
+        ));
+    }
+    if !matches!(
+        evidence.evidence_type.as_str(),
+        "source" | "reinforcement" | "contradiction" | "manual"
+    ) {
+        return Err(AppError::Validation(
+            "memory evidence type is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn insert_memory<C>(db: &C, memory: NewMemory) -> Result<UserMemory, AppError>
+where
+    C: ConnectionTrait,
+{
+    validate_memory(&memory)?;
+    let now = Utc::now().naive_utc();
+    let source_confidence =
+        sea_orm::prelude::Decimal::from_str(&format!("{:.2}", memory.confidence.clamp(0.0, 1.0)))
+            .unwrap_or(sea_orm::prelude::Decimal::ZERO);
+    let active = user_memories::ActiveModel {
+        memory_id: sea_orm::ActiveValue::NotSet,
+        user_id: Set(memory.user_id),
+        memory_type: Set(memory.memory_type),
+        memory_key: Set(memory.memory_key),
+        canonical_form: Set(memory.canonical_form),
+        content: Set(memory.content),
+        source_confidence: Set(source_confidence),
+        confidence: Set(memory.confidence.clamp(0.0, 1.0)),
+        salience: Set(0.5),
+        source_conversation_id: Set(memory.source_conversation_id),
+        source_message_id: Set(memory.source_message_id),
+        reinforced_at: Set(None),
+        reinforce_count: Set(0),
+        contradicted_at: Set(None),
+        superseded_by: Set(None),
+        status: Set(1),
+        canonicalizer_version: Set(None),
+        merge_decision: Set(Some(memory.merge_decision)),
+        merge_reason: Set(None),
+        metadata: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        last_accessed_at: Set(None),
+        access_count: Set(0),
+        vector_id: Set(None),
+        embedding_provider: Set(None),
+        embedding_model: Set(None),
+        embedding_dimension: Set(None),
+        indexed_at: Set(None),
+    };
+
+    let saved = active
+        .insert(db)
+        .await
+        .map_err(|e| AppError::internal(format!("failed to save memory: {e}")))?;
+
+    Ok(map_memory(saved))
+}
+
+async fn insert_evidence<C>(
+    db: &C,
+    memory_id: u64,
+    evidence: NewMemoryEvidence,
+) -> Result<(), AppError>
+where
+    C: ConnectionTrait,
+{
+    validate_evidence(&evidence)?;
+    let confidence = evidence.confidence.map(|value| {
+        sea_orm::prelude::Decimal::from_str(&format!("{:.3}", value.clamp(0.0, 1.0)))
+            .unwrap_or(sea_orm::prelude::Decimal::ZERO)
+    });
+    let active = user_memory_evidence::ActiveModel {
+        evidence_id: sea_orm::ActiveValue::NotSet,
+        memory_id: Set(memory_id),
+        source_type: Set(evidence.source_type),
+        source_ref_id: Set(evidence.source_ref_id),
+        message_id: Set(evidence.message_id),
+        summary_id: Set(evidence.summary_id),
+        source_deleted: Set(0),
+        evidence_type: Set(evidence.evidence_type),
+        confidence: Set(confidence),
+        extractor_version: Set(evidence.extractor_version),
+        created_at: Set(Utc::now().naive_utc()),
+    };
+    active
+        .insert(db)
+        .await
+        .map_err(|e| AppError::internal(format!("failed to save memory evidence: {e}")))?;
+    Ok(())
+}
+
+async fn bump_context_version<C>(db: &C, user_id: u64) -> Result<(), AppError>
+where
+    C: ConnectionTrait,
+{
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO user_context_versions (user_id, version, updated_at) \
+         VALUES (?, 2, UTC_TIMESTAMP(6)) \
+         ON DUPLICATE KEY UPDATE version = version + 1, updated_at = UTC_TIMESTAMP(6)",
+        [user_id.into()],
+    );
+    db.execute_raw(statement)
+        .await
+        .map_err(|e| AppError::internal(format!("bump memory context version: {e}")))?;
+    Ok(())
+}
+
 #[async_trait]
 impl MemoryRepository for SeaOrmMemoryRepository {
-    async fn save_memory(&self, memory: NewMemory) -> Result<UserMemory, AppError> {
-        let now = Utc::now().naive_utc();
-        let active = user_memories::ActiveModel {
-            memory_id: sea_orm::ActiveValue::NotSet,
-            user_id: Set(memory.user_id),
-            memory_type: Set(memory.memory_type),
-            memory_key: Set(None),
-            content: Set(memory.content),
-            confidence: Set(memory.confidence),
-            salience: Set(0.5),
-            source_conversation_id: Set(memory.source_conversation_id),
-            source_message_id: Set(memory.source_message_id),
-            status: Set(1),
-            metadata: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-            last_accessed_at: Set(None),
-            access_count: Set(0),
-            vector_id: Set(None),
-            embedding_provider: Set(None),
-            embedding_model: Set(None),
-            embedding_dimension: Set(None),
-            indexed_at: Set(None),
-            ..Default::default()
-        };
-
-        let saved = active
-            .insert(&self.db)
+    async fn save_memory_with_evidence(
+        &self,
+        memory: NewMemory,
+        evidence: NewMemoryEvidence,
+    ) -> Result<UserMemory, AppError> {
+        validate_memory(&memory)?;
+        validate_evidence(&evidence)?;
+        let txn = self
+            .db
+            .begin()
             .await
-            .map_err(|e| AppError::internal(format!("failed to save memory: {e}")))?;
+            .map_err(|e| AppError::internal(format!("begin memory transaction: {e}")))?;
+        let saved = insert_memory(&txn, memory).await?;
+        insert_evidence(&txn, saved.memory_id, evidence).await?;
+        txn.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("commit memory transaction: {e}")))?;
 
-        Ok(map_memory(saved))
+        Ok(saved)
+    }
+
+    async fn reinforce_memory_with_evidence(
+        &self,
+        memory_id: u64,
+        evidence: NewMemoryEvidence,
+        confidence: f64,
+    ) -> Result<UserMemory, AppError> {
+        validate_evidence(&evidence)?;
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| AppError::internal(format!("begin reinforcement transaction: {e}")))?;
+        let model = user_memories::Entity::find_by_id(memory_id)
+            .one(&txn)
+            .await
+            .map_err(|e| AppError::internal(format!("find memory {memory_id}: {e}")))?
+            .ok_or_else(|| AppError::NotFound(format!("memory {memory_id} not found")))?;
+        let mut active: user_memories::ActiveModel = model.clone().into();
+        active.confidence = Set(model.confidence.max(confidence.clamp(0.0, 1.0)));
+        active.reinforced_at = Set(Some(Utc::now().naive_utc()));
+        active.reinforce_count = Set(model.reinforce_count.saturating_add(1));
+        active.merge_decision = Set(Some("new_evidence".into()));
+        active.updated_at = Set(Utc::now().naive_utc());
+        let updated = active
+            .update(&txn)
+            .await
+            .map_err(|e| AppError::internal(format!("reinforce memory {memory_id}: {e}")))?;
+        insert_evidence(&txn, memory_id, evidence).await?;
+        txn.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("commit reinforcement: {e}")))?;
+        Ok(map_memory(updated))
+    }
+
+    async fn save_contradicting_memory_with_evidence(
+        &self,
+        memory: NewMemory,
+        evidence: NewMemoryEvidence,
+        contradicted_memory_id: u64,
+    ) -> Result<UserMemory, AppError> {
+        validate_memory(&memory)?;
+        validate_evidence(&evidence)?;
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| AppError::internal(format!("begin contradiction transaction: {e}")))?;
+        let contradicted = user_memories::Entity::find_by_id(contradicted_memory_id)
+            .one(&txn)
+            .await
+            .map_err(|e| {
+                AppError::internal(format!(
+                    "find contradicted memory {contradicted_memory_id}: {e}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::NotFound(format!("memory {contradicted_memory_id} not found"))
+            })?;
+        if contradicted.user_id != memory.user_id {
+            return Err(AppError::Forbidden(
+                "cannot contradict another user's memory".into(),
+            ));
+        }
+
+        let saved = insert_memory(&txn, memory).await?;
+        insert_evidence(&txn, saved.memory_id, evidence).await?;
+
+        let mut active: user_memories::ActiveModel = contradicted.into();
+        active.status = Set(-1);
+        active.contradicted_at = Set(Some(Utc::now().naive_utc()));
+        active.superseded_by = Set(Some(saved.memory_id));
+        active.merge_decision = Set(Some("contradiction".into()));
+        active.updated_at = Set(Utc::now().naive_utc());
+        active.update(&txn).await.map_err(|e| {
+            AppError::internal(format!(
+                "mark memory {contradicted_memory_id} contradicted: {e}"
+            ))
+        })?;
+        bump_context_version(&txn, saved.user_id).await?;
+        txn.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("commit contradiction: {e}")))?;
+        Ok(saved)
     }
 
     async fn find_by_id(&self, memory_id: u64) -> Result<Option<UserMemory>, AppError> {
@@ -87,8 +300,9 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         user_id: u64,
         status: Option<i8>,
     ) -> Result<Vec<UserMemory>, AppError> {
-        let mut query =
-            user_memories::Entity::find().filter(user_memories::Column::UserId.eq(user_id));
+        let mut query = user_memories::Entity::find()
+            .filter(user_memories::Column::UserId.eq(user_id))
+            .filter(user_memories::Column::MemoryType.is_in(ALLOWED_MEMORY_TYPES.iter().copied()));
 
         if let Some(s) = status {
             query = query.filter(user_memories::Column::Status.eq(s));
@@ -118,6 +332,7 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             .filter(user_memories::Column::UserId.eq(user_id))
             .filter(user_memories::Column::Content.like(&pattern))
             .filter(user_memories::Column::Status.eq(1))
+            .filter(user_memories::Column::MemoryType.is_in(ALLOWED_MEMORY_TYPES.iter().copied()))
             .paginate(&self.db, top_k as u64)
             .fetch_page(0)
             .await
@@ -156,26 +371,47 @@ impl MemoryRepository for SeaOrmMemoryRepository {
     }
 
     async fn disable_memory(&self, memory_id: u64) -> Result<(), AppError> {
-        let mut active: user_memories::ActiveModel = user_memories::Entity::find_by_id(memory_id)
-            .one(&self.db)
+        let txn =
+            self.db.begin().await.map_err(|e| {
+                AppError::internal(format!("begin disable memory transaction: {e}"))
+            })?;
+        let model = user_memories::Entity::find_by_id(memory_id)
+            .one(&txn)
             .await
             .map_err(|e| AppError::internal(format!("failed to find memory {memory_id}: {e}")))?
-            .ok_or_else(|| AppError::NotFound(format!("memory {memory_id} not found")))?
-            .into();
+            .ok_or_else(|| AppError::NotFound(format!("memory {memory_id} not found")))?;
+        let user_id = model.user_id;
+        let mut active: user_memories::ActiveModel = model.into();
 
         active.status = Set(0);
         active.updated_at = Set(Utc::now().naive_utc());
 
-        active.update(&self.db).await.map_err(|e| {
+        active.update(&txn).await.map_err(|e| {
             AppError::internal(format!("failed to disable memory {memory_id}: {e}"))
         })?;
+        bump_context_version(&txn, user_id).await?;
+        txn.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("commit disable memory: {e}")))?;
 
         Ok(())
     }
 
     async fn delete_memory(&self, memory_id: u64) -> Result<bool, AppError> {
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| AppError::internal(format!("begin delete memory transaction: {e}")))?;
+        let Some(memory) = user_memories::Entity::find_by_id(memory_id)
+            .one(&txn)
+            .await
+            .map_err(|e| AppError::internal(format!("find memory {memory_id}: {e}")))?
+        else {
+            return Ok(false);
+        };
         let result = user_memories::Entity::delete_by_id(memory_id)
-            .exec(&self.db)
+            .exec(&txn)
             .await
             .map_err(|e| AppError::internal(format!("failed to delete memory {memory_id}: {e}")))?;
 
@@ -183,6 +419,10 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             warn!(memory_id, "delete_memory: no rows affected");
             return Ok(false);
         }
+        bump_context_version(&txn, memory.user_id).await?;
+        txn.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("commit delete memory: {e}")))?;
         Ok(true)
     }
 
@@ -267,6 +507,7 @@ impl MemoryRepository for SeaOrmMemoryRepository {
     ) -> Result<Vec<UserMemory>, AppError> {
         let mut query = user_memories::Entity::find()
             .filter(user_memories::Column::Status.eq(1))
+            .filter(user_memories::Column::MemoryType.is_in(ALLOWED_MEMORY_TYPES.iter().copied()))
             .filter(user_memories::Column::VectorId.is_null());
         if let Some(uid) = user_id {
             query = query.filter(user_memories::Column::UserId.eq(uid));
@@ -277,5 +518,58 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             .await
             .map_err(|e| AppError::internal(format!("list_indexable_memories: {e}")))?;
         Ok(rows.into_iter().map(map_memory).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory(memory_type: &str) -> NewMemory {
+        NewMemory {
+            user_id: 1,
+            memory_key: Some("key".into()),
+            canonical_form: Some("user likes jazz".into()),
+            memory_type: memory_type.into(),
+            content: "user likes jazz".into(),
+            confidence: 0.9,
+            merge_decision: "new".into(),
+            source_conversation_id: Some(1),
+            source_message_id: Some(2),
+        }
+    }
+
+    fn message_evidence() -> NewMemoryEvidence {
+        NewMemoryEvidence {
+            source_type: "message".into(),
+            source_ref_id: 2,
+            message_id: Some(2),
+            summary_id: None,
+            evidence_type: "source".into(),
+            confidence: Some(0.9),
+            extractor_version: Some("memory-extractor-v1".into()),
+        }
+    }
+
+    #[test]
+    fn accepts_only_memory_whitelist() {
+        for memory_type in ALLOWED_MEMORY_TYPES {
+            assert!(validate_memory(&memory(memory_type)).is_ok());
+        }
+        assert!(validate_memory(&memory("profile")).is_err());
+        assert!(validate_memory(&memory("safety_note")).is_err());
+    }
+
+    #[test]
+    fn validates_evidence_reference_and_type() {
+        assert!(validate_evidence(&message_evidence()).is_ok());
+
+        let mut wrong_ref = message_evidence();
+        wrong_ref.source_ref_id = 3;
+        assert!(validate_evidence(&wrong_ref).is_err());
+
+        let mut wrong_type = message_evidence();
+        wrong_type.evidence_type = "unknown".into();
+        assert!(validate_evidence(&wrong_type).is_err());
     }
 }

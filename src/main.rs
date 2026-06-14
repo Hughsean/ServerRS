@@ -84,12 +84,10 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     ));
 
     let (tp, tw) = new_task_channel(256);
-    background.spawn(tokio::spawn(
-        tw.with_handler(Arc::new(LoggingHandler))
-            .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
-            .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>)
-            .run(),
-    ));
+    let task_worker = tw
+        .with_handler(Arc::new(LoggingHandler))
+        .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
+        .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>);
     let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
 
     // Periodic cleanup for stateful handlers
@@ -264,7 +262,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     let memory_extractor: Arc<MemoryExtractor> =
         Arc::new(MemoryExtractor::new(Arc::clone(&ollama_provider)));
-    let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor);
+    let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor)
+        .with_personalization_profile_repo(Arc::clone(&profile_repo));
     if let Some(ref vs) = vector_store {
         memory_svc = memory_svc.with_vector_search(
             Arc::clone(vs),
@@ -282,6 +281,16 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let summary_service: Arc<SummaryService> = Arc::new(SummaryService::new(
         Arc::clone(&summary_repo),
         vector_index.clone(),
+    ));
+    use application::summary::summary_refresh_handler::SummaryRefreshHandler;
+    let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
+        config.agent.enabled && config.agent.summary_enabled && config.agent.summary_async,
+        Arc::clone(&ollama_provider) as Arc<dyn LlmProvider>,
+        Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+        Arc::clone(&summary_service),
+    ));
+    background.spawn(tokio::spawn(
+        task_worker.with_handler(summary_refresh_handler).run(),
     ));
 
     // ── Agent Runtime ──
@@ -316,7 +325,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         max_memory_items: config.agent.max_memory_items,
         max_rag_chunks: config.agent.max_rag_chunks as u64,
         memory_extraction_async: config.agent.memory_extraction_async,
-        summary_async: config.agent.summary_async,
         max_tool_depth: config.llm.max_tool_depth as usize,
         temperature: config.llm.temperature,
         top_p: config.llm.top_p,
@@ -330,7 +338,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
         context_builder,
-        Arc::clone(&summary_service),
         agent_tools,
         agent_settings,
     ));

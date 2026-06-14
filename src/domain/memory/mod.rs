@@ -4,15 +4,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::error::AppError;
 
+pub const ALLOWED_MEMORY_TYPES: [&str; 4] = ["preference", "fact", "emotional_pattern", "goal"];
+pub const ROLLING_GENERAL_SUMMARY: &str = "rolling_general";
+pub const MILESTONE_GENERAL_SUMMARY: &str = "milestone_general";
+pub const ALLOWED_SUMMARY_TYPES: [&str; 2] = [ROLLING_GENERAL_SUMMARY, MILESTONE_GENERAL_SUMMARY];
+
+pub fn is_allowed_memory_type(memory_type: &str) -> bool {
+    ALLOWED_MEMORY_TYPES.contains(&memory_type)
+}
+
+pub fn is_allowed_summary_type(summary_type: &str) -> bool {
+    ALLOWED_SUMMARY_TYPES.contains(&summary_type)
+}
+
 /// Represents a user's long-term memory entry.
 ///
 /// Supported memory types:
 /// - `preference`: User stated preferences (e.g. "I like jazz music")
-/// - `profile`: Personal background facts (e.g. "user is a college student")
 /// - `fact`: Objective facts inferred or stated (e.g. "user has a cat named Luna")
 /// - `emotional_pattern`: Recurring emotional states or triggers
 /// - `goal`: Current or past goals the user has stated
-/// - `safety_note`: Safety-relevant observations (e.g. mentions of self-harm)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMemory {
     pub memory_id: u64,
@@ -44,11 +55,26 @@ pub struct UserMemoryEmbedding {
 #[derive(Debug, Clone)]
 pub struct NewMemory {
     pub user_id: u64,
+    pub memory_key: Option<String>,
+    pub canonical_form: Option<String>,
     pub memory_type: String,
     pub content: String,
     pub confidence: f64,
+    pub merge_decision: String,
     pub source_conversation_id: Option<u64>,
     pub source_message_id: Option<u64>,
+}
+
+/// Evidence persisted atomically with a new memory.
+#[derive(Debug, Clone)]
+pub struct NewMemoryEvidence {
+    pub source_type: String,
+    pub source_ref_id: u64,
+    pub message_id: Option<u64>,
+    pub summary_id: Option<u64>,
+    pub evidence_type: String,
+    pub confidence: Option<f64>,
+    pub extractor_version: Option<String>,
 }
 
 /// A compressed summary of a conversation, used for context window management
@@ -60,9 +86,11 @@ pub struct ConversationSummary {
     pub user_id: u64,
     pub summary_type: String,
     pub content: String,
-    pub message_start_id: Option<u64>,
-    pub message_end_id: Option<u64>,
+    pub message_start_id: u64,
+    pub message_end_id: u64,
+    pub supersedes_id: Option<u64>,
     pub token_count: Option<u32>,
+    pub status: i8,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -74,16 +102,36 @@ pub struct NewSummary {
     pub user_id: u64,
     pub summary_type: String,
     pub content: String,
-    pub message_start_id: Option<u64>,
-    pub message_end_id: Option<u64>,
+    pub message_start_id: u64,
+    pub message_end_id: u64,
     pub token_count: Option<u32>,
 }
 
 /// Repository trait for persisting and querying user memories.
 #[async_trait]
 pub trait MemoryRepository: Send + Sync {
-    /// Persist a new memory entry. Returns the saved memory with generated id and timestamps.
-    async fn save_memory(&self, memory: NewMemory) -> Result<UserMemory, AppError>;
+    /// Persist a memory and its source evidence in one database transaction.
+    async fn save_memory_with_evidence(
+        &self,
+        memory: NewMemory,
+        evidence: NewMemoryEvidence,
+    ) -> Result<UserMemory, AppError>;
+
+    /// Attach independent evidence to an existing memory and increase confidence.
+    async fn reinforce_memory_with_evidence(
+        &self,
+        memory_id: u64,
+        evidence: NewMemoryEvidence,
+        confidence: f64,
+    ) -> Result<UserMemory, AppError>;
+
+    /// Save a contradicting memory, mark the old one contradicted, and bump context version.
+    async fn save_contradicting_memory_with_evidence(
+        &self,
+        memory: NewMemory,
+        evidence: NewMemoryEvidence,
+        contradicted_memory_id: u64,
+    ) -> Result<UserMemory, AppError>;
 
     /// Retrieve a single memory by its primary key.
     async fn find_by_id(&self, memory_id: u64) -> Result<Option<UserMemory>, AppError>;

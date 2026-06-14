@@ -40,6 +40,8 @@ fn model_to_domain(m: user_profiles::Model) -> UserProfile {
         interaction_preferences: parse_json_array(&m.interaction_preferences),
         emotional_tendency: parse_json_array(&m.emotional_tendency),
         learning_records: parse_json_array(&m.learning_records),
+        personalization_enabled: m.personalization_enabled != 0,
+        personalization_reset_at: m.personalization_reset_at.map(|value| value.and_utc()),
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
     }

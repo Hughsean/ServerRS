@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
 use crate::domain::llm::{ChatMessage, EmbeddingProvider};
-use crate::domain::memory::{MemoryRepository, UserMemory};
+use crate::domain::memory::{
+    MemoryRepository, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
+};
+use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::vector_store::{VectorFilter, VectorStore};
 use crate::shared::error::AppError;
 
-use super::memory_extractor::MemoryExtractor;
+use super::memory_extractor::{MemoryExtractor, MemoryMergeDecision};
 
 /// Application-layer service for memory extraction, search, recall,
 /// and lifecycle management.
@@ -21,7 +26,39 @@ pub struct MemoryService {
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_store: Option<Arc<dyn VectorStore>>,
     vector_index: Option<Arc<crate::application::rag::vector_index_service::VectorIndexService>>,
+    profile_repo: Option<Arc<dyn UserProfileRepository>>,
     memory_collection: String,
+}
+
+struct PersonalizationPolicy {
+    enabled: bool,
+    reset_at: Option<DateTime<Utc>>,
+}
+
+impl PersonalizationPolicy {
+    fn includes(&self, memory: &UserMemory) -> bool {
+        self.enabled
+            && self
+                .reset_at
+                .is_none_or(|reset_at| memory.created_at > reset_at)
+            && is_allowed_memory_type(&memory.memory_type)
+    }
+}
+
+fn canonicalize_memory(content: &str) -> String {
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_lowercase()
+}
+
+fn memory_key(canonical_form: &str) -> String {
+    Sha256::digest(canonical_form.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl MemoryService {
@@ -32,6 +69,7 @@ impl MemoryService {
             embedding: None,
             vector_store: None,
             vector_index: None,
+            profile_repo: None,
             memory_collection: "user_memories".into(),
         }
     }
@@ -57,6 +95,36 @@ impl MemoryService {
         self
     }
 
+    pub fn with_personalization_profile_repo(
+        mut self,
+        profile_repo: Arc<dyn UserProfileRepository>,
+    ) -> Self {
+        self.profile_repo = Some(profile_repo);
+        self
+    }
+
+    async fn personalization_policy(
+        &self,
+        user_id: u64,
+    ) -> Result<PersonalizationPolicy, AppError> {
+        let Some(profile_repo) = &self.profile_repo else {
+            return Ok(PersonalizationPolicy {
+                enabled: true,
+                reset_at: None,
+            });
+        };
+        let profile = profile_repo.find_by_user_id(user_id).await?;
+        Ok(profile
+            .map(|profile| PersonalizationPolicy {
+                enabled: profile.personalization_enabled,
+                reset_at: profile.personalization_reset_at,
+            })
+            .unwrap_or(PersonalizationPolicy {
+                enabled: true,
+                reset_at: None,
+            }))
+    }
+
     /// Run the LLM extractor and persist every extracted memory.
 
     /// Retrieve memories for a user, optionally filtered by status.
@@ -65,13 +133,17 @@ impl MemoryService {
         user_id: u64,
         status: Option<i8>,
     ) -> Result<Vec<crate::domain::memory::UserMemory>, AppError> {
-        self.repo.find_by_user_id(user_id, status).await
+        let policy = self.personalization_policy(user_id).await?;
+        if !policy.enabled {
+            return Ok(Vec::new());
+        }
+        let memories = self.repo.find_by_user_id(user_id, status).await?;
+        Ok(memories
+            .into_iter()
+            .filter(|memory| policy.includes(memory))
+            .collect())
     }
 
-    /// Disable a memory by its ID.
-    pub async fn disable_memory(&self, memory_id: u64) -> Result<(), AppError> {
-        self.repo.disable_memory(memory_id).await
-    }
     pub async fn extract_and_save(
         &self,
         user_id: u64,
@@ -79,14 +151,15 @@ impl MemoryService {
         conversation_id: u64,
         message_id: u64,
     ) -> Result<Vec<UserMemory>, AppError> {
+        let policy = self.personalization_policy(user_id).await?;
+        if !policy.enabled {
+            return Ok(Vec::new());
+        }
         let memories = self.extractor.extract(user_id, messages).await;
 
         if memories.is_empty() {
             return Ok(Vec::new());
         }
-
-        // Defensive filtering (belt-and-suspenders with MemoryExtractor)
-        let allowed_types: [&str; 4] = ["preference", "fact", "emotional_pattern", "goal"];
 
         let mut saved = Vec::with_capacity(memories.len());
         for mut memory in memories {
@@ -98,9 +171,8 @@ impl MemoryService {
             if memory.confidence < 0.7 {
                 continue;
             }
-            // Normalize memory_type
-            if !allowed_types.contains(&memory.memory_type.as_str()) {
-                memory.memory_type = "fact".to_string();
+            if !is_allowed_memory_type(&memory.memory_type) {
+                continue;
             }
             // Truncate
             if memory.content.chars().count() > 300 {
@@ -108,7 +180,72 @@ impl MemoryService {
             }
             memory.source_conversation_id = Some(conversation_id);
             memory.source_message_id = Some(message_id);
-            saved.push(self.repo.save_memory(memory).await?);
+
+            let mut evidence = NewMemoryEvidence {
+                source_type: "message".into(),
+                source_ref_id: message_id,
+                message_id: Some(message_id),
+                summary_id: None,
+                evidence_type: "source".into(),
+                confidence: Some(memory.confidence),
+                extractor_version: Some("memory-extractor-v1".into()),
+            };
+            let canonical_form = canonicalize_memory(&memory.content);
+            let key = memory_key(&canonical_form);
+            memory.canonical_form = Some(canonical_form);
+            memory.memory_key = Some(key.clone());
+            if let Some(existing) = self.repo.find_by_memory_key(user_id, &key).await? {
+                if policy.includes(&existing) {
+                    evidence.evidence_type = "reinforcement".into();
+                    saved.push(
+                        self.repo
+                            .reinforce_memory_with_evidence(
+                                existing.memory_id,
+                                evidence,
+                                memory.confidence,
+                            )
+                            .await?,
+                    );
+                    continue;
+                }
+                memory.memory_key = None;
+            }
+
+            let candidates = self
+                .recall(user_id, &memory.content, 5)
+                .await
+                .unwrap_or_default();
+            let decision = self.extractor.classify_merge(&memory, &candidates).await;
+
+            let persisted = match decision {
+                MemoryMergeDecision::Same => continue,
+                MemoryMergeDecision::Related => {
+                    memory.merge_decision = "related".into();
+                    self.repo
+                        .save_memory_with_evidence(memory, evidence)
+                        .await?
+                }
+                MemoryMergeDecision::NewEvidence(existing_id) => {
+                    evidence.evidence_type = "reinforcement".into();
+                    self.repo
+                        .reinforce_memory_with_evidence(existing_id, evidence, memory.confidence)
+                        .await?
+                }
+                MemoryMergeDecision::Contradiction(existing_id) => {
+                    memory.merge_decision = "contradiction".into();
+                    evidence.evidence_type = "contradiction".into();
+                    self.repo
+                        .save_contradicting_memory_with_evidence(memory, evidence, existing_id)
+                        .await?
+                }
+                MemoryMergeDecision::New => {
+                    memory.merge_decision = "new".into();
+                    self.repo
+                        .save_memory_with_evidence(memory, evidence)
+                        .await?
+                }
+            };
+            saved.push(persisted);
         }
 
         // Attempt vector indexing for each saved memory.
@@ -168,7 +305,7 @@ impl MemoryService {
 
     /// List all non-disabled memories for a user.
     pub async fn list(&self, user_id: u64) -> Result<Vec<UserMemory>, AppError> {
-        self.repo.find_by_user_id(user_id, Some(1)).await
+        self.find_by_user_id(user_id, Some(1)).await
     }
 
     /// Semantic search over the user's memories (default top_k=10).
@@ -186,9 +323,17 @@ impl MemoryService {
         query: &str,
         top_k: u32,
     ) -> Result<Vec<UserMemory>, AppError> {
+        let policy = self.personalization_policy(user_id).await?;
+        if !policy.enabled {
+            return Ok(Vec::new());
+        }
+
         // Try Qdrant path
         if let (Some(vs), Some(ep)) = (&self.vector_store, &self.embedding) {
-            match self.qdrant_recall(vs, ep, user_id, query, top_k).await {
+            match self
+                .qdrant_recall(vs, ep, user_id, query, top_k, &policy)
+                .await
+            {
                 Ok(results) if !results.is_empty() => {
                     debug!(count = results.len(), "Qdrant memory recall succeeded");
                     return Ok(results);
@@ -203,7 +348,11 @@ impl MemoryService {
         }
 
         // Fallback to MySQL keyword search
-        self.repo.search_by_user(user_id, query, top_k).await
+        let memories = self.repo.search_by_user(user_id, query, top_k).await?;
+        Ok(memories
+            .into_iter()
+            .filter(|memory| policy.includes(memory))
+            .collect())
     }
 
     async fn qdrant_recall(
@@ -213,6 +362,7 @@ impl MemoryService {
         user_id: u64,
         query: &str,
         top_k: u32,
+        policy: &PersonalizationPolicy,
     ) -> Result<Vec<UserMemory>, AppError> {
         // 1. Embed the query
         let vecs = ep
@@ -264,6 +414,13 @@ impl MemoryService {
                     }
                     if mem.status != 1 {
                         debug!(memory_id, "memory is disabled; skipping");
+                        continue;
+                    }
+                    if !policy.includes(&mem) {
+                        debug!(
+                            memory_id,
+                            "memory is outside personalization policy; skipping"
+                        );
                         continue;
                     }
                     results.push(mem);
@@ -340,14 +497,18 @@ mod tests {
     use chrono::Utc;
 
     use crate::application::memory::memory_extractor::test_utils::MockLlm;
-    use crate::domain::memory::NewMemory;
+    use crate::domain::memory::{NewMemory, NewMemoryEvidence};
     use crate::infrastructure::llm::mock_provider::MockEmbeddingProvider;
     use crate::infrastructure::vector_store::mock_vector_store::MockVectorStore;
 
     struct MockRepo;
     #[async_trait]
     impl MemoryRepository for MockRepo {
-        async fn save_memory(&self, memory: NewMemory) -> Result<UserMemory, AppError> {
+        async fn save_memory_with_evidence(
+            &self,
+            memory: NewMemory,
+            _evidence: NewMemoryEvidence,
+        ) -> Result<UserMemory, AppError> {
             Ok(UserMemory {
                 memory_id: 1,
                 user_id: memory.user_id,
@@ -361,6 +522,34 @@ mod tests {
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             })
+        }
+        async fn reinforce_memory_with_evidence(
+            &self,
+            memory_id: u64,
+            _evidence: NewMemoryEvidence,
+            confidence: f64,
+        ) -> Result<UserMemory, AppError> {
+            Ok(UserMemory {
+                memory_id,
+                user_id: 42,
+                memory_type: "fact".into(),
+                content: "reinforced".into(),
+                confidence,
+                source_conversation_id: Some(1),
+                source_message_id: Some(1),
+                status: 1,
+                metadata: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+        }
+        async fn save_contradicting_memory_with_evidence(
+            &self,
+            memory: NewMemory,
+            evidence: NewMemoryEvidence,
+            _contradicted_memory_id: u64,
+        ) -> Result<UserMemory, AppError> {
+            self.save_memory_with_evidence(memory, evidence).await
         }
         async fn find_by_id(&self, memory_id: u64) -> Result<Option<UserMemory>, AppError> {
             Ok(Some(UserMemory {
@@ -478,6 +667,52 @@ mod tests {
         let llm = Arc::new(MockLlm);
         let extractor = Arc::new(MemoryExtractor::new(llm));
         MemoryService::new(Arc::new(MockRepo), extractor)
+    }
+
+    #[test]
+    fn canonicalization_produces_stable_key() {
+        let first = canonicalize_memory("  User   Likes JAZZ ");
+        let second = canonicalize_memory("user likes jazz");
+        assert_eq!(first, second);
+        assert_eq!(memory_key(&first), memory_key(&second));
+    }
+
+    #[test]
+    fn personalization_policy_filters_disabled_and_pre_reset_memories() {
+        let memory = UserMemory {
+            memory_id: 1,
+            user_id: 1,
+            memory_type: "fact".into(),
+            content: "test".into(),
+            confidence: 0.9,
+            source_conversation_id: None,
+            source_message_id: None,
+            status: 1,
+            metadata: None,
+            created_at: Utc::now() - chrono::Duration::hours(1),
+            updated_at: Utc::now(),
+        };
+        assert!(
+            !PersonalizationPolicy {
+                enabled: false,
+                reset_at: None,
+            }
+            .includes(&memory)
+        );
+        assert!(
+            !PersonalizationPolicy {
+                enabled: true,
+                reset_at: Some(Utc::now()),
+            }
+            .includes(&memory)
+        );
+        assert!(
+            PersonalizationPolicy {
+                enabled: true,
+                reset_at: Some(Utc::now() - chrono::Duration::hours(2)),
+            }
+            .includes(&memory)
+        );
     }
 
     fn make_service_with_vector() -> (
@@ -600,8 +835,7 @@ mod tests {
         }];
 
         let saved = svc.extract_and_save(42, &messages, 1, 1).await.unwrap();
-        // The extractor should return 2 memories (jazz + college student)
-        assert!(!saved.is_empty());
+        assert_eq!(saved.len(), 1);
 
         // After saving, memories should be indexed in the vector store
         // With user_id filter for user 42, they should be findable

@@ -1,9 +1,19 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
-use crate::domain::memory::NewMemory;
+use crate::domain::memory::{NewMemory, UserMemory, is_allowed_memory_type};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryMergeDecision {
+    Same,
+    Related,
+    NewEvidence(u64),
+    Contradiction(u64),
+    New,
+}
 
 /// Extracts structured long-term memories from a slice of chat messages
 /// by asking an LLM to analyze the conversation.
@@ -21,19 +31,26 @@ struct LlmMemoryItem {
     confidence: f64,
 }
 
+#[derive(Debug, Deserialize)]
+struct LlmMergeDecision {
+    decision: String,
+    #[serde(default)]
+    candidate_memory_id: Option<u64>,
+}
+
 fn default_confidence() -> f64 {
     0.7
 }
 
 const EXTRACTION_PROMPT: &str = "\
 You are a memory-extraction assistant. Analyze the conversation and extract \
-any important personal information, preferences, goals, or safety-relevant facts \
+only durable user-stated preferences, facts, emotional patterns, or goals \
 about the user. Return a JSON array of objects with these fields:
   - memory_type: one of \"preference\", \"fact\", \"emotional_pattern\", \"goal\"
   - content: a concise statement of the memory (e.g. \"user mentioned they enjoy hiking\")
   - confidence: a number between 0.0 and 1.0 indicating how certain you are
 
-只提取用户明确表达、对长期陪伴有用的信息。不要提取助手建议。不要保存一次性闲聊、网页内容、工具输出或不确定推测。不得保存身份证号、手机号、住址、密码、银行卡、API Key 等敏感凭据。
+只提取用户明确表达、对长期陪伴有用的信息。不要提取助手建议。不要保存一次性闲聊、网页内容、工具输出或不确定推测。不得保存风险标签、危机信号、安全判断、自伤风险分析、临床诊断、人格障碍标签、身份证号、手机号、住址、密码、银行卡、API Key 等内容。
 
 Return ONLY a valid JSON array with no additional text or markdown. \
 If nothing noteworthy is found, return an empty array [].";
@@ -93,8 +110,6 @@ impl MemoryExtractor {
             }
         };
 
-        let allowed_types: [&str; 4] = ["preference", "fact", "emotional_pattern", "goal"];
-
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result: Vec<NewMemory> = Vec::new();
 
@@ -112,13 +127,10 @@ impl MemoryExtractor {
             }
 
             // Normalize memory_type
-            let memory_type = if item.memory_type.is_empty() {
-                "fact".to_string()
-            } else if allowed_types.contains(&item.memory_type.as_str()) {
-                item.memory_type
-            } else {
-                "fact".to_string()
-            };
+            if !is_allowed_memory_type(&item.memory_type) {
+                continue;
+            }
+            let memory_type = item.memory_type;
 
             // Truncate long content
             let truncated = if content.chars().count() > 300 {
@@ -135,15 +147,100 @@ impl MemoryExtractor {
 
             result.push(NewMemory {
                 user_id,
+                memory_key: None,
+                canonical_form: None,
                 memory_type,
                 content: truncated,
                 confidence,
+                merge_decision: "new".into(),
                 source_conversation_id: None,
                 source_message_id: None,
             });
         }
 
         result
+    }
+
+    pub async fn classify_merge(
+        &self,
+        proposed: &NewMemory,
+        candidates: &[UserMemory],
+    ) -> MemoryMergeDecision {
+        if candidates.is_empty() {
+            return MemoryMergeDecision::New;
+        }
+
+        let candidate_data: Vec<_> = candidates
+            .iter()
+            .map(|candidate| {
+                json!({
+                    "memory_id": candidate.memory_id,
+                    "memory_type": candidate.memory_type,
+                    "content": candidate.content,
+                })
+            })
+            .collect();
+        let prompt = json!({
+            "proposed_memory": {
+                "memory_type": proposed.memory_type,
+                "content": proposed.content,
+            },
+            "candidate_memories": candidate_data,
+        });
+        let request = ChatCompletionRequest {
+            messages: vec![
+                ChatMessage {
+                    role: "system".into(),
+                    content: "Classify how a proposed user memory relates to existing memories. \
+                              Return only JSON: {\"decision\":\"same|related|new_evidence|contradiction|new\",\
+                              \"candidate_memory_id\":number|null}. Use a candidate id only for \
+                              same, new_evidence, or contradiction. Do not infer diagnoses or risk labels."
+                        .into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: prompt.to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            ],
+            temperature: 0.0,
+            top_p: 1.0,
+            max_tokens: Some(128),
+            tools: None,
+        };
+
+        let Ok(response) = self.llm.chat(request).await else {
+            return MemoryMergeDecision::New;
+        };
+        let trimmed = response.content.trim();
+        let json_str = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .and_then(|value| value.strip_suffix("```"))
+            .unwrap_or(trimmed)
+            .trim();
+        let Ok(result) = serde_json::from_str::<LlmMergeDecision>(json_str) else {
+            return MemoryMergeDecision::New;
+        };
+        let candidate_id = result.candidate_memory_id.filter(|id| {
+            candidates
+                .iter()
+                .any(|candidate| candidate.memory_id == *id)
+        });
+
+        match (result.decision.as_str(), candidate_id) {
+            ("same", Some(_)) => MemoryMergeDecision::Same,
+            ("related", _) => MemoryMergeDecision::Related,
+            ("new_evidence", Some(id)) => MemoryMergeDecision::NewEvidence(id),
+            ("contradiction", Some(id)) => MemoryMergeDecision::Contradiction(id),
+            ("new", _) => MemoryMergeDecision::New,
+            _ => MemoryMergeDecision::New,
+        }
     }
 }
 
@@ -209,7 +306,7 @@ mod tests {
             name: None,
         }];
         let memories = extractor.extract(42, &messages).await;
-        assert_eq!(memories.len(), 2);
+        assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].memory_type, "preference");
         assert_eq!(memories[0].content, "user likes jazz music");
         assert_eq!(memories[0].user_id, 42);
@@ -407,7 +504,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_memory_type_does_not_panic() {
+    async fn unknown_memory_type_is_rejected() {
         let mock = ConfigurableMockLlm {
             content: r#"[
                 {"memory_type": "unknown_type", "content": "用户最近睡眠不好", "confidence": 0.9}
@@ -416,10 +513,7 @@ mod tests {
         };
         let extractor = MemoryExtractor::new(Arc::new(mock));
         let memories = extractor.extract(1, &[]).await;
-        // Unknown types are mapped to "fact"
-        assert_eq!(memories.len(), 1);
-        assert_eq!(memories[0].memory_type, "fact");
-        assert_eq!(memories[0].content, "用户最近睡眠不好");
+        assert!(memories.is_empty());
     }
 
     #[tokio::test]
@@ -459,5 +553,59 @@ mod tests {
             memories[0].content.chars().count() <= 303,
             "Chinese content should be truncated by char count, not bytes"
         );
+    }
+
+    fn proposed_memory() -> NewMemory {
+        NewMemory {
+            user_id: 1,
+            memory_key: None,
+            canonical_form: None,
+            memory_type: "preference".into(),
+            content: "user prefers tea".into(),
+            confidence: 0.9,
+            merge_decision: "new".into(),
+            source_conversation_id: Some(1),
+            source_message_id: Some(1),
+        }
+    }
+
+    fn candidate_memory() -> UserMemory {
+        UserMemory {
+            memory_id: 7,
+            user_id: 1,
+            memory_type: "preference".into(),
+            content: "user likes tea".into(),
+            confidence: 0.8,
+            source_conversation_id: Some(1),
+            source_message_id: Some(1),
+            status: 1,
+            metadata: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn merge_classifier_accepts_known_candidate() {
+        let mock = ConfigurableMockLlm {
+            content: r#"{"decision":"new_evidence","candidate_memory_id":7}"#.into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+        let decision = extractor
+            .classify_merge(&proposed_memory(), &[candidate_memory()])
+            .await;
+        assert_eq!(decision, MemoryMergeDecision::NewEvidence(7));
+    }
+
+    #[tokio::test]
+    async fn merge_classifier_rejects_unknown_candidate_id() {
+        let mock = ConfigurableMockLlm {
+            content: r#"{"decision":"contradiction","candidate_memory_id":99}"#.into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+        let decision = extractor
+            .classify_merge(&proposed_memory(), &[candidate_memory()])
+            .await;
+        assert_eq!(decision, MemoryMergeDecision::New);
     }
 }
