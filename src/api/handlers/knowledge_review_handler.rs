@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::api::AdminState;
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::domain::web_ingestion::review::{
     KnowledgeReviewAuditEntry, KnowledgeReviewDetail, KnowledgeReviewItem, KnowledgeReviewPage,
     ReviewPublishRequest,

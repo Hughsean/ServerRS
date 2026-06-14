@@ -2,21 +2,21 @@ use std::sync::Arc;
 
 use axum::extract::FromRef;
 
-use crate::application::agent::agent_runtime::AgentRuntime;
-use crate::application::auth::auth_service::AuthService;
-use crate::application::community::community_service::CommunityService;
-use crate::application::depression::depression_service::DepressionService;
-use crate::application::diary::diary_service::DiaryService;
-use crate::application::memory::memory_service::MemoryService;
-use crate::application::music::music_service::MusicService;
-use crate::application::psychology::psychology_service::PsychologyService;
-use crate::application::rag::ingestion_service::IngestionService;
-use crate::application::rag::retrieval_service::RetrievalService;
-use crate::application::session::chat_service::ChatService;
-use crate::application::session::session_service::SessionService;
-use crate::application::storage::object_service::ObjectService;
-use crate::application::user::user_service::UserService;
-use crate::application::web_ingestion::review_service::KnowledgeReviewService;
+use crate::app::agent::agent_runtime::AgentRuntime;
+use crate::app::auth::auth_service::AuthService;
+use crate::app::community::community_service::CommunityService;
+use crate::app::depression::depression_service::DepressionService;
+use crate::app::diary::diary_service::DiaryService;
+use crate::app::memory::memory_service::MemoryService;
+use crate::app::music::music_service::MusicService;
+use crate::app::psychology::psychology_service::PsychologyService;
+use crate::app::rag::ingestion_service::IngestionService;
+use crate::app::rag::retrieval_service::RetrievalService;
+use crate::app::session::chat_service::ChatService;
+use crate::app::session::session_service::SessionService;
+use crate::app::storage::object_service::ObjectService;
+use crate::app::user::user_service::UserService;
+use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 
 #[derive(Clone, FromRef)]

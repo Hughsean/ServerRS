@@ -5,7 +5,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::api::AuthState;
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 /// NOTE: Uses State<AuthState>, NOT State<Arc<AuthState>>.

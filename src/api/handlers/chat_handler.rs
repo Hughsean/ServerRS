@@ -5,7 +5,7 @@ use axum::{
 
 use crate::api::dto::chat_dto::*;
 use crate::api::state::AppState;
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 /// POST /api/v1/chat/open

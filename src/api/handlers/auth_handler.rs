@@ -8,7 +8,7 @@ use crate::api::AuthState;
 use crate::api::dto::auth_dto::{
     LoginRequest, LogoutRequest, RefreshTokenRequest, RegisterRequest,
 };
-use crate::application::auth::auth_service::{AuthTokenPair, AuthenticatedUser, LoginInput};
+use crate::app::auth::auth_service::{AuthTokenPair, AuthenticatedUser, LoginInput};
 use crate::shared::error::AppError;
 
 // ── Response DTOs ────────────────────────────────────────────────────────────

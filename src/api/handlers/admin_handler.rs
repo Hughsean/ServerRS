@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::AdminState;
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::domain::user::user::{UserRole, UserStatus, UserUpdate};
 use crate::shared::error::AppError;
 

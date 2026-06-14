@@ -11,7 +11,7 @@ use crate::api::dto::user_dto::{
     DeleteUserResponse, UpdateUserRequest, UpsertUserProfileRequest, UserProfileResponse,
     UserResponse,
 };
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::domain::user::user::UserStatus;
 use crate::shared::error::AppError;
 

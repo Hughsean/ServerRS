@@ -3,44 +3,6 @@
 version = 4
 
 [[package]]
-name = "ServerRS"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum 0.8.9",
- "base64",
- "bcrypt",
- "chrono",
- "dashmap",
- "dotenvy",
- "jsonwebtoken",
- "lettre",
- "mime",
- "qdrant-client",
- "quick-xml 0.40.1",
- "regex",
- "reqwest 0.13.4",
- "rss",
- "scraper",
- "sea-orm",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "toml",
- "tower 0.5.3",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3688,6 +3650,44 @@ checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "server-rs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.8.9",
+ "base64",
+ "bcrypt",
+ "chrono",
+ "dashmap",
+ "dotenvy",
+ "jsonwebtoken",
+ "lettre",
+ "mime",
+ "qdrant-client",
+ "quick-xml 0.40.1",
+ "regex",
+ "reqwest 0.13.4",
+ "rss",
+ "scraper",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "toml",
+ "tower 0.5.3",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "validator",
 ]
 
 [[package]]

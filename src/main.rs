@@ -1,25 +1,25 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ServerRS::{api, application, bootstrap, domain, infrastructure, shared};
-use application::agent::agent_context::AgentContextBuilder;
-use application::agent::agent_runtime::AgentRuntime;
-use application::community::community_service::CommunityService;
-use application::depression::depression_service::DepressionService;
-use application::diary::diary_service::DiaryService;
-use application::memory::memory_extractor::MemoryExtractor;
-use application::memory::memory_service::MemoryService;
-use application::music::music_service::MusicService;
-use application::psychology::psychology_service::PsychologyService;
-use application::rag::chunking::ChunkingService;
-use application::rag::ingestion_service::IngestionService;
-use application::rag::retrieval_service::RetrievalService;
-use application::risk::post_conversation_risk_audit_worker::PostConversationRiskAuditWorker;
-use application::risk::risk_detection_service::RiskDetectionService;
-use application::session::chat_service::ChatService;
-use application::session::session_service::SessionService;
-use application::storage::object_service::ObjectService;
-use application::user::user_service::UserService;
+use server_rs::{api, app, bootstrap, domain, infra, shared};
+use app::agent::agent_context::AgentContextBuilder;
+use app::agent::agent_runtime::AgentRuntime;
+use app::community::community_service::CommunityService;
+use app::depression::depression_service::DepressionService;
+use app::diary::diary_service::DiaryService;
+use app::memory::memory_extractor::MemoryExtractor;
+use app::memory::memory_service::MemoryService;
+use app::music::music_service::MusicService;
+use app::psychology::psychology_service::PsychologyService;
+use app::rag::chunking::ChunkingService;
+use app::rag::ingestion_service::IngestionService;
+use app::rag::retrieval_service::RetrievalService;
+use app::risk::post_conversation_risk_audit_worker::PostConversationRiskAuditWorker;
+use app::risk::risk_detection_service::RiskDetectionService;
+use app::session::chat_service::ChatService;
+use app::session::session_service::SessionService;
+use app::storage::object_service::ObjectService;
+use app::user::user_service::UserService;
 use domain::auth::refresh_token_store::RefreshTokenStore;
 use domain::conversation::conversation_repository::ConversationRepository;
 use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider};
@@ -27,21 +27,21 @@ use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
-use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
-use infrastructure::llm::ollama_client::OllamaClient;
-use infrastructure::llm::ollama_provider::OllamaProvider;
-use infrastructure::persistence::seaorm_db::init_db;
-use infrastructure::storage::local_storage::LocalObjectStorage;
-use infrastructure::tasks::alert_handler::{AlertConfig, AlertHandler};
-use infrastructure::tasks::in_memory_task_flow::new_task_channel;
-use infrastructure::tasks::logging_handler::LoggingHandler;
-use infrastructure::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
+use infra::detector::rule_based_detector::RuleBasedRiskDetector;
+use infra::llm::ollama_client::OllamaClient;
+use infra::llm::ollama_provider::OllamaProvider;
+use infra::persistence::seaorm_db::init_db;
+use infra::storage::local_storage::LocalObjectStorage;
+use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
+use infra::tasks::in_memory_task_flow::new_task_channel;
+use infra::tasks::logging_handler::LoggingHandler;
+use infra::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 
 use shared::config::AppConfig;
 use tracing::info;
 
 // ── Agent tool registry ────────────────────────────────────────────────────
-use application::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
+use app::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
 
 #[tokio::main]
 async fn main() {
@@ -143,7 +143,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     ));
     // ── Dedicated embedding provider (separate from chat LLM) ──
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
-        infrastructure::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
+        infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
             config.embedding.base_url.clone(),
             config.embedding.model.clone(),
             config.embedding.dimension,
@@ -157,7 +157,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let vector_store: Option<Arc<dyn VectorStore>> = if config.qdrant.enabled {
         #[cfg(feature = "qdrant")]
         {
-            let qdrant = infrastructure::vector_store::qdrant_vector_store::QdrantVectorStore::new(
+            let qdrant = infra::vector_store::qdrant_vector_store::QdrantVectorStore::new(
                 &config.qdrant.url,
                 config.qdrant.api_key.as_deref(),
             )
@@ -181,11 +181,11 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         None
     };
 
-    use application::rag::vector_index_service::{VectorIndexConfig, VectorIndexService};
+    use app::rag::vector_index_service::{VectorIndexConfig, VectorIndexService};
     use domain::vector_index::VectorIndexRepository;
 
     let vector_index_repo: Arc<dyn VectorIndexRepository> = Arc::new(
-        infrastructure::persistence::implementations::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(db.clone()),
+        infra::persistence::implementations::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(db.clone()),
     );
 
     let vector_index: Option<Arc<VectorIndexService>> = vector_store.as_ref().map(|vs| {
@@ -289,12 +289,12 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let memory_svc: Arc<MemoryService> = Arc::new(memory_svc);
 
     // ── SummaryService ──
-    use application::summary::summary_service::SummaryService;
+    use app::summary::summary_service::SummaryService;
     let summary_service: Arc<SummaryService> = Arc::new(SummaryService::new(
         Arc::clone(&summary_repo),
         vector_index.clone(),
     ));
-    use application::summary::summary_refresh_handler::SummaryRefreshHandler;
+    use app::summary::summary_refresh_handler::SummaryRefreshHandler;
     let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
         config.agent.enabled && config.agent.summary_enabled && config.agent.summary_async,
         Arc::clone(&ollama_provider) as Arc<dyn LlmProvider>,
@@ -331,7 +331,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let agent_tools = build_default_agent_tools(&tool_deps, config.agent.enabled)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    let agent_settings = application::agent::agent_runtime::AgentRuntimeSettings {
+    let agent_settings = app::agent::agent_runtime::AgentRuntimeSettings {
         agent_enabled: config.agent.enabled,
         memory_enabled: config.agent.memory_enabled,
         rag_enabled: config.agent.rag_enabled,

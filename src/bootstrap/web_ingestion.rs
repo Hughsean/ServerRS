@@ -9,17 +9,17 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use tracing::info;
 
-use crate::application::web_ingestion::pipeline_context::PipelineContext;
-use crate::application::web_ingestion::review_service::KnowledgeReviewService;
-use crate::application::web_ingestion::{dispatcher, scheduler};
+use crate::app::web_ingestion::pipeline_context::PipelineContext;
+use crate::app::web_ingestion::review_service::KnowledgeReviewService;
+use crate::app::web_ingestion::{dispatcher, scheduler};
 use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::RAGRepository;
 use crate::domain::vector_store::VectorStore;
-use crate::infrastructure::web_ingestion::distiller::OpenAiKnowledgeDistiller;
-use crate::infrastructure::web_ingestion::fetcher::WebFetcher;
-use crate::infrastructure::web_ingestion::repositories::*;
-use crate::infrastructure::web_ingestion::review_repository::SeaOrmKnowledgeReviewRepository;
+use crate::infra::web_ingestion::distiller::OpenAiKnowledgeDistiller;
+use crate::infra::web_ingestion::fetcher::WebFetcher;
+use crate::infra::web_ingestion::repositories::*;
+use crate::infra::web_ingestion::review_repository::SeaOrmKnowledgeReviewRepository;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 

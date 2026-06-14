@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::CommunityState;
-use crate::application::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────

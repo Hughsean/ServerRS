@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::application::auth::auth_service::{AuthConfig, AuthService};
+use crate::app::auth::auth_service::{AuthConfig, AuthService};
 use crate::domain::auth::password_service::PasswordService;
 use crate::domain::auth::refresh_token_store::RefreshTokenStore;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user_repository::UserRepository;
-use crate::infrastructure::auth::bcrypt_password_hasher::BcryptPasswordHasher;
-use crate::infrastructure::auth::jwt_token_service::JwtTokenService;
-use crate::infrastructure::persistence::implementations::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
+use crate::infra::auth::bcrypt_password_hasher::BcryptPasswordHasher;
+use crate::infra::auth::jwt_token_service::JwtTokenService;
+use crate::infra::persistence::implementations::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
 use crate::shared::config::{AuthConfig as AppAuthConfig, JwtConfig};
 
 pub struct AuthGraph {
