@@ -15,15 +15,13 @@ use application::rag::chunking::ChunkingService;
 use application::rag::ingestion_service::IngestionService;
 use application::rag::retrieval_service::RetrievalService;
 use application::session::chat_service::ChatService;
-use application::session::conversation_orchestrator::ConversationOrchestrator;
 use application::session::risk_detection_service::RiskDetectionService;
-use application::session::session_manager::SessionManager;
 use application::session::session_service::SessionService;
 use application::storage::object_service::ObjectService;
 use application::user::user_service::UserService;
 use domain::auth::refresh_token_store::RefreshTokenStore;
 use domain::conversation::conversation_repository::ConversationRepository;
-use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider, PromptProvider};
+use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider};
 use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
@@ -31,7 +29,6 @@ use domain::tasks::task_publisher::TaskPublisher;
 use infrastructure::detector::rule_based_detector::RuleBasedRiskDetector;
 use infrastructure::llm::ollama_client::OllamaClient;
 use infrastructure::llm::ollama_provider::OllamaProvider;
-use infrastructure::llm::prompt_provider::PromptProvider as InfraPromptProvider;
 use infrastructure::persistence::seaorm_db::init_db;
 use infrastructure::storage::local_storage::LocalObjectStorage;
 use infrastructure::tasks::alert_handler::{AlertConfig, AlertHandler};
@@ -126,7 +123,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     });
 
     // ── LLM (infrastructure → domain trait) ──
-    // Legacy LlmClient (used by ConversationOrchestrator and DiaryService)
+    // Legacy LlmClient (used by DiaryService for title generation)
     let ollama_client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(
         config.ollama.base_url.clone(),
         config.ollama.model.clone(),
@@ -149,7 +146,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
             config.embedding.timeout_secs,
         ),
     );
-    let prompt_provider: Arc<dyn PromptProvider> = Arc::new(InfraPromptProvider::new(None));
 
     // ── Qdrant VectorStore (optional, enabled via config) ──
     use domain::vector_store::VectorStore;
@@ -233,13 +229,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&conv_repo),
         Arc::clone(&risk_repo),
     ));
-    let orchestrator: Arc<ConversationOrchestrator> = Arc::new(ConversationOrchestrator::new(
-        Arc::clone(&task_publisher),
-        Arc::clone(&ollama_client),
-        Arc::clone(&prompt_provider),
-        Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
-        Arc::clone(&profile_repo),
-    ));
 
     // ── RAG & Memory services (constructed early — needed by AgentContextBuilder) ──
     let mut retrieval_svc =
@@ -295,7 +284,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         vector_index.clone(),
     ));
 
-    // ── Agent Runtime (constructed before SessionManager so it can be injected) ──
+    // ── Agent Runtime ──
     let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
         Arc::clone(&memory_svc),
         Arc::clone(&retrieval),
@@ -346,32 +335,13 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         agent_settings,
     ));
 
-    // ── ChatService (replaces SessionManager as the business entry point) ──
+    // ── ChatService (the business entry point) ──
     // Must be built AFTER agent_runtime, which it depends on.
     let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
         Arc::clone(&task_publisher),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&agent_runtime),
     ));
-
-    let session: Arc<SessionManager> = Arc::new(SessionManager::new(
-        Arc::clone(&task_publisher),
-        Arc::clone(&orchestrator),
-        Arc::clone(&agent_runtime),
-        config.session.timeout_seconds,
-    ));
-    background.spawn({
-        let s = Arc::clone(&session);
-        let cleanup_interval =
-            tokio::time::Duration::from_secs(config.session.cleanup_interval_seconds());
-        tokio::spawn(async move {
-            let mut i = tokio::time::interval(cleanup_interval);
-            loop {
-                i.tick().await;
-                s.cleanup().await;
-            }
-        })
-    });
 
     // ── Domain services with real SeaORM repositories ──
     let psychology: Arc<PsychologyService> =
@@ -412,7 +382,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let services = bootstrap::state::ServiceGraph {
         auth,
         user,
-        session,
         query,
         objects,
         psychology,

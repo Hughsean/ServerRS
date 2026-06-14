@@ -13,7 +13,6 @@ use crate::application::psychology::psychology_service::PsychologyService;
 use crate::application::rag::ingestion_service::IngestionService;
 use crate::application::rag::retrieval_service::RetrievalService;
 use crate::application::session::chat_service::ChatService;
-use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
@@ -24,7 +23,6 @@ use crate::domain::conversation::conversation_repository::ConversationRepository
 pub struct AppState {
     pub auth: AuthState,
     pub user: UserState,
-    pub session: SessionState,
     pub chat: ChatState,
     pub object: ObjectState,
     pub psychology: PsychologyState,
@@ -44,12 +42,6 @@ pub struct AuthState {
 #[derive(Clone)]
 pub struct UserState {
     pub user: Arc<UserService>,
-}
-
-#[derive(Clone)]
-pub struct SessionState {
-    pub session: Arc<SessionManager>,
-    pub query: Arc<SessionService>,
 }
 
 #[derive(Clone)]

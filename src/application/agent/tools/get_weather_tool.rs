@@ -1070,7 +1070,6 @@ mod tests {
 
         AgentContext {
             user_id: 1,
-            session_id: "test-session".into(),
             conversation_id: None,
             recent_messages: vec![],
             summary: None,

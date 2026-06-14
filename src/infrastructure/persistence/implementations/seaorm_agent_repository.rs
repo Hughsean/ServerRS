@@ -24,7 +24,6 @@ fn from_model(model: agent_events::Model) -> AgentEvent {
         event_id: model.event_id,
         user_id: model.user_id,
         conversation_id: model.conversation_id,
-        session_id: None,
         trace_id: model.trace_id,
         event_type: model.event_type,
         tool_name: model.tool_name,

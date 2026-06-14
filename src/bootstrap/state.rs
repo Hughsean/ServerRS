@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::api::{
     AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
-    InternalState, MusicState, ObjectState, PsychologyState, SessionState, UserState,
+    InternalState, MusicState, ObjectState, PsychologyState, UserState,
 };
 use crate::application::agent::agent_runtime::AgentRuntime;
 use crate::application::auth::auth_service::AuthService;
@@ -15,7 +15,6 @@ use crate::application::psychology::psychology_service::PsychologyService;
 use crate::application::rag::ingestion_service::IngestionService;
 use crate::application::rag::retrieval_service::RetrievalService;
 use crate::application::session::chat_service::ChatService;
-use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
@@ -26,7 +25,6 @@ use crate::domain::conversation::conversation_repository::ConversationRepository
 pub struct ServiceGraph {
     pub auth: Arc<AuthService>,
     pub user: Arc<UserService>,
-    pub session: Arc<SessionManager>,
     pub query: Arc<SessionService>,
     pub objects: Arc<ObjectService>,
     pub psychology: Arc<PsychologyService>,
@@ -50,10 +48,6 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
         },
         user: UserState {
             user: Arc::clone(&services.user),
-        },
-        session: SessionState {
-            session: Arc::clone(&services.session),
-            query: Arc::clone(&services.query),
         },
         chat: ChatState {
             chat_service: Arc::clone(&services.chat),

@@ -46,10 +46,13 @@ use super::handlers::psychology_handler::{
     get_category_tree, get_qna, get_resource, list_articles, list_categories, list_favorites,
     list_qna, list_resources, toggle_favorite, toggle_like,
 };
-use super::handlers::session_handler::{
-    create_session, get_session_status, list_conversation_messages, list_conversations,
-    list_risk_detections, post_message,
-};
+use super::handlers::session_handler::list_risk_detections;
+// OLD session/conversation handlers — routes shut down (design §4.1).
+// Files retained for reference; to be removed in a later phase.
+// use super::handlers::session_handler::{
+//     create_session, get_session_status, list_conversation_messages, list_conversations,
+//     post_message,
+// };
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
@@ -75,22 +78,24 @@ pub fn build_router_with_origins(
         .route("/api/v1/users/me", delete(delete_me))
         .route("/api/v1/users/me/profile", get(get_profile))
         .route("/api/v1/users/me/profile", put(put_profile))
-        // Conversations
-        .route(
-            "/api/v1/users/{user_id}/conversations",
-            get(list_conversations),
-        )
-        .route(
-            "/api/v1/users/{user_id}/conversations/{conv_id}",
-            get(list_conversation_messages),
-        )
-        // LLM Sessions
-        .route("/api/v1/llm/sessions", post(create_session))
-        .route(
-            "/api/v1/llm/sessions/{session_id}/messages",
-            post(post_message),
-        )
-        .route("/api/v1/llm/sessions/{session_id}", get(get_session_status))
+        // OLD conversation list / detail routes — shut down (design §4.1).
+        // Single-user-single-conversation model replaces these.
+        // .route(
+        //     "/api/v1/users/{user_id}/conversations",
+        //     get(list_conversations),
+        // )
+        // .route(
+        //     "/api/v1/users/{user_id}/conversations/{conv_id}",
+        //     get(list_conversation_messages),
+        // )
+        // OLD LLM session routes — shut down (design §4.1).
+        // ChatService (/api/v1/chat/*) replaces these.
+        // .route("/api/v1/llm/sessions", post(create_session))
+        // .route(
+        //     "/api/v1/llm/sessions/{session_id}/messages",
+        //     post(post_message),
+        // )
+        // .route("/api/v1/llm/sessions/{session_id}", get(get_session_status))
         // Chat API (new — sessionless, per-user conversation)
         .route("/api/v1/chat/open", post(chat_open))
         .route("/api/v1/chat/messages", post(chat_send_message))

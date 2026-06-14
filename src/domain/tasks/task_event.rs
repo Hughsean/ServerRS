@@ -9,10 +9,6 @@ pub enum TaskEvent {
     RefreshTokenRevoked(RefreshTokenRevokedTask),
     RefreshTokenRotated(RefreshTokenRotatedTask),
 
-    // ── Session lifecycle ──
-    SessionCreated(SessionLifecycleTask),
-    SessionExpired(SessionLifecycleTask),
-
     // ── Conversation ──
     ConversationCreated(ConversationLifecycleTask),
 
@@ -74,15 +70,6 @@ pub struct RefreshTokenRotatedTask {
     pub username: String,
     pub old_token_id: String,
     pub device_id: Option<String>,
-}
-
-// ── Session payloads ──
-
-#[derive(Debug, Clone)]
-pub struct SessionLifecycleTask {
-    pub session_id: String,
-    pub user_id: u64,
-    pub dialogue_id: Option<u64>,
 }
 
 // ── Conversation payloads ──

@@ -72,7 +72,6 @@ impl AgentTool for RiskEscalationTool {
             "reason": reason,
             "severity": severity,
             "evidence": evidence,
-            "session_id": context.session_id,
             "conversation_id": context.conversation_id,
         });
 
@@ -81,7 +80,6 @@ impl AgentTool for RiskEscalationTool {
             .log_event(NewAgentEvent {
                 user_id: context.user_id,
                 conversation_id: context.conversation_id,
-                session_id: Some(context.session_id.clone()),
                 event_type: "risk_escalation".to_string(),
                 tool_name: Some("risk_escalation".to_string()),
                 payload,

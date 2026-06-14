@@ -31,12 +31,6 @@ impl TaskHandler for LoggingHandler {
             TaskEvent::RefreshTokenRotated(t) => {
                 info!(user_id = t.user_id, username = %t.username, "token rotated")
             }
-            TaskEvent::SessionCreated(t) => {
-                info!(session_id = %t.session_id, user_id = t.user_id, "session created")
-            }
-            TaskEvent::SessionExpired(t) => {
-                info!(session_id = %t.session_id, user_id = t.user_id, "session expired")
-            }
             TaskEvent::ConversationCreated(t) => info!(
                 conversation_id = t.conversation_id,
                 user_id = t.user_id,

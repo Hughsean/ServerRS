@@ -51,7 +51,6 @@ impl AgentContextBuilder {
 
     pub async fn build(
         &self,
-        session_id: String,
         user_id: u64,
         conversation_id: Option<u64>,
         recent_messages: Vec<ChatMessage>,
@@ -123,7 +122,6 @@ impl AgentContextBuilder {
 
         AgentContext {
             user_id,
-            session_id,
             conversation_id,
             recent_messages,
             summary,

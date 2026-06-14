@@ -12,7 +12,6 @@ pub struct AgentEvent {
     pub event_id: u64,
     pub user_id: u64,
     pub conversation_id: Option<u64>,
-    pub session_id: Option<String>,
     pub trace_id: Option<String>,
     /// One of: plan, tool_call, tool_result, rag_retrieval, memory_write, safety_block.
     pub event_type: String,
@@ -26,7 +25,6 @@ pub struct AgentEvent {
 pub struct NewAgentEvent {
     pub user_id: u64,
     pub conversation_id: Option<u64>,
-    pub session_id: Option<String>,
     pub event_type: String,
     pub tool_name: Option<String>,
     pub payload: Value,
@@ -38,7 +36,6 @@ pub struct NewAgentEvent {
 #[derive(Debug, Clone)]
 pub struct AgentContext {
     pub user_id: u64,
-    pub session_id: String,
     pub conversation_id: Option<u64>,
     pub recent_messages: Vec<crate::domain::llm::ChatMessage>,
     pub summary: Option<String>,

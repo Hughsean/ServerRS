@@ -4,29 +4,28 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tracing::info;
 
 use crate::application::agent::agent_runtime::{AgentResponse, AgentRuntime};
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
-use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};
+use crate::domain::tasks::task_event::{ConversationLifecycleTask, TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::shared::error::AppError;
 
 /// Per-user mutex for serializing concurrent requests from the same user.
 type UserMutexMap = DashMap<u64, Arc<Mutex<()>>>;
 
-/// ChatService replaces the old SessionManager as the primary business entry point.
+/// ChatService is the primary business entry point for the sessionless,
+/// per-user conversation model.
 ///
 /// Flow:
 /// 1. Acquire per-user lock
 /// 2. find_or_create_for_user(user_id) — single Conversation per user
-/// 3. Build AgentContext via PromptBuilder (external)
+/// 3. Build AgentContext via PromptBuilder (inside AgentRuntime)
 /// 4. Call AgentRuntime::respond
 /// 5. Persist user + assistant messages (AgentRuntime handles persistence)
-/// 6. Atomic touch_and_incr
-/// 7. Return reply
-/// 8. After response closed: emit TurnClosedEvent for post-processing
+/// 6. Return reply
+/// 7. After response closed: emit TurnClosedEvent for post-processing
 pub struct ChatService {
     task_publisher: Arc<dyn TaskPublisher>,
     conv_repo: Arc<dyn ConversationRepository>,
@@ -66,10 +65,26 @@ impl ChatService {
 
     /// POST /api/v1/chat/open
     /// Ensure a Conversation exists for this user. Returns the conversation metadata.
+    /// Publishes ConversationCreated when the conversation is newly created.
     pub async fn open(&self, user_id: u64) -> Result<Conversation, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
-        self.conv_repo.find_or_create_for_user(user_id).await
+
+        let conversation = self.conv_repo.find_or_create_for_user(user_id).await?;
+
+        // Heuristic: a brand-new conversation has message_count == 0.
+        // Publish ConversationCreated for audit trail.
+        if conversation.message_count == 0 {
+            let event = TaskEvent::ConversationCreated(ConversationLifecycleTask {
+                conversation_id: conversation.id,
+                user_id,
+            });
+            if let Err(e) = self.task_publisher.publish(event).await {
+                tracing::warn!(error = %e, "failed to publish ConversationCreated");
+            }
+        }
+
+        Ok(conversation)
     }
 
     /// POST /api/v1/chat/messages
@@ -94,18 +109,15 @@ impl ChatService {
             .and_then(|loc| serde_json::to_value(loc).ok());
 
         // 3. Call AgentRuntime::respond
-        // AgentRuntime no longer needs session_id; it uses user_id + conversation_id.
         let response: AgentResponse = self
             .agent_runtime
             .respond(
                 user_id,
-                String::new(), // session_id — deprecated, kept for compatibility
                 Some(conversation_id),
                 text,
                 emotion,
                 location_value,
-                Vec::new(), // recent_messages — AgentRuntime will load from DB
-                None,       // session_prompt — deprecated
+                Vec::new(), // recent_messages — AgentRuntime loads from DB
             )
             .await?;
 

@@ -34,7 +34,7 @@ pub struct ChoiceMessage {
     pub tool_calls: Option<serde_json::Value>,
 }
 
-// ── Legacy LLM client trait (used by ConversationOrchestrator) ─────────────────
+// ── Legacy LLM client trait (used by DiaryService for title generation) ──────
 
 #[async_trait]
 pub trait LlmClient: Send + Sync {

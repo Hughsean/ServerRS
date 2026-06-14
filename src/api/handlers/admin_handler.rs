@@ -7,7 +7,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::AdminState;
-use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::domain::user::user::{UserRole, UserStatus, UserUpdate};
 use crate::shared::error::AppError;
@@ -56,6 +55,31 @@ pub struct RiskConvQuery {
 pub struct AdminPatchUser {
     pub status: Option<i32>,
     pub role: Option<String>,
+}
+
+// ── Admin conversation DTOs ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ConversationResponse {
+    pub id: u64,
+    pub user_id: u64,
+    pub title: Option<String>,
+    pub is_title_generated: bool,
+    pub last_message_at: Option<String>,
+    pub message_count: i32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConversationMessageResponse {
+    pub id: u64,
+    pub conversation_id: u64,
+    pub sender_role: String,
+    pub sender_user_id: Option<u64>,
+    pub message_type: String,
+    pub content: String,
+    pub token_count: Option<i32>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -17,6 +17,8 @@ pub enum AppError {
     Infrastructure(String),
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl AppError {
