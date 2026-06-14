@@ -23,8 +23,8 @@ pub struct Model {
     pub learning_records: Option<Json>,
     pub personalization_enabled: i8,
     pub personalization_reset_at: Option<DateTime>,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -72,8 +72,8 @@ impl ColumnTrait for Column {
             Self::LearningRecords => ColumnType::Json.def().null(),
             Self::PersonalizationEnabled => ColumnType::TinyInteger.def(),
             Self::PersonalizationResetAt => ColumnType::DateTime.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

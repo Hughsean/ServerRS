@@ -57,12 +57,12 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             updated_at: Set(now),
             last_accessed_at: Set(None),
             access_count: Set(0),
-            expires_at: Set(None),
             vector_id: Set(None),
             embedding_provider: Set(None),
             embedding_model: Set(None),
             embedding_dimension: Set(None),
             indexed_at: Set(None),
+            ..Default::default()
         };
 
         let saved = active

@@ -52,7 +52,6 @@ pub enum Relation {
     ConversationMessages,
     ConversationSummaries,
     PostConversationRiskAudits,
-    RiskDetectionResults,
     UserMemories,
     Users,
 }
@@ -85,9 +84,6 @@ impl RelationTrait for Relation {
             Self::PostConversationRiskAudits => {
                 Entity::has_many(super::post_conversation_risk_audits::Entity).into()
             }
-            Self::RiskDetectionResults => {
-                Entity::has_many(super::risk_detection_results::Entity).into()
-            }
             Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
             Self::Users => Entity::belongs_to(super::users::Entity)
                 .from(Column::UserId)
@@ -118,12 +114,6 @@ impl Related<super::conversation_summaries::Entity> for Entity {
 impl Related<super::post_conversation_risk_audits::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::PostConversationRiskAudits.def()
-    }
-}
-
-impl Related<super::risk_detection_results::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::RiskDetectionResults.def()
     }
 }
 

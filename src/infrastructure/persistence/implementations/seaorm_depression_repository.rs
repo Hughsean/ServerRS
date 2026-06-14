@@ -20,8 +20,8 @@ fn map_scale(m: depression_scales::Model) -> DepressionScale {
         max_score: m.max_score,
         questions: m.questions,
         severity_ranges: m.severity_ranges,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.map(|v| v.and_utc()),
+        updated_at: m.updated_at.map(|v| v.and_utc()),
     }
 }
 
@@ -34,8 +34,8 @@ fn map_assessment(m: depression_assessments::Model) -> DepressionAssessment {
         answers: m.answers,
         total_score: m.total_score,
         notes: m.notes,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.map(|v| v.and_utc()),
+        updated_at: m.updated_at.map(|v| v.and_utc()),
     }
 }
 
@@ -85,8 +85,8 @@ impl DepressionRepository for SeaOrmDepressionRepository {
             answers: Set(new.answers),
             total_score: Set(total_score),
             notes: Set(new.notes),
-            created_at: Set(Some(now)),
-            updated_at: Set(Some(now)),
+            created_at: Set(Some(now.naive_utc())),
+            updated_at: Set(Some(now.naive_utc())),
             ..Default::default()
         };
         Ok(map_assessment(am.insert(&self.db).await.map_err(map_err)?))
@@ -131,7 +131,7 @@ impl DepressionRepository for SeaOrmDepressionRepository {
             .ok_or(AppError::NotFound("assessment not found".into()))?;
         let mut am: depression_assessments::ActiveModel = existing.into();
         am.notes = Set(notes);
-        am.updated_at = Set(Some(chrono::Utc::now()));
+        am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
         Ok(map_assessment(am.update(&self.db).await.map_err(map_err)?))
     }
 

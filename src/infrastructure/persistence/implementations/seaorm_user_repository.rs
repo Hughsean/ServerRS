@@ -30,9 +30,9 @@ fn model_to_domain(m: users::Model) -> User {
         status: UserStatus::from_i32(m.status as i32).unwrap_or(UserStatus::Disabled),
         role: crate::domain::user::user::UserRole::from_str(&m.role)
             .unwrap_or(crate::domain::user::user::UserRole::User),
-        created_at: m.created_at,
-        updated_at: m.updated_at,
-        last_login_at: m.last_login_at,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
+        last_login_at: m.last_login_at.map(|v| v.and_utc()),
     }
 }
 
@@ -110,8 +110,8 @@ impl UserRepository for SeaOrmUserRepository {
             nickname: Set(new_user.nickname),
             status: Set(new_user.status.to_i32() as i8),
             role: Set(new_user.role.as_str().to_string()),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
 
@@ -144,7 +144,7 @@ impl UserRepository for SeaOrmUserRepository {
         if let Some(role) = update.role {
             active.role = Set(role.as_str().to_string());
         }
-        active.updated_at = Set(chrono::Utc::now());
+        active.updated_at = Set(chrono::Utc::now().naive_utc());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(updated))
@@ -166,7 +166,7 @@ impl UserRepository for SeaOrmUserRepository {
             .ok_or(AppError::NotFound("users not found".into()))?;
 
         let mut active: users::ActiveModel = existing.into();
-        active.last_login_at = Set(Some(chrono::Utc::now()));
+        active.last_login_at = Set(Some(chrono::Utc::now().naive_utc()));
         active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
     }

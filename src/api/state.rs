@@ -12,17 +12,20 @@ use crate::application::music::music_service::MusicService;
 use crate::application::psychology::psychology_service::PsychologyService;
 use crate::application::rag::ingestion_service::IngestionService;
 use crate::application::rag::retrieval_service::RetrievalService;
+use crate::application::session::chat_service::ChatService;
 use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
 use crate::application::web_ingestion::review_service::KnowledgeReviewService;
+use crate::domain::conversation::conversation_repository::ConversationRepository;
 
 #[derive(Clone, FromRef)]
 pub struct AppState {
     pub auth: AuthState,
     pub user: UserState,
     pub session: SessionState,
+    pub chat: ChatState,
     pub object: ObjectState,
     pub psychology: PsychologyState,
     pub depression: DepressionState,
@@ -47,6 +50,12 @@ pub struct UserState {
 pub struct SessionState {
     pub session: Arc<SessionManager>,
     pub query: Arc<SessionService>,
+}
+
+#[derive(Clone)]
+pub struct ChatState {
+    pub chat_service: Arc<ChatService>,
+    pub conv_repo: Arc<dyn ConversationRepository>,
 }
 
 #[derive(Clone)]

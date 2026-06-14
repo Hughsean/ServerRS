@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 
 use crate::domain::conversation::conversation::{Conversation, NewConversation};
@@ -27,10 +28,10 @@ fn map_conv(m: conversations::Model) -> Conversation {
         id: m.id,
         user_id: m.user_id,
         title: m.title,
-        is_title_generated: m.is_title_generated != 0,
-        last_message_at: m.last_message_at,
+
+        last_message_at: m.last_message_at.map(|v| v.and_utc()),
         message_count: m.message_count as i32,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -43,7 +44,7 @@ fn map_msg(m: conversation_messages::Model) -> ConversationMessage {
         message_type: m.message_type,
         content: serde_json::to_string(&m.content).unwrap_or_default(),
         token_count: m.token_count.map(|v| v as i32),
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -60,6 +61,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .map_err(map_err)
             .map(|o| o.map(map_conv))
     }
+
     async fn find_by_user_id(&self, user_id: u64) -> Result<Vec<Conversation>, AppError> {
         conversations::Entity::find()
             .filter(conversations::Column::UserId.eq(user_id))
@@ -69,18 +71,55 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .map_err(map_err)
             .map(|v| v.into_iter().map(map_conv).collect())
     }
+
+    async fn find_or_create_for_user(&self, user_id: u64) -> Result<Conversation, AppError> {
+        // Atomic UPSERT: INSERT ... ON DUPLICATE KEY UPDATE (uses uk_conversations_user_id)
+        let sql = format!(
+            "INSERT INTO conversations (user_id, message_count, created_at, updated_at) \
+             VALUES ({user_id}, 0, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) \
+             ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)"
+        );
+        let stmt = Statement::from_string(DbBackend::MySql, sql);
+        self.db.execute_raw(stmt).await.map_err(map_err)?;
+
+        // Retrieve the (new or existing) row using LAST_INSERT_ID
+        let rows = conversations::Entity::find()
+            .from_raw_sql(Statement::from_string(
+                DbBackend::MySql,
+                "SELECT * FROM conversations WHERE id = LAST_INSERT_ID()",
+            ))
+            .all(&self.db)
+            .await
+            .map_err(map_err)?;
+
+        rows.into_iter()
+            .next()
+            .map(map_conv)
+            .ok_or_else(|| AppError::Internal("conversation upsert failed".into()))
+    }
+
+    async fn find_single_by_user_id(&self, user_id: u64) -> Result<Option<Conversation>, AppError> {
+        conversations::Entity::find()
+            .filter(conversations::Column::UserId.eq(user_id))
+            .one(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|o| o.map(map_conv))
+    }
+
     async fn save(&self, c: NewConversation) -> Result<Conversation, AppError> {
         let now = chrono::Utc::now();
         let am = conversations::ActiveModel {
             user_id: Set(c.user_id),
             title: Set(c.title),
-            is_title_generated: Set(0_i8),
-            message_count: Set(0_u32),
-            created_at: Set(now),
+
+            message_count: Set(0),
+            created_at: Set(now.naive_utc()),
             ..Default::default()
         };
         Ok(map_conv(am.insert(&self.db).await.map_err(map_err)?))
     }
+
     async fn update_title(&self, id: u64, title: &str) -> Result<(), AppError> {
         let existing = conversations::Entity::find_by_id(id)
             .one(&self.db)
@@ -89,27 +128,24 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .ok_or(AppError::NotFound("conversation not found".into()))?;
         let mut am: conversations::ActiveModel = existing.into();
         am.title = Set(Some(title.to_string()));
-        am.is_title_generated = Set(1_i8);
-        am.update(&self.db).await.map_err(map_err)?;
-        Ok(())
-    }
-    async fn touch_and_incr(&self, id: u64, inc: i32) -> Result<(), AppError> {
-        let existing = conversations::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_err)?
-            .ok_or(AppError::NotFound("conversation not found".into()))?;
 
-        let mut am: conversations::ActiveModel = existing.into();
-        am.last_message_at = Set(Some(chrono::Utc::now()));
-        am.message_count = Set(am
-            .message_count
-            .take()
-            .unwrap_or(0)
-            .saturating_add(inc as u32));
         am.update(&self.db).await.map_err(map_err)?;
         Ok(())
     }
+
+    /// Atomic update: message_count += inc, last_message_at = UTC_TIMESTAMP(6).
+    async fn touch_and_incr(&self, id: u64, inc: u64) -> Result<(), AppError> {
+        let sql = format!(
+            "UPDATE conversations SET message_count = message_count + {inc}, \
+             last_message_at = UTC_TIMESTAMP(6), \
+             updated_at = UTC_TIMESTAMP(6) \
+             WHERE id = {id}"
+        );
+        let stmt = Statement::from_string(DbBackend::MySql, sql);
+        self.db.execute_raw(stmt).await.map_err(map_err)?;
+        Ok(())
+    }
+
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError> {
         Ok(conversations::Entity::delete_by_id(id)
             .exec(&self.db)
@@ -118,6 +154,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .rows_affected
             > 0)
     }
+
     async fn save_message(
         &self,
         msg: NewConversationMessage,
@@ -130,11 +167,12 @@ impl ConversationRepository for SeaOrmConversationRepository {
             message_type: Set(msg.message_type),
             content: Set(serde_json::from_str(&msg.content).unwrap_or(serde_json::Value::Null)),
             token_count: Set(msg.token_count.map(|v| v as u32)),
-            created_at: Set(now),
+            created_at: Set(now.naive_utc()),
             ..Default::default()
         };
         Ok(map_msg(am.insert(&self.db).await.map_err(map_err)?))
     }
+
     async fn find_messages_by_conversation_id(
         &self,
         cid: u64,
@@ -147,6 +185,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .map_err(map_err)
             .map(|v| v.into_iter().map(map_msg).collect())
     }
+
     async fn delete_messages_by_conversation_id(&self, cid: u64) -> Result<u64, AppError> {
         Ok(conversation_messages::Entity::delete_many()
             .filter(conversation_messages::Column::ConversationId.eq(cid))
@@ -154,5 +193,46 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .await
             .map_err(map_err)?
             .rows_affected)
+    }
+
+    async fn find_messages_before(
+        &self,
+        conversation_id: u64,
+        before_id: Option<u64>,
+        limit: u64,
+    ) -> Result<Vec<ConversationMessage>, AppError> {
+        let mut query = conversation_messages::Entity::find()
+            .filter(conversation_messages::Column::ConversationId.eq(conversation_id))
+            .order_by_desc(conversation_messages::Column::Id);
+
+        if let Some(before) = before_id {
+            query = query.filter(conversation_messages::Column::Id.lt(before));
+        }
+
+        let rows = query
+            .limit(limit as u64)
+            .all(&self.db)
+            .await
+            .map_err(map_err)?;
+
+        // Restore ascending order
+        let mut msgs: Vec<_> = rows.into_iter().map(map_msg).collect();
+        msgs.reverse();
+        Ok(msgs)
+    }
+
+    async fn find_messages_since(
+        &self,
+        conversation_id: u64,
+        since_id: u64,
+    ) -> Result<Vec<ConversationMessage>, AppError> {
+        conversation_messages::Entity::find()
+            .filter(conversation_messages::Column::ConversationId.eq(conversation_id))
+            .filter(conversation_messages::Column::Id.gte(since_id))
+            .order_by_asc(conversation_messages::Column::Id)
+            .all(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|v| v.into_iter().map(map_msg).collect())
     }
 }

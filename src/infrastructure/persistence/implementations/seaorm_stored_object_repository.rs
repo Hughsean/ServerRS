@@ -45,7 +45,7 @@ fn map(m: stored_objects::Model) -> StoredObject {
         storage_backend: str_to_backend(&m.storage_backend),
         public_url: m.public_url,
         created_by: m.created_by,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -66,7 +66,7 @@ impl StoredObjectRepository for SeaOrmStoredObjectRepository {
             storage_backend: Set(backend_to_str(&object.storage_backend)),
             public_url: Set(object.public_url),
             created_by: Set(object.created_by),
-            created_at: Set(object.created_at),
+            created_at: Set(object.created_at.naive_utc()),
             ..Default::default()
         };
 

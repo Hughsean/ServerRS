@@ -94,10 +94,9 @@ pub struct AgentResponse {
     pub reply: String,
     /// Trace of every tool that was invoked during this turn.
     pub tool_calls: Vec<ToolTrace>,
-    /// Whether the session should be marked as closed.
-    pub session_closed: bool,
-    /// Whether a safety intervention was triggered.
-    pub safety_triggered: bool,
+    /// IDs of persisted messages, available after persist_messages succeeds.
+    pub user_message_id: Option<u64>,
+    pub assistant_message_id: Option<u64>,
 }
 
 /// Record of a single tool invocation within a turn.
@@ -110,6 +109,7 @@ pub struct ToolTrace {
 
 struct PersistedTurn {
     user_message_id: u64,
+    assistant_message_id: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,80 +236,6 @@ impl AgentRuntime {
         recent_messages: Vec<ChatMessage>,
         session_prompt: Option<String>,
     ) -> Result<AgentResponse, AppError> {
-        // ── Step 1: Safety pre-check ──────────────────────────────
-        let detection = self.risk_detection_service.evaluate(&user_message);
-
-        // Log the detection event.
-        self.log_event(
-            &session_id,
-            user_id,
-            conversation_id,
-            "safety_block",
-            None,
-            serde_json::json!({
-                "risk_level": format!("{:?}", detection.risk_level),
-                "intent": format!("{:?}", detection.intent),
-                "confidence": detection.confidence,
-            }),
-        )
-        .await;
-
-        // ── Step 2: Crisis fast-path ──────────────────────────────
-        if detection.risk_level == RiskLevel::Crisis {
-            info!(
-                user_id,
-                ?conversation_id,
-                "crisis detected — returning safety response"
-            );
-
-            let safety_reply = self.build_crisis_response(&detection);
-
-            // Persist both the user message and the safety reply.
-            let persisted = self
-                .persist_messages(
-                    user_id,
-                    conversation_id,
-                    &user_message,
-                    &safety_reply,
-                    &emotion,
-                )
-                .await?;
-            self.spawn_risk_persist_and_publish(
-                user_id,
-                conversation_id,
-                Some(persisted.user_message_id),
-                &detection,
-            );
-
-            return Ok(AgentResponse {
-                reply: safety_reply,
-                tool_calls: Vec::new(),
-                session_closed: false,
-                safety_triggered: true,
-            });
-        }
-
-        if self.is_exit_intent(&user_message) {
-            let reply =
-                "好的，我们先到这里。需要的时候随时回来，我会继续接住你的话题。".to_string();
-            let persisted = self
-                .persist_messages(user_id, conversation_id, &user_message, &reply, &emotion)
-                .await?;
-            self.spawn_risk_persist_and_publish(
-                user_id,
-                conversation_id,
-                Some(persisted.user_message_id),
-                &detection,
-            );
-
-            return Ok(AgentResponse {
-                reply,
-                tool_calls: Vec::new(),
-                session_closed: true,
-                safety_triggered: false,
-            });
-        }
-
         // ── Step 3: Build agent context ──────────────────────────
         let profile = self
             .user_profile_repo
@@ -632,12 +558,7 @@ impl AgentRuntime {
                 &emotion,
             )
             .await?;
-        self.spawn_risk_persist_and_publish(
-            user_id,
-            conversation_id,
-            Some(persisted.user_message_id),
-            &detection,
-        );
+        // Risk persist deferred to TurnClosedEvent
 
         // ── Step 8: Async memory extraction ──────────────────────
         if self.settings.agent_enabled
@@ -663,8 +584,8 @@ impl AgentRuntime {
         Ok(AgentResponse {
             reply: final_content,
             tool_calls: tool_traces,
-            session_closed: end_session,
-            safety_triggered: false,
+            user_message_id: Some(persisted.user_message_id),
+            assistant_message_id: Some(persisted.assistant_message_id),
         })
     }
 
@@ -955,7 +876,8 @@ impl AgentRuntime {
             .await?;
 
         let asst_content = serde_json::json!({ "text": assistant_reply });
-        self.conversation_repo
+        let asst_msg = self
+            .conversation_repo
             .save_message(NewConversationMessage {
                 conversation_id: cid,
                 sender_role: "assistant".into(),
@@ -970,6 +892,7 @@ impl AgentRuntime {
 
         Ok(PersistedTurn {
             user_message_id: user_msg.id,
+            assistant_message_id: asst_msg.id,
         })
     }
 
@@ -1205,9 +1128,13 @@ impl AgentRuntime {
         let det = detection.clone();
 
         tokio::spawn(async move {
-            risk_detection_service
-                .persist_and_publish_result(det, user_id, conversation_id, message_id)
-                .await;
+            // New post-conversation audit model: conversation_id is required and
+            // we pass the user message id; assistant_message_id is not known here.
+            if let Some(cid) = conversation_id {
+                risk_detection_service
+                    .persist_and_publish_result(det, user_id, cid, message_id, None)
+                    .await;
+            }
         });
     }
 

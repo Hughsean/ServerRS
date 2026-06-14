@@ -21,8 +21,8 @@ pub struct Model {
     pub max_score: i16,
     pub severity_ranges: Json,
     pub questions: Json,
-    pub created_at: Option<DateTimeUtc>,
-    pub updated_at: Option<DateTimeUtc>,
+    pub created_at: Option<DateTime>,
+    pub updated_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -66,8 +66,8 @@ impl ColumnTrait for Column {
             Self::MaxScore => ColumnType::SmallInteger.def(),
             Self::SeverityRanges => ColumnType::Json.def(),
             Self::Questions => ColumnType::Json.def(),
-            Self::CreatedAt => ColumnType::Timestamp.def().null(),
-            Self::UpdatedAt => ColumnType::Timestamp.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def().null(),
+            Self::UpdatedAt => ColumnType::DateTime.def().null(),
         }
     }
 }

@@ -28,8 +28,8 @@ fn map_post(m: community_posts::Model) -> Post {
         likes_count: m.likes_count,
         comments_count: m.comments_count,
         status: ArticleStatus::from_i8(m.status).unwrap_or(ArticleStatus::Hidden),
-        created_at: m.created_at.into(),
-        updated_at: m.updated_at.into(),
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -43,8 +43,8 @@ fn map_comment(m: community_comments::Model) -> Comment {
         attachments: m.attachments.map(|v| v.into()),
         likes_count: m.likes_count,
         status: ArticleStatus::from_i8(m.status).unwrap_or(ArticleStatus::Hidden),
-        created_at: m.created_at.into(),
-        updated_at: m.updated_at.into(),
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -55,7 +55,7 @@ fn map_media(m: community_post_media::Model) -> PostMedia {
         media_type: m.media_type,
         mime_type: m.mime_type,
         media_data: m.media_data,
-        created_at: m.created_at.into(),
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -117,8 +117,8 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             likes_count: Set(0),
             comments_count: Set(0),
             status: Set(new_post.status.to_i8()),
-            created_at: Set(now.into()),
-            updated_at: Set(now.into()),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         Ok(map_post(am.insert(&self.db).await.map_err(map_err)?))
@@ -140,7 +140,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
         if let Some(status) = update.status {
             am.status = Set(status.to_i8());
         }
-        am.updated_at = Set(chrono::Utc::now().into());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         Ok(map_post(am.update(&self.db).await.map_err(map_err)?))
     }
 
@@ -217,8 +217,8 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             attachments: Set(new_comment.attachments.map(|v| v.into())),
             likes_count: Set(0),
             status: Set(new_comment.status.to_i8()),
-            created_at: Set(now.into()),
-            updated_at: Set(now.into()),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         let txn = self.db.begin().await.map_err(map_err)?;
@@ -250,7 +250,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
         if let Some(s) = status {
             am.status = Set(s.to_i8());
         }
-        am.updated_at = Set(chrono::Utc::now().into());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         Ok(map_comment(am.update(&self.db).await.map_err(map_err)?))
     }
 
@@ -300,7 +300,7 @@ impl CommunityRepository for SeaOrmCommunityRepository {
             media_type: Set(new_media.media_type),
             mime_type: Set(new_media.mime_type),
             media_data: Set(new_media.media_data),
-            created_at: Set(now.into()),
+            created_at: Set(now.naive_utc()),
             ..Default::default()
         };
         Ok(map_media(am.insert(&self.db).await.map_err(map_err)?))

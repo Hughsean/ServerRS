@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::api::{
-    AdminState, AppState, AuthState, CommunityState, DepressionState, DiaryState, InternalState,
-    MusicState, ObjectState, PsychologyState, SessionState, UserState,
+    AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
+    InternalState, MusicState, ObjectState, PsychologyState, SessionState, UserState,
 };
 use crate::application::agent::agent_runtime::AgentRuntime;
 use crate::application::auth::auth_service::AuthService;
@@ -14,11 +14,13 @@ use crate::application::music::music_service::MusicService;
 use crate::application::psychology::psychology_service::PsychologyService;
 use crate::application::rag::ingestion_service::IngestionService;
 use crate::application::rag::retrieval_service::RetrievalService;
+use crate::application::session::chat_service::ChatService;
 use crate::application::session::session_manager::SessionManager;
 use crate::application::session::session_service::SessionService;
 use crate::application::storage::object_service::ObjectService;
 use crate::application::user::user_service::UserService;
 use crate::application::web_ingestion::review_service::KnowledgeReviewService;
+use crate::domain::conversation::conversation_repository::ConversationRepository;
 
 #[derive(Clone)]
 pub struct ServiceGraph {
@@ -37,6 +39,8 @@ pub struct ServiceGraph {
     pub memory: Arc<MemoryService>,
     pub agent_runtime: Arc<AgentRuntime>,
     pub knowledge_review: Arc<KnowledgeReviewService>,
+    pub chat: Arc<ChatService>,
+    pub chat_conv_repo: Arc<dyn ConversationRepository>,
 }
 
 pub fn build_state(services: &ServiceGraph) -> AppState {
@@ -50,6 +54,10 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
         session: SessionState {
             session: Arc::clone(&services.session),
             query: Arc::clone(&services.query),
+        },
+        chat: ChatState {
+            chat_service: Arc::clone(&services.chat),
+            conv_repo: Arc::clone(&services.chat_conv_repo),
         },
         object: ObjectState {
             objects: Arc::clone(&services.objects),

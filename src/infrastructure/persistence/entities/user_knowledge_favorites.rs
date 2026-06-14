@@ -18,7 +18,7 @@ pub struct Model {
     pub user_id: u64,
     pub content_type: String,
     pub content_id: u64,
-    pub created_at: DateTimeUtc,
+    pub created_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -55,7 +55,7 @@ impl ColumnTrait for Column {
             Self::UserId => ColumnType::BigUnsigned.def(),
             Self::ContentType => ColumnType::String(StringLen::N(32u32)).def(),
             Self::ContentId => ColumnType::BigUnsigned.def(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
         }
     }
 }

@@ -16,8 +16,8 @@ fn map(m: user_diaries::Model) -> UserDiary {
         title: m.title,
         content: m.content,
         mood_description: m.mood_description,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -44,8 +44,8 @@ impl DiaryRepository for SeaOrmDiaryRepository {
             title: Set(diary.title),
             content: Set(diary.content),
             mood_description: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         Ok(map(am.insert(&self.db).await.map_err(map_err)?))
@@ -91,7 +91,7 @@ impl DiaryRepository for SeaOrmDiaryRepository {
         if let Some(md) = update.mood_description {
             am.mood_description = Set(md);
         }
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         Ok(map(am.update(&self.db).await.map_err(map_err)?))
     }
 
@@ -103,7 +103,7 @@ impl DiaryRepository for SeaOrmDiaryRepository {
             .ok_or(AppError::NotFound("diary not found".into()))?;
         let mut am: user_diaries::ActiveModel = existing.into();
         am.mood_description = Set(Some(mood_description));
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         am.update(&self.db).await.map_err(map_err)?;
         Ok(())
     }

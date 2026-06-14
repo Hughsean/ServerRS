@@ -1,5 +1,6 @@
 pub mod admin_handler;
 pub mod auth_handler;
+pub mod chat_handler;
 pub mod community_handler;
 pub mod depression_handler;
 pub mod diary_handler;

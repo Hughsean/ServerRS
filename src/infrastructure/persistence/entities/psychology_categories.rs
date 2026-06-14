@@ -20,8 +20,8 @@ pub struct Model {
     pub description: Option<String>,
     pub sort_order: i32,
     pub status: i8,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -66,8 +66,8 @@ impl ColumnTrait for Column {
             Self::Description => ColumnType::Text.def().null(),
             Self::SortOrder => ColumnType::Integer.def(),
             Self::Status => ColumnType::TinyInteger.def(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

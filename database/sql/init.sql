@@ -37,9 +37,9 @@ CREATE TABLE users
     phone         VARCHAR(20) UNIQUE COMMENT '手机号',
     avatar        BLOB COMMENT '头像二进制数据',
     nickname      VARCHAR(50) COMMENT '昵称',
-    created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    last_login_at TIMESTAMP    NULL COMMENT '最后登录时间',
+    created_at    DATETIME(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at    DATETIME(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    last_login_at DATETIME(6)    NULL COMMENT '最后登录时间',
     status        TINYINT      NOT NULL DEFAULT 1 COMMENT '账号状态:1正常,0禁用',
     role          VARCHAR(32)  NOT NULL DEFAULT 'USER' COMMENT 'USER/ADMIN/SUPER_ADMIN',
     INDEX idx_username (username),
@@ -86,8 +86,8 @@ CREATE TABLE user_profiles
     learning_records        JSON COMMENT '学习记录',
     personalization_enabled TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '个性化是否启用',
     personalization_reset_at DATETIME(6)    NULL COMMENT '最近一次重置时间',
-    created_at              TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at              TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at              DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at              DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id)
 ) ENGINE = InnoDB
@@ -104,8 +104,8 @@ CREATE TABLE user_diaries
     title            VARCHAR(100)    NOT NULL DEFAULT '无标题' COMMENT '日记标题',
     content          TEXT            NOT NULL COMMENT '日记内容',
     mood_description VARCHAR(255) COMMENT '心情描述，使用大模型评估',
-    created_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at       DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at       DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id),
     INDEX idx_created_at (created_at)
@@ -170,8 +170,8 @@ CREATE TABLE community_posts
     likes_count    INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '点赞数',
     comments_count INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '评论数',
     status         TINYINT         NOT NULL DEFAULT 1 COMMENT '帖子状态:1可见,0隐藏',
-    created_at     TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at     TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at     DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at     DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id),
     INDEX idx_created_at (created_at),
@@ -190,7 +190,7 @@ CREATE TABLE community_post_media
     media_type VARCHAR(20)     NOT NULL COMMENT '媒体类型:IMAGE/VIDEO',
     mime_type  VARCHAR(100)    NOT NULL COMMENT '媒体MIME类型',
     media_data LONGBLOB        NOT NULL COMMENT '媒体二进制数据',
-    created_at TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    created_at DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
     FOREIGN KEY (post_id) REFERENCES community_posts (post_id) ON DELETE CASCADE,
     INDEX idx_post_id (post_id),
     INDEX idx_media_type (media_type)
@@ -213,7 +213,7 @@ CREATE TABLE stored_objects
     storage_backend VARCHAR(32)      NOT NULL DEFAULT 'LOCAL' COMMENT '存储后端',
     public_url      TEXT             NULL COMMENT '公开访问URL',
     created_by      BIGINT UNSIGNED  NULL COMMENT '上传用户ID',
-    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    created_at      DATETIME(6)        NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
     FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL,
     UNIQUE KEY uk_stored_objects_bucket_key (bucket, object_key),
     INDEX idx_stored_objects_created_by (created_by),
@@ -235,8 +235,8 @@ CREATE TABLE community_comments
     attachments       JSON COMMENT '附件资源(JSON数组，存储图片/视频等URL或标识)',
     likes_count       INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '点赞数',
     status            TINYINT         NOT NULL DEFAULT 1 COMMENT '评论状态:1可见,0隐藏',
-    created_at        TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at        TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at        DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at        DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (post_id) REFERENCES community_posts (post_id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (parent_comment_id) REFERENCES community_comments (comment_id) ON DELETE CASCADE,
@@ -259,8 +259,8 @@ CREATE TABLE depression_scales
     max_score         SMALLINT    NOT NULL COMMENT '最高分',
     severity_ranges   JSON        NOT NULL COMMENT '严重程度分级标准',
     questions         JSON        NOT NULL COMMENT '问题列表',
-    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+    created_at        DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at        DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间'
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '抑郁量表定义表';
@@ -277,8 +277,8 @@ CREATE TABLE depression_assessments
     answers         JSON              NOT NULL COMMENT '问题答案集合',
     total_score     SMALLINT          NOT NULL COMMENT '总得分',
     notes           TEXT COMMENT '附加说明',
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at      DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at      DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (scale_id) REFERENCES depression_scales (scale_id),
     INDEX idx_user_assessment (user_id, assessment_date),
@@ -287,40 +287,6 @@ CREATE TABLE depression_assessments
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT = '抑郁评估记录表';
 
--- ============================================================================
--- 13. risk_detection_results — 风险检测结果表
--- ============================================================================
-CREATE TABLE risk_detection_results
-(
-    id               BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '检测结果ID',
-    user_id          BIGINT UNSIGNED NOT NULL COMMENT '关联用户ID',
-    message_id       BIGINT UNSIGNED NOT NULL COMMENT '关联消息ID(仅对 user 角色的消息进行检测)',
-    conversation_id  BIGINT UNSIGNED NOT NULL COMMENT '冗余存储会话ID以便快速查询',
-    risk_level       VARCHAR(16)     NOT NULL COMMENT '风险等级: NONE|LOW|MEDIUM|HIGH|CRISIS|UNKNOWN',
-    polarity         VARCHAR(16)     NOT NULL COMMENT '情绪极性: POSITIVE|NEUTRAL|NEGATIVE|MIXED|UNKNOWN',
-    intent           VARCHAR(32)     NOT NULL COMMENT '话语意图: HELP_SEEKING|VENTING|INFO_QUERY|NARRATIVE|JOKE_SARCASM|UNKNOWN',
-    target           VARCHAR(32)     NOT NULL COMMENT '指向对象: SELF|OTHER_INDIVIDUAL|GROUP_ORG|UNKNOWN',
-    confidence       DECIMAL(4, 3)   NOT NULL COMMENT '置信度 0-1',
-    evidence         JSON            NULL COMMENT '证据短句数组(JSON字符串数组)',
-    reason           VARCHAR(200)    NULL COMMENT '判断理由(简明说明判断依据)',
-    raw_payload      JSON            NULL COMMENT '原始模型返回的 JSON 结果(溯源)',
-    model_name       VARCHAR(64)     NULL COMMENT '使用的模型名称',
-    detector_version VARCHAR(32)     NULL COMMENT '检测器版本号',
-    is_processed     TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否被医生或管理员处理',
-    process_notes    TEXT            NULL COMMENT '处理备注',
-    created_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE,
-    FOREIGN KEY (message_id) REFERENCES conversation_messages (id) ON DELETE CASCADE,
-    INDEX idx_message_id (message_id),
-    INDEX idx_user_created (user_id, created_at),
-    INDEX idx_conversation (conversation_id),
-    INDEX idx_risk_level (risk_level),
-    INDEX idx_intent (intent),
-    INDEX idx_is_processed (is_processed)
-) ENGINE = InnoDB
-  DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci COMMENT = '风险检测结果表';
 
 -- ============================================================================
 -- 14. psychology_categories — 心理知识库分类表
@@ -333,8 +299,8 @@ CREATE TABLE psychology_categories
     description   TEXT COMMENT '分类描述',
     sort_order    INT               NOT NULL DEFAULT 0 COMMENT '排序顺序',
     status        TINYINT           NOT NULL DEFAULT 1 COMMENT '状态:1启用,0禁用',
-    created_at    TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at    TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at    DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at    DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (parent_id) REFERENCES psychology_categories (category_id) ON DELETE SET NULL,
     INDEX idx_parent_id (parent_id),
     INDEX idx_status (status)
@@ -360,9 +326,9 @@ CREATE TABLE psychology_articles
     like_count   INT UNSIGNED      NOT NULL DEFAULT 0 COMMENT '点赞次数',
     is_featured  TINYINT(1)        NOT NULL DEFAULT 0 COMMENT '是否精选',
     is_published TINYINT(1)        NOT NULL DEFAULT 1 COMMENT '是否发布',
-    publish_date TIMESTAMP         NULL COMMENT '发布时间',
-    created_at   TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at   TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    publish_date DATETIME(6)         NULL COMMENT '发布时间',
+    created_at   DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at   DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (category_id) REFERENCES psychology_categories (category_id) ON DELETE RESTRICT,
     INDEX idx_category (category_id),
     INDEX idx_publish_date (publish_date),
@@ -389,8 +355,8 @@ CREATE TABLE psychology_qna
     like_count   INT UNSIGNED      NOT NULL DEFAULT 0 COMMENT '点赞次数',
     is_verified  TINYINT(1)        NOT NULL DEFAULT 0 COMMENT '是否经过专业验证',
     status       TINYINT           NOT NULL DEFAULT 1 COMMENT '状态:1可见,0隐藏',
-    created_at   TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at   TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at   DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at   DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (category_id) REFERENCES psychology_categories (category_id) ON DELETE RESTRICT,
     INDEX idx_category (category_id),
     INDEX idx_status (status),
@@ -420,8 +386,8 @@ CREATE TABLE psychology_resources
     view_count    INT UNSIGNED      NOT NULL DEFAULT 0 COMMENT '浏览/下载次数',
     like_count    INT UNSIGNED      NOT NULL DEFAULT 0 COMMENT '点赞次数',
     status        TINYINT           NOT NULL DEFAULT 1 COMMENT '状态:1可用,0不可用',
-    created_at    TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at    TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at    DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at    DATETIME(6)         NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (category_id) REFERENCES psychology_categories (category_id) ON DELETE RESTRICT,
     INDEX idx_category (category_id),
     INDEX idx_resource_type (resource_type),
@@ -439,7 +405,7 @@ CREATE TABLE user_knowledge_favorites
     user_id      BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     content_type VARCHAR(32)     NOT NULL COMMENT '内容类型:ARTICLE|QNA|RESOURCE',
     content_id   BIGINT UNSIGNED NOT NULL COMMENT '内容ID',
-    created_at   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '收藏时间',
+    created_at   DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '收藏时间',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     UNIQUE KEY uk_user_content (user_id, content_type, content_id),
     INDEX idx_user_id (user_id),
@@ -486,8 +452,8 @@ CREATE TABLE music
     tags        JSON COMMENT '标签数组',
     mood_tags   JSON COMMENT '情绪标签(如放松、振奋、舒缓等)',
     status      TINYINT         NOT NULL DEFAULT 1 COMMENT '状态:1可用,0不可用',
-    created_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    created_at  DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at  DATETIME(6)       NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     INDEX idx_artist (artist),
     INDEX idx_category (category),
     INDEX idx_status (status),
@@ -656,23 +622,6 @@ CREATE TABLE user_memories
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '用户长期记忆表';
 
--- ============================================================================
--- 25. user_memory_embeddings — 用户记忆嵌入向量表 (from patch 002)
--- ============================================================================
-CREATE TABLE user_memory_embeddings
-(
-    embedding_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-    memory_id      BIGINT UNSIGNED NOT NULL,
-    provider       VARCHAR(64)     NOT NULL,
-    model          VARCHAR(128)    NOT NULL,
-    dimension      INT UNSIGNED    NOT NULL,
-    embedding_json JSON            NOT NULL,
-    created_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    UNIQUE KEY uk_user_memory_embeddings_memory_model (memory_id, provider, model),
-    FOREIGN KEY (memory_id) REFERENCES user_memories (memory_id) ON DELETE CASCADE
-) ENGINE = InnoDB
-  DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci;
 
 -- ============================================================================
 -- 26. conversation_summaries — 会话摘要表
@@ -714,7 +663,8 @@ CREATE TABLE conversation_summaries
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 
-    INDEX idx_conv_status_end (conversation_id, status, message_end_id),
+    INDEX idx_conv_type_status_end (conversation_id, summary_type, status, message_end_id),
+    INDEX idx_user_status (user_id, status),
     INDEX idx_vector_id (vector_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
@@ -731,7 +681,6 @@ CREATE TABLE agent_events
     event_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
     user_id         BIGINT UNSIGNED NOT NULL,
     conversation_id BIGINT UNSIGNED NULL,
-    session_id      VARCHAR(64)     NULL,
     trace_id        VARCHAR(64)     NULL,
     turn_id         VARCHAR(64)     NULL,
     event_type      VARCHAR(64)     NOT NULL,
@@ -1289,7 +1238,7 @@ CREATE TABLE user_context_versions
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
-  COMMENT = '用户上下文版本号（bump on memory/persona/safety/summary change）';
+  COMMENT = '用户上下文版本号（bump on memory/persona/summary/control change）';
 
 -- ============================================================================
 -- 43. post_conversation_risk_audits — 对话关闭后置 Risk 审计表（新增）

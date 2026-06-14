@@ -40,8 +40,8 @@ fn model_to_domain(m: user_profiles::Model) -> UserProfile {
         interaction_preferences: parse_json_array(&m.interaction_preferences),
         emotional_tendency: parse_json_array(&m.emotional_tendency),
         learning_records: parse_json_array(&m.learning_records),
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -76,8 +76,8 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
             interaction_preferences: Set(to_json_array(&profile.interaction_preferences)),
             emotional_tendency: Set(to_json_array(&profile.emotional_tendency)),
             learning_records: Set(to_json_array(&profile.learning_records)),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
 
@@ -114,7 +114,7 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
         if let Some(learning_records) = update.learning_records {
             active.learning_records = Set(to_json_array(&learning_records));
         }
-        active.updated_at = Set(chrono::Utc::now());
+        active.updated_at = Set(chrono::Utc::now().naive_utc());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(updated))

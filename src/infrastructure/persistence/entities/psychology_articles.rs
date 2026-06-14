@@ -27,9 +27,9 @@ pub struct Model {
     pub like_count: u32,
     pub is_featured: i8,
     pub is_published: i8,
-    pub publish_date: Option<DateTimeUtc>,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub publish_date: Option<DateTime>,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -86,9 +86,9 @@ impl ColumnTrait for Column {
             Self::LikeCount => ColumnType::Unsigned.def(),
             Self::IsFeatured => ColumnType::TinyInteger.def(),
             Self::IsPublished => ColumnType::TinyInteger.def(),
-            Self::PublishDate => ColumnType::Timestamp.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::PublishDate => ColumnType::DateTime.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

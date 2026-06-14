@@ -7,6 +7,6 @@ pub mod router;
 pub mod state;
 
 pub use state::{
-    AdminState, AppState, AuthState, CommunityState, DepressionState, DiaryState, InternalState,
-    MusicState, ObjectState, PsychologyState, SessionState, UserState,
+    AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
+    InternalState, MusicState, ObjectState, PsychologyState, SessionState, UserState,
 };

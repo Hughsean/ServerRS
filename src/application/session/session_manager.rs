@@ -255,7 +255,7 @@ impl SessionManager {
             .await?;
 
         let reply = response.reply;
-        let session_closed = response.session_closed;
+        let session_closed = false; // field removed
 
         let mut completed_messages = turn_messages;
         if !reply.is_empty() {

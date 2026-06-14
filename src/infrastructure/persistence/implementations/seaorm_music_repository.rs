@@ -26,8 +26,8 @@ fn map(m: music::Model) -> MusicTrack {
         tags: m.tags,
         mood_tags: m.mood_tags,
         status: m.status,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -201,7 +201,7 @@ impl MusicRepository for SeaOrmMusicRepository {
         if let Some(status) = update.status {
             am.status = Set(status);
         }
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         Ok(map(am.update(&self.db).await.map_err(map_err)?))
     }
 

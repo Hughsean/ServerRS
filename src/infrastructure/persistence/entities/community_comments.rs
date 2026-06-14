@@ -22,8 +22,8 @@ pub struct Model {
     pub attachments: Option<Json>,
     pub likes_count: u32,
     pub status: i8,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -71,8 +71,8 @@ impl ColumnTrait for Column {
             Self::Attachments => ColumnType::Json.def().null(),
             Self::LikesCount => ColumnType::Unsigned.def(),
             Self::Status => ColumnType::TinyInteger.def(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

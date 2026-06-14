@@ -1,29 +1,17 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, Value,
 };
 
-use crate::domain::risk::detection_types::RiskLevel;
-use crate::domain::risk::risk_detection_result::{NewRiskDetectionResult, RiskDetectionResult};
+use crate::domain::risk::post_conversation_risk_audit::{
+    NewPostConversationRiskAudit, PostConversationRiskAudit, PostRiskAuditResult,
+};
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
 
-use super::super::entities::risk_detection_results;
-
-// ── Enum ↔ String helpers (serde-based, matches SCREAMING_SNAKE_CASE) ──
-
-fn enum_to_str<T: serde::Serialize>(v: &T) -> String {
-    serde_json::to_string(v)
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_string()
-}
-
-fn str_to_enum<T: serde::de::DeserializeOwned>(s: &str) -> T {
-    serde_json::from_str(&format!("\"{}\"", s))
-        .unwrap_or_else(|_| serde_json::from_str("\"UNKNOWN\"").unwrap())
-}
+use super::super::entities::post_conversation_risk_audits;
 
 pub struct SeaOrmRiskRepository {
     db: DatabaseConnection,
@@ -35,75 +23,162 @@ impl SeaOrmRiskRepository {
     }
 }
 
-fn map(m: risk_detection_results::Model) -> RiskDetectionResult {
-    RiskDetectionResult {
-        id: m.id,
-        user_id: m.user_id,
-        message_id: Some(m.message_id),
-        conversation_id: Some(m.conversation_id),
-        risk_level: str_to_enum(&m.risk_level),
-        polarity: str_to_enum(&m.polarity),
-        intent: str_to_enum(&m.intent),
-        target: str_to_enum(&m.target),
-        confidence: m.confidence.to_string().parse::<f64>().unwrap_or(0.0),
-        evidence: m
-            .evidence
-            .map(|v| serde_json::to_string(&v).unwrap_or_default())
-            .unwrap_or_default(),
-        reason: m.reason,
-        raw_payload: m
-            .raw_payload
-            .map(|v| serde_json::to_string(&v).unwrap_or_default()),
-        model_name: m.model_name,
-        detector_version: m.detector_version,
-        is_processed: m.is_processed != 0,
-        process_notes: m.process_notes,
-        created_at: m.created_at,
-    }
-}
-
 fn map_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
 
-fn json_from_str(s: &str) -> Option<serde_json::Value> {
-    serde_json::from_str(s).ok()
+fn decimal_to_f64(d: sea_orm::prelude::Decimal) -> f64 {
+    use std::str::FromStr;
+    f64::from_str(&d.to_string()).unwrap_or(0.0)
 }
 
-fn json_from_opt_str(s: &Option<String>) -> Option<serde_json::Value> {
-    s.as_ref().and_then(|s| serde_json::from_str(s).ok())
+fn f64_to_decimal(v: f64) -> sea_orm::prelude::Decimal {
+    use std::str::FromStr;
+    let s = format!("{:.4}", v);
+    sea_orm::prelude::Decimal::from_str(&s).unwrap_or(sea_orm::prelude::Decimal::ZERO)
+}
+
+fn map_audit(m: post_conversation_risk_audits::Model) -> PostConversationRiskAudit {
+    PostConversationRiskAudit {
+        audit_id: m.audit_id,
+        user_id: m.user_id,
+        conversation_id: m.conversation_id,
+        audit_scope: m.audit_scope,
+        user_message_ref_id: m.user_message_ref_id,
+        assistant_message_ref_id: m.assistant_message_ref_id,
+        user_message_id: m.user_message_id,
+        assistant_message_id: m.assistant_message_id,
+        status: m.status,
+        risk_level: m.risk_level,
+        risk_categories: m.risk_categories.map(|j| j.into()),
+        confidence: m.confidence.map(decimal_to_f64),
+        input_hash: m.input_hash,
+        detector_name: m.detector_name,
+        detector_version: m.detector_version,
+        model_name: m.model_name,
+        checked_at: m.checked_at.map(|v| v.and_utc()),
+        error_message: m.error_message,
+        metadata: m.metadata.map(|j| j.into()),
+        source_deleted: m.source_deleted != 0,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
+    }
 }
 
 #[async_trait]
 impl RiskRepository for SeaOrmRiskRepository {
-    async fn save(&self, r: NewRiskDetectionResult) -> Result<RiskDetectionResult, AppError> {
-        let now = chrono::Utc::now();
-        let decimal_confidence = {
-            let s = format!("{:.3}", r.confidence);
-            s.parse::<sea_orm::prelude::Decimal>()
-                .unwrap_or(sea_orm::prelude::Decimal::ZERO)
-        };
-        let am = risk_detection_results::ActiveModel {
-            user_id: Set(r.user_id),
-            message_id: Set(r.message_id.unwrap_or(0)),
-            conversation_id: Set(r.conversation_id.unwrap_or(0)),
-            risk_level: Set(enum_to_str(&r.risk_level)),
-            polarity: Set(enum_to_str(&r.polarity)),
-            intent: Set(enum_to_str(&r.intent)),
-            target: Set(enum_to_str(&r.target)),
-            confidence: Set(decimal_confidence),
-            evidence: Set(json_from_str(&r.evidence)),
-            reason: Set(r.reason),
-            raw_payload: Set(json_from_opt_str(&r.raw_payload)),
-            model_name: Set(r.model_name),
-            detector_version: Set(r.detector_version),
-            is_processed: Set(0_i8),
-            process_notes: Set(None),
+    async fn create_pending(
+        &self,
+        new_audit: NewPostConversationRiskAudit,
+    ) -> Result<PostConversationRiskAudit, AppError> {
+        let now = Utc::now().naive_utc();
+        let am = post_conversation_risk_audits::ActiveModel {
+            audit_id: sea_orm::ActiveValue::NotSet,
+            user_id: Set(new_audit.user_id),
+            conversation_id: Set(new_audit.conversation_id),
+            audit_scope: Set(new_audit.audit_scope),
+            user_message_ref_id: Set(new_audit.user_message_ref_id),
+            assistant_message_ref_id: Set(new_audit.assistant_message_ref_id),
+            user_message_id: Set(new_audit.user_message_id),
+            assistant_message_id: Set(new_audit.assistant_message_id),
+            status: Set("pending".to_string()),
+            risk_level: Set(None),
+            risk_categories: Set(None),
+            confidence: Set(None),
+            input_hash: Set(None),
+            detector_name: Set(None),
+            detector_version: Set(None),
+            model_name: Set(None),
+            checked_at: Set(None),
+            error_message: Set(None),
+            metadata: Set(None),
+            source_deleted: Set(0),
             created_at: Set(now),
-            ..Default::default()
+            updated_at: Set(now),
         };
-        let inserted = am.insert(&self.db).await.map_err(map_err)?;
-        Ok(map(inserted))
+        let saved = am.insert(&self.db).await.map_err(map_err)?;
+        Ok(map_audit(saved))
+    }
+
+    async fn fetch_pending(&self, limit: u64) -> Result<Vec<PostConversationRiskAudit>, AppError> {
+        let rows = post_conversation_risk_audits::Entity::find()
+            .filter(post_conversation_risk_audits::Column::Status.eq("pending"))
+            .order_by_asc(post_conversation_risk_audits::Column::CreatedAt)
+            .limit(limit)
+            .all(&self.db)
+            .await
+            .map_err(map_err)?;
+        Ok(rows.into_iter().map(map_audit).collect())
+    }
+
+    async fn mark_running(&self, audit_id: u64) -> Result<(), AppError> {
+        let model = post_conversation_risk_audits::Entity::find_by_id(audit_id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::NotFound(format!("risk audit {audit_id} not found")))?;
+        let mut am: post_conversation_risk_audits::ActiveModel = model.into();
+        am.status = Set("running".to_string());
+        am.updated_at = Set(Utc::now().naive_utc());
+        am.update(&self.db).await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn mark_completed(
+        &self,
+        audit_id: u64,
+        result: PostRiskAuditResult,
+    ) -> Result<(), AppError> {
+        let model = post_conversation_risk_audits::Entity::find_by_id(audit_id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::NotFound(format!("risk audit {audit_id} not found")))?;
+        let mut am: post_conversation_risk_audits::ActiveModel = model.into();
+        am.status = Set("completed".to_string());
+        am.risk_level = Set(Some(result.risk_level));
+        am.risk_categories = Set(result.risk_categories.map(|v| v.into()));
+        am.confidence = Set(result.confidence.map(f64_to_decimal));
+        am.input_hash = Set(result.input_hash);
+        am.detector_name = Set(result.detector_name);
+        am.detector_version = Set(result.detector_version);
+        am.model_name = Set(result.model_name);
+        am.checked_at = Set(Some(result.checked_at.naive_utc()));
+        am.updated_at = Set(Utc::now().naive_utc());
+        am.update(&self.db).await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn mark_failed(&self, audit_id: u64, error_message: String) -> Result<(), AppError> {
+        let model = post_conversation_risk_audits::Entity::find_by_id(audit_id)
+            .one(&self.db)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::NotFound(format!("risk audit {audit_id} not found")))?;
+        let mut am: post_conversation_risk_audits::ActiveModel = model.into();
+        am.status = Set("failed".to_string());
+        am.error_message = Set(Some(error_message));
+        am.updated_at = Set(Utc::now().naive_utc());
+        am.update(&self.db).await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_for_user(&self, user_id: u64) -> Result<u64, AppError> {
+        let r = post_conversation_risk_audits::Entity::delete_many()
+            .filter(post_conversation_risk_audits::Column::UserId.eq(user_id))
+            .exec(&self.db)
+            .await
+            .map_err(map_err)?;
+        Ok(r.rows_affected)
+    }
+
+    async fn delete_for_conversation(&self, conversation_id: u64) -> Result<u64, AppError> {
+        let r = post_conversation_risk_audits::Entity::delete_many()
+            .filter(post_conversation_risk_audits::Column::ConversationId.eq(conversation_id))
+            .exec(&self.db)
+            .await
+            .map_err(map_err)?;
+        Ok(r.rows_affected)
     }
 
     async fn find_by_user_id_paginated(
@@ -111,122 +186,100 @@ impl RiskRepository for SeaOrmRiskRepository {
         user_id: u64,
         limit: u64,
         offset: u64,
-    ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
-        let paginator = risk_detection_results::Entity::find()
-            .filter(risk_detection_results::Column::UserId.eq(user_id))
-            .order_by_desc(risk_detection_results::Column::CreatedAt)
+    ) -> Result<(Vec<PostConversationRiskAudit>, u64), AppError> {
+        let paginator = post_conversation_risk_audits::Entity::find()
+            .filter(post_conversation_risk_audits::Column::UserId.eq(user_id))
+            .order_by_desc(post_conversation_risk_audits::Column::CreatedAt)
             .paginate(&self.db, limit);
-        let count = paginator.num_items().await.map_err(map_err)?;
-        let page_num = offset / limit;
+        let total = paginator.num_items().await.map_err(map_err)?;
+        let page_num = if limit > 0 { offset / limit } else { 0 };
         let items = paginator.fetch_page(page_num).await.map_err(map_err)?;
-        Ok((items.into_iter().map(map).collect(), count))
+        Ok((items.into_iter().map(map_audit).collect(), total))
     }
 
     async fn find_by_conversation_id(
         &self,
-        cid: u64,
-    ) -> Result<Vec<RiskDetectionResult>, AppError> {
-        risk_detection_results::Entity::find()
-            .filter(risk_detection_results::Column::ConversationId.eq(cid))
-            .order_by_asc(risk_detection_results::Column::CreatedAt)
+        conversation_id: u64,
+    ) -> Result<Vec<PostConversationRiskAudit>, AppError> {
+        let rows = post_conversation_risk_audits::Entity::find()
+            .filter(post_conversation_risk_audits::Column::ConversationId.eq(conversation_id))
+            .order_by_desc(post_conversation_risk_audits::Column::CreatedAt)
             .all(&self.db)
             .await
-            .map_err(map_err)
-            .map(|v| v.into_iter().map(map).collect())
+            .map_err(map_err)?;
+        Ok(rows.into_iter().map(map_audit).collect())
     }
 
     async fn find_all_paginated(
         &self,
         limit: u64,
         offset: u64,
-        risk_level: Option<RiskLevel>,
-    ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
-        let mut query = risk_detection_results::Entity::find();
+        risk_level: Option<&str>,
+    ) -> Result<(Vec<PostConversationRiskAudit>, u64), AppError> {
+        let mut query = post_conversation_risk_audits::Entity::find();
         if let Some(level) = risk_level {
-            query = query.filter(risk_detection_results::Column::RiskLevel.eq(enum_to_str(&level)));
+            query = query
+                .filter(post_conversation_risk_audits::Column::RiskLevel.eq(level.to_string()));
         }
-
         let paginator = query
-            .order_by_desc(risk_detection_results::Column::CreatedAt)
+            .order_by_desc(post_conversation_risk_audits::Column::CreatedAt)
             .paginate(&self.db, limit);
-        let count = paginator.num_items().await.map_err(map_err)?;
-        let page_num = offset / limit;
+        let total = paginator.num_items().await.map_err(map_err)?;
+        let page_num = if limit > 0 { offset / limit } else { 0 };
         let items = paginator.fetch_page(page_num).await.map_err(map_err)?;
-        Ok((items.into_iter().map(map).collect(), count))
+        Ok((items.into_iter().map(map_audit).collect(), total))
     }
 
     async fn find_conversation_ids_paginated(
         &self,
         limit: u64,
         offset: u64,
-        risk_level: Option<RiskLevel>,
+        risk_level: Option<&str>,
     ) -> Result<(Vec<u64>, u64), AppError> {
-        let (filter, values) = match risk_level {
+        let (filter, mut values) = match risk_level {
             Some(level) => (
                 " AND risk_level = ?",
-                vec![Value::String(Some(enum_to_str(&level)))],
+                vec![Value::String(Some(level.to_string()))],
             ),
             None => ("", Vec::new()),
         };
+
         let backend = self.db.get_database_backend();
         let count_sql = format!(
             "SELECT COUNT(DISTINCT conversation_id) AS total \
-             FROM risk_detection_results WHERE conversation_id <> 0{filter}"
+             FROM post_conversation_risk_audits \
+             WHERE conversation_id <> 0{filter}"
         );
-        let count_statement = Statement::from_sql_and_values(backend, count_sql, values.clone());
+        let count_stmt = Statement::from_sql_and_values(backend, count_sql, values.clone());
         let total = self
             .db
-            .query_one_raw(count_statement)
+            .query_one_raw(count_stmt)
             .await
             .map_err(map_err)?
-            .map(|row| row.try_get::<u64>("", "total"))
-            .transpose()
-            .map_err(map_err)?
+            .map(|row| {
+                row.try_get::<i64>("", "total")
+                    .map(|v| v as u64)
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
 
         let page_sql = format!(
             "SELECT conversation_id, MAX(created_at) AS latest \
-             FROM risk_detection_results \
+             FROM post_conversation_risk_audits \
              WHERE conversation_id <> 0{filter} \
              GROUP BY conversation_id ORDER BY latest DESC \
              LIMIT {limit} OFFSET {offset}"
         );
-        let page_statement = Statement::from_sql_and_values(backend, page_sql, values);
+        values.clear();
+        let page_stmt = Statement::from_sql_and_values(backend, page_sql, values);
         let ids = self
             .db
-            .query_all_raw(page_statement)
+            .query_all_raw(page_stmt)
             .await
             .map_err(map_err)?
             .into_iter()
             .map(|row| row.try_get::<u64>("", "conversation_id").map_err(map_err))
             .collect::<Result<Vec<_>, _>>()?;
         Ok((ids, total))
-    }
-
-    async fn mark_processed(
-        &self,
-        id: u64,
-        notes: Option<String>,
-    ) -> Result<RiskDetectionResult, AppError> {
-        let existing = risk_detection_results::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| AppError::NotFound(format!("risk detection {id} not found")))?;
-
-        let mut active: risk_detection_results::ActiveModel = existing.into();
-        active.is_processed = Set(1_i8);
-        active.process_notes = Set(notes);
-        let updated = active.update(&self.db).await.map_err(map_err)?;
-        Ok(map(updated))
-    }
-
-    async fn delete_by_conversation_id(&self, cid: u64) -> Result<u64, AppError> {
-        let r = risk_detection_results::Entity::delete_many()
-            .filter(risk_detection_results::Column::ConversationId.eq(cid))
-            .exec(&self.db)
-            .await
-            .map_err(map_err)?;
-        Ok(r.rows_affected)
     }
 }

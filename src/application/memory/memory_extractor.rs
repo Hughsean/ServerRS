@@ -29,7 +29,7 @@ const EXTRACTION_PROMPT: &str = "\
 You are a memory-extraction assistant. Analyze the conversation and extract \
 any important personal information, preferences, goals, or safety-relevant facts \
 about the user. Return a JSON array of objects with these fields:
-  - memory_type: one of \"preference\", \"profile\", \"fact\", \"emotional_pattern\", \"goal\", \"safety_note\"
+  - memory_type: one of \"preference\", \"fact\", \"emotional_pattern\", \"goal\"
   - content: a concise statement of the memory (e.g. \"user mentioned they enjoy hiking\")
   - confidence: a number between 0.0 and 1.0 indicating how certain you are
 
@@ -93,14 +93,7 @@ impl MemoryExtractor {
             }
         };
 
-        let allowed_types: [&str; 6] = [
-            "preference",
-            "profile",
-            "fact",
-            "emotional_pattern",
-            "goal",
-            "safety_note",
-        ];
+        let allowed_types: [&str; 4] = ["preference", "fact", "emotional_pattern", "goal"];
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result: Vec<NewMemory> = Vec::new();

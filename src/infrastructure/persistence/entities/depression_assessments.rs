@@ -21,8 +21,8 @@ pub struct Model {
     pub answers: Json,
     pub total_score: i16,
     pub notes: Option<String>,
-    pub created_at: Option<DateTimeUtc>,
-    pub updated_at: Option<DateTimeUtc>,
+    pub created_at: Option<DateTime>,
+    pub updated_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -67,8 +67,8 @@ impl ColumnTrait for Column {
             Self::Answers => ColumnType::Json.def(),
             Self::TotalScore => ColumnType::SmallInteger.def(),
             Self::Notes => ColumnType::Text.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def().null(),
-            Self::UpdatedAt => ColumnType::Timestamp.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def().null(),
+            Self::UpdatedAt => ColumnType::DateTime.def().null(),
         }
     }
 }

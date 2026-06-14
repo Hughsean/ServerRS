@@ -6,7 +6,6 @@ pub struct Conversation {
     pub id: u64,
     pub user_id: u64,
     pub title: Option<String>,
-    pub is_title_generated: bool,
     pub last_message_at: Option<DateTime<Utc>>,
     pub message_count: i32,
     pub created_at: DateTime<Utc>,

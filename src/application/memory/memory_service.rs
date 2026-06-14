@@ -58,6 +58,20 @@ impl MemoryService {
     }
 
     /// Run the LLM extractor and persist every extracted memory.
+
+    /// Retrieve memories for a user, optionally filtered by status.
+    pub async fn find_by_user_id(
+        &self,
+        user_id: u64,
+        status: Option<i8>,
+    ) -> Result<Vec<crate::domain::memory::UserMemory>, AppError> {
+        self.repo.find_by_user_id(user_id, status).await
+    }
+
+    /// Disable a memory by its ID.
+    pub async fn disable_memory(&self, memory_id: u64) -> Result<(), AppError> {
+        self.repo.disable_memory(memory_id).await
+    }
     pub async fn extract_and_save(
         &self,
         user_id: u64,
@@ -72,14 +86,7 @@ impl MemoryService {
         }
 
         // Defensive filtering (belt-and-suspenders with MemoryExtractor)
-        let allowed_types: [&str; 6] = [
-            "preference",
-            "profile",
-            "fact",
-            "emotional_pattern",
-            "goal",
-            "safety_note",
-        ];
+        let allowed_types: [&str; 4] = ["preference", "fact", "emotional_pattern", "goal"];
 
         let mut saved = Vec::with_capacity(memories.len());
         for mut memory in memories {

@@ -100,8 +100,8 @@ pub async fn list_conversations(
             .map(|c| ConversationResponse {
                 id: c.id,
                 user_id: c.user_id,
-                title: c.title,
-                is_title_generated: c.is_title_generated,
+                title: c.title.clone(),
+                is_title_generated: c.title.is_some(),
                 last_message_at: c.last_message_at.map(|t| t.to_rfc3339()),
                 message_count: c.message_count,
                 created_at: c.created_at.to_rfc3339(),
@@ -145,41 +145,17 @@ pub struct RiskListQuery {
 }
 
 pub async fn list_risk_detections(
-    State(state): State<SessionState>,
-    Extension(auth_user): Extension<AuthenticatedUser>,
-    Query(query): Query<RiskListQuery>,
+    State(_state): State<SessionState>,
+    Extension(_auth_user): Extension<AuthenticatedUser>,
+    Query(_query): Query<RiskListQuery>,
 ) -> Result<Json<RiskDetectionPage>, AppError> {
-    let page = query.page.unwrap_or(1).max(1);
-    let size = query.size.unwrap_or(10).clamp(1, 100);
-    let (items, total) = state
-        .query
-        .list_risk_detections(auth_user.user_id, page, size)
-        .await?;
+    // Risk data is no longer exposed to end users in the post-conversation
+    // audit model (design 4.1 / 6.3). Audits are internal/admin-only.
+    // Returns an empty page to keep the route backward-compatible until removed.
     Ok(Json(RiskDetectionPage {
-        items: items
-            .into_iter()
-            .map(|r| RiskDetectionResponse {
-                id: r.id,
-                conversation_id: r.conversation_id,
-                risk_level: serde_json::to_string(&r.risk_level)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string(),
-                polarity: serde_json::to_string(&r.polarity)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string(),
-                intent: serde_json::to_string(&r.intent)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string(),
-                reason: r.reason,
-                confidence: r.confidence,
-                created_at: r.created_at.to_rfc3339(),
-            })
-            .collect(),
-        total,
-        page,
-        size,
+        items: Vec::new(),
+        total: 0,
+        page: 1,
+        size: 10,
     }))
 }

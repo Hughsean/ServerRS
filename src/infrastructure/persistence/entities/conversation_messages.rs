@@ -51,7 +51,6 @@ impl PrimaryKeyTrait for PrimaryKey {
 #[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
     Conversations,
-    RiskDetectionResults,
     UserMemories,
     UserMemoryEvidence,
 }
@@ -79,9 +78,6 @@ impl RelationTrait for Relation {
                 .from(Column::ConversationId)
                 .to(super::conversations::Column::Id)
                 .into(),
-            Self::RiskDetectionResults => {
-                Entity::has_many(super::risk_detection_results::Entity).into()
-            }
             Self::UserMemories => Entity::has_many(super::user_memories::Entity).into(),
             Self::UserMemoryEvidence => {
                 Entity::has_many(super::user_memory_evidence::Entity).into()
@@ -93,12 +89,6 @@ impl RelationTrait for Relation {
 impl Related<super::conversations::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Conversations.def()
-    }
-}
-
-impl Related<super::risk_detection_results::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::RiskDetectionResults.def()
     }
 }
 

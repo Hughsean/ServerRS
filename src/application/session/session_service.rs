@@ -3,12 +3,14 @@ use std::sync::Arc;
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
-use crate::domain::risk::detection_types::RiskLevel;
-use crate::domain::risk::risk_detection_result::RiskDetectionResult;
+use crate::domain::risk::post_conversation_risk_audit::PostConversationRiskAudit;
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::shared::error::AppError;
 
-/// Unified session-domain operations: conversations + risk detections.
+/// Unified session-domain operations: conversations + post-conversation risk audits.
+///
+/// Risk data here comes from `post_conversation_risk_audits` — it never enters
+/// the conversation generation path (PromptBuilder/Persona/Memory/Summary).
 pub struct SessionService {
     conv_repo: Arc<dyn ConversationRepository>,
     risk_repo: Arc<dyn RiskRepository>,
@@ -49,14 +51,14 @@ impl SessionService {
             .await
     }
 
-    // ── Risk detections ──
+    // ── Post-conversation risk audits (user view) ──
 
-    pub async fn list_risk_detections(
+    pub async fn list_risk_audits(
         &self,
         user_id: u64,
         page: u64,
         size: u64,
-    ) -> Result<(Vec<RiskDetectionResult>, u64), AppError> {
+    ) -> Result<(Vec<PostConversationRiskAudit>, u64), AppError> {
         let offset = (page.saturating_sub(1)) * size;
         self.risk_repo
             .find_by_user_id_paginated(user_id, size, offset)
@@ -69,14 +71,14 @@ impl SessionService {
         &self,
         page: u64,
         page_size: u64,
-        risk_level: Option<RiskLevel>,
+        risk_level: Option<String>,
     ) -> Result<(Vec<Conversation>, u64), AppError> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let offset = (page.saturating_sub(1)) * page_size;
         let (conv_ids, total) = self
             .risk_repo
-            .find_conversation_ids_paginated(page_size, offset, risk_level)
+            .find_conversation_ids_paginated(page_size, offset, risk_level.as_deref())
             .await?;
 
         let mut convs = Vec::new();
@@ -99,21 +101,12 @@ impl SessionService {
         self.conv_repo.find_messages_by_conversation_id(id).await
     }
 
-    pub async fn admin_get_conversation_risk_detections(
+    pub async fn admin_get_conversation_risk_audits(
         &self,
         conversation_id: u64,
-    ) -> Result<Vec<RiskDetectionResult>, AppError> {
+    ) -> Result<Vec<PostConversationRiskAudit>, AppError> {
         self.risk_repo
             .find_by_conversation_id(conversation_id)
             .await
-    }
-
-    pub async fn admin_process_risk_detection(
-        &self,
-        id: u64,
-        _admin_user_id: u64,
-        notes: Option<String>,
-    ) -> Result<RiskDetectionResult, AppError> {
-        self.risk_repo.mark_processed(id, notes).await
     }
 }

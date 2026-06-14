@@ -1,4 +1,5 @@
 use crate::domain::risk::detection_types::RiskLevel;
+use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
@@ -17,6 +18,9 @@ pub enum TaskEvent {
 
     // ── Risk detection ──
     RiskDetected(RiskDetectedTask),
+
+    // ── Conversation turn lifecycle ──
+    TurnClosed(TurnClosedEvent),
 }
 
 // ── Auth payloads ──
@@ -97,4 +101,17 @@ pub struct RiskDetectedTask {
     pub conversation_id: Option<u64>,
     pub risk_level: RiskLevel,
     pub confidence: f64,
+}
+
+// ── Conversation turn lifecycle payloads ──
+
+/// Published after a chat turn completes: user message + assistant message both persisted,
+/// HTTP/SSE connection closed, no further effect on current reply.
+#[derive(Debug, Clone)]
+pub struct TurnClosedEvent {
+    pub user_id: u64,
+    pub conversation_id: u64,
+    pub user_message_id: Option<u64>,
+    pub assistant_message_id: Option<u64>,
+    pub closed_at: chrono::DateTime<Utc>,
 }

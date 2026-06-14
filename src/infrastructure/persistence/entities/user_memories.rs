@@ -95,7 +95,6 @@ pub enum Relation {
     ConversationMessages,
     Conversations,
     SelfRef,
-    UserMemoryEmbeddings,
     UserMemoryEvidence,
     Users,
 }
@@ -155,9 +154,6 @@ impl RelationTrait for Relation {
                 .from(Column::SupersededBy)
                 .to(Column::MemoryId)
                 .into(),
-            Self::UserMemoryEmbeddings => {
-                Entity::has_many(super::user_memory_embeddings::Entity).into()
-            }
             Self::UserMemoryEvidence => {
                 Entity::has_many(super::user_memory_evidence::Entity).into()
             }
@@ -178,12 +174,6 @@ impl Related<super::conversation_messages::Entity> for Entity {
 impl Related<super::conversations::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Conversations.def()
-    }
-}
-
-impl Related<super::user_memory_embeddings::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::UserMemoryEmbeddings.def()
     }
 }
 

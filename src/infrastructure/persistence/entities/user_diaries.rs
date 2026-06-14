@@ -19,8 +19,8 @@ pub struct Model {
     pub title: String,
     pub content: String,
     pub mood_description: Option<String>,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -60,8 +60,8 @@ impl ColumnTrait for Column {
             Self::Title => ColumnType::String(StringLen::N(100u32)).def(),
             Self::Content => ColumnType::Text.def(),
             Self::MoodDescription => ColumnType::String(StringLen::N(255u32)).def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
         }
     }
 }

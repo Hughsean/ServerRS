@@ -14,6 +14,7 @@ use application::psychology::psychology_service::PsychologyService;
 use application::rag::chunking::ChunkingService;
 use application::rag::ingestion_service::IngestionService;
 use application::rag::retrieval_service::RetrievalService;
+use application::session::chat_service::ChatService;
 use application::session::conversation_orchestrator::ConversationOrchestrator;
 use application::session::risk_detection_service::RiskDetectionService;
 use application::session::session_manager::SessionManager;
@@ -345,6 +346,14 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         agent_settings,
     ));
 
+    // ── ChatService (replaces SessionManager as the business entry point) ──
+    // Must be built AFTER agent_runtime, which it depends on.
+    let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
+        Arc::clone(&task_publisher),
+        Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+        Arc::clone(&agent_runtime),
+    ));
+
     let session: Arc<SessionManager> = Arc::new(SessionManager::new(
         Arc::clone(&task_publisher),
         Arc::clone(&orchestrator),
@@ -416,6 +425,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         memory: memory_svc,
         agent_runtime,
         knowledge_review,
+        chat: chat_service,
+        chat_conv_repo: Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
     };
 
     let state = bootstrap::state::build_state(&services);

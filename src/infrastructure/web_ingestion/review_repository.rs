@@ -1,12 +1,3 @@
-use std::collections::HashMap;
-
-use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
-};
-
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::event_types::{aggregate, event as ev};
 use crate::domain::web_ingestion::review::{
@@ -18,16 +9,20 @@ use crate::infrastructure::persistence::entities::{
     domain_event_outbox, knowledge_documents, knowledge_ingestion_runs, knowledge_publish_records,
     web_ingestion_audit_logs, web_pages, web_sources,
 };
-
+use async_trait::async_trait;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
+};
+use std::collections::HashMap;
 pub struct SeaOrmKnowledgeReviewRepository {
     db: DatabaseConnection,
 }
-
 impl SeaOrmKnowledgeReviewRepository {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
-
     async fn hydrate(
         &self,
         records: Vec<knowledge_publish_records::Model>,
@@ -35,7 +30,6 @@ impl SeaOrmKnowledgeReviewRepository {
         if records.is_empty() {
             return Ok(Vec::new());
         }
-
         let run_ids = records.iter().map(|row| row.run_id).collect::<Vec<_>>();
         let document_ids = records
             .iter()
@@ -43,7 +37,6 @@ impl SeaOrmKnowledgeReviewRepository {
             .collect::<Vec<_>>();
         let page_ids = records.iter().map(|row| row.page_id).collect::<Vec<_>>();
         let source_ids = records.iter().map(|row| row.source_id).collect::<Vec<_>>();
-
         let runs = knowledge_ingestion_runs::Entity::find()
             .filter(knowledge_ingestion_runs::Column::Id.is_in(run_ids))
             .all(&self.db)
@@ -76,7 +69,6 @@ impl SeaOrmKnowledgeReviewRepository {
             .into_iter()
             .map(|row| (row.id, row))
             .collect::<HashMap<_, _>>();
-
         records
             .into_iter()
             .map(|record| {
@@ -104,7 +96,6 @@ impl SeaOrmKnowledgeReviewRepository {
                         record.id, record.source_id
                     ))
                 })?;
-
                 Ok(KnowledgeReviewItem {
                     publish_record_id: record.id,
                     source_id: record.source_id,
@@ -133,7 +124,6 @@ impl SeaOrmKnowledgeReviewRepository {
             .collect()
     }
 }
-
 #[async_trait]
 impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
     async fn list(
@@ -149,7 +139,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
         if let Some(source_id) = filter.source_id {
             query = query.filter(knowledge_publish_records::Column::SourceId.eq(source_id));
         }
-
         let paginator = query
             .order_by_desc(knowledge_publish_records::Column::CreatedAt)
             .paginate(&self.db, filter.page_size);
@@ -158,7 +147,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
             .fetch_page(filter.page.saturating_sub(1))
             .await
             .map_err(map_db_err)?;
-
         Ok(KnowledgeReviewPage {
             items: self.hydrate(records).await?,
             page: filter.page,
@@ -166,7 +154,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
             total,
         })
     }
-
     async fn find_item_by_id(
         &self,
         publish_record_id: u64,
@@ -180,7 +167,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
         };
         Ok(self.hydrate(vec![record]).await?.into_iter().next())
     }
-
     async fn find_detail_by_id(
         &self,
         publish_record_id: u64,
@@ -228,7 +214,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
             audit_logs,
         }))
     }
-
     async fn request_publish(
         &self,
         request: NewReviewPublishRequest,
@@ -243,7 +228,6 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
                 entity: "knowledge_publish_record".into(),
                 id: request.publish_record_id,
             })?;
-
         if let Some(existing) = domain_event_outbox::Entity::find()
             .filter(domain_event_outbox::Column::EventKey.eq(&request.event_key))
             .one(&txn)
@@ -258,13 +242,11 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
                 already_requested: true,
             });
         }
-
         if record.publish_status != publish_status::STAGED || record.active != 0 {
             return Err(WebIngestionError::ReviewConflict {
                 reason: format!("publish record {} is not staged", record.id),
             });
         }
-
         let run = knowledge_ingestion_runs::Entity::find_by_id(record.run_id)
             .one(&txn)
             .await
@@ -281,53 +263,8 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
                 ),
             });
         }
-
-        let event = domain_event_outbox::ActiveModel {
-            event_key: Set(request.event_key),
-            event_type: Set(ev::KNOWLEDGE_PUBLISH_REQUESTED.into()),
-            aggregate_type: Set(aggregate::KNOWLEDGE_PUBLISH_RECORD.into()),
-            aggregate_id: Set(record.id),
-            payload: Set(serde_json::json!({
-                "publish_record_id": record.id,
-                "run_id": record.run_id,
-                "automatic": false,
-                "reviewed": true,
-                "reviewed_by_user_id": request.reviewer_user_id,
-                "reviewed_by_username": request.reviewer_username.clone(),
-                "review_notes": request.notes.clone(),
-            })),
-            status: Set("pending".into()),
-            max_retries: Set(5),
-            ..Default::default()
-        }
-        .insert(&txn)
-        .await
-        .map_err(map_db_err)?;
-
-        web_ingestion_audit_logs::ActiveModel {
-            source_id: Set(Some(record.source_id)),
-            source_url_id: Set(run.source_url_id),
-            page_id: Set(Some(record.page_id)),
-            run_id: Set(Some(record.run_id)),
-            publish_record_id: Set(Some(record.id)),
-            action: Set("manual_publish_requested".into()),
-            status: Set("pending".into()),
-            message: Set(format!(
-                "reviewer {} requested publication",
-                request.reviewer_username
-            )),
-            metadata: Set(Some(serde_json::json!({
-                "reviewed_by_user_id": request.reviewer_user_id,
-                "reviewed_by_username": request.reviewer_username,
-                "review_notes": request.notes,
-                "event_id": event.id,
-            }))),
-            ..Default::default()
-        }
-        .insert(&txn)
-        .await
-        .map_err(map_db_err)?;
-
+        let event = domain_event_outbox::ActiveModel {            event_key: Set(request.event_key),            event_type: Set(ev::KNOWLEDGE_PUBLISH_REQUESTED.into()),            aggregate_type: Set(aggregate::KNOWLEDGE_PUBLISH_RECORD.into()),            aggregate_id: Set(record.id),            payload: Set(serde_json::json!({                "publish_record_id": record.id,                "run_id": record.run_id,                "automatic": false,                "reviewed": true,                "reviewed_by_user_id": request.reviewer_user_id,                "reviewed_by_username": request.reviewer_username.clone(),                "review_notes": request.notes.clone(),            })),            status: Set("pending".into()),            max_retries: Set(5),            ..Default::default()        }        .insert(&txn)        .await        .map_err(map_db_err)?;
+        web_ingestion_audit_logs::ActiveModel {            source_id: Set(Some(record.source_id)),            source_url_id: Set(run.source_url_id),            page_id: Set(Some(record.page_id)),            run_id: Set(Some(record.run_id)),            publish_record_id: Set(Some(record.id)),            action: Set("manual_publish_requested".into()),            status: Set("pending".into()),            message: Set(format!(                "reviewer {} requested publication",                request.reviewer_username            )),            metadata: Set(Some(serde_json::json!({                "reviewed_by_user_id": request.reviewer_user_id,                "reviewed_by_username": request.reviewer_username,                "review_notes": request.notes,                "event_id": event.id,            }))),            ..Default::default()        }        .insert(&txn)        .await        .map_err(map_db_err)?;
         txn.commit().await.map_err(map_db_err)?;
         Ok(ReviewPublishRequest {
             publish_record_id: record.id,
@@ -337,11 +274,9 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
         })
     }
 }
-
 fn map_db_err(error: sea_orm::DbErr) -> WebIngestionError {
     WebIngestionError::Internal(error.to_string())
 }
-
 fn to_utc(value: NaiveDateTime) -> DateTime<Utc> {
     value.and_utc()
 }

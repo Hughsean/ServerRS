@@ -24,7 +24,7 @@ pub struct Model {
     pub storage_backend: String,
     pub public_url: Option<String>,
     pub created_by: Option<u64>,
-    pub created_at: DateTimeUtc,
+    pub created_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -73,7 +73,7 @@ impl ColumnTrait for Column {
             Self::StorageBackend => ColumnType::String(StringLen::N(32u32)).def(),
             Self::PublicUrl => ColumnType::Text.def().null(),
             Self::CreatedBy => ColumnType::BigUnsigned.def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
         }
     }
 }

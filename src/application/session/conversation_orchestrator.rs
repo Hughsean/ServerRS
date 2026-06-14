@@ -207,7 +207,7 @@ impl ConversationOrchestrator {
             .await;
     }
 
-    pub async fn touch_and_incr(&self, conv_id: u64, inc: i32) -> Result<(), AppError> {
+    pub async fn touch_and_incr(&self, conv_id: u64, inc: u64) -> Result<(), AppError> {
         self.conversation_repo.touch_and_incr(conv_id, inc).await
     }
 }

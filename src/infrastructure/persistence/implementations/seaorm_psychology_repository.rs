@@ -46,7 +46,7 @@ fn map_category(m: psychology_categories::Model) -> PsychologyCategory {
         description: m.description,
         sort_order: m.sort_order,
         is_enabled: m.status != 0,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -64,8 +64,8 @@ fn map_article(m: psychology_articles::Model) -> PsychologyArticle {
         like_count: m.like_count as i64,
         is_featured: m.is_featured != 0,
         is_published: m.is_published != 0,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
+        created_at: m.created_at.and_utc(),
+        updated_at: m.updated_at.and_utc(),
     }
 }
 
@@ -82,7 +82,7 @@ fn map_qna(m: psychology_qna::Model) -> PsychologyQna {
         like_count: m.like_count as i64,
         is_verified: m.is_verified != 0,
         is_published: m.status != 0,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -102,7 +102,7 @@ fn map_resource(m: psychology_resources::Model) -> PsychologyResource {
         view_count: m.view_count as i64,
         like_count: m.like_count as i64,
         is_published: m.status != 0,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -112,7 +112,7 @@ fn map_favorite(m: user_knowledge_favorites::Model) -> KnowledgeFavorite {
         user_id: m.user_id,
         content_type: m.content_type,
         content_id: m.content_id,
-        created_at: m.created_at,
+        created_at: m.created_at.and_utc(),
     }
 }
 
@@ -242,8 +242,8 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             description: Set(new.description),
             sort_order: Set(new.sort_order),
             status: Set(if new.is_enabled { 1_i8 } else { 0_i8 }),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         am.insert(&self.db).await.map_err(map_err).map(map_category)
@@ -265,7 +265,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         am.description = Set(new.description);
         am.sort_order = Set(new.sort_order);
         am.status = Set(if new.is_enabled { 1_i8 } else { 0_i8 });
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         am.update(&self.db).await.map_err(map_err).map(map_category)
     }
 
@@ -418,8 +418,8 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             is_featured: Set(if new.is_featured { 1_i8 } else { 0_i8 }),
             is_published: Set(if new.is_published { 1_i8 } else { 0_i8 }),
             publish_date: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         am.insert(&self.db).await.map_err(map_err).map(map_article)
@@ -445,7 +445,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         am.tags = Set(string_to_json(new.tags));
         am.is_featured = Set(if new.is_featured { 1_i8 } else { 0_i8 });
         am.is_published = Set(if new.is_published { 1_i8 } else { 0_i8 });
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         am.update(&self.db).await.map_err(map_err).map(map_article)
     }
 
@@ -573,8 +573,8 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             like_count: Set(0_u32),
             is_verified: Set(if new.is_verified { 1_i8 } else { 0_i8 }),
             status: Set(if new.is_published { 1_i8 } else { 0_i8 }),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             ..Default::default()
         };
         am.insert(&self.db).await.map_err(map_err).map(map_qna)
@@ -595,7 +595,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         am.tags = Set(string_to_json(new.tags));
         am.is_verified = Set(if new.is_verified { 1_i8 } else { 0_i8 });
         am.status = Set(if new.is_published { 1_i8 } else { 0_i8 });
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         am.update(&self.db).await.map_err(map_err).map(map_qna)
     }
 
@@ -728,8 +728,8 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
             view_count: Set(0_u32),
             like_count: Set(0_u32),
             status: Set(if new.is_published { 1_i8 } else { 0_i8 }),
-            created_at: Set(now),
-            updated_at: Set(now),
+            created_at: Set(now.naive_utc()),
+            updated_at: Set(now.naive_utc()),
             thumbnail: Set(None),
             ..Default::default()
         };
@@ -754,7 +754,7 @@ impl PsychologyRepository for SeaOrmPsychologyRepository {
         am.external_url = Set(new.external_url);
         am.tags = Set(string_to_json(new.tags));
         am.status = Set(if new.is_published { 1_i8 } else { 0_i8 });
-        am.updated_at = Set(chrono::Utc::now());
+        am.updated_at = Set(chrono::Utc::now().naive_utc());
         am.update(&self.db).await.map_err(map_err).map(map_resource)
     }
 

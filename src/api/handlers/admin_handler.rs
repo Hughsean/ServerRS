@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::api::AdminState;
 use crate::api::dto::session_dto::{ConversationMessageResponse, ConversationResponse};
 use crate::application::auth::auth_service::AuthenticatedUser;
-use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::user::user::{UserRole, UserStatus, UserUpdate};
 use crate::shared::error::AppError;
 
@@ -50,7 +49,7 @@ pub struct RiskConvQuery {
     #[serde(rename = "pageSize")]
     pub page_size: Option<u64>,
     #[serde(rename = "riskLevel")]
-    pub risk_level: Option<RiskLevel>,
+    pub risk_level: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,20 +67,21 @@ pub struct ProcessNotes {
 pub struct RiskConversationDetail {
     pub conversation: ConversationResponse,
     pub messages: Vec<ConversationMessageResponse>,
-    pub risk_detections: Vec<RiskDetectionAdminDto>,
+    pub risk_audits: Vec<RiskAuditAdminDto>,
 }
 
+/// Admin-facing projection of a `post_conversation_risk_audit` row.
 #[derive(Debug, Serialize)]
-pub struct RiskDetectionAdminDto {
-    pub id: u64,
-    pub conversation_id: Option<u64>,
-    pub risk_level: String,
-    pub polarity: String,
-    pub intent: String,
-    pub confidence: f64,
-    pub reason: Option<String>,
-    pub is_processed: bool,
-    pub process_notes: Option<String>,
+pub struct RiskAuditAdminDto {
+    pub audit_id: u64,
+    pub conversation_id: u64,
+    pub audit_scope: String,
+    pub status: String,
+    pub risk_level: Option<String>,
+    pub confidence: Option<f64>,
+    pub detector_name: Option<String>,
+    pub error_message: Option<String>,
+    pub source_deleted: bool,
     pub created_at: String,
 }
 
@@ -248,8 +248,8 @@ pub async fn list_risk_conversations(
             .map(|c| ConversationResponse {
                 id: c.id,
                 user_id: c.user_id,
-                title: c.title,
-                is_title_generated: c.is_title_generated,
+                title: c.title.clone(),
+                is_title_generated: c.title.is_some(),
                 last_message_at: c.last_message_at.map(|t| t.to_rfc3339()),
                 message_count: c.message_count,
                 created_at: c.created_at.to_rfc3339(),
@@ -273,17 +273,14 @@ pub async fn get_risk_conversation(
 
     let messages = state.query.admin_get_conversation_messages(id).await?;
 
-    let detections = state
-        .query
-        .admin_get_conversation_risk_detections(id)
-        .await?;
+    let audits = state.query.admin_get_conversation_risk_audits(id).await?;
 
     Ok(Json(RiskConversationDetail {
         conversation: ConversationResponse {
             id: conv.id,
             user_id: conv.user_id,
-            title: conv.title,
-            is_title_generated: conv.is_title_generated,
+            title: conv.title.clone(),
+            is_title_generated: conv.title.is_some(),
             last_message_at: conv.last_message_at.map(|t| t.to_rfc3339()),
             message_count: conv.message_count,
             created_at: conv.created_at.to_rfc3339(),
@@ -301,45 +298,35 @@ pub async fn get_risk_conversation(
                 created_at: m.created_at.to_rfc3339(),
             })
             .collect(),
-        risk_detections: detections
+        risk_audits: audits
             .into_iter()
-            .map(|r| RiskDetectionAdminDto {
-                id: r.id,
-                conversation_id: r.conversation_id,
-                risk_level: enum_str(&r.risk_level),
-                polarity: enum_str(&r.polarity),
-                intent: enum_str(&r.intent),
-                confidence: r.confidence,
-                reason: r.reason,
-                is_processed: r.is_processed,
-                process_notes: r.process_notes,
-                created_at: r.created_at.to_rfc3339(),
+            .map(|a| RiskAuditAdminDto {
+                audit_id: a.audit_id,
+                conversation_id: a.conversation_id,
+                audit_scope: a.audit_scope,
+                status: a.status,
+                risk_level: a.risk_level,
+                confidence: a.confidence,
+                detector_name: a.detector_name,
+                error_message: a.error_message,
+                source_deleted: a.source_deleted,
+                created_at: a.created_at.to_rfc3339(),
             })
             .collect(),
     }))
 }
 
 pub async fn process_risk_detection(
-    State(state): State<AdminState>,
-    Extension(auth): Extension<AuthenticatedUser>,
-    Path(id): Path<u64>,
-    Json(body): Json<ProcessNotes>,
-) -> Result<Json<RiskDetectionAdminDto>, AppError> {
-    let r = state
-        .query
-        .admin_process_risk_detection(id, auth.user_id, body.notes)
-        .await?;
-
-    Ok(Json(RiskDetectionAdminDto {
-        id: r.id,
-        conversation_id: r.conversation_id,
-        risk_level: enum_str(&r.risk_level),
-        polarity: enum_str(&r.polarity),
-        intent: enum_str(&r.intent),
-        confidence: r.confidence,
-        reason: r.reason,
-        is_processed: r.is_processed,
-        process_notes: r.process_notes,
-        created_at: r.created_at.to_rfc3339(),
-    }))
+    State(_state): State<AdminState>,
+    Extension(_auth): Extension<AuthenticatedUser>,
+    Path(_id): Path<u64>,
+    Json(_body): Json<ProcessNotes>,
+) -> Result<StatusCode, AppError> {
+    // Manual "mark processed" is no longer applicable: post-conversation risk
+    // audits are completed by the PostConversationRiskAuditWorker, not by an
+    // admin. This handler is retained only to keep the route mount valid until
+    // the router is updated to drop it.
+    Err(AppError::NotFound(
+        "manual risk processing is not supported in the post-conversation audit model".into(),
+    ))
 }

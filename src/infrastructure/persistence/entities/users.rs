@@ -21,9 +21,9 @@ pub struct Model {
     pub phone: Option<String>,
     pub avatar: Option<Vec<u8>>,
     pub nickname: Option<String>,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
-    pub last_login_at: Option<DateTimeUtc>,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
+    pub last_login_at: Option<DateTime>,
     pub status: i8,
     pub role: String,
 }
@@ -68,7 +68,6 @@ pub enum Relation {
     KnowledgeDocuments,
     PostConversationRiskAudits,
     RefreshTokens,
-    RiskDetectionResults,
     StoredObjects,
     UserContextVersions,
     UserDiaries,
@@ -96,9 +95,9 @@ impl ColumnTrait for Column {
                 .unique(),
             Self::Avatar => ColumnType::Binary(255u32).def().null(),
             Self::Nickname => ColumnType::String(StringLen::N(50u32)).def().null(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
-            Self::UpdatedAt => ColumnType::Timestamp.def(),
-            Self::LastLoginAt => ColumnType::Timestamp.def().null(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
+            Self::UpdatedAt => ColumnType::DateTime.def(),
+            Self::LastLoginAt => ColumnType::DateTime.def().null(),
             Self::Status => ColumnType::TinyInteger.def(),
             Self::Role => ColumnType::String(StringLen::N(32u32)).def(),
         }
@@ -124,9 +123,6 @@ impl RelationTrait for Relation {
                 Entity::has_many(super::post_conversation_risk_audits::Entity).into()
             }
             Self::RefreshTokens => Entity::has_many(super::refresh_tokens::Entity).into(),
-            Self::RiskDetectionResults => {
-                Entity::has_many(super::risk_detection_results::Entity).into()
-            }
             Self::StoredObjects => Entity::has_many(super::stored_objects::Entity).into(),
             Self::UserContextVersions => {
                 Entity::has_one(super::user_context_versions::Entity).into()
@@ -204,12 +200,6 @@ impl Related<super::post_conversation_risk_audits::Entity> for Entity {
 impl Related<super::refresh_tokens::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::RefreshTokens.def()
-    }
-}
-
-impl Related<super::risk_detection_results::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::RiskDetectionResults.def()
     }
 }
 

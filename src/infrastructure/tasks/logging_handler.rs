@@ -49,6 +49,9 @@ impl TaskHandler for LoggingHandler {
                     info!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "risk detected");
                 }
             }
+            TaskEvent::TurnClosed(_) => {
+                tracing::debug!("turn closed");
+            }
         }
     }
 }

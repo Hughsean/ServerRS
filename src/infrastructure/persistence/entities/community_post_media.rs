@@ -19,7 +19,7 @@ pub struct Model {
     pub media_type: String,
     pub mime_type: String,
     pub media_data: String,
-    pub created_at: DateTimeUtc,
+    pub created_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -58,7 +58,7 @@ impl ColumnTrait for Column {
             Self::MediaType => ColumnType::String(StringLen::N(20u32)).def(),
             Self::MimeType => ColumnType::String(StringLen::N(100u32)).def(),
             Self::MediaData => ColumnType::custom("longblob").def(),
-            Self::CreatedAt => ColumnType::Timestamp.def(),
+            Self::CreatedAt => ColumnType::DateTime.def(),
         }
     }
 }

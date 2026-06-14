@@ -15,6 +15,10 @@ use super::handlers::admin_handler::{
     process_risk_detection,
 };
 use super::handlers::auth_handler::{health, login, logout, me, refresh_token, register};
+use super::handlers::chat_handler::{
+    chat_disable_memory, chat_forget, chat_history, chat_memories, chat_open, chat_persona,
+    chat_persona_rebuild, chat_persona_reset, chat_send_message, chat_transcript_clear,
+};
 use super::handlers::community_handler::{
     create_comment, create_post, delete_comment, delete_post, get_post, like_comment, like_post,
     list_comments, list_posts, unlike_comment, unlike_post, update_post,
@@ -87,6 +91,20 @@ pub fn build_router_with_origins(
             post(post_message),
         )
         .route("/api/v1/llm/sessions/{session_id}", get(get_session_status))
+        // Chat API (new — sessionless, per-user conversation)
+        .route("/api/v1/chat/open", post(chat_open))
+        .route("/api/v1/chat/messages", post(chat_send_message))
+        .route("/api/v1/chat/history", get(chat_history))
+        .route("/api/v1/chat/memories", get(chat_memories))
+        .route("/api/v1/chat/persona", get(chat_persona))
+        .route(
+            "/api/v1/chat/memory/{id}/disable",
+            post(chat_disable_memory),
+        )
+        .route("/api/v1/chat/persona/reset", post(chat_persona_reset))
+        .route("/api/v1/chat/persona/rebuild", post(chat_persona_rebuild))
+        .route("/api/v1/chat/transcript/clear", post(chat_transcript_clear))
+        .route("/api/v1/chat/forget", post(chat_forget))
         // Risk detections
         .route("/api/v1/risk-detections", get(list_risk_detections))
         // Depression scales (read) + assessments (write)
