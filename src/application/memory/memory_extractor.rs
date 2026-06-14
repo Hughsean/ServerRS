@@ -576,6 +576,8 @@ mod tests {
             memory_type: "preference".into(),
             content: "user likes tea".into(),
             confidence: 0.8,
+            reinforce_count: 0,
+            reinforced_at: None,
             source_conversation_id: Some(1),
             source_message_id: Some(1),
             status: 1,

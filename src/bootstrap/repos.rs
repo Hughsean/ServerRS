@@ -14,6 +14,7 @@ use crate::domain::rag::RAGRepository;
 use crate::domain::risk::risk_repository::RiskRepository;
 use crate::domain::storage::StoredObjectRepository;
 use crate::domain::summary::SummaryRepository;
+use crate::domain::user::user_context_control::UserContextControlRepository;
 use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::user::user_repository::UserRepository;
@@ -29,6 +30,7 @@ use crate::infrastructure::persistence::implementations::seaorm_psychology_repos
 use crate::infrastructure::persistence::implementations::seaorm_rag_repository::SeaOrmRAGRepository;
 use crate::infrastructure::persistence::implementations::seaorm_risk_repository::SeaOrmRiskRepository;
 use crate::infrastructure::persistence::implementations::seaorm_stored_object_repository::SeaOrmStoredObjectRepository;
+use crate::infrastructure::persistence::implementations::seaorm_user_context_control_repository::SeaOrmUserContextControlRepository;
 use crate::infrastructure::persistence::implementations::seaorm_user_context_version_repository::SeaOrmUserContextVersionRepository;
 use crate::infrastructure::persistence::implementations::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
 use crate::infrastructure::persistence::implementations::seaorm_user_repository::SeaOrmUserRepository;
@@ -37,6 +39,7 @@ pub struct RepoGraph {
     pub user_repo: Arc<dyn UserRepository>,
     pub profile_repo: Arc<dyn UserProfileRepository>,
     pub context_version_repo: Arc<dyn UserContextVersionRepository>,
+    pub context_control_repo: Arc<dyn UserContextControlRepository>,
     pub conv_repo: Arc<dyn ConversationRepository>,
     pub risk_repo: Arc<dyn RiskRepository>,
     pub psychology_repo: Arc<dyn PsychologyRepository>,
@@ -51,11 +54,20 @@ pub struct RepoGraph {
     pub summary_repo: Arc<dyn SummaryRepository>,
 }
 
-pub fn build_repos(db: &DatabaseConnection) -> RepoGraph {
+pub fn build_repos(
+    db: &DatabaseConnection,
+    memory_collection: &str,
+    summary_collection: &str,
+) -> RepoGraph {
     RepoGraph {
         user_repo: Arc::new(SeaOrmUserRepository::new(db.clone())),
         profile_repo: Arc::new(SeaOrmUserProfileRepository::new(db.clone())),
         context_version_repo: Arc::new(SeaOrmUserContextVersionRepository::new(db.clone())),
+        context_control_repo: Arc::new(SeaOrmUserContextControlRepository::new(
+            db.clone(),
+            memory_collection.to_string(),
+            summary_collection.to_string(),
+        )),
         conv_repo: Arc::new(SeaOrmConversationRepository::new(db.clone())),
         risk_repo: Arc::new(SeaOrmRiskRepository::new(db.clone())),
         psychology_repo: Arc::new(SeaOrmPsychologyRepository::new(db.clone())),

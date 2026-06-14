@@ -12,6 +12,7 @@ pub mod seaorm_rag_repository;
 pub mod seaorm_refresh_token_store;
 pub mod seaorm_risk_repository;
 pub mod seaorm_stored_object_repository;
+pub mod seaorm_user_context_control_repository;
 pub mod seaorm_user_context_version_repository;
 pub mod seaorm_user_profile_repository;
 pub mod seaorm_user_repository;

@@ -463,6 +463,34 @@ impl VectorIndexService {
             .await
     }
 
+    pub async fn enqueue_memory_delete(&self, memory_id: u64) -> Result<(), AppError> {
+        self.vector_index_repo
+            .enqueue_job(NewVectorIndexJob {
+                action: "delete".into(),
+                object_type: "memory".into(),
+                object_id: memory_id,
+                collection_name: self.config.memory_collection.clone(),
+                vector_id: Some(memory_vector_id(memory_id)),
+                priority: 200,
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn enqueue_summary_delete(&self, summary_id: u64) -> Result<(), AppError> {
+        self.vector_index_repo
+            .enqueue_job(NewVectorIndexJob {
+                action: "delete".into(),
+                object_type: "summary".into(),
+                object_id: summary_id,
+                collection_name: self.config.summary_collection.clone(),
+                vector_id: Some(summary_vector_id(summary_id)),
+                priority: 200,
+            })
+            .await?;
+        Ok(())
+    }
+
     // ── Helpers for the application layer ──────────────────────────
 
     pub fn rag_collection(&self) -> &str {
@@ -914,6 +942,8 @@ mod tests {
             memory_type: "preference".into(),
             content: "likes coffee".into(),
             confidence: 0.9,
+            reinforce_count: 0,
+            reinforced_at: None,
             source_conversation_id: None,
             source_message_id: None,
             status: 1,

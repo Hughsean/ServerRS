@@ -14,8 +14,9 @@ use application::psychology::psychology_service::PsychologyService;
 use application::rag::chunking::ChunkingService;
 use application::rag::ingestion_service::IngestionService;
 use application::rag::retrieval_service::RetrievalService;
+use application::risk::post_conversation_risk_audit_worker::PostConversationRiskAuditWorker;
+use application::risk::risk_detection_service::RiskDetectionService;
 use application::session::chat_service::ChatService;
-use application::session::risk_detection_service::RiskDetectionService;
 use application::session::session_service::SessionService;
 use application::storage::object_service::ObjectService;
 use application::user::user_service::UserService;
@@ -57,10 +58,16 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         .expect("db init");
 
     // ── Repositories ──
-    let repos = bootstrap::repos::build_repos(&db);
+    let repos = bootstrap::repos::build_repos(
+        &db,
+        &config.qdrant.memory_collection,
+        &config.qdrant.summary_collection,
+    );
 
     let user_repo = Arc::clone(&repos.user_repo);
     let profile_repo = Arc::clone(&repos.profile_repo);
+    let context_version_repo = Arc::clone(&repos.context_version_repo);
+    let context_control_repo = Arc::clone(&repos.context_control_repo);
     let conv_repo = Arc::clone(&repos.conv_repo);
     let risk_repo = Arc::clone(&repos.risk_repo);
     let psychology_repo = Arc::clone(&repos.psychology_repo);
@@ -216,6 +223,10 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&task_publisher),
         Arc::clone(&risk_detector),
     ));
+    let risk_audit_worker: Arc<dyn TaskHandler> = Arc::new(PostConversationRiskAuditWorker::new(
+        Arc::clone(&conv_repo),
+        Arc::clone(&risk_detection_service),
+    ));
 
     // ── Services ──
     let auth = Arc::clone(&auth_graph.auth_service);
@@ -263,7 +274,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let memory_extractor: Arc<MemoryExtractor> =
         Arc::new(MemoryExtractor::new(Arc::clone(&ollama_provider)));
     let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor)
-        .with_personalization_profile_repo(Arc::clone(&profile_repo));
+        .with_personalization_profile_repo(Arc::clone(&profile_repo))
+        .with_context_version_repo(Arc::clone(&context_version_repo));
     if let Some(ref vs) = vector_store {
         memory_svc = memory_svc.with_vector_search(
             Arc::clone(vs),
@@ -288,9 +300,13 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&ollama_provider) as Arc<dyn LlmProvider>,
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&summary_service),
+        Arc::clone(&context_version_repo),
     ));
     background.spawn(tokio::spawn(
-        task_worker.with_handler(summary_refresh_handler).run(),
+        task_worker
+            .with_handler(risk_audit_worker)
+            .with_handler(summary_refresh_handler)
+            .run(),
     ));
 
     // ── Agent Runtime ──
@@ -309,7 +325,6 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         depression_repo: Arc::clone(&depression_repo),
         music_repo: Arc::clone(&music_repo),
         community_repo: Arc::clone(&community_repo),
-        agent_event_repo: Arc::clone(&agent_event_repo),
         plugins: config.plugins.clone(),
     };
 
@@ -333,10 +348,10 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
         Arc::clone(&ollama_provider),
         Arc::clone(&memory_svc),
-        Arc::clone(&risk_detection_service),
         Arc::clone(&agent_event_repo),
         Arc::clone(&conv_repo),
         Arc::clone(&profile_repo),
+        Arc::clone(&context_version_repo),
         context_builder,
         agent_tools,
         agent_settings,
@@ -348,6 +363,9 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&task_publisher),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&agent_runtime),
+        Arc::clone(&memory_svc),
+        Arc::clone(&context_control_repo),
+        vector_index.clone(),
     ));
 
     // ── Domain services with real SeaORM repositories ──

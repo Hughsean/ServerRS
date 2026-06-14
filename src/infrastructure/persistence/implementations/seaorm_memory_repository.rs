@@ -32,6 +32,8 @@ fn map_memory(m: user_memories::Model) -> UserMemory {
         memory_type: m.memory_type,
         content: m.content,
         confidence: m.confidence,
+        reinforce_count: m.reinforce_count,
+        reinforced_at: m.reinforced_at.map(|value| value.and_utc()),
         source_conversation_id: m.source_conversation_id,
         source_message_id: m.source_message_id,
         status: m.status,

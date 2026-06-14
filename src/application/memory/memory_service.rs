@@ -8,6 +8,7 @@ use crate::domain::llm::{ChatMessage, EmbeddingProvider};
 use crate::domain::memory::{
     MemoryRepository, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
 };
+use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::vector_store::{VectorFilter, VectorStore};
 use crate::shared::error::AppError;
@@ -27,6 +28,7 @@ pub struct MemoryService {
     vector_store: Option<Arc<dyn VectorStore>>,
     vector_index: Option<Arc<crate::application::rag::vector_index_service::VectorIndexService>>,
     profile_repo: Option<Arc<dyn UserProfileRepository>>,
+    context_version_repo: Option<Arc<dyn UserContextVersionRepository>>,
     memory_collection: String,
 }
 
@@ -70,6 +72,7 @@ impl MemoryService {
             vector_store: None,
             vector_index: None,
             profile_repo: None,
+            context_version_repo: None,
             memory_collection: "user_memories".into(),
         }
     }
@@ -101,6 +104,25 @@ impl MemoryService {
     ) -> Self {
         self.profile_repo = Some(profile_repo);
         self
+    }
+
+    pub fn with_context_version_repo(
+        mut self,
+        context_version_repo: Arc<dyn UserContextVersionRepository>,
+    ) -> Self {
+        self.context_version_repo = Some(context_version_repo);
+        self
+    }
+
+    async fn context_is_current(
+        &self,
+        user_id: u64,
+        expected_version: Option<u64>,
+    ) -> Result<bool, AppError> {
+        let (Some(repo), Some(expected)) = (&self.context_version_repo, expected_version) else {
+            return Ok(true);
+        };
+        Ok(repo.get_or_create(user_id).await?.version == expected)
     }
 
     async fn personalization_policy(
@@ -151,13 +173,28 @@ impl MemoryService {
         conversation_id: u64,
         message_id: u64,
     ) -> Result<Vec<UserMemory>, AppError> {
+        self.extract_and_save_at_version(user_id, messages, conversation_id, message_id, None)
+            .await
+    }
+
+    pub async fn extract_and_save_at_version(
+        &self,
+        user_id: u64,
+        messages: &[ChatMessage],
+        conversation_id: u64,
+        message_id: u64,
+        expected_version: Option<u64>,
+    ) -> Result<Vec<UserMemory>, AppError> {
+        if !self.context_is_current(user_id, expected_version).await? {
+            return Ok(Vec::new());
+        }
         let policy = self.personalization_policy(user_id).await?;
         if !policy.enabled {
             return Ok(Vec::new());
         }
         let memories = self.extractor.extract(user_id, messages).await;
 
-        if memories.is_empty() {
+        if memories.is_empty() || !self.context_is_current(user_id, expected_version).await? {
             return Ok(Vec::new());
         }
 
@@ -245,6 +282,10 @@ impl MemoryService {
                         .await?
                 }
             };
+            if !self.context_is_current(user_id, expected_version).await? {
+                let _ = self.repo.disable_memory(persisted.memory_id).await;
+                return Ok(Vec::new());
+            }
             saved.push(persisted);
         }
 
@@ -455,8 +496,11 @@ impl MemoryService {
 
         self.repo.disable_memory(id).await?;
 
-        // Sync delete from Qdrant index (non-fatal)
+        // Persist a delete job and also remove the live point immediately.
         if let Some(ref vi) = self.vector_index {
+            if let Err(e) = vi.enqueue_memory_delete(id).await {
+                tracing::warn!(memory_id = id, error = %e, "failed to enqueue memory index delete");
+            }
             if let Err(e) = vi.delete_memory_index(id).await {
                 tracing::warn!(memory_id = id, error = %e, "failed to delete memory index during disable");
             }
@@ -515,6 +559,8 @@ mod tests {
                 memory_type: memory.memory_type,
                 content: memory.content,
                 confidence: memory.confidence,
+                reinforce_count: 0,
+                reinforced_at: None,
                 source_conversation_id: memory.source_conversation_id,
                 source_message_id: memory.source_message_id,
                 status: 1,
@@ -535,6 +581,8 @@ mod tests {
                 memory_type: "fact".into(),
                 content: "reinforced".into(),
                 confidence,
+                reinforce_count: 1,
+                reinforced_at: Some(Utc::now()),
                 source_conversation_id: Some(1),
                 source_message_id: Some(1),
                 status: 1,
@@ -558,6 +606,8 @@ mod tests {
                 memory_type: "fact".into(),
                 content: "test".into(),
                 confidence: 0.8,
+                reinforce_count: 0,
+                reinforced_at: None,
                 source_conversation_id: None,
                 source_message_id: None,
                 status: 1,
@@ -577,6 +627,8 @@ mod tests {
                 memory_type: "fact".into(),
                 content: "test".into(),
                 confidence: 0.8,
+                reinforce_count: 0,
+                reinforced_at: None,
                 source_conversation_id: None,
                 source_message_id: None,
                 status: 1,
@@ -597,6 +649,8 @@ mod tests {
                 memory_type: "preference".into(),
                 content: "likes hiking".into(),
                 confidence: 0.9,
+                reinforce_count: 0,
+                reinforced_at: None,
                 source_conversation_id: None,
                 source_message_id: None,
                 status: 1,
@@ -617,6 +671,8 @@ mod tests {
                 memory_type: "fact".into(),
                 content: "updated".into(),
                 confidence: 0.5,
+                reinforce_count: 0,
+                reinforced_at: None,
                 source_conversation_id: None,
                 source_message_id: None,
                 status: 1,
@@ -685,6 +741,8 @@ mod tests {
             memory_type: "fact".into(),
             content: "test".into(),
             confidence: 0.9,
+            reinforce_count: 0,
+            reinforced_at: None,
             source_conversation_id: None,
             source_message_id: None,
             status: 1,

@@ -31,6 +31,8 @@ pub struct UserMemory {
     pub memory_type: String,
     pub content: String,
     pub confidence: f64,
+    pub reinforce_count: u32,
+    pub reinforced_at: Option<DateTime<Utc>>,
     pub source_conversation_id: Option<u64>,
     pub source_message_id: Option<u64>,
     pub status: i8,

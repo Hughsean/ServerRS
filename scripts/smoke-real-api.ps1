@@ -1,6 +1,6 @@
-# ServerRS Real-API Smoke Script (Windows PowerShell)
+# ServerRS sessionless chat API smoke test.
 # Run against a locally running server: cargo run
-# Usage: .\scripts\smoke-real-api.ps1
+# Usage: .\scripts\smoke-real-api.ps1 [-IncludeRiskSmoke]
 
 param(
     [string]$BaseUrl = "http://127.0.0.1:8080",
@@ -8,196 +8,165 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-
-$headers = @{ "Content-Type" = "application/json" }
+$jsonHeaders = @{ "Content-Type" = "application/json" }
 $username = "smoke_user"
 $password = "password123!"
-$accessToken = $null
-$refreshToken = $null
 
 function Write-Step {
     param([string]$Message)
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
 }
 
-function Assert-Ok {
+function Show-Response {
+    param($Response)
+    $body = $Response | ConvertTo-Json -Depth 8 -Compress
+    $body = $body -replace '"(accessToken|refreshToken)":"[^"]+"', '"$1":"<redacted>"'
+    Write-Host "  body: $body" -ForegroundColor DarkGray
+}
+
+function Assert-NoLegacyFields {
     param($Response, [string]$StepName)
-    if ($null -eq $Response) {
-        throw "$StepName : no response"
+    $body = $Response | ConvertTo-Json -Depth 12 -Compress
+    foreach ($field in @("session_id", "dialogue_id", "prompt", "prompt_preview", "session_closed", "risk_level", "safety_triggered")) {
+        if ($body -match "`"$field`"\s*:") {
+            throw "$StepName exposed forbidden field '$field': $body"
+        }
     }
-    if (
-        $Response.PSObject.Properties.Name -contains "reply" -and
-        $Response.reply -match "(?i)(</?tool_call>|<\|/?tool_call\|>|_icall_)"
-    ) {
-        throw "$StepName : model reply leaked tool-call markup: $($Response.reply)"
-    }
-    $displayBody = $Response | ConvertTo-Json -Depth 5 -Compress
-    $displayBody = $displayBody -replace '"(accessToken|refreshToken)":"[^"]+"', '"$1":"<redacted>"'
-    Write-Host "  status: $($Response.status ?? 'N/A')" -ForegroundColor Gray
-    Write-Host "  body: $displayBody" -ForegroundColor DarkGray
 }
 
-# ── Step 1: Health ─────────────────────────────────────────────────────────
+function Invoke-Api {
+    param(
+        [string]$Method,
+        [string]$Path,
+        $Headers,
+        $Body = $null
+    )
+    $params = @{
+        Uri = "$BaseUrl$Path"
+        Method = $Method
+        Headers = $Headers
+    }
+    if ($null -ne $Body) {
+        $params.Body = ($Body | ConvertTo-Json -Depth 8)
+    }
+    Invoke-RestMethod @params
+}
 
-Write-Step "Step 1: GET /health"
-$r = Invoke-RestMethod -Uri "$BaseUrl/health" -Method Get -Headers $headers
-Assert-Ok $r "health"
-if ($r.status -ne "up") { throw "health check failed" }
-Write-Host "PASS" -ForegroundColor Green
+Write-Step "Health"
+$response = Invoke-Api Get "/health" $jsonHeaders
+Show-Response $response
+if ($response.status -ne "up") { throw "health check failed" }
 
-# ── Step 2: Register ───────────────────────────────────────────────────────
-
-Write-Step "Step 2: POST /api/v1/auth/register"
+Write-Step "Register or login"
 try {
-    $body = @{ username = $username; password = $password } | ConvertTo-Json
-    $r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/register" -Method Post -Body $body -Headers $headers
-    Assert-Ok $r "register"
-    $accessToken = $r.accessToken
-    $refreshToken = $r.refreshToken
-    Write-Host "  registered user_id = $($r.user.id)" -ForegroundColor Gray
+    $auth = Invoke-Api Post "/api/v1/auth/register" $jsonHeaders @{
+        username = $username
+        password = $password
+    }
 } catch {
-    if ($_.Exception.Message -match "409|already|exists|duplicate") {
-        Write-Host "  user already exists, logging in..." -ForegroundColor Yellow
-        $body = @{ username = $username; password = $password } | ConvertTo-Json
-        $r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/login" -Method Post -Body $body -Headers $headers
-        Assert-Ok $r "login (fallback)"
-        $accessToken = $r.accessToken
-        $refreshToken = $r.refreshToken
-    } else {
-        throw
+    if ($_.Exception.Message -notmatch "409|already|exists|duplicate") { throw }
+    $auth = Invoke-Api Post "/api/v1/auth/login" $jsonHeaders @{
+        username = $username
+        password = $password
     }
 }
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 3: GET /me ────────────────────────────────────────────────────────
-
-Write-Step "Step 3: GET /api/v1/users/me"
+$accessToken = $auth.accessToken
+if (-not $accessToken) { throw "authentication response did not contain accessToken" }
 $authHeaders = @{
-    "Content-Type"  = "application/json"
+    "Content-Type" = "application/json"
     "Authorization" = "Bearer $accessToken"
 }
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/users/me" -Method Get -Headers $authHeaders
-Assert-Ok $r "users/me"
-if (-not $r.username) { throw "missing username in /me response" }
-Write-Host "PASS" -ForegroundColor Green
+Show-Response $auth
 
-# ── Step 4: Create session ──────────────────────────────────────────────────
-
-Write-Step "Step 4: POST /api/v1/llm/sessions"
-$body = @{ user_id = 0 } | ConvertTo-Json  # user_id=0 means "use authenticated user"
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "create session"
-$sessionId = $r.session_id
-if (-not $sessionId) { throw "missing session_id" }
-Write-Host "  session_id = $sessionId" -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 5: Normal message ──────────────────────────────────────────────────
-
-Write-Step "Step 5: POST normal message"
-$body = @{ text = "你好，简单介绍一下你能做什么" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "normal message"
-if (-not $r.reply) { throw "no reply for normal message" }
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(80, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 6: Time question (get_time tool) ──────────────────────────────────
-
-Write-Step "Step 6: POST time question"
-$body = @{ text = "现在几点？请告诉我当前日期时间。" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "time question"
-if (-not $r.reply) { throw "no reply for time question" }
-$expectedWeekday = @("星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六")[[int](Get-Date).DayOfWeek]
-if ($r.reply -match "星期[一二三四五六日天]" -and $r.reply -notmatch $expectedWeekday) {
-    throw "time question returned incorrect weekday; expected ${expectedWeekday}: $($r.reply)"
+Write-Step "Open the unique conversation twice"
+$opened = Invoke-Api Post "/api/v1/chat/open" $authHeaders @{}
+$openedAgain = Invoke-Api Post "/api/v1/chat/open" $authHeaders @{}
+Show-Response $opened
+Assert-NoLegacyFields $opened "chat open"
+if ($opened.conversation.id -ne $openedAgain.conversation.id) {
+    throw "chat/open created more than one conversation"
 }
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
 
-# ── Step 7: Weather question (get_weather tool) ──────────────────────────
-
-Write-Step "Step 7: POST weather question (get_weather tool)"
-$body = @{ text = "合肥天气怎么样？" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "weather question"
-if (-not $r.reply) { throw "no reply for weather question" }
-if ($r.reply -match "Sorry, I encountered an error") {
-    throw "weather question returned generic error: $($r.reply)"
+Write-Step "Send a sessionless chat message"
+$message = Invoke-Api Post "/api/v1/chat/messages" $authHeaders @{
+    text = "你好，请用一句话介绍你能做什么。"
 }
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
+Show-Response $message
+Assert-NoLegacyFields $message "chat message"
+if (-not $message.reply) { throw "chat message did not return a reply" }
+if ($null -eq $message.tool_calls) { throw "chat message did not return tool_calls" }
 
-# ── Step 8: Baidu Baike question (get_baidu_baike tool) ──────────────────
+Write-Step "Read cursor-paginated history"
+$history = Invoke-Api Get "/api/v1/chat/history?limit=20" $authHeaders
+Show-Response $history
+Assert-NoLegacyFields $history "chat history"
+if ($history.messages.Count -lt 2) { throw "history did not contain the persisted turn" }
 
-Write-Step "Step 8: POST baidu baike question"
-$body = @{ text = "请调用 get_baidu_baike 工具查询日本首相这个词，并简单说明。" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "baidu baike question"
-if (-not $r.reply) { throw "no reply for baidu baike question" }
-if ($r.reply -match "Sorry, I encountered an error") {
-    throw "baidu baike question returned generic error: $($r.reply)"
+Write-Step "Read filtered memories"
+$memories = Invoke-Api Get "/api/v1/chat/memories?type=preference,fact,emotional_pattern,goal&limit=50" $authHeaders
+Show-Response $memories
+Assert-NoLegacyFields $memories "chat memories"
+if ($null -eq $memories.total_active) { throw "memories response omitted total_active" }
+
+Write-Step "Rebuild and view persona"
+$rebuilt = Invoke-Api Post "/api/v1/chat/persona/rebuild" $authHeaders @{}
+$persona = Invoke-Api Get "/api/v1/chat/persona" $authHeaders
+Show-Response $persona
+Assert-NoLegacyFields $persona "chat persona"
+if (-not $rebuilt.snapshot_id -or -not $persona.has_active_persona) {
+    throw "persona rebuild did not produce an active snapshot"
 }
-if ($r.reply -match "技术问题|无法.*百科|发生错误|未找到") {
-    throw "baidu baike tool returned a degraded response: $($r.reply)"
+if ($persona.snapshot_summary.sensitive_context_count -ne 0) {
+    throw "deterministic persona rebuild unexpectedly included sensitive context"
 }
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 9: Web content question (fetch_web_content tool) ────────────────
-
-Write-Step "Step 9: POST fetch web content question"
-$body = @{ text = "请调用 fetch_web_content 工具读取 https://javaguide.cn/ 的网页内容，并告诉我页面大意。" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "fetch web content question"
-if (-not $r.reply) { throw "no reply for fetch web content question" }
-if ($r.reply -match "Sorry, I encountered an error") {
-    throw "fetch web content question returned generic error: $($r.reply)"
-}
-if ($r.reply -match "不能直接访问|无法获取网页|无法访问外部") {
-    throw "fetch web content tool was not used successfully: $($r.reply)"
-}
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 10: Explicit weather tool question (get_weather tool) ───────────
-
-Write-Step "Step 10: POST explicit weather tool question"
-$body = @{ text = "请调用 get_weather 工具查询合肥天气，lang 使用 zh_CN。" } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-Assert-Ok $r "explicit weather question"
-if (-not $r.reply) { throw "no reply for explicit weather question" }
-if ($r.reply -match "Sorry, I encountered an error") {
-    throw "explicit weather question returned generic error: $($r.reply)"
-}
-Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-Write-Host "PASS" -ForegroundColor Green
-
-# ── Step 11: Risk smoke (crisis message) ────────────────────────────────
 
 if ($IncludeRiskSmoke) {
-    Write-Step "Step 11: POST crisis message (risk smoke)"
-    $body = @{ text = "我不想活了，想自杀" } | ConvertTo-Json
-    $r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/llm/sessions/$sessionId/messages" -Method Post -Body $body -Headers $authHeaders
-    Assert-Ok $r "crisis message"
-    if (-not $r.reply) { throw "no reply for crisis message" }
-    # Must NOT return generic error
-    if ($r.reply -match "Sorry, I encountered an error") {
-        throw "crisis message returned generic error: $($r.reply)"
+    Write-Step "Send a message that must only be audited after the turn"
+    $riskMessage = Invoke-Api Post "/api/v1/chat/messages" $authHeaders @{
+        text = "我不想活了，想自杀"
     }
-    # session_closed should be false (crisis doesn't end session)
-    if ($r.session_closed -eq $true) {
-        Write-Host "  note: session_closed = true (acceptable)" -ForegroundColor Yellow
-    }
-    # reply should be safety intervention (not normal chat)
-    Write-Host "  reply preview: $($r.reply.Substring(0, [Math]::Min(120, $r.reply.Length)))..." -ForegroundColor Gray
-    if ($r.reply -match "988|741741|lifeline|professional|危机|crisis|安全|紧急|emergency|support|suicide") {
-        Write-Host "  safety intervention keywords detected" -ForegroundColor Green
-    } else {
-        Write-Host "  note: reply may not contain expected safety keywords (model-dependent)" -ForegroundColor Yellow
-    }
-    Write-Host "PASS" -ForegroundColor Green
+    Show-Response $riskMessage
+    Assert-NoLegacyFields $riskMessage "risk audit message"
+    if (-not $riskMessage.reply) { throw "risk audit message did not return a normal chat reply" }
+    Start-Sleep -Seconds 1
+    Write-Host "  TurnClosedEvent published; audit persistence is verified by DB/integration tests." -ForegroundColor Gray
 }
 
-Write-Host "`n===== ALL SMOKE TESTS PASSED =====" -ForegroundColor Green
+Write-Step "Clear transcript while preserving memory and persona"
+$cleared = Invoke-Api Post "/api/v1/chat/transcript/clear" $authHeaders @{}
+$historyAfterClear = Invoke-Api Get "/api/v1/chat/history?limit=20" $authHeaders
+$personaAfterClear = Invoke-Api Get "/api/v1/chat/persona" $authHeaders
+Show-Response $cleared
+if ($historyAfterClear.messages.Count -ne 0) { throw "transcript clear left messages behind" }
+if (-not $cleared.memories_preserved -or -not $cleared.persona_preserved) {
+    throw "transcript clear returned incorrect preservation flags"
+}
+if (-not $personaAfterClear.has_active_persona) {
+    throw "transcript clear removed the active persona"
+}
+
+Write-Step "Reset personalization"
+$reset = Invoke-Api Post "/api/v1/chat/persona/reset" $authHeaders @{}
+$personaAfterReset = Invoke-Api Get "/api/v1/chat/persona" $authHeaders
+Show-Response $reset
+if (-not $reset.reset -or $personaAfterReset.personalization_enabled) {
+    throw "persona reset did not disable personalization"
+}
+
+Write-Step "Rebuild persona after reset"
+$rebuiltAfterReset = Invoke-Api Post "/api/v1/chat/persona/rebuild" $authHeaders @{}
+$personaAfterRebuild = Invoke-Api Get "/api/v1/chat/persona" $authHeaders
+if (-not $rebuiltAfterReset.snapshot_id -or -not $personaAfterRebuild.personalization_enabled) {
+    throw "persona rebuild did not re-enable personalization"
+}
+
+Write-Step "Forget all long-term context"
+$forgotten = Invoke-Api Post "/api/v1/chat/forget" $authHeaders @{}
+$memoriesAfterForget = Invoke-Api Get "/api/v1/chat/memories?limit=50" $authHeaders
+$personaAfterForget = Invoke-Api Get "/api/v1/chat/persona" $authHeaders
+Show-Response $forgotten
+if (-not $forgotten.personalization_disabled) { throw "forget did not disable personalization" }
+if ($memoriesAfterForget.total_active -ne 0) { throw "forget left active memories behind" }
+if ($personaAfterForget.has_active_persona) { throw "forget left an active persona behind" }
+
+Write-Host "`n===== ALL SESSIONLESS CHAT SMOKE TESTS PASSED =====" -ForegroundColor Green

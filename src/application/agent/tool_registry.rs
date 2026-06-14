@@ -14,10 +14,8 @@ use crate::application::agent::tools::get_weather_tool::GetWeatherTool;
 use crate::application::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
 use crate::application::agent::tools::memory_search_tool::MemorySearchTool;
 use crate::application::agent::tools::music_recommend_tool::MusicRecommendTool;
-use crate::application::agent::tools::risk_escalation_tool::RiskEscalationTool;
 use crate::application::memory::memory_service::MemoryService;
 use crate::application::rag::retrieval_service::RetrievalService;
-use crate::domain::agent::AgentEventRepository;
 use crate::domain::community::CommunityRepository;
 use crate::domain::depression::DepressionRepository;
 use crate::domain::diary::DiaryRepository;
@@ -35,7 +33,6 @@ pub struct AgentToolDeps {
     pub depression_repo: Arc<dyn DepressionRepository>,
     pub music_repo: Arc<dyn MusicRepository>,
     pub community_repo: Arc<dyn CommunityRepository>,
-    pub agent_event_repo: Arc<dyn AgentEventRepository>,
     pub plugins: PluginsConfig,
 }
 
@@ -88,12 +85,6 @@ pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
             order: 60,
             enabled_by_default: true,
             factory: |deps| Arc::new(CommunitySearchTool::new(Arc::clone(&deps.community_repo))),
-        },
-        AgentToolRegistration {
-            key: "risk_escalation",
-            order: 70,
-            enabled_by_default: true,
-            factory: |deps| Arc::new(RiskEscalationTool::new(Arc::clone(&deps.agent_event_repo))),
         },
         AgentToolRegistration {
             key: "get_time",
@@ -246,7 +237,6 @@ mod tests {
                 "depression_scale",
                 "music_recommend",
                 "community_search",
-                "risk_escalation",
                 "get_time",
                 "fetch_web_content",
                 "get_baidu_baike",
@@ -259,5 +249,14 @@ mod tests {
     fn default_registration_keys_are_unique() {
         let registrations = default_agent_tool_registrations();
         validate_registration_keys(&registrations).expect("default tool keys must be unique");
+    }
+
+    #[test]
+    fn default_registrations_do_not_include_risk_tools() {
+        assert!(
+            default_agent_tool_registrations()
+                .iter()
+                .all(|registration| !registration.key.contains("risk"))
+        );
     }
 }

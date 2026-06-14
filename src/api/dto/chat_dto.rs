@@ -10,10 +10,15 @@ pub struct ChatOpenRequest {
 
 #[derive(Debug, Serialize)]
 pub struct ChatOpenResponse {
-    pub conversation_id: u64,
+    pub conversation: ChatConversationInfo,
+    pub personalization_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatConversationInfo {
+    pub id: u64,
     pub message_count: u64,
-    pub title: Option<String>,
-    pub created_at: String,
+    pub last_message_at: Option<String>,
 }
 
 // ── POST /api/v1/chat/messages ──
@@ -31,29 +36,51 @@ pub struct ChatMessageRequest {
 pub struct ChatMessageResponse {
     pub conversation_id: u64,
     pub reply: String,
+    pub tool_calls: Vec<ChatToolCallItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatToolCallItem {
+    pub name: String,
+    pub arguments: serde_json::Value,
 }
 
 // ── GET /api/v1/chat/history ──
 
+#[derive(Debug, Deserialize)]
+pub struct ChatHistoryQuery {
+    pub before_id: Option<u64>,
+    pub limit: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ChatHistoryResponse {
-    pub conversation_id: u64,
     pub messages: Vec<ChatMessageItem>,
+    pub next_before_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ChatMessageItem {
     pub id: u64,
     pub sender_role: String,
-    pub content: String,
+    pub message_type: String,
+    pub content: serde_json::Value,
     pub created_at: String,
 }
 
 // ── GET /api/v1/chat/memories ──
 
+#[derive(Debug, Deserialize)]
+pub struct ChatMemoryQuery {
+    #[serde(rename = "type")]
+    pub memory_types: Option<String>,
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ChatMemoryResponse {
     pub memories: Vec<ChatMemoryItem>,
+    pub total_active: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,15 +89,28 @@ pub struct ChatMemoryItem {
     pub memory_type: String,
     pub content: String,
     pub confidence: f64,
+    pub reinforce_count: u32,
     pub created_at: String,
+    pub reinforced_at: Option<String>,
 }
 
 // ── GET /api/v1/chat/persona ──
 
 #[derive(Debug, Serialize)]
 pub struct ChatPersonaResponse {
-    pub snapshot_id: Option<u64>,
-    pub snapshot_data: Option<serde_json::Value>,
+    pub has_active_persona: bool,
+    pub generated_at: Option<String>,
+    pub snapshot_summary: ChatPersonaSnapshotSummary,
+    pub personalization_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatPersonaSnapshotSummary {
+    pub communication_preferences_count: usize,
+    pub stable_facts_count: usize,
+    pub recurring_topics_count: usize,
+    pub goals_count: usize,
+    pub sensitive_context_count: usize,
 }
 
 // ── POST /api/v1/chat/memory/{id}/disable ──
@@ -92,19 +132,28 @@ pub struct PersonaResetResponse {
 
 #[derive(Debug, Serialize)]
 pub struct PersonaRebuildResponse {
-    pub snapshot_id: Option<u64>,
+    pub snapshot_id: u64,
 }
 
 // ── POST /api/v1/chat/transcript/clear ──
 
 #[derive(Debug, Serialize)]
 pub struct TranscriptClearResponse {
-    pub cleared: bool,
+    pub cleared_messages: bool,
+    pub cleared_summaries: bool,
+    pub memories_preserved: bool,
+    pub persona_preserved: bool,
+    pub post_risk_audits_cleared: bool,
 }
 
 // ── POST /api/v1/chat/forget ──
 
 #[derive(Debug, Serialize)]
 pub struct ForgetResponse {
-    pub forgotten: bool,
+    pub messages_cleared: bool,
+    pub summaries_cleared: bool,
+    pub memories_disabled: u64,
+    pub persona_expired: bool,
+    pub post_risk_audits_deleted: bool,
+    pub personalization_disabled: bool,
 }

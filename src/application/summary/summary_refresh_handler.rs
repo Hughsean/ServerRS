@@ -10,6 +10,7 @@ use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewSummary, ROLLING_GENERAL_SUMMARY};
 use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_handler::TaskHandler;
+use crate::domain::user::user_context_version::UserContextVersionRepository;
 
 use super::summary_service::SummaryService;
 
@@ -20,6 +21,7 @@ pub struct SummaryRefreshHandler {
     llm: Arc<dyn LlmProvider>,
     conversation_repo: Arc<dyn ConversationRepository>,
     summary_service: Arc<SummaryService>,
+    context_version_repo: Arc<dyn UserContextVersionRepository>,
     user_locks: DashMap<u64, Arc<Mutex<()>>>,
 }
 
@@ -29,12 +31,14 @@ impl SummaryRefreshHandler {
         llm: Arc<dyn LlmProvider>,
         conversation_repo: Arc<dyn ConversationRepository>,
         summary_service: Arc<SummaryService>,
+        context_version_repo: Arc<dyn UserContextVersionRepository>,
     ) -> Self {
         Self {
             enabled,
             llm,
             conversation_repo,
             summary_service,
+            context_version_repo,
             user_locks: DashMap::new(),
         }
     }
@@ -55,6 +59,13 @@ impl SummaryRefreshHandler {
                 "summary refresh already running; skipping"
             );
             return;
+        };
+        let task_epoch = match self.context_version_repo.get_or_create(event.user_id).await {
+            Ok(version) => version.version,
+            Err(error) => {
+                warn!(user_id = event.user_id, %error, "failed to load summary task epoch");
+                return;
+            }
         };
 
         let previous = match self
@@ -154,6 +165,20 @@ impl SummaryRefreshHandler {
         let (Some(first_message), Some(last_message)) = (dialogue.first(), dialogue.last()) else {
             return;
         };
+        match self.context_version_repo.get_or_create(event.user_id).await {
+            Ok(version) if version.version == task_epoch => {}
+            Ok(_) => {
+                debug!(
+                    user_id = event.user_id,
+                    "summary refresh discarded because context version changed"
+                );
+                return;
+            }
+            Err(error) => {
+                warn!(user_id = event.user_id, %error, "failed to recheck summary task epoch");
+                return;
+            }
+        }
         let token_count = Some(summary.split_whitespace().count().min(u32::MAX as usize) as u32);
         if let Err(error) = self
             .summary_service

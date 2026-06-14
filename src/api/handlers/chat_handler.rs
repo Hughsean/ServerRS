@@ -1,11 +1,9 @@
 use axum::{
     Json,
-    extract::{Extension, Path, State},
-    http::StatusCode,
+    extract::{Extension, Path, Query, State},
 };
 
 use crate::api::dto::chat_dto::*;
-use crate::api::response::ApiResponse;
 use crate::api::state::AppState;
 use crate::application::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
@@ -14,14 +12,19 @@ use crate::shared::error::AppError;
 pub async fn chat_open(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<ChatOpenResponse>>, AppError> {
+) -> Result<Json<ChatOpenResponse>, AppError> {
     let conv = state.chat.chat_service.open(auth_user.user_id).await?;
-    Ok(Json(ApiResponse::ok(ChatOpenResponse {
-        conversation_id: conv.id,
-        message_count: conv.message_count as u64,
-        title: conv.title,
-        created_at: conv.created_at.to_string(),
-    })))
+    Ok(Json(ChatOpenResponse {
+        conversation: ChatConversationInfo {
+            id: conv.conversation.id,
+            message_count: conv.conversation.message_count as u64,
+            last_message_at: conv
+                .conversation
+                .last_message_at
+                .map(|value| value.to_rfc3339()),
+        },
+        personalization_enabled: conv.personalization_enabled,
+    }))
 }
 
 /// POST /api/v1/chat/messages
@@ -29,63 +32,120 @@ pub async fn chat_send_message(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(body): Json<ChatMessageRequest>,
-) -> Result<Json<ApiResponse<ChatMessageResponse>>, AppError> {
+) -> Result<Json<ChatMessageResponse>, AppError> {
     let result = state
         .chat
         .chat_service
         .send_message(auth_user.user_id, body.text, body.emotion, body.location)
         .await?;
-    Ok(Json(ApiResponse::ok(ChatMessageResponse {
+    Ok(Json(ChatMessageResponse {
         conversation_id: result.conversation_id,
         reply: result.reply,
-    })))
+        tool_calls: result
+            .tool_calls
+            .into_iter()
+            .map(|tool| ChatToolCallItem {
+                name: tool.tool_name,
+                arguments: tool.arguments,
+            })
+            .collect(),
+    }))
 }
 
 /// GET /api/v1/chat/history
 pub async fn chat_history(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<ChatHistoryResponse>>, AppError> {
-    let conv = state
+    Query(query): Query<ChatHistoryQuery>,
+) -> Result<Json<ChatHistoryResponse>, AppError> {
+    let limit = query.limit.unwrap_or(50);
+    if limit == 0 || limit > 100 {
+        return Err(AppError::Validation(
+            "history limit must be between 1 and 100".into(),
+        ));
+    }
+    let Some(conv) = state
         .chat
         .conv_repo
         .find_single_by_user_id(auth_user.user_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("no conversation found".into()))?;
+    else {
+        return Ok(Json(ChatHistoryResponse {
+            messages: Vec::new(),
+            next_before_id: None,
+        }));
+    };
 
     let messages = state
         .chat
         .conv_repo
-        .find_messages_by_conversation_id(conv.id)
+        .find_messages_before(conv.id, query.before_id, limit)
         .await?;
+    let next_before_id = (messages.len() == limit as usize)
+        .then(|| messages.first().map(|message| message.id))
+        .flatten();
 
     let items: Vec<ChatMessageItem> = messages
         .into_iter()
         .map(|m| ChatMessageItem {
             id: m.id,
             sender_role: m.sender_role,
-            content: m.content,
+            message_type: m.message_type,
+            content: serde_json::from_str(&m.content)
+                .unwrap_or_else(|_| serde_json::json!({ "text": m.content })),
             created_at: m.created_at.to_string(),
         })
         .collect();
 
-    Ok(Json(ApiResponse::ok(ChatHistoryResponse {
-        conversation_id: conv.id,
+    Ok(Json(ChatHistoryResponse {
         messages: items,
-    })))
+        next_before_id,
+    }))
 }
 
 /// GET /api/v1/chat/memories
 pub async fn chat_memories(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<ChatMemoryResponse>>, AppError> {
-    let memories = state
+    Query(query): Query<ChatMemoryQuery>,
+) -> Result<Json<ChatMemoryResponse>, AppError> {
+    let limit = query.limit.unwrap_or(50);
+    if limit == 0 || limit > 100 {
+        return Err(AppError::Validation(
+            "memory limit must be between 1 and 100".into(),
+        ));
+    }
+    let requested_types = query
+        .memory_types
+        .as_deref()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if requested_types
+        .iter()
+        .any(|memory_type| !crate::domain::memory::is_allowed_memory_type(memory_type))
+    {
+        return Err(AppError::Validation(
+            "memory type filter contains an unsupported type".into(),
+        ));
+    }
+
+    let mut memories = state
         .internal
         .memory
         .find_by_user_id(auth_user.user_id, Some(1))
-        .await
-        .unwrap_or_default();
+        .await?;
+    if !requested_types.is_empty() {
+        memories.retain(|memory| requested_types.contains(&memory.memory_type));
+    }
+    let total_active = memories.len();
+    memories.truncate(limit);
 
     let items: Vec<ChatMemoryItem> = memories
         .into_iter()
@@ -94,26 +154,39 @@ pub async fn chat_memories(
             memory_type: m.memory_type,
             content: m.content,
             confidence: m.confidence,
+            reinforce_count: m.reinforce_count,
             created_at: m.created_at.to_string(),
+            reinforced_at: m.reinforced_at.map(|value| value.to_rfc3339()),
         })
         .collect();
 
-    Ok(Json(ApiResponse::ok(ChatMemoryResponse {
+    Ok(Json(ChatMemoryResponse {
         memories: items,
-    })))
+        total_active,
+    }))
 }
 
 /// GET /api/v1/chat/persona
 ///
-/// Not yet implemented — PersonaEngine and snapshot retrieval will be added in
-/// a later phase. Returns 501 rather than a fake-success empty body.
 pub async fn chat_persona(
-    State(_state): State<AppState>,
-    Extension(_auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<ChatPersonaResponse>>, AppError> {
-    Err(AppError::NotImplemented(
-        "persona view is not yet implemented".into(),
-    ))
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+) -> Result<Json<ChatPersonaResponse>, AppError> {
+    let persona = state.chat.chat_service.persona(auth_user.user_id).await?;
+    Ok(Json(ChatPersonaResponse {
+        has_active_persona: persona.has_active_persona,
+        generated_at: persona.generated_at.map(|value| value.to_rfc3339()),
+        snapshot_summary: ChatPersonaSnapshotSummary {
+            communication_preferences_count: persona
+                .snapshot_summary
+                .communication_preferences_count,
+            stable_facts_count: persona.snapshot_summary.stable_facts_count,
+            recurring_topics_count: persona.snapshot_summary.recurring_topics_count,
+            goals_count: persona.snapshot_summary.goals_count,
+            sensitive_context_count: persona.snapshot_summary.sensitive_context_count,
+        },
+        personalization_enabled: persona.personalization_enabled,
+    }))
 }
 
 /// POST /api/v1/chat/memory/{id}/disable
@@ -125,71 +198,85 @@ pub async fn chat_disable_memory(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(memory_id): Path<u64>,
-) -> Result<Json<ApiResponse<DisableMemoryResponse>>, AppError> {
+) -> Result<Json<DisableMemoryResponse>, AppError> {
     // MemoryService::disable verifies ownership (mem.user_id != user_id → 403)
     // and syncs vector index deletion.
     state
-        .internal
-        .memory
-        .disable(memory_id, auth_user.user_id)
+        .chat
+        .chat_service
+        .disable_memory(auth_user.user_id, memory_id)
         .await?;
-    Ok(Json(ApiResponse::ok(DisableMemoryResponse {
+    Ok(Json(DisableMemoryResponse {
         memory_id,
         disabled: true,
-    })))
+    }))
 }
 
 /// POST /api/v1/chat/persona/reset
 ///
-/// Not yet implemented — full semantics (expire active persona snapshot,
-/// bump context_version, disable personalization) will be added in phase 4.
 pub async fn chat_persona_reset(
-    State(_state): State<AppState>,
-    Extension(_auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<PersonaResetResponse>>, AppError> {
-    Err(AppError::NotImplemented(
-        "persona reset is not yet implemented".into(),
-    ))
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+) -> Result<Json<PersonaResetResponse>, AppError> {
+    let result = state
+        .chat
+        .chat_service
+        .reset_persona(auth_user.user_id)
+        .await?;
+    Ok(Json(PersonaResetResponse {
+        reset: result.reset,
+    }))
 }
 
 /// POST /api/v1/chat/persona/rebuild
 ///
-/// Not yet implemented — PersonaEngine rebuild will be added in a later phase.
 pub async fn chat_persona_rebuild(
-    State(_state): State<AppState>,
-    Extension(_auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<PersonaRebuildResponse>>, AppError> {
-    Err(AppError::NotImplemented(
-        "persona rebuild is not yet implemented".into(),
-    ))
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+) -> Result<Json<PersonaRebuildResponse>, AppError> {
+    let result = state
+        .chat
+        .chat_service
+        .rebuild_persona(auth_user.user_id)
+        .await?;
+    Ok(Json(PersonaRebuildResponse {
+        snapshot_id: result.snapshot_id,
+    }))
 }
 
 /// POST /api/v1/chat/transcript/clear
 ///
-/// Not yet implemented — full semantics (delete messages + summaries +
-/// post-risk-audits, null evidence FKs, reset conversation counters, enqueue
-/// vector delete jobs, bump context_version) will be added in phase 4.
-/// The current `clear_transcript` only deletes messages, which is incomplete.
 pub async fn chat_transcript_clear(
-    State(_state): State<AppState>,
-    Extension(_auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<TranscriptClearResponse>>, AppError> {
-    Err(AppError::NotImplemented(
-        "transcript clear is not yet implemented".into(),
-    ))
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+) -> Result<Json<TranscriptClearResponse>, AppError> {
+    let result = state
+        .chat
+        .chat_service
+        .clear_transcript(auth_user.user_id)
+        .await?;
+    Ok(Json(TranscriptClearResponse {
+        cleared_messages: result.cleared_messages,
+        cleared_summaries: result.cleared_summaries,
+        memories_preserved: result.memories_preserved,
+        persona_preserved: result.persona_preserved,
+        post_risk_audits_cleared: result.post_risk_audits_cleared,
+    }))
 }
 
 /// POST /api/v1/chat/forget
 ///
-/// Not yet implemented — full semantics (transcript/clear + disable all
-/// memories + expire persona + delete post-risk-audits + disable
-/// personalization + enqueue vector deletes + bump context_version) will be
-/// added in phase 4.
 pub async fn chat_forget(
-    State(_state): State<AppState>,
-    Extension(_auth_user): Extension<AuthenticatedUser>,
-) -> Result<Json<ApiResponse<ForgetResponse>>, AppError> {
-    Err(AppError::NotImplemented(
-        "forget is not yet implemented".into(),
-    ))
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+) -> Result<Json<ForgetResponse>, AppError> {
+    let result = state.chat.chat_service.forget(auth_user.user_id).await?;
+    Ok(Json(ForgetResponse {
+        messages_cleared: result.messages_cleared,
+        summaries_cleared: result.summaries_cleared,
+        memories_disabled: result.memories_disabled,
+        persona_expired: result.persona_expired,
+        post_risk_audits_deleted: result.post_risk_audits_deleted,
+        personalization_disabled: result.personalization_disabled,
+    }))
 }

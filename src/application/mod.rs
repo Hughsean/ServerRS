@@ -7,6 +7,7 @@ pub mod memory;
 pub mod music;
 pub mod psychology;
 pub mod rag;
+pub mod risk;
 pub mod session;
 pub mod storage;
 pub mod summary;

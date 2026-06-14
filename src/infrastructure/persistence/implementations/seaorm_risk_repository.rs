@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, Value,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, Value,
 };
 
 use crate::domain::risk::post_conversation_risk_audit::{
@@ -236,7 +236,7 @@ impl RiskRepository for SeaOrmRiskRepository {
         offset: u64,
         risk_level: Option<&str>,
     ) -> Result<(Vec<u64>, u64), AppError> {
-        let (filter, mut values) = match risk_level {
+        let (filter, values) = match risk_level {
             Some(level) => (
                 " AND risk_level = ?",
                 vec![Value::String(Some(level.to_string()))],
@@ -270,7 +270,6 @@ impl RiskRepository for SeaOrmRiskRepository {
              GROUP BY conversation_id ORDER BY latest DESC \
              LIMIT {limit} OFFSET {offset}"
         );
-        values.clear();
         let page_stmt = Statement::from_sql_and_values(backend, page_sql, values);
         let ids = self
             .db

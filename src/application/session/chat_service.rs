@@ -5,11 +5,18 @@ use dashmap::DashMap;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use crate::application::agent::agent_runtime::ToolTrace;
 use crate::application::agent::agent_runtime::{AgentResponse, AgentRuntime};
+use crate::application::memory::memory_service::MemoryService;
+use crate::application::rag::vector_index_service::VectorIndexService;
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::tasks::task_event::{ConversationLifecycleTask, TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
+use crate::domain::user::user_context_control::{
+    ForgetResult, PersonaRebuildResult, PersonaResetResult, PersonaView, TranscriptClearResult,
+    UserContextControlRepository,
+};
 use crate::shared::error::AppError;
 
 /// Per-user mutex for serializing concurrent requests from the same user.
@@ -30,7 +37,16 @@ pub struct ChatService {
     task_publisher: Arc<dyn TaskPublisher>,
     conv_repo: Arc<dyn ConversationRepository>,
     agent_runtime: Arc<AgentRuntime>,
+    memory_service: Arc<MemoryService>,
+    context_control_repo: Arc<dyn UserContextControlRepository>,
+    vector_index: Option<Arc<VectorIndexService>>,
     user_locks: UserMutexMap,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatOpenResult {
+    pub conversation: Conversation,
+    pub personalization_enabled: bool,
 }
 
 /// Response from a single chat turn.
@@ -38,6 +54,7 @@ pub struct ChatService {
 pub struct ChatTurnResponse {
     pub reply: String,
     pub conversation_id: u64,
+    pub tool_calls: Vec<ToolTrace>,
 }
 
 impl ChatService {
@@ -45,11 +62,17 @@ impl ChatService {
         task_publisher: Arc<dyn TaskPublisher>,
         conv_repo: Arc<dyn ConversationRepository>,
         agent_runtime: Arc<AgentRuntime>,
+        memory_service: Arc<MemoryService>,
+        context_control_repo: Arc<dyn UserContextControlRepository>,
+        vector_index: Option<Arc<VectorIndexService>>,
     ) -> Self {
         Self {
             task_publisher,
             conv_repo,
             agent_runtime,
+            memory_service,
+            context_control_repo,
+            vector_index,
             user_locks: DashMap::new(),
         }
     }
@@ -66,7 +89,7 @@ impl ChatService {
     /// POST /api/v1/chat/open
     /// Ensure a Conversation exists for this user. Returns the conversation metadata.
     /// Publishes ConversationCreated when the conversation is newly created.
-    pub async fn open(&self, user_id: u64) -> Result<Conversation, AppError> {
+    pub async fn open(&self, user_id: u64) -> Result<ChatOpenResult, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
@@ -84,7 +107,11 @@ impl ChatService {
             }
         }
 
-        Ok(conversation)
+        let persona = self.context_control_repo.persona_view(user_id).await?;
+        Ok(ChatOpenResult {
+            conversation,
+            personalization_enabled: persona.personalization_enabled,
+        })
     }
 
     /// POST /api/v1/chat/messages
@@ -137,6 +164,7 @@ impl ChatService {
         Ok(ChatTurnResponse {
             reply: response.reply,
             conversation_id,
+            tool_calls: response.tool_calls,
         })
     }
 
@@ -145,17 +173,72 @@ impl ChatService {
         self.user_lock(user_id)
     }
 
-    /// POST /api/v1/chat/transcript/clear
-    pub async fn clear_transcript(&self, user_id: u64) -> Result<(), AppError> {
+    pub async fn disable_memory(&self, user_id: u64, memory_id: u64) -> Result<(), AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+        self.memory_service.disable(memory_id, user_id).await
+    }
+
+    pub async fn persona(&self, user_id: u64) -> Result<PersonaView, AppError> {
+        self.context_control_repo.persona_view(user_id).await
+    }
+
+    pub async fn reset_persona(&self, user_id: u64) -> Result<PersonaResetResult, AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+        self.context_control_repo.reset_persona(user_id).await
+    }
+
+    pub async fn rebuild_persona(&self, user_id: u64) -> Result<PersonaRebuildResult, AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+        self.context_control_repo.rebuild_persona(user_id).await
+    }
+
+    pub async fn clear_transcript(&self, user_id: u64) -> Result<TranscriptClearResult, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
-        let conv = self.conv_repo.find_single_by_user_id(user_id).await?;
-        if let Some(conv) = conv {
-            self.conv_repo
-                .delete_messages_by_conversation_id(conv.id)
-                .await?;
+        let result = self.context_control_repo.clear_transcript(user_id).await?;
+        if let Some(vector_index) = &self.vector_index {
+            for summary_id in &result.summary_ids {
+                if let Err(error) = vector_index.delete_summary_index(*summary_id).await {
+                    tracing::warn!(
+                        summary_id,
+                        %error,
+                        "failed to immediately delete cleared summary vector"
+                    );
+                }
+            }
         }
-        Ok(())
+        Ok(result)
+    }
+
+    pub async fn forget(&self, user_id: u64) -> Result<ForgetResult, AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+
+        let result = self.context_control_repo.forget(user_id).await?;
+        if let Some(vector_index) = &self.vector_index {
+            for summary_id in &result.summary_ids {
+                if let Err(error) = vector_index.delete_summary_index(*summary_id).await {
+                    tracing::warn!(
+                        summary_id,
+                        %error,
+                        "failed to immediately delete forgotten summary vector"
+                    );
+                }
+            }
+            for memory_id in &result.memory_ids {
+                if let Err(error) = vector_index.delete_memory_index(*memory_id).await {
+                    tracing::warn!(
+                        memory_id,
+                        %error,
+                        "failed to immediately delete forgotten memory vector"
+                    );
+                }
+            }
+        }
+        Ok(result)
     }
 }

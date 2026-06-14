@@ -53,4 +53,11 @@ pub trait ConversationRepository: Send + Sync {
         conversation_id: u64,
         since_id: u64,
     ) -> Result<Vec<ConversationMessage>, AppError>;
+
+    /// Load a specific persisted turn without scanning the full transcript.
+    async fn find_messages_by_ids(
+        &self,
+        conversation_id: u64,
+        message_ids: &[u64],
+    ) -> Result<Vec<ConversationMessage>, AppError>;
 }

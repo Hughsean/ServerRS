@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
 };
 
 use crate::domain::conversation::conversation::{Conversation, NewConversation};
@@ -73,29 +73,24 @@ impl ConversationRepository for SeaOrmConversationRepository {
     }
 
     async fn find_or_create_for_user(&self, user_id: u64) -> Result<Conversation, AppError> {
-        // Atomic UPSERT: INSERT ... ON DUPLICATE KEY UPDATE (uses uk_conversations_user_id)
-        let sql = format!(
+        let txn = self.db.begin().await.map_err(map_err)?;
+        txn.execute_raw(Statement::from_sql_and_values(
+            DbBackend::MySql,
             "INSERT INTO conversations (user_id, message_count, created_at, updated_at) \
-             VALUES ({user_id}, 0, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) \
-             ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)"
-        );
-        let stmt = Statement::from_string(DbBackend::MySql, sql);
-        self.db.execute_raw(stmt).await.map_err(map_err)?;
-
-        // Retrieve the (new or existing) row using LAST_INSERT_ID
-        let rows = conversations::Entity::find()
-            .from_raw_sql(Statement::from_string(
-                DbBackend::MySql,
-                "SELECT * FROM conversations WHERE id = LAST_INSERT_ID()",
-            ))
-            .all(&self.db)
+             VALUES (?, 0, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) \
+             ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)",
+            [user_id.into()],
+        ))
+        .await
+        .map_err(map_err)?;
+        let conversation = conversations::Entity::find()
+            .filter(conversations::Column::UserId.eq(user_id))
+            .one(&txn)
             .await
-            .map_err(map_err)?;
-
-        rows.into_iter()
-            .next()
-            .map(map_conv)
-            .ok_or_else(|| AppError::Internal("conversation upsert failed".into()))
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::Internal("conversation upsert failed".into()))?;
+        txn.commit().await.map_err(map_err)?;
+        Ok(map_conv(conversation))
     }
 
     async fn find_single_by_user_id(&self, user_id: u64) -> Result<Option<Conversation>, AppError> {
@@ -234,5 +229,23 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .await
             .map_err(map_err)
             .map(|v| v.into_iter().map(map_msg).collect())
+    }
+
+    async fn find_messages_by_ids(
+        &self,
+        conversation_id: u64,
+        message_ids: &[u64],
+    ) -> Result<Vec<ConversationMessage>, AppError> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        conversation_messages::Entity::find()
+            .filter(conversation_messages::Column::ConversationId.eq(conversation_id))
+            .filter(conversation_messages::Column::Id.is_in(message_ids.iter().copied()))
+            .order_by_asc(conversation_messages::Column::Id)
+            .all(&self.db)
+            .await
+            .map_err(map_err)
+            .map(|messages| messages.into_iter().map(map_msg).collect())
     }
 }

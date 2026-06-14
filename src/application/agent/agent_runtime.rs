@@ -6,14 +6,13 @@ use tracing::{debug, info, warn};
 use super::agent_context::AgentContextBuilder;
 use super::prompt_builder::PromptBuilder;
 use crate::application::memory::memory_service::MemoryService;
-use crate::application::session::risk_detection_service::RiskDetectionService;
 use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
 };
-use crate::domain::risk::detection_types::DetectionResult;
+use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::shared::error::AppError;
 
@@ -171,22 +170,19 @@ pub fn is_tool_call_argument_error(msg: &str) -> bool {
 /// High-level agent runtime that orchestrates a single message-response turn.
 ///
 /// Flow:
-/// 1. Safety pre-check on the incoming user message.
-/// 2. If crisis level is detected, return a safety response immediately
-///    (no LLM call, no tool execution).
-/// 3. Build `AgentContext` (summary, memories, RAG chunks, profile).
-/// 4. Run the LLM with tool definitions.
-/// 5. Extract tool calls from the LLM response and execute them.
-/// 6. Feed tool results back to the LLM for a final response.
-/// 7. Persist messages.
-/// 8. Spawn async memory extraction.
+/// 1. Build `AgentContext` (summary, memories, RAG chunks, profile).
+/// 2. Run the LLM with tool definitions.
+/// 3. Extract tool calls from the LLM response and execute them.
+/// 4. Feed tool results back to the LLM for a final response.
+/// 5. Persist messages.
+/// 6. Spawn async memory extraction.
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     memory_service: Arc<MemoryService>,
-    risk_detection_service: Arc<RiskDetectionService>,
     event_repo: Arc<dyn AgentEventRepository>,
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
+    context_version_repo: Arc<dyn UserContextVersionRepository>,
     context_builder: Arc<AgentContextBuilder>,
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn AgentTool>>,
@@ -198,10 +194,10 @@ impl AgentRuntime {
     pub fn new(
         llm: Arc<dyn LlmProvider>,
         memory_service: Arc<MemoryService>,
-        risk_detection_service: Arc<RiskDetectionService>,
         event_repo: Arc<dyn AgentEventRepository>,
         conversation_repo: Arc<dyn ConversationRepository>,
         user_profile_repo: Arc<dyn UserProfileRepository>,
+        context_version_repo: Arc<dyn UserContextVersionRepository>,
         context_builder: Arc<AgentContextBuilder>,
         tools: Vec<Arc<dyn AgentTool>>,
         settings: AgentRuntimeSettings,
@@ -209,10 +205,10 @@ impl AgentRuntime {
         Self {
             llm,
             memory_service,
-            risk_detection_service,
             event_repo,
             conversation_repo,
             user_profile_repo,
+            context_version_repo,
             context_builder,
             prompt_builder: PromptBuilder::new(),
             tools,
@@ -230,6 +226,11 @@ impl AgentRuntime {
         location: Option<Value>,
         recent_messages: Vec<ChatMessage>,
     ) -> Result<AgentResponse, AppError> {
+        let task_epoch = self
+            .context_version_repo
+            .get_or_create(user_id)
+            .await?
+            .version;
         // ── Step 3: Build agent context ──────────────────────────
         let profile = self
             .user_profile_repo
@@ -555,6 +556,7 @@ impl AgentRuntime {
                 persisted.user_message_id,
                 &user_message,
                 &final_content,
+                task_epoch,
             );
         }
 
@@ -624,32 +626,6 @@ impl AgentRuntime {
         result
     }
 
-    fn is_exit_intent(&self, text: &str) -> bool {
-        let normalized = text
-            .trim()
-            .trim_matches(|c: char| c.is_ascii_punctuation() || "。！？、，；：".contains(c))
-            .to_lowercase();
-
-        matches!(
-            normalized.as_str(),
-            "结束对话"
-                | "结束会话"
-                | "关闭会话"
-                | "退出"
-                | "退出对话"
-                | "不聊了"
-                | "先这样"
-                | "再见"
-                | "拜拜"
-                | "bye"
-                | "goodbye"
-                | "exit"
-                | "quit"
-                | "end chat"
-                | "stop chat"
-        )
-    }
-
     /// Perform one final LLM call without tools, returning the reply text.
     /// Used as a fallback when tools are exhausted or unavailable.
     async fn final_chat_without_tools(
@@ -686,21 +662,6 @@ impl AgentRuntime {
                     .to_string()
             }
         }
-    }
-
-    /// Build a crisis / safety response when the risk detector flags Crisis level.
-    fn build_crisis_response(&self, detection: &DetectionResult) -> String {
-        let evidence_note = if detection.evidence.is_empty() {
-            String::new()
-        } else {
-            "\n你刚才提到的内容已经涉及较高的安全风险。".to_string()
-        };
-
-        format!(
-            "我很担心你现在的安全。先请你把可能伤害自己的物品放远一点，尽量不要独处，马上联系身边可信任的人陪你。{evidence_note}\n\n\
-             如果你已经有明确计划、已经受伤，或担心自己会立刻行动，请立即拨打 120 或 110，或直接前往当地医院急诊/精神卫生中心。也可以马上联系家人、朋友、老师、同事或物业，请他们现在到你身边。\n\n\
-             你不用一个人扛过这一刻。先告诉我：你现在是一个人吗？身边有没有可以立刻联系的人？"
-        )
     }
 
     /// Execute a single tool by name, returning its output.
@@ -791,6 +752,7 @@ impl AgentRuntime {
         source_message_id: u64,
         user_message: &str,
         assistant_reply: &str,
+        task_epoch: u64,
     ) {
         let memory_service = Arc::clone(&self.memory_service);
 
@@ -818,7 +780,13 @@ impl AgentRuntime {
 
             if let Some(cid) = conversation_id {
                 if let Err(e) = memory_service
-                    .extract_and_save(user_id, &messages, cid, source_message_id)
+                    .extract_and_save_at_version(
+                        user_id,
+                        &messages,
+                        cid,
+                        source_message_id,
+                        Some(task_epoch),
+                    )
                     .await
                 {
                     warn!(user_id, conversation_id = cid, error = %e, "memory extraction failed");
@@ -891,38 +859,6 @@ fn normalize_final_content(content: String) -> String {
 }
 
 impl AgentRuntime {
-    fn message_text(content: &str) -> String {
-        serde_json::from_str::<Value>(content)
-            .ok()
-            .and_then(|v| {
-                v.get("text")
-                    .and_then(|text| text.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| content.to_string())
-    }
-
-    fn spawn_risk_persist_and_publish(
-        &self,
-        user_id: u64,
-        conversation_id: Option<u64>,
-        message_id: Option<u64>,
-        detection: &DetectionResult,
-    ) {
-        let risk_detection_service = Arc::clone(&self.risk_detection_service);
-        let det = detection.clone();
-
-        tokio::spawn(async move {
-            // New post-conversation audit model: conversation_id is required and
-            // we pass the user message id; assistant_message_id is not known here.
-            if let Some(cid) = conversation_id {
-                risk_detection_service
-                    .persist_and_publish_result(det, user_id, cid, message_id, None)
-                    .await;
-            }
-        });
-    }
-
     /// Persist an agent event for observability / auditing.
     async fn log_event(
         &self,

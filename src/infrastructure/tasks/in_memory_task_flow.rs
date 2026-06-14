@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
@@ -12,11 +12,11 @@ use crate::shared::error::AppError;
 
 #[derive(Clone)]
 pub struct ResilientTaskPublisher {
-    sender: mpsc::Sender<TaskEvent>,
+    sender: mpsc::UnboundedSender<TaskEvent>,
 }
 
 impl ResilientTaskPublisher {
-    fn new(sender: mpsc::Sender<TaskEvent>) -> Self {
+    fn new(sender: mpsc::UnboundedSender<TaskEvent>) -> Self {
         Self { sender }
     }
 }
@@ -24,30 +24,23 @@ impl ResilientTaskPublisher {
 #[async_trait]
 impl TaskPublisher for ResilientTaskPublisher {
     async fn publish(&self, event: TaskEvent) -> Result<(), AppError> {
-        match self.sender.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!("task channel full, event dropped");
-                Ok(())
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Err(AppError::Infrastructure("task channel closed".into()))
-            }
-        }
+        self.sender
+            .send(event)
+            .map_err(|_| AppError::Infrastructure("task channel closed".into()))
     }
 }
 
 // ── Worker ──
 
 pub struct TaskWorker {
-    receiver: mpsc::Receiver<TaskEvent>,
+    receiver: mpsc::UnboundedReceiver<TaskEvent>,
     handlers: Vec<Arc<dyn TaskHandler>>,
 }
 
 /// Creates a channel pair. The worker starts with **no handlers** —
 /// use `TaskWorker::with_handler` to inject `LoggingHandler` or custom handlers.
-pub fn new_task_channel(buffer: usize) -> (ResilientTaskPublisher, TaskWorker) {
-    let (tx, rx) = mpsc::channel(buffer);
+pub fn new_task_channel(_buffer: usize) -> (ResilientTaskPublisher, TaskWorker) {
+    let (tx, rx) = mpsc::unbounded_channel();
     let worker = TaskWorker {
         receiver: rx,
         handlers: Vec::new(),

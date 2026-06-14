@@ -8,5 +8,4 @@ pub mod knowledge_review_handler;
 pub mod music_handler;
 pub mod object_handler;
 pub mod psychology_handler;
-pub mod session_handler;
 pub mod user_handler;
