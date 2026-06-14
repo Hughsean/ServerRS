@@ -51,6 +51,7 @@ impl Default for VectorIndexConfig {
 pub struct VectorIndexService {
     rag_repo: Arc<dyn RAGRepository>,
     memory_repo: Arc<dyn MemoryRepository>,
+    #[allow(dead_code)]
     summary_repo: Arc<dyn SummaryRepository>,
     vector_index_repo: Arc<dyn VectorIndexRepository>,
     vector_store: Arc<dyn VectorStore>,

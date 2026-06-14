@@ -79,6 +79,7 @@ struct ChatResponseMessage {
 struct ResponseToolCall {
     id: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     type_: String,
     function: ResponseToolCallFunction,
 }

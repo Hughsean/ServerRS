@@ -9,6 +9,7 @@ use crate::shared::error::AppError;
 
 use super::super::entities::content_likes;
 
+#[allow(dead_code)]
 fn map(m: content_likes::Model) -> ContentLike {
     ContentLike {
         like_id: m.like_id,

@@ -16,6 +16,7 @@ pub struct AgentContextBuilder {
     memory_service: Arc<MemoryService>,
     retrieval_service: Arc<RetrievalService>,
     summary_service: Arc<SummaryService>,
+    #[allow(dead_code)]
     conversation_repo: Arc<dyn ConversationRepository>,
     user_profile_repo: Arc<dyn UserProfileRepository>,
 }

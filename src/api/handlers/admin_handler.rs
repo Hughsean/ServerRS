@@ -118,7 +118,7 @@ pub struct PaginatedRiskConversations {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
+#[allow(dead_code)]
 fn enum_str<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_string(v)
         .unwrap_or_default()
