@@ -147,6 +147,7 @@ impl SummaryRefreshHandler {
             top_p: 1.0,
             max_tokens: Some(512),
             tools: None,
+            reasoning: None,
         };
         let summary = match self.llm.chat(request).await {
             Ok(response) => response.content.trim().to_string(),

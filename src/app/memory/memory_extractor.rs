@@ -82,6 +82,7 @@ impl MemoryExtractor {
             top_p: 0.9,
             max_tokens: Some(2048),
             tools: None,
+            reasoning: None,
         };
 
         let response = match self.llm.chat(request).await {
@@ -212,6 +213,7 @@ impl MemoryExtractor {
             top_p: 1.0,
             max_tokens: Some(128),
             tools: None,
+            reasoning: None,
         };
 
         let Ok(response) = self.llm.chat(request).await else {

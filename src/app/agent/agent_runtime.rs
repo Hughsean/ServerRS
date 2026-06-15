@@ -10,7 +10,8 @@ use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
-    ChatCompletionRequest, ChatMessage, LlmProvider, ToolDefinition as LlmToolDef,
+    ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig,
+    ToolDefinition as LlmToolDef,
 };
 use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
@@ -32,6 +33,20 @@ pub struct AgentRuntimeSettings {
     pub max_tool_depth: usize,
     pub temperature: f64,
     pub top_p: f64,
+    pub enable_reasoning: bool,
+}
+
+impl AgentRuntimeSettings {
+    /// Returns `Some(ReasoningConfig { enabled: false })` when reasoning is disabled,
+    /// and `None` when reasoning is enabled (Ollama default). Sending `None` means
+    /// the serialised JSON simply omits the `reasoning` field.
+    pub fn reasoning_config(&self) -> Option<ReasoningConfig> {
+        if self.enable_reasoning {
+            None
+        } else {
+            Some(ReasoningConfig { enabled: false })
+        }
+    }
 }
 
 impl Default for AgentRuntimeSettings {
@@ -48,6 +63,7 @@ impl Default for AgentRuntimeSettings {
             max_tool_depth: 10,
             temperature: 0.7,
             top_p: 0.9,
+            enable_reasoning: true,
         }
     }
 }
@@ -345,6 +361,7 @@ impl AgentRuntime {
                 } else {
                     None
                 },
+                reasoning: self.settings.reasoning_config(),
             };
 
             let response = match if tools_allowed {
@@ -376,6 +393,7 @@ impl AgentRuntime {
                             top_p: self.settings.top_p,
                             max_tokens: None,
                             tools: None,
+                            reasoning: self.settings.reasoning_config(),
                         };
 
                         match self.llm.chat(fallback_request).await {
@@ -652,6 +670,7 @@ impl AgentRuntime {
             top_p: self.settings.top_p,
             max_tokens: None,
             tools: None,
+            reasoning: self.settings.reasoning_config(),
         };
 
         match self.llm.chat(request).await {

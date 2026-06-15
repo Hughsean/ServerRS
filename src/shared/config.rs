@@ -266,6 +266,8 @@ pub struct LlmConfig {
     pub timeout_secs: u64,
     #[serde(default = "default_llm_max_tool_depth")]
     pub max_tool_depth: u32,
+    #[serde(default = "default_llm_enable_reasoning")]
+    pub enable_reasoning: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -448,6 +450,7 @@ impl Default for LlmConfig {
             top_p: default_llm_top_p(),
             timeout_secs: default_llm_timeout_secs(),
             max_tool_depth: default_llm_max_tool_depth(),
+            enable_reasoning: default_llm_enable_reasoning(),
         }
     }
 }
@@ -959,6 +962,9 @@ fn default_llm_timeout_secs() -> u64 {
 }
 fn default_llm_max_tool_depth() -> u32 {
     10
+}
+fn default_llm_enable_reasoning() -> bool {
+    true
 }
 
 // ── AgentConfig defaults ──

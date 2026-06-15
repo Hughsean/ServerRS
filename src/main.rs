@@ -343,6 +343,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         max_tool_depth: config.llm.max_tool_depth as usize,
         temperature: config.llm.temperature,
         top_p: config.llm.top_p,
+        enable_reasoning: config.llm.enable_reasoning,
     };
 
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(

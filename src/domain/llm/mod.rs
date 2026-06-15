@@ -66,6 +66,11 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningConfig {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatCompletionRequest {
     pub messages: Vec<ChatMessage>,
@@ -73,6 +78,7 @@ pub struct ChatCompletionRequest {
     pub top_p: f64,
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<ToolDefinition>>,
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 impl ChatCompletionRequest {
@@ -83,6 +89,7 @@ impl ChatCompletionRequest {
             top_p: 0.9,
             max_tokens: None,
             tools: None,
+            reasoning: None,
         }
     }
     pub fn with_temperature(mut self, t: f64) -> Self {

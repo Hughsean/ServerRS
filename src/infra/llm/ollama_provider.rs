@@ -37,8 +37,8 @@ struct ChatRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ToolDef>>,
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // think: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
 }
 
 #[derive(Serialize)]
@@ -53,6 +53,11 @@ struct ToolFunction {
     name: String,
     description: String,
     parameters: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ReasoningConfig {
+    enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -236,7 +241,7 @@ impl LlmProvider for OllamaProvider {
             top_p: request.top_p,
             max_tokens: request.max_tokens,
             tools,
-
+            reasoning: request.reasoning.map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
         debug!("OllamaProvider.chat -> {url}");
@@ -299,6 +304,7 @@ impl LlmProvider for OllamaProvider {
             top_p: request.top_p,
             max_tokens: request.max_tokens,
             tools: Some(tool_defs),
+            reasoning: request.reasoning.map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
         debug!("OllamaProvider.chat_with_tools -> {url}");
