@@ -38,6 +38,8 @@ pub struct AppConfig {
     pub embedding: EmbeddingConfig,
     #[serde(default)]
     pub web_ingestion: WebIngestionConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -758,6 +760,46 @@ fn default_distill_llm_timeout_secs() -> u64 {
     120
 }
 
+// ── TtsConfig ──
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default = "default_tts_provider")]
+    pub provider: String,
+    #[serde(default = "default_tts_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub resource_id: String,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_default_voice")]
+    pub default_voice: String,
+    #[serde(default = "default_tts_default_encoding")]
+    pub default_encoding: String,
+    #[serde(default = "default_tts_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_tts_sample_rate")]
+    pub sample_rate: u32,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_tts_provider(),
+            base_url: default_tts_base_url(),
+            api_key: String::new(),
+            resource_id: String::new(),
+            model: default_tts_model(),
+            default_voice: default_tts_default_voice(),
+            default_encoding: default_tts_default_encoding(),
+            timeout_secs: default_tts_timeout_secs(),
+            sample_rate: default_tts_sample_rate(),
+        }
+    }
+}
+
 // ── QdrantConfig ──
 
 #[derive(Debug, Clone, Deserialize)]
@@ -937,6 +979,30 @@ fn default_true() -> bool {
     true
 }
 
+// ── TtsConfig defaults ──
+
+fn default_tts_provider() -> String {
+    "volcengine".into()
+}
+fn default_tts_base_url() -> String {
+    "https://openspeech.bytedance.com/api/v3/tts/unidirectional".into()
+}
+fn default_tts_model() -> String {
+    "seed-tts-2.0-standard".into()
+}
+fn default_tts_default_voice() -> String {
+    "zh_female_qingxin".into()
+}
+fn default_tts_default_encoding() -> String {
+    "wav".into()
+}
+fn default_tts_timeout_secs() -> u64 {
+    30
+}
+fn default_tts_sample_rate() -> u32 {
+    24000
+}
+
 // ── LlmConfig defaults ──
 
 fn default_llm_provider() -> String {
@@ -1036,6 +1102,7 @@ impl Default for AppConfig {
             qdrant: Default::default(),
             embedding: Default::default(),
             web_ingestion: Default::default(),
+            tts: Default::default(),
         }
     }
 }
@@ -1367,6 +1434,47 @@ impl AppConfig {
         if let Ok(val) = std::env::var("QDRANT_COLLECTION") {
             if !val.is_empty() {
                 self.embedding.qdrant_collection = val;
+            }
+        }
+        // ── TTS ──
+        if let Ok(val) = std::env::var("TTS_API_KEY") {
+            if !val.is_empty() {
+                self.tts.api_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_RESOURCE_ID") {
+            if !val.is_empty() {
+                self.tts.resource_id = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_MODEL") {
+            if !val.is_empty() {
+                self.tts.model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_DEFAULT_VOICE") {
+            if !val.is_empty() {
+                self.tts.default_voice = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_DEFAULT_ENCODING") {
+            if !val.is_empty() {
+                self.tts.default_encoding = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.tts.timeout_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_BASE_URL") {
+            if !val.is_empty() {
+                self.tts.base_url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_SAMPLE_RATE") {
+            if let Ok(n) = val.parse::<u32>() {
+                self.tts.sample_rate = n;
             }
         }
     }

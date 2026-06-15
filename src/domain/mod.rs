@@ -14,6 +14,7 @@ pub mod risk;
 pub mod storage;
 pub mod summary;
 pub mod tasks;
+pub mod tts;
 pub mod user;
 pub mod vector_index;
 pub mod vector_store;
