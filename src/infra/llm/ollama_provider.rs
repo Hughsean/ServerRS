@@ -37,6 +37,8 @@ struct ChatRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ToolDef>>,
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // think: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -234,6 +236,7 @@ impl LlmProvider for OllamaProvider {
             top_p: request.top_p,
             max_tokens: request.max_tokens,
             tools,
+
         };
 
         debug!("OllamaProvider.chat -> {url}");

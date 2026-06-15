@@ -41,6 +41,19 @@ impl Default for AuthConfig {
 }
 
 #[derive(Debug, Clone)]
+pub enum Role {
+    //TODO 是不是需要一个回退字段？？？
+    Admin,
+    User,
+}
+
+impl From<&str> for Role {
+    fn from(value: &str) -> Self {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub user_id: u64,
     pub username: String,

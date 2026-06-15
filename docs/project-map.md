@@ -1,0 +1,924 @@
+﻿ # ServerRS 项目地图 — 从入门到精通
+ 
+ > 作者：项目代码自动分析  
+ > 目标：让一个完全不懂这个项目的人，看完这个文件就能知道  
+ > "这个项目是干什么的"、"代码放在哪"、"每个文件是干啥的"
+ 
+ ---
+ 
+ ## 一、这个项目到底是干啥的？
+ 
+ **一句话版**：这是一个 AI 聊天机器人后端服务器。用户注册后，可以跟 AI 聊天，  
+ AI 会记住用户说过的话、了解用户的性格和情绪、给用户推荐音乐、帮用户做抑郁评估、  
+ 写日记、逛社区发帖子。管理员可以在后台管理用户、查看聊天中的风险内容、  
+ 管理知识库文章和音乐曲库。
+ 
+ **正经版**：ServerRS（代号 Digital Companion）是一个用 **Rust** 语言写的  
+ **Web 后端服务**，使用 Axum 框架提供 HTTP API，MySQL 存数据，  
+ Ollama 启动本地大模型（Qwen2.5）做 AI 对话，Qdrant 做向量搜索。
+ 
+ ---
+ 
+ ## 二、项目长什么样？—— 目录结构总览
+ 
+ ```
+ D:\WorkSpace\ServerRS/
+ ├── Cargo.toml            # Rust 项目配置（依赖声明）
+ ├── config.toml           # 服务器配置文件（数据库/Ollama/JWT 等）
+ ├── .env                  # 环境变量（密钥、数据库密码等）
+ │
+ ├── src/                  # ★ 核心代码（Rust 源码）
+ │   ├── main.rs           # 程序入口（启动服务器）
+ │   ├── lib.rs            # 模块声明（各模块的入口）
+ │   ├── api/              # ★ 网络层（路由 + 请求处理）
+ │   ├── app/              # ★ 业务层（服务的具体逻辑）
+ │   ├── domain/           # ★ 领域层（核心数据结构和接口）
+ │   ├── infra/            # ★ 基础设施（数据库/LLM/存储的具体实现）
+ │   ├── bootstrap/        # 组装代码（把各组件拼装起来）
+ │   └── shared/           # 共享代码（配置、错误定义）
+ │
+ ├── database/
+ │   └── sql/
+ │       ├── init.sql      # ★ 数据库建表语句（所有表结构）
+ │       └── mock.sql      # 模拟数据（开发测试用）
+ │
+ ├── web/
+ │   ├── admin/            # ★ 管理后台前端（Vue 3 + TypeScript）
+ │   └── sdk/              # TypeScript SDK（前端调用 API）
+ │
+ ├── docs/                 # 设计文档
+ ├── data/                 # 运行时数据（MySQL 数据文件、Qdrant 数据等）
+ ├── scripts/              # 运维脚本（知识摄入、API 测试等）
+ └── examples/             # （空目录，留作示例代码占位）
+ ```
+ 
+ ---
+ 
+ ## 三、分层架构（六层）—— 代码从用户到数据库的完整路径
+ 
+ 当用户发一个 HTTP 请求时，数据经过以下六层：
+ 
+ ```
+ 用户浏览器/App
+     ↓  HTTP 请求
+ ┌──────────────────┐
+ │  第1层: api/     │  ← 路由 + 请求处理（接收请求、检查权限、返回响应）
+ │  （路由器层）    │     文件：src/api/router.rs + handlers/*.rs
+ └──────┬───────────┘
+        ↓ 调用 Service
+ ┌──────────────────┐
+ │  第2层: app/     │  ← 业务逻辑（真正的功能实现）
+ │  （服务层）      │     文件：src/app/*/*_service.rs
+ └──────┬───────────┘
+        ↓ 调用 Repository 接口
+ ┌──────────────────┐
+ │  第3层: domain/  │  ← 纯数据结构和接口定义（像合同的条款）
+ │  （领域层）      │     文件：src/domain/*/mod.rs
+ └──────┬───────────┘
+        ↓ 调用 Repository 实现
+ ┌──────────────────┐
+ │  第4层: infra/   │  ← 具体实现（操作数据库、调 LLM、存文件）
+ │  （基础设施层）  │     文件：src/infra/persistence/**/*.rs
+ └──────┬───────────┘
+        ↓ SQL/LLM API
+ ┌──────────────────┐
+ │  MySQL / Qdrant  │  ← 数据库和向量引擎
+ │  / Ollama /      │
+ │  文件系统        │
+ └──────────────────┘
+ 
+ 还有两个"胶水"模块：
+   - bootstrap/      ← 把上面所有层粘在一起（依赖注入）
+   - shared/         ← 配置、错误类型等共享工具
+ ```
+ 
+ ---
+ 
+ ## 四、逐层逐文件详解
+ 
+ ---
+ 
+ ### 4.1 入口区：`src/main.rs`（程序的起点）
+ 
+ ```rust
+ #[tokio::main]
+ async fn main() {
+     // 1. 加载配置
+     let config = AppConfig::load();
+     // 2. 连接数据库
+     let db = init_db(...).await;
+     // 3. 构建数据仓库（Repository）
+     let repos = bootstrap::repos::build_repos(...);
+     // 4. 构建认证体系
+     let auth_graph = bootstrap::auth::build_auth(...);
+     // 5. 连接 LLM（Ollama）
+     let ollama_provider = OllamaProvider::new(...);
+     let embedding_provider = OllamaEmbeddingProvider::new(...);
+     // 6. 初始化各种 Service（业务服务）
+     let chat_service = ChatService::new(...);
+     let psychology = PsychologyService::new(...);
+     // ... 十几个 Service
+     // 7. 组装路由，启动服务器
+     let app = api::router::build_router(state);
+     axum::serve(listener, app).await;
+ }
+ ```
+ 
+ 通俗理解：`main.rs` 就像开餐馆的**总厨**，负责：
+ - 买菜进货（连接数据库、连 LLM）
+ - 分配人手（创建各种 Service 和 Repository）
+ - 设置菜单（注册路由）
+ - 开门营业（启动 HTTP 服务器）
+ 
+ ---
+ 
+ ### 4.2 `src/lib.rs` —— 模块总目录
+ 
+ 只有 5 行：
+ ```rust
+ pub mod api;
+ pub mod app;
+ pub mod bootstrap;
+ pub mod domain;
+ pub mod infra;
+ pub mod shared;
+ ```
+ 顾名思义，这是整栋大楼的**楼层索引图**。其他文件通过 `use server_rs::api::xxx` 互相引用。
+ 
+ ---
+ 
+ ### 4.3 第1层 — API 层（`src/api/`）—— 接待员
+ 
+ **职责**：接收 HTTP 请求、解析参数、检查身份、调用业务服务、返回 JSON 响应。
+ 
+ ```
+ src/api/
+ ├── router.rs           ★ 路由总表（哪个 URL 对应哪个函数）
+ ├── state.rs            状态结构（把所有 Service 打包成一个 AppState）
+ ├── error.rs            错误处理
+ ├── response.rs         通用响应格式（⚠ 已弃用，实际通过 error.rs 的 IntoResponse 处理）
+ ├── dto/                DTO（请求/响应数据结构）
+ │   ├── mod.rs
+ │   ├── auth_dto.rs     登录/注册的请求/响应格式
+ │   ├── chat_dto.rs     聊天的请求/响应格式
+ │   ├── music_dto.rs    音乐的请求/响应格式
+ │   └── user_dto.rs     用户的请求/响应格式
+ ├── handlers/           ★ 请求处理器（每个文件处理一类业务）
+ │   ├── mod.rs
+ │   ├── auth_handler.rs     注册/登录/登出/令牌刷新
+ │   ├── chat_handler.rs     聊天发送/历史/记忆/人物画像
+ │   ├── user_handler.rs     获取/修改个人信息
+ │   ├── diary_handler.rs    日记 CRUD
+ │   ├── music_handler.rs    音乐浏览/播放
+ │   ├── community_handler.rs 社区帖子/评论/点赞
+ │   ├── psychology_handler.rs 心理知识库阅读
+ │   ├── depression_handler.rs 抑郁量表/评估
+ │   ├── object_handler.rs   文件上传/下载
+ │   ├── admin_handler.rs    管理员操作用户/风险/知识审核
+ │   └── knowledge_review_handler.rs  知识摄入审核/发布
+ └── middleware/
+     ├── mod.rs
+     └── auth_middleware.rs   ★ 身份认证中间件（检查 JWT Token）
+ ```
+ 
+ #### `router.rs` —— 路由总表（关键文件）
+ 
+ 这个文件定义了：**用户访问哪个 URL，系统调用哪个函数**。
+ 
+ **公开路由（不需要登录）：**
+ | HTTP 方法 | 路径 | 谁调用 | 干啥的 |
+ |-----------|------|--------|--------|
+ | GET | /health | 监控 | 健康检查 |
+ | POST | /api/v1/auth/register | 任何人 | 注册账号 |
+ | POST | /api/v1/auth/login | 任何人 | 登录 |
+ | POST | /api/v1/auth/refresh | 任何人 | 刷新令牌 |
+ | POST | /api/v1/auth/logout | 任何人 | 退出登录 |
+ | GET | /api/v1/psychology/categories | 任何人 | 看心理文章分类 |
+ | GET | /api/v1/psychology/articles | 任何人 | 看心理文章列表 |
+ | GET | /api/v1/psychology/qna | 任何人 | 看心理问答 |
+ | GET | /api/v1/psychology/resources | 任何人 | 看自助资源 |
+ | GET | /api/v1/music/tracks | 任何人 | 看音乐列表 |
+ | GET | /api/v1/music/tracks/{id}/stream | 任何人 | 听音乐 |
+ | GET | /api/v1/depression/scales | 任何人 | 看看抑郁量表 |
+ | GET | /api/v1/community/posts | 任何人 | 看社区帖子 |
+ 
+ **需要登录的路由：**
+ | HTTP 方法 | 路径 | 干啥的 |
+ |-----------|------|--------|
+ | GET | /api/v1/auth/me | 看自己的信息 |
+ | PATCH | /api/v1/users/me | 改自己信息 |
+ | POST | /api/v1/chat/open | 开始聊天 |
+ | POST | /api/v1/chat/messages | 发消息给 AI |
+ | GET | /api/v1/chat/history | 看聊天历史 |
+ | GET | /api/v1/chat/memories | 看 AI 记住了什么 |
+ | POST | /api/v1/diaries | 写日记 |
+ | POST | /api/v1/depression/assessments | 做抑郁测试 |
+ | POST | /api/v1/community/posts | 发帖子 |
+ | POST | /api/v1/objects/upload | 上传文件 |
+ 
+ **需要管理员身份的路由：**
+ | HTTP 方法 | 路径 | 干啥的 |
+ |-----------|------|--------|
+ | GET | /api/v1/admin/users | 查看所有用户 |
+ | DELETE | /api/v1/admin/users/{id} | 删除用户 |
+ | GET | /api/v1/admin/risk-conversations | 看风险对话 |
+ | POST | /api/v1/admin/music | 创建音乐 |
+ | POST | /api/v1/admin/psychology/articles | 创建心理文章 |
+ | GET | /api/v1/admin/web-ingestion/reviews | 知识审核列表 |
+ | POST | /api/v1/admin/web-ingestion/reviews/{id}/publish | 审核通过发布 |
+ 
+ ---
+ 
+ ### 4.4 第2层 — 服务层（`src/app/`）—— 业务大脑
+ 
+ **职责**：每个 `xxx_service.rs` 文件实现了某类业务的核心逻辑。
+ 
+ ```
+ src/app/
+ ├── mod.rs              声明所有子模块
+ │
+ ├── auth/
+ │   ├── mod.rs
+ │   └── auth_service.rs      ★ 注册、登录、令牌刷新逻辑
+ │
+ ├── user/
+ │   ├── mod.rs
+ │   └── user_service.rs      ★ 用户资料 CRUD
+ │
+ ├── session/                 ★★★ 最核心的聊天区
+ │   ├── mod.rs
+ │   ├── chat_service.rs      ★ 聊天主入口（发消息、收回复）
+ │   └── session_service.rs   查询会话数据
+ │
+ ├── agent/                   ★★★ Agent（智能体）区
+ │   ├── mod.rs
+ │   ├── agent_runtime.rs     ★ Agent 运行时（决定 AI 用哪个工具）
+ │   ├── agent_context.rs     构建 Agent 上下文（记忆+RAG+摘要）
+ │   ├── prompt_builder.rs    构建发送给 LLM 的提示词
+ │   ├── tool_registry.rs     工具注册列表
+ │   └── tools/               ★ Agent 能用的工具列表
+ │       ├── get_weather_tool.rs      查天气
+ │       ├── knowledge_search_tool.rs  搜知识库
+ │       ├── memory_search_tool.rs     搜长期记忆
+ │       ├── diary_search_tool.rs      搜日记
+ │       ├── depression_scale_tool.rs  查抑郁评估记录
+ │       ├── music_recommend_tool.rs   推荐音乐
+ │       ├── community_search_tool.rs  搜社区帖子
+ │       ├── get_time_tool.rs          查时间
+ │       ├── fetch_web_content_tool.rs 抓网页
+ │       └── baidu_baike_tool.rs       查百度百科
+ │
+ ├── memory/                   ★★★ 记忆区
+ │   ├── mod.rs
+ │   ├── memory_service.rs     ★ 记忆的存储/查询/向量化
+ │   └── memory_extractor.rs   从对话中提取事实记忆
+ │
+ ├── rag/                      ★★★ RAG（知识库检索）
+ │   ├── mod.rs
+ │   ├── chunking.rs           文本分块
+ │   ├── ingestion_service.rs  知识入库
+ │   ├── retrieval_service.rs  ★ 检索知识（关键词+向量混合搜索）
+ │   └── vector_index_service.rs  向量索引管理（Qdrant）
+ │
+ ├── risk/                     ★★★ 风险检测
+ │   ├── mod.rs
+ │   ├── risk_detection_service.rs      风险检测逻辑
+ │   └── post_conversation_risk_audit_worker.rs  ★ 对话后置审计
+ │
+ ├── summary/
+ │   ├── mod.rs
+ │   ├── summary_service.rs          对话摘要生成
+ │   └── summary_refresh_handler.rs  异步刷新摘要
+ │
+ ├── community/                社区
+ │   ├── mod.rs
+ │   └── community_service.rs  帖子/评论/点赞
+ │
+ ├── depression/               抑郁评估
+ │   ├── mod.rs
+ │   └── depression_service.rs 量表答题计分
+ │
+ ├── diary/                    日记
+ │   ├── mod.rs
+ │   └── diary_service.rs      日记 CRUD
+ │
+ ├── music/                    音乐
+ │   ├── mod.rs
+ │   └── music_service.rs      曲库 CRUD + 流式播放
+ │
+ ├── psychology/               心理知识库
+ │   ├── mod.rs
+ │   └── psychology_service.rs 知识分类/文章/问答/资源
+ │
+ ├── storage/                  文件存储
+ │   ├── mod.rs
+ │   └── object_service.rs     上传/下载/删除文件
+ │
+ └── web_ingestion/            ★★★ 知识自动爬取流水线
+     ├── mod.rs
+     ├── dispatcher.rs          分发器（取任务→执行）
+     ├── scheduler.rs           调度器（定时触发爬取）
+     ├── extractor.rs           网页内容提取（HTML→纯文本）
+     ├── industrial_chunker.rs  ★ 工业级文本分块（章节/摘要/原子块）
+     ├── quality_gate.rs        质量门控（评分决定自动发布还是人工审核）
+     ├── review_service.rs      审核发布服务
+     ├── pipeline_context.rs    管道上下文
+     ├── state_machine_adapter.rs 状态机适配
+     ├── event_types.rs          事件类型
+     ├── hash.rs                 哈希工具
+     ├── handlers/              各个阶段的事件处理
+     └── services/              子服务
+ ```
+ 
+ ---
+ 
+ ### 4.5 第3层 — 领域层（`src/domain/`）—— 合同/接口/数据结构
+ 
+ **职责**：定义"有什么数据"、"能做什么操作"（接口），但不写具体实现。  
+ 就像签合同——规定双方责任，但不规定具体怎么干活。
+ 
+ ```
+ src/domain/
+ ├── mod.rs
+ ├── user/
+ │   ├── mod.rs
+ │   ├── user.rs                用户数据结构
+ │   ├── user_profile.rs        用户画像数据结构
+ │   ├── user_repository.rs          ★ 用户仓库接口（定义：能查询用户）
+ │   ├── user_context_version.rs    上下文版本号结构
+ │   ├── user_context_control.rs    上下文控制流结构
+ │   └── user_profile_repository.rs 画像仓库接口
+ │
+ ├── auth/
+ │   ├── mod.rs
+ │   ├── password_service.rs    密码加密接口
+ │   ├── token_service.rs       JWT 令牌接口
+ │   ├── refresh_token_store.rs 刷新令牌接口
+ │   └── refresh_token_revocation_repository.rs 令牌吊销接口
+ │
+ ├── conversation/
+ │   ├── mod.rs
+ │   ├── conversation.rs        会话数据结构
+ │   ├── conversation_message.rs 消息数据结构
+ │   └── conversation_repository.rs ★ 会话仓库接口
+ │
+ ├── memory/
+ │   └── mod.rs                  记忆数据结构
+ │
+ ├── rag/
+ │   └── mod.rs                  RAG 数据结构
+ │
+ ├── risk/
+ │   ├── mod.rs
+ │   ├── detection_types.rs         风险检测类型定义
+ │   ├── risk_detection_result.rs   风险检测结果
+ │   ├── risk_detector.rs          ★ 风险检测器接口
+ │   ├── risk_repository.rs         风险仓库接口
+ │   └── post_conversation_risk_audit.rs 后置审计数据结构
+ │
+ ├── llm/
+ │   ├── mod.rs
+ │   └── tools.rs                LLM 工具定义
+ │
+ ├── storage/
+ │   └── mod.rs                  对象存储接口
+ │
+ ├── vector_store/
+ │   ├── mod.rs
+ │   └── types.rs                向量存储类型
+ │
+ ├── tasks/
+ │   ├── mod.rs
+ │   ├── task_event.rs           任务事件定义
+ │   ├── task_handler.rs         ★ 任务处理器接口
+ │   └── task_publisher.rs       任务发布器接口
+ │
+ ├── web_ingestion/              知识摄入领域
+ │   ├── mod.rs
+ │   ├── error.rs                错误类型定义
+ │   ├── event_types.rs          事件类型
+ │   ├── status.rs               状态枚举
+ │   ├── state_machine.rs        ★ 状态机定义
+ │   ├── fetcher.rs              网页抓取接口
+ │   ├── distiller.rs            LLM 蒸馏接口
+ │   ├── repository.rs           仓库接口
+ │   └── review.rs               审核数据结构
+ │
+ ├── community/
+ │   └── mod.rs                  社区数据结构
+ ├── depression/
+ │   └── mod.rs                  抑郁评估数据结构
+ ├── diary/
+ │   └── mod.rs                  日记数据结构
+ ├── music/
+ │   └── mod.rs                  音乐数据结构
+ ├── psychology/
+ │   └── mod.rs                  心理知识库数据结构
+ ├── like/
+ │   └── mod.rs                  点赞数据结构
+ ├── summary/
+ │   └── mod.rs                  摘要数据结构
+ ├── vector_index/
+ │   └── mod.rs                  向量索引数据结构
+ ├── agent/
+ │   └── mod.rs                  Agent 事件数据结构
+ └── tasks/
+     └── ...                     任务相关
+ ```
+ 
+ ---
+ 
+ ### 4.6 第4层 — 基础设施层（`src/infra/`）—— 干活的人
+ 
+ **职责**：实现领域层定义的接口。领域层说"我要能查询用户"，  
+ 基础设施层说"好的，我用 MySQL 查"。
+ 
+ ```
+ src/infra/
+ ├── mod.rs
+ │
+ ├── persistence/                ★ 数据库实现
+ │   ├── mod.rs
+ │   ├── seaorm_db.rs            连接 MySQL
+ │   ├── entities/               ★★ SeaORM 实体（1文件=1数据库表）
+ │   │   ├── users.rs                  用户表
+ │   │   ├── refresh_tokens.rs         刷新令牌表
+ │   │   ├── user_profiles.rs          用户画像表
+ │   │   ├── user_diaries.rs           日记表
+ │   │   ├── user_memories.rs          记忆表
+ │   │   ├── user_memory_evidence.rs   记忆证据表
+ │   │   ├── user_persona_snapshots.rs 画像快照表
+ │   │   ├── user_context_versions.rs  上下文版本表
+ │   │   ├── conversations.rs          会话表
+ │   │   ├── conversation_messages.rs  消息表
+ │   │   ├── conversation_summaries.rs 摘要表
+ │   │   ├── community_posts.rs        社区帖子表
+ │   │   ├── community_comments.rs     社区评论表
+ │   │   ├── community_post_media.rs   社区媒体表
+ │   │   ├── content_likes.rs          点赞表
+ │   │   ├── depression_scales.rs      抑郁量表定义表
+ │   │   ├── depression_assessments.rs 抑郁评估记录表
+ │   │   ├── psychology_categories.rs  心理分类表
+ │   │   ├── psychology_articles.rs    心理文章表
+ │   │   ├── psychology_qna.rs         心理问答表
+ │   │   ├── psychology_resources.rs   心理资源表
+ │   │   ├── user_knowledge_favorites.rs 心理收藏表
+ │   │   ├── music.rs                  音乐曲库表
+ │   │   ├── stored_objects.rs         对象存储表
+ │   │   ├── web_sources.rs            知识来源表
+ │   │   ├── web_source_urls.rs        来源 URL 表
+ │   │   ├── web_pages.rs              网页内容表
+ │   │   ├── web_crawl_jobs.rs         爬取任务表
+ │   │   ├── web_ingestion_audit_logs.rs 审计日志表
+ │   │   ├── knowledge_documents.rs    文档表
+ │   │   ├── knowledge_chunks.rs       文本分块表
+ │   │   ├── knowledge_embeddings.rs   向量表
+ │   │   ├── knowledge_ingestion_runs.rs 摄入运行记录表
+ │   │   ├── knowledge_publish_records.rs 发布记录表
+ │   │   ├── knowledge_chunk_manifests.rs 分块映射表
+ │   │   ├── knowledge_vector_manifests.rs 向量映射表
+ │   │   ├── domain_event_outbox.rs    事件发件箱表
+ │   │   ├── agent_events.rs           Agent 事件表
+ │   │   ├── post_conversation_risk_audits.rs 风险审计表
+ │   │   ├── vector_index_jobs.rs      向量索引任务表
+ │   │   ├── vector_index_records.rs   向量索引记录表
+ │   │   └── prelude.rs                实体导出的快捷引用
+ │   └── implementations/              ★ 接口的具体 SQL 实现
+ │
+ ├── llm/                           AI 模型实现
+ │   ├── mod.rs
+ │   ├── ollama_client.rs           调用 Ollama API
+ │   ├── ollama_provider.rs         LLM 聊天实现
+ │   ├── ollama_embedding_provider.rs 向量嵌入实现
+ │   ├── mock_provider.rs           测试用的假 LLM
+ │   └── prompt_provider.rs         提示词模板
+ │
+ ├── auth/                          认证实现
+ │   ├── mod.rs
+ │   ├── jwt_token_service.rs       JWT 令牌生成/验证
+ │   ├── bcrypt_password_hasher.rs  密码加密
+ │   └── in_memory_refresh_token_revocation_repository.rs 令牌吊销
+ │
+ ├── detector/                      风险检测实现
+ │   ├── mod.rs
+ │   └── rule_based_detector.rs    ★ 基于规则的风险检测器
+ │
+ ├── storage/
+ │   ├── mod.rs
+ │   └── local_storage.rs           本地文件存储
+ │
+ ├── vector_store/
+ │   ├── mod.rs
+ │   ├── qdrant_vector_store.rs     ★ Qdrant 向量存储实现
+ │   └── mock_vector_store.rs        测试用的假向量存储
+ │
+ ├── tasks/                         后台任务
+ │   ├── mod.rs
+ │   ├── in_memory_task_flow.rs     内存任务管道
+ │   ├── logging_handler.rs         日志处理器
+ │   ├── alert_handler.rs           告警处理器
+ │   └── rate_limit_handler.rs      限流处理器
+ │
+ └── web_ingestion/                 知识摄入实现
+     ├── mod.rs
+     ├── fetcher.rs                 用 Reqwest 抓网页
+     ├── distiller.rs               用 LLM 蒸馏摘要
+     ├── repositories.rs            知识摄入的 MySQL 操作
+     └── review_repository.rs       审核记录的 MySQL 操作
+ ```
+ 
+ ---
+ 
+ ### 4.7 胶水层 `src/bootstrap/` —— 组装车间
+ 
+ **职责**：把各种零件（Repository、Service、Provider）组装到一起。
+ 
+ ```
+ src/bootstrap/
+ ├── mod.rs
+ ├── repos.rs       ★ 创建所有 Repository（数据仓库）
+ ├── auth.rs        创建认证服务
+ ├── state.rs       把所有 Service 打包成 AppState
+ ├── tasks.rs       启动后台任务
+ └── web_ingestion.rs  初始化知识摄入模块
+ ```
+ 
+ ---
+ 
+ ### 4.8 共享层 `src/shared/`
+ 
+ ```
+ src/shared/
+ ├── mod.rs
+ ├── config.rs      ★★ 配置文件结构（AppConfig 和他的全部子配置）
+ ├── error.rs       错误类型定义
+ ```
+ 
+ `config.rs` 定义了所有配置项：
+ - `server`：监听地址和端口（默认 0.0.0.0:8080）
+ - `database`：MySQL 连接
+ - `jwt`：JWT 密钥、过期时间
+ - `auth`：登录限制（最大尝试次数、锁定时间）
+ - `storage`：文件存储后端和大小限制
+ - `ollama`：Ollama LLM 配置
+ - `llm`：AI 模型配置
+ - `agent`：Agent 开关（记忆/RAG/摘要）
+ - `rag`：RAG 分块大小、检索参数
+ - `qdrant`：向量数据库配置
+ - `embedding`：向量嵌入配置
+ - `web_ingestion`：知识摄入全部配置
+ - `plugins`：Agent 工具配置（天气、新闻、搜索等）
+ - `mail`：邮件配置
+ - `cors`：跨域配置
+ - `logging`：日志级别
+ 
+ ---
+ 
+ ## 五、数据库表全解（41 张表）
+ 
+ > 建表语句在：`database/sql/init.sql`
+ > 每个表的 Rust 实体在：`src/infra/persistence/entities/`
+ 
+ ### 5.1 用户与账号（5 张表）
+ 
+ | 表名 | 中文名 | 存什么 | 关键字段 |
+ |------|--------|--------|----------|
+ | `users` | 用户表 | 账号信息 | id, username, password(加密), email, phone, role(USER/ADMIN) |
+ | `refresh_tokens` | 刷新令牌表 | 记住登录状态 | token_hash, user_id, expires_at |
+ | `user_profiles` | 用户画像表 | AI 对用户的了解 | interests, personality_traits, emotional_tendency |
+ | `user_context_versions` | 上下文版本号 | 标记画像/记忆是否更新 | version(数字, 每次都+1) |
+ | `user_persona_snapshots` | 画像快照表 | AI 生成的用户画像缓存 | snapshot_data(JSON), 每用户1条 active |
+ 
+ ### 5.2 对话（4 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `conversations` | 会话表 | 每个用户 1 条，记录对话主题、消息总数 |
+ | `conversation_messages` | 消息表 | 每条聊天消息（谁发的、发的啥） |
+ | `conversation_summaries` | 摘要表 | 聊完一个话题后生成的摘要（有版本追溯） |
+ | `agent_events` | Agent 事件表 | AI 调用工具的记录 |
+ 
+ ### 5.3 记忆系统（3 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `user_memories` | 记忆表 | AI 从聊天中提取的长期记忆（"用户叫张三，喜欢猫"） |
+ | `user_memory_evidence` | 记忆证据表 | 这条记忆是从哪条消息/摘要提取的（追溯用） |
+ | `user_persona_snapshots` | 画像快照表 |（同 5.1）|
+ 
+ ### 5.4 心理健康（6 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `psychology_categories` | 分类表 | 知识分类树（如"焦虑症/抑郁症/..."） |
+ | `psychology_articles` | 文章表 | 心理科普文章 |
+ | `psychology_qna` | 问答表 | 常见心理问题及答案 |
+ | `psychology_resources` | 资源表 | 自助资源（热线电话/书籍推荐等） |
+ | `user_knowledge_favorites` | 收藏表 | 用户收藏了哪些文章/问答/资源 |
+ | `content_likes` | 点赞表 | 用户点赞记录 |
+ 
+ ### 5.5 抑郁评估（2 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `depression_scales` | 量表定义表 | PHQ-9/SDS/BDI 等量表的题目和评分标准 |
+ | `depression_assessments` | 评估记录表 | 用户每次答题的结果 |
+ 
+ ### 5.6 社区（4 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `community_posts` | 帖子表 | 用户发的帖子 |
+ | `community_post_media` | 媒体表 | 帖子附带的图片/视频二进制数据 |
+ | `community_comments` | 评论表 | 帖子评论（支持楼中楼） |
+ | `content_likes` | 点赞表 |（同 5.4，也用于社区点赞）|
+ 
+ ### 5.7 其他业务（3 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `user_diaries` | 日记表 | 用户写的日记 |
+ | `music` | 音乐表 | 音乐曲库 |
+ | `stored_objects` | 对象存储表 | 上传文件的元数据 |
+ 
+ ### 5.8 知识摄入（15 张表）— 最复杂的一块
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `web_sources` | 来源表 | 要爬取的网站配置（种子 URL、规则） |
+ | `web_source_urls` | URL 表 | 从来源发现的待爬 URL 队列 |
+ | `web_pages` | 网页表 | 爬取到的原始 HTML 和提取的文本 |
+ | `web_crawl_jobs` | 爬取任务表 | 爬虫任务记录 |
+ | `knowledge_ingestion_runs` | 运行记录表 | 每次知识摄入流水线的运行记录 |
+ | `knowledge_documents` | 文档表 | 爬取/蒸馏后生成的文档 |
+ | `knowledge_chunks` | 分块表 | 文档被切成的文本块 |
+ | `knowledge_embeddings` | 向量表 | 文本块的向量嵌入（已弃用，保留兼容） |
+ | `knowledge_publish_records` | 发布记录表 | 发布的版本（staged→published→superseded） |
+ | `knowledge_chunk_manifests` | 分块映射表 | 发布版本→分块的映射 |
+ | `knowledge_vector_manifests` | 向量映射表 | 分块→Qdrant 向量的映射 |
+ | `domain_event_outbox` | 事件发件箱 | 异步事件（publish 等） |
+ | `web_ingestion_audit_logs` | 审计日志 | 所有操作的日志 |
+ | `vector_index_jobs` | 索引任务表 | 向量索引任务 |
+ | `vector_index_records` | 索引记录表 | 向量索引记录 |
+ 
+ ### 5.9 风险检测（1 张表）
+ 
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `post_conversation_risk_audits` | 风险审计表 | 对话后的风险检测结果 |
+ 
+ ---
+ 
+ ## 六、一条请求的完整旅程（举例：用户发消息给 AI）
+ 
+ 假设用户已登录，发送一条消息"今天天气怎么样？"
+ 
+ ```
+ ┌── 1. HTTP 请求 ──────────────────────────────────────────┐
+ │ POST /api/v1/chat/messages                               │
+ │ Headers: Authorization: Bearer eyJxxx...                 │
+ │ Body: { "message": "今天天气怎么样？" }                    │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 2. src/api/router.rs ───────────────────────────────────┐
+ │ 匹配路由 → 调用 chat_send_message 函数                     │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 3. src/api/middleware/auth_middleware.rs ──────────────┐
+ │ 解析 JWT Token → 确认用户身份 → 通过                      │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 4. src/api/handlers/chat_handler.rs ──────────────────┐
+ │ chat_send_message():                                     │
+ │ ① 解析请求体 → ② 调用 chat_service.send_message()        │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 5. src/app/session/chat_service.rs ───────────────────┐
+ │ ChatService::send_message():                              │
+ │ ① 保存用户消息到数据库                                    │
+ │ ② 调用 AgentRuntime 生成回复                              │
+ │ ③ 保存 AI 回复到数据库                                    │
+ │ ④ 返回结果                                                │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 6. src/app/agent/agent_runtime.rs ────────────────────┐
+ │ AgentRuntime::chat():                                     │
+ │ ① 加载上下文（聊天历史、记忆、RAG 知识）                  │
+ │ ② 构建提示词（system prompt + 工具描述）                  │
+ │ ③ 调用 LLM（Ollama API）                                  │
+ │ ④ LLM 决定要不要用工具 → 发现涉及天气                     │
+ │ ⑤ 调用 get_weather_tool                                   │
+ │ ⑥ 把工具结果发给 LLM 生成最终回复                          │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 7. src/app/agent/tools/get_weather_tool.rs ──────────┐
+ │ GetWeatherTool::call():                                  │
+ │ ① 调和风天气 API 查合肥实时天气                          │
+ │ ② 返回天气数据                                            │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 8. LLM 生成回复 ─────────────────────────────────────┐
+ │ "合肥当前温度 28°C，晴，适合出门散步 ☀️"                   │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 9. 后台异步任务 ──────────────────────────────────────┐
+ │ ① MemoryExtractor → 从对话中提取事实记忆                  │
+ │ ② SummaryRefreshHandler → 检查是否需要生成摘要           │
+ │ ③ PostConversationRiskAuditWorker → 检查是否有风险内容    │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼
+ ┌── 10. HTTP 响应 ────────────────────────────────────────┐
+ │ { "reply": "合肥当前温度 28°C，晴，适合出门散步 ☀️",      │
+ │   "tool_calls": [...] }                                   │
+ └──────────────────────────────────────────────────────────┘
+ ```
+ 
+ ---
+ 
+ ## 七、文件依赖关系图（谁依赖谁）
+ 
+ ```
+ main.rs
+   ├── bootstrap/     ← 装配所有组件
+   │   ├── repos.rs   → 依赖 infra/persistence/ 和 domain/*/ 接口
+   │   ├── auth.rs    → 依赖 domain/auth/ 和 infra/auth/
+   │   ├── state.rs   → 把所有 Service 打包
+   │   └── tasks.rs   → 启动后台任务（风险审计、摘要刷新等）
+   │
+   ├── api/           ← HTTP 层
+   │   ├── router.rs  → 引用 handlers/* 注册路由
+   │   ├── handlers/* → 调用 app/*_service 执行业务
+   │   └── middleware/ → 检查 JWT 身份
+   │
+   ├── app/           ← 业务逻辑层
+   │   ├── */*_service.rs  → 调用 domain/* 中的接口
+   │   └── agent/     → 调用 app/memory/, app/rag/, app/summary/, tools/
+   │
+   ├── domain/        ← 定义接口和数据结构（纯 Rust 结构体 + trait）
+   │   └── */         → 被 app/ 和 infra/ 双方引用
+   │
+   └── infra/         ← 实现 domain 接口
+       ├── persistence/ → 操作 MySQL（SeaORM）
+       ├── llm/         → 调 Ollama API
+       ├── vector_store/ → 操作 Qdrant
+       └── detector/    → 风险检测规则
+ 
+ 依赖方向（从右到左）：
+   main.rs → bootstrap → api/app → domain ← infra
+                      ↑                    ↑
+                      └──  glue code ──────┘
+ ```
+ 
+ **关键原则**：
+ - `domain/` **不依赖** `app/` 或 `infra/`（纯接口层）
+ - `infra/` **依赖** `domain/`（实现接口）
+ - `app/` **依赖** `domain/`（调用接口）
+ - `api/` **依赖** `app/`（调用服务）
+ - `main.rs` **依赖** `bootstrap/`（组装一切）
+ 
+ ---
+ 
+ ## 八、配置文件速查（`config.toml`）
+ 
+ | 配置段 | 关键字段 | 默认值 | 说明 |
+ |--------|---------|--------|------|
+ | `[server]` | host, port | 0.0.0.0:8080 | 监听地址 |
+ | `[database]` | url | mysql://user:pass@.../digital_companion | MySQL 连接 |
+ | `[jwt]` | secret, access_ttl_secs | CHANGE_ME..., 86400(1天) | JWT 密钥 |
+ | `[llm]` | chat_model, temperature | qwen2.5:14b, 0.7 | LLM 模型 |
+ | `[embedding]` | model, dimension | nomic-embed-text, 768 | 向量嵌入 |
+ | `[agent]` | enabled, memory_enabled | true, true | Agent 开关 |
+ | `[qdrant]` | enabled, url | true, http://127.0.0.1:6334 | 向量数据库 |
+ | `[web_ingestion]` | enabled, auto_publish | true, true | 知识摄入 |
+ | `[plugins.weather]` | api_key | "" | 天气 API |
+ | `[plugins.news]` | rss_urls | 中国新闻网 | 新闻源 |
+ 
+ 环境变量会覆盖配置文件（如 `DATABASE_URL`、`JWT_SECRET`、`LLM_BASE_URL` 等）。
+ 
+ ---
+ 
+ ## 九、前端项目
+ 
+ ### 9.1 管理后台（`web/admin/`）
+ 
+ **技术栈**：Vue 3 + TypeScript + Pinia + Vue Router + Rolldown
+ 
+ ```
+ web/admin/src/
+ ├── main.ts             入口
+ ├── App.vue             根组件
+ ├── router/
+ │   └── index.ts        路由（登录/控制台/用户管理/风险/知识审核/心理学/音乐）
+ ├── stores/
+ │   └── auth.ts         登录状态管理
+ ├── views/
+ │   ├── LoginView.vue          登录页
+ │   ├── DashboardView.vue      控制台首页
+ │   ├── UsersView.vue          用户管理
+ │   ├── RiskView.vue           风险对话列表
+ │   ├── RiskDetailView.vue     风险对话详情
+ │   ├── KnowledgeReviewsView.vue    知识审核列表
+ │   ├── KnowledgeReviewDetailView.vue 知识审核详情
+ │   ├── PsychologyView.vue     心理知识库管理
+ │   ├── MusicView.vue          音乐管理
+ │   └── NotFoundView.vue       404
+ ├── layouts/
+ │   └── AdminLayout.vue    后台布局（侧边栏 + 顶栏）
+ ├── components/           公共组件
+ ├── lib/                  工具函数
+ ├── utils/                工具函数（format.ts）
+ └── assets/               CSS 等
+ ```
+ 
+ ### 9.2 TypeScript SDK（`web/sdk/`）
+ 
+ 给前端用的 API 调用封装：
+ ```
+ web/sdk/src/
+ ├── index.ts       SDK 入口
+ ├── client.ts      API 客户端（自动管理 Token）
+ ├── http.ts        HTTP 请求封装（fetch）
+ └── types.ts       所有 API 的数据类型定义
+ ```
+ 
+ ---
+ 
+ ## 十、开发指南
+ 
+ ### 前置条件
+ 
+ | 工具 | 用途 |
+ |------|------|
+ | Rust ≥ 1.85 | 编译后端 |
+ | MySQL 8.0+ | 数据库 |
+ | Ollama | 运行 AI 模型（qwen2.5:14b + nomic-embed-text） |
+ | Qdrant（可选） | 向量数据库 |
+ | Node.js 22+ | 前端开发 |
+ 
+ ### 启动步骤
+ 
+ 1. **初始化数据库**：`mysql -u root -p < database/sql/init.sql`
+ 2. **启动 Ollama**：`ollama serve`，然后 `ollama pull qwen2.5:14b` 等
+ 3. **启动 Qdrant**（如果配置了 qdrant.enabled=true）
+ 4. **启动后端**：
+    ```
+    copy .env.example .env    # 编辑数据库密码等
+    cargo run                 # 编译并启动
+    ```
+ 5. **访问**：`http://localhost:8080/health`
+ 
+ ### 代码贡献原则
+ 
+ | 原则 | 说明 |
+ |------|------|
+ | 分层依赖 | api → app → domain ← infra |
+ | 接口隔离 | domain 定义 trait，infra 实现，app 使用 |
+ | 配置先行 | 新增功能先加 config.toml 配置项 |
+ | 建表先写 | 新增业务先写 init.sql 再加 Rust 实体 |
+ | 测试覆盖 | Service 层写单元测试，Handler 层写集成测试 |
+ 
+ ---
+ 
+ ## 十一、常见问题
+ 
+ **Q：这个项目是做什么的？**  
+ A：一个 AI 聊天伴侣后端。用户可以注册、聊天、写日记、做抑郁评估、逛社区、听音乐。  
+ AI 会记住用户的信息，越来越了解用户。
+ 
+ **Q：AI 能力是怎么来的？**  
+ A：通过 Ollama 运行本地大模型（Qwen2.5:14b）。也可以配置连 OpenAI 兼容的 API。
+ 
+ **Q：项目为什么分这么多层？**  
+ A：为了"解耦"。业务代码（app/）不需要知道数据存在 MySQL 还是 MongoDB；  
+ 数据库代码（infra/）改动了，业务逻辑不用改。方便测试、维护和扩展。
+ 
+ **Q：有哪些外部依赖？**  
+ A：MySQL（数据存储）、Ollama（AI 推理）、Qdrant（向量搜索，可选），  
+ 以及和风天气（查天气）、中国新闻网 RSS（新闻）等外部 API。
+ 
+ **Q：什么是向量搜索？为什么需要 Qdrant？**  
+ A：传统搜索是"关键字匹配"（搜"苹果"只能找到有"苹果"二字的文章），  
+ 向量搜索是"语义匹配"（搜"苹果"还能找到"iPhone""乔布斯""水果"等相关的）。  
+ Qdrant 是专门做向量搜索的数据库。
+ 
+ **Q：知识摄入（Web Ingestion）是干什么的？**  
+ A：自动爬取指定网站的内容，用 AI 理解、分块、去重后存入知识库。  
+ 这样 AI 就能用这些知识来回答用户问题。整个过程全自动。
+ 
+ **Q：这个项目有前端吗？**  
+ A：有一个 Vue 3 写的内容管理后台（管理用户、审核风险、管理知识库等）。  
+ 用户端的聊天界面不在此项目中。
+ 
+ ---
+ 
+ *项目地图生成时间：2026-06-15*  
+ *基于 commit 时点的全量代码分析*
