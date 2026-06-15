@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
 };
 use crate::domain::tasks::task_publisher::TaskPublisher;
-use crate::domain::user::user::{NewUser, UserStatus};
+use crate::domain::user::user::{NewUser, UserRole, UserStatus};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
@@ -42,14 +43,52 @@ impl Default for AuthConfig {
 
 #[derive(Debug, Clone)]
 pub enum Role {
-    //TODO 是不是需要一个回退字段？？？
     Admin,
+    SuperAdmin,
     User,
+    Other(String),
+}
+
+impl Role {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Admin => "ADMIN",
+            Self::SuperAdmin => "SUPER_ADMIN",
+            Self::User => "USER",
+            Self::Other(v) => v.as_str(),
+        }
+    }
 }
 
 impl From<&str> for Role {
     fn from(value: &str) -> Self {
-        unimplemented!()
+        match value {
+            "ADMIN" => Role::Admin,
+            "SUPER_ADMIN" => Role::SuperAdmin,
+            "USER" => Role::User,
+            _ => match value.to_lowercase().as_str() {
+                "admin" => Role::Admin,
+                "super_admin" | "superadmin" => Role::SuperAdmin,
+                "user" => Role::User,
+                _ => Role::Other(value.to_string()),
+            },
+        }
+    }
+}
+
+impl From<UserRole> for Role {
+    fn from(value: UserRole) -> Self {
+        match value {
+            UserRole::User => Role::User,
+            UserRole::Admin => Role::Admin,
+            UserRole::SuperAdmin => Role::SuperAdmin,
+        }
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -57,7 +96,7 @@ impl From<&str> for Role {
 pub struct AuthenticatedUser {
     pub user_id: u64,
     pub username: String,
-    pub role: String,
+    pub role: Role,
 }
 
 #[derive(Debug, Clone)]
@@ -355,7 +394,7 @@ impl AuthService {
         Ok(AuthenticatedUser {
             user_id: user.id,
             username: user.username,
-            role: user.role.as_str().to_string(),
+            role: Role::from(user.role),
         })
     }
 }

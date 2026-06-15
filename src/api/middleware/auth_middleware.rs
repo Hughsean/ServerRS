@@ -5,7 +5,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::api::AuthState;
-use crate::app::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::{AuthenticatedUser, Role};
 use crate::shared::error::AppError;
 
 /// NOTE: Uses State<AuthState>, NOT State<Arc<AuthState>>.
@@ -45,7 +45,7 @@ pub async fn require_admin_role(
         .get::<AuthenticatedUser>()
         .ok_or(AppError::Unauthorized)?;
 
-    if user.role != "ADMIN" && user.role != "SUPER_ADMIN" {
+    if !matches!(user.role, Role::Admin | Role::SuperAdmin) {
         return Err(AppError::Forbidden(format!(
             "role '{}' is not permitted for this action",
             user.role

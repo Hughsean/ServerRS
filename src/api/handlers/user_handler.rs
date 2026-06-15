@@ -11,7 +11,7 @@ use crate::api::dto::user_dto::{
     DeleteUserResponse, UpdateUserRequest, UpsertUserProfileRequest, UserProfileResponse,
     UserResponse,
 };
-use crate::app::auth::auth_service::AuthenticatedUser;
+use crate::app::auth::auth_service::{AuthenticatedUser, Role};
 use crate::domain::user::user::UserStatus;
 use crate::shared::error::AppError;
 
@@ -261,7 +261,7 @@ pub async fn upsert_user_profile(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn to_user_dto(u: crate::domain::user::user::User, role: &str) -> UserDto {
+fn to_user_dto(u: crate::domain::user::user::User, role: &Role) -> UserDto {
     UserDto {
         id: u.id,
         username: u.username,

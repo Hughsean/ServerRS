@@ -126,6 +126,6 @@ pub async fn me(Extension(user): Extension<AuthenticatedUser>) -> Json<UserInfo>
     Json(UserInfo {
         id: user.user_id,
         username: user.username,
-        role: user.role,
+        role: user.role.to_string(),
     })
 }
