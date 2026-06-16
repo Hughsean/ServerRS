@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
 
 use crate::domain::qq_bot::config::ExternalUser;
@@ -56,8 +56,31 @@ impl ExternalUserRepository for SeaOrmExternalUserRepository {
             persona_enabled: Set(if user.persona_enabled { 1i8 } else { 0i8 }),
             ..Default::default()
         };
-        let result = model.save(&self.db).await.map_err(map_db_err)?;
-        Ok(model_to_domain(result.try_into_model().unwrap()))
+
+        let update_columns = vec![
+            qq_external_users::Column::InternalUserId,
+            qq_external_users::Column::Nickname,
+            qq_external_users::Column::AvatarUrl,
+            qq_external_users::Column::LastSeenAt,
+            qq_external_users::Column::MemoryEnabled,
+            qq_external_users::Column::PersonaEnabled,
+        ];
+
+        qq_external_users::Entity::insert_many([model])
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([
+                    qq_external_users::Column::QqUserId,
+                ])
+                .update_columns(update_columns)
+                .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        self.find_by_qq_user_id(user.qq_user_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("external user not found after upsert".into()))
     }
 
     async fn update_last_seen(&self, qq_user_id: i64, last_seen_at: i64) -> Result<(), AppError> {

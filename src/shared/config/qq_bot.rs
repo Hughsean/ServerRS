@@ -12,6 +12,10 @@ pub struct QqBotConfig {
     /// NapCat 反向 WebSocket 监听端口
     #[serde(default = "default_ws_port")]
     pub ws_port: u16,
+    /// NapCat 正向 WebSocket URL（可选）。
+    /// 设置后优先使用此 URL 连接；不设置则从 http_base_url 推导（http→ws）。
+    #[serde(default)]
+    pub ws_url: Option<String>,
     /// NapCat HTTP API 地址
     #[serde(default = "default_http_base_url")]
     pub http_base_url: String,
@@ -83,6 +87,7 @@ impl Default for QqBotConfig {
             enabled: false,
             ws_host: default_ws_host(),
             ws_port: default_ws_port(),
+            ws_url: None,
             http_base_url: default_http_base_url(),
             http_token: String::new(),
             self_qq_id: default_self_qq_id(),

@@ -9,16 +9,13 @@ use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
 use super::listener::GroupNoticeHandler;
 
-/// Handles OneBot group notice events (member join/leave, poke) by syncing to database
-/// and optionally responding.
+/// Handles OneBot group notice events (member join/leave) by syncing to database.
 pub struct NapCatGroupNoticeHandler {
     member_repo: Arc<dyn GroupMemberRepository>,
     external_user_repo: Arc<dyn ExternalUserRepository>,
     napcat_api: Option<Arc<NapCatApiClient>>,
     /// bot_account_id to associate with new group members.
     bot_account_id: u64,
-    /// Whether to auto-reply to pokes by poking back.
-    auto_poke_back: bool,
 }
 
 impl NapCatGroupNoticeHandler {
@@ -33,14 +30,7 @@ impl NapCatGroupNoticeHandler {
             external_user_repo,
             napcat_api,
             bot_account_id,
-            auto_poke_back: true,
         }
-    }
-
-    /// Enable or disable automatic poke-back.
-    pub fn with_auto_poke_back(mut self, enabled: bool) -> Self {
-        self.auto_poke_back = enabled;
-        self
     }
 }
 
@@ -192,38 +182,6 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
                 "group member created (was not in DB)"
             );
         }
-
-	        Ok(())
-	    }
-
-	    async fn handle_group_poke(
-	        &self,
-	        group_id: i64,
-	        user_id: i64,
-	    ) -> Result<(), QqBotError> {
-	        info!(
-	            group_id,
-	            user_id,
-	            "group_poke: bot was poked"
-	        );
-
-	        if self.auto_poke_back {
-	            if let Some(ref api) = self.napcat_api {
-	                match api.group_poke(group_id, user_id).await {
-	                    Ok(_) => {
-	                        info!(group_id, user_id, "auto poke-back sent");
-	                    }
-	                    Err(e) => {
-	                        warn!(
-	                            group_id,
-	                            user_id,
-	                            error = %e,
-	                            "auto poke-back failed"
-	                        );
-	                    }
-	                }
-	            }
-	        }
 
 	        Ok(())
 	    }

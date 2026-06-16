@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
 
 use crate::domain::qq_bot::config::GroupMember;
@@ -64,8 +64,33 @@ impl GroupMemberRepository for SeaOrmGroupMemberRepository {
             status: Set(member.status.clone()),
             ..Default::default()
         };
-        let result = model.save(&self.db).await.map_err(map_db_err)?;
-        Ok(model_to_domain(result.try_into_model().unwrap()))
+
+        let update_columns = vec![
+            qq_group_members::Column::Card,
+            qq_group_members::Column::Nickname,
+            qq_group_members::Column::Role,
+            qq_group_members::Column::Title,
+            qq_group_members::Column::JoinTime,
+            qq_group_members::Column::LastSeenAt,
+            qq_group_members::Column::Status,
+        ];
+
+        qq_group_members::Entity::insert_many([model])
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([
+                    qq_group_members::Column::QqGroupId,
+                    qq_group_members::Column::QqUserId,
+                ])
+                .update_columns(update_columns)
+                .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        self.find(member.qq_group_id, member.qq_user_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("group member not found after upsert".into()))
     }
 
     async fn update_last_seen(

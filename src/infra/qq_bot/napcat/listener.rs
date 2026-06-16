@@ -7,11 +7,17 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
 use crate::domain::qq_bot::QqBotError;
-use crate::domain::qq_bot::message::NormalizedMessage;
+use crate::domain::qq_bot::message::{
+    MessageDirection, NormalizedMessage,
+};
 
 use super::message_parser::{ParsedEvent, normalize_text, parse_message_segments};
 
 /// Raw OneBot group message event.
+///
+/// All fields use `#[serde(default)]` so a single unknown field never causes the
+/// whole event to be dropped — this is critical because NapCat may emit fields
+/// (e.g. `message` as an array, extra metadata) that we don't model.
 #[derive(Debug, serde::Deserialize)]
 struct OneBotGroupMessageEvent {
     #[serde(default)]
@@ -22,14 +28,17 @@ struct OneBotGroupMessageEvent {
     #[serde(default)]
     sub_type: String,
     #[serde(default)]
+    #[serde(deserialize_with = "deserialize_message_id")]
     message_id: String,
     #[serde(default)]
     group_id: i64,
     #[serde(default)]
     user_id: i64,
+    /// NapCat may send this as a string (CQ codes) or an array (message segments).
+    /// We don't use it, so we accept any form and discard it.
     #[allow(dead_code)]
     #[serde(default)]
-    message: String,
+    message: serde_json::Value,
     #[serde(default)]
     raw_message: String,
     #[serde(default)]
@@ -50,6 +59,30 @@ struct OneBotSender {
     #[allow(dead_code)]
     #[serde(default)]
     role: Option<String>,
+}
+
+/// Deserialize message_id which can be either a number or string in OneBot v11.
+fn deserialize_message_id<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<String, D::Error> {
+    use serde::de;
+    struct V;
+    impl<'de> de::Visitor<'de> for V {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a number or string")
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+    d.deserialize_any(V)
 }
 
 /// Raw OneBot group notice event (member join/leave, poke, etc.).
@@ -81,7 +114,7 @@ pub trait GroupMessageHandler: Send + Sync {
     async fn handle_group_message(&self, msg: NormalizedMessage, raw_json: Value);
 }
 
-/// Event handler trait for group notice events (member join/leave, poke, etc.).
+/// Event handler trait for group notice events (member join/leave).
 #[async_trait::async_trait]
 pub trait GroupNoticeHandler: Send + Sync {
     async fn handle_group_increase(
@@ -96,13 +129,6 @@ pub trait GroupNoticeHandler: Send + Sync {
         group_id: i64,
         user_id: i64,
         sub_type: &str,
-    ) -> Result<(), QqBotError>;
-
-    /// Someone poked the bot in a group.
-    async fn handle_group_poke(
-        &self,
-        group_id: i64,
-        user_id: i64,
     ) -> Result<(), QqBotError>;
 }
 
@@ -242,19 +268,32 @@ impl NapCatListener {
                     "notify" if event.sub_type == "poke" => {
                         // Only respond if the bot itself was poked
                         if event.target_id == Some(self.self_qq_id) {
-                            if let Some(ref handler) = self.notice_handler {
-                                if let Err(e) = handler
-                                    .handle_group_poke(event.group_id, event.user_id)
-                                    .await
-                                {
-                                    warn!(
-                                        group_id = event.group_id,
-                                        user_id = event.user_id,
-                                        error = %e,
-                                        "handle_group_poke failed"
-                                    );
-                                }
-                            }
+                            let synthetic_msg = NormalizedMessage {
+                                id: None,
+                                bot_account_id: 0,
+                                qq_group_id: event.group_id,
+                                qq_user_id: Some(event.user_id),
+                                platform_message_id: format!(
+                                    "poke_{}_{}_{}",
+                                    event.group_id, event.user_id, event.time
+                                ),
+                                direction: MessageDirection::Inbound,
+                                raw_text: format!(
+                                    "用户{}戳了戳你",
+                                    event.user_id
+                                ),
+                                normalized_text: format!(
+                                    "用户{}戳了戳你",
+                                    event.user_id
+                                ),
+                                segments: vec![],
+                                at_bot: true,
+                                command_name: Some("poke".to_string()),
+                                sent_at: event.time,
+                            };
+                            self.handler
+                                .handle_group_message(synthetic_msg, value.clone())
+                                .await;
                         }
                     }
                     _ => {
@@ -269,13 +308,27 @@ impl NapCatListener {
         }
 
         // Check if it's a group message event
-        if let Ok(event) = serde_json::from_value::<OneBotGroupMessageEvent>(value.clone()) {
-            if event.post_type == "message" && event.message_type == "group" {
+        match serde_json::from_value::<OneBotGroupMessageEvent>(value.clone()) {
+            Ok(event) if event.post_type == "message" && event.message_type == "group" => {
                 let parsed = self.parse_event(&event);
                 let raw_text = event.raw_message.clone();
 
                 let (normalized_text, at_bot, command_name) =
                     normalize_text(&raw_text, self.self_qq_id);
+
+                // Diagnostic: detect @bot directly from raw before normalize_text
+                let direct_at_bot = {
+                    let pat1 = format!("[CQ:at,qq={}]", self.self_qq_id);
+                    let pat2 = format!("[CQ:at,qq={}", self.self_qq_id); // match even if extra params
+                    raw_text.contains(&pat1) || raw_text.contains(&pat2)
+                };
+                info!(
+                    self_qq_id = self.self_qq_id,
+                    raw_len = raw_text.len(),
+                    at_bot_detected = at_bot,
+                    direct_at_bot,
+                    "WS: at-bot detection diagnostic"
+                );
 
                 let segments = parse_message_segments(&raw_text);
 
@@ -294,8 +347,31 @@ impl NapCatListener {
                     sent_at: parsed.sent_at,
                 };
 
+                info!(
+                    group_id = parsed.qq_group_id,
+                    user_id = parsed.qq_user_id,
+                    at_bot,
+                    raw = %event.raw_message,
+                    "WS: received group message event"
+                );
+
                 self.handler.handle_group_message(msg, value).await;
                 return Ok(());
+            }
+            Ok(other) => {
+                debug!(
+                    post_type = %other.post_type,
+                    message_type = %other.message_type,
+                    "WS: non-group-message event ignored"
+                );
+            }
+            Err(e) => {
+                // Parse failed — log full payload to diagnose schema mismatch
+                warn!(
+                    error = %e,
+                    payload = %value,
+                    "WS: failed to parse as OneBotGroupMessageEvent"
+                );
             }
         }
 

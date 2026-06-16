@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter, Set,
-    TryIntoModel,
+    ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter, Set,
 };
 
 use crate::domain::qq_bot::config::{GroupConfig, MemoryPolicy, ReplyPolicy, TriggerPolicy};
@@ -137,8 +136,35 @@ impl GroupRepository for SeaOrmGroupRepository {
 
     async fn upsert(&self, group: &GroupConfig) -> Result<GroupConfig, AppError> {
         let model = domain_to_active_model(group);
-        let result = model.save(&self.db).await.map_err(map_db_err)?;
-        Ok(model_to_domain(result.try_into_model().unwrap()))
+
+        let update_columns = vec![
+            qq_groups::Column::GroupName,
+            qq_groups::Column::BotAccountId,
+            qq_groups::Column::Enabled,
+            qq_groups::Column::TriggerPolicy,
+            qq_groups::Column::CooldownSecs,
+            qq_groups::Column::MaxSegments,
+            qq_groups::Column::MaxCharsPerSegment,
+            qq_groups::Column::AllowProactive,
+            qq_groups::Column::Keywords,
+            qq_groups::Column::MemoryPolicy,
+            qq_groups::Column::LastSeenAt,
+        ];
+
+        qq_groups::Entity::insert_many([model])
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([qq_groups::Column::QqGroupId])
+                    .update_columns(update_columns)
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        // Fetch the upserted record
+        self.find_by_group_id(group.qq_group_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("group not found after upsert".into()))
     }
 
     async fn update_last_seen(&self, qq_group_id: i64, _last_seen_at: i64) -> Result<(), AppError> {

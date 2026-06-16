@@ -50,7 +50,7 @@ fn default_tts_model() -> String {
     "seed-tts-2.0-standard".into()
 }
 fn default_tts_default_voice() -> String {
-    "zh_female_qingxin".into()
+    "zh_female_wanwanxiaohe_moon_bigtts".into()
 }
 fn default_tts_default_encoding() -> String {
     "wav".into()

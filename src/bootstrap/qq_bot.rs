@@ -254,10 +254,12 @@ pub async fn init_qq_bot(
         "qq_bot 发件箱 Worker 已启动"
     );
 
-    // ── 启动 NapCat WebSocket 监听器（正向 WS）──────────────
-    // 通过替换协议从 http_base_url 推导 WS URL。
-    // NapCat 通常在 HTTP 的同一主机端口暴露 WebSocket。
-    let ws_url = qc.http_base_url.replace("http://", "ws://");
+    // ── 启动 NapCat WebSocket 监听器（正向 WS，自动重连）──
+    // 优先使用显式配置的 ws_url，否则从 http_base_url 推导
+    let ws_url = qc
+        .ws_url
+        .clone()
+        .unwrap_or_else(|| qc.http_base_url.replace("http://", "ws://"));
     info!(
         ws_url = %ws_url,
         "正在启动 NapCat 正向 WebSocket 监听器"
@@ -290,7 +292,7 @@ pub async fn init_qq_bot(
         None
     };
 
-    // 构建并在后台任务中启动监听器
+    // 构建监听器
     let listener_handler: Arc<dyn GroupMessageHandler> =
         Arc::clone(&service) as Arc<dyn GroupMessageHandler>;
     let mut listener_builder = NapCatListener::new(ws_url, qc.self_qq_id, listener_handler);
@@ -298,9 +300,22 @@ pub async fn init_qq_bot(
         listener_builder = listener_builder.with_notice_handler(Arc::clone(nh));
     }
 
+    // 在后台循环运行，断开时自动重连（退避间隔逐步增加）
     background.spawn(tokio::spawn(async move {
-        if let Err(e) = listener_builder.run_forward().await {
-            tracing::error!(error = %e, "NapCat 监听器运行出错");
+        let mut backoff_secs = 1u64;
+        loop {
+            if let Err(e) = listener_builder.run_forward().await {
+                tracing::error!(error = %e, "NapCat 监听器运行出错");
+            } else {
+                // run_forward 正常返回（WS 被远端关闭）
+                tracing::warn!("NapCat WebSocket 连接已关闭，准备重连");
+            }
+
+            // 退避等待后重试，最长不超过 60 秒
+            let wait_secs = std::cmp::min(backoff_secs, 60);
+            tracing::info!(wait_secs = %wait_secs, "NapCat WebSocket 将在 {} 秒后重连", wait_secs);
+            tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+            backoff_secs = std::cmp::min(backoff_secs * 2, 120);
         }
     }));
 

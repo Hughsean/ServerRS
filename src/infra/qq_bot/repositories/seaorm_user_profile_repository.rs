@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
 
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
@@ -71,8 +71,35 @@ impl QqUserProfileRepository for SeaOrmQqUserProfileRepository {
             raw_profile: Set(profile.raw_profile.clone()),
             ..Default::default()
         };
-        let result = model.save(&self.db).await.map_err(map_db_err)?;
-        Ok(model_to_domain(result.try_into_model().unwrap()))
+
+        let update_columns = vec![
+            qq_user_profiles::Column::InterestTags,
+            qq_user_profiles::Column::ActiveHours,
+            qq_user_profiles::Column::SpeakingStyle,
+            qq_user_profiles::Column::TopicFrequency,
+            qq_user_profiles::Column::TotalMessages,
+            qq_user_profiles::Column::AvgMessageLength,
+            qq_user_profiles::Column::EmojiUsageRate,
+            qq_user_profiles::Column::FirstSeenAt,
+            qq_user_profiles::Column::LastSummaryAt,
+            qq_user_profiles::Column::RawProfile,
+        ];
+
+        qq_user_profiles::Entity::insert_many([model])
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([
+                    qq_user_profiles::Column::QqUserId,
+                ])
+                .update_columns(update_columns)
+                .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        self.find_by_qq_user_id(profile.qq_user_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("user profile not found after upsert".into()))
     }
 
     async fn update_stats(

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+};
 
 use crate::domain::qq_bot::attention::BotAccount;
 use crate::domain::qq_bot::repository::BotAccountRepository;
@@ -29,19 +31,6 @@ fn model_to_domain(m: qq_bot_accounts::Model) -> BotAccount {
     }
 }
 
-fn domain_to_active_model(account: &BotAccount) -> qq_bot_accounts::ActiveModel {
-    qq_bot_accounts::ActiveModel {
-        bot_account_id: Set(account.bot_account_id),
-        platform: Set(account.platform.clone()),
-        self_qq_id: Set(account.self_qq_id),
-        display_name: Set(account.display_name.clone()),
-        adapter: Set(account.adapter.clone()),
-        connection_mode: Set(account.connection_mode.clone()),
-        enabled: Set(if account.enabled { 1 } else { 0 }),
-        ..Default::default()
-    }
-}
-
 fn map_db_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
@@ -67,8 +56,39 @@ impl BotAccountRepository for SeaOrmBotAccountRepository {
     }
 
     async fn upsert(&self, account: &BotAccount) -> Result<BotAccount, AppError> {
-        let model = domain_to_active_model(account);
-        let result = model.insert(&self.db).await.map_err(map_db_err)?;
-        Ok(model_to_domain(result))
+        // Check if a record with this self_qq_id already exists
+        let existing = self.find_by_self_qq_id(account.self_qq_id).await?;
+
+        let model = match existing {
+            Some(existing) => {
+                // Update existing record
+                qq_bot_accounts::ActiveModel {
+                    bot_account_id: Set(existing.bot_account_id),
+                    platform: Set(account.platform.clone()),
+                    self_qq_id: Set(account.self_qq_id),
+                    display_name: Set(account.display_name.clone()),
+                    adapter: Set(account.adapter.clone()),
+                    connection_mode: Set(account.connection_mode.clone()),
+                    enabled: Set(if account.enabled { 1 } else { 0 }),
+                    ..Default::default()
+                }
+            }
+            None => {
+                // Insert new record (bot_account_id is auto-increment)
+                qq_bot_accounts::ActiveModel {
+                    bot_account_id: Set(0u64), // ignored for auto-increment
+                    platform: Set(account.platform.clone()),
+                    self_qq_id: Set(account.self_qq_id),
+                    display_name: Set(account.display_name.clone()),
+                    adapter: Set(account.adapter.clone()),
+                    connection_mode: Set(account.connection_mode.clone()),
+                    enabled: Set(if account.enabled { 1 } else { 0 }),
+                    ..Default::default()
+                }
+            }
+        };
+
+        let result = model.save(&self.db).await.map_err(map_db_err)?;
+        Ok(model_to_domain(result.try_into_model().unwrap()))
     }
 }

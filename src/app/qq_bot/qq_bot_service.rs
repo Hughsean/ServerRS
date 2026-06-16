@@ -132,28 +132,34 @@ impl QqBotService {
     /// Handle an incoming group message — full lifecycle.
     ///
     /// This is the main entry point called by the WebSocket listener.
-    pub async fn handle_group_message(&self, msg: NormalizedMessage) {
+    pub async fn handle_group_message(&self, mut msg: NormalizedMessage) {
         let group_id = msg.qq_group_id;
 
-        // 1. Ingest the message
-        let persisted = match self
-            .ingestion
-            .ingest(
-                msg.bot_account_id,
-                msg.qq_group_id,
-                msg.qq_user_id.unwrap_or(0),
-                &msg.platform_message_id,
-                &msg.raw_text,
-                msg.sent_at,
-            )
-            .await
-        {
+        // Resolve the real bot_account_id from the cached account (listener may pass 0)
+        if msg.bot_account_id == 0 {
+            msg.bot_account_id = self
+                .bot_account
+                .read()
+                .await
+                .as_ref()
+                .map(|a| a.bot_account_id)
+                .unwrap_or(0);
+        }
+
+        // 1. Ingest the message (listener already computed at_bot/normalized_text/segments)
+        let mut persisted = match self.ingestion.ingest(&msg).await {
             Ok(m) => m,
             Err(e) => {
                 error!(group_id, error = %e, "消息接收失败");
                 return;
             }
         };
+
+        // Defensive: ensure the parsed fields from the listener are preserved
+        // (some storage layers may not round-trip these).
+        persisted.at_bot = msg.at_bot;
+        persisted.command_name = msg.command_name.clone();
+        persisted.normalized_text = msg.normalized_text.clone();
 
         // 1b. Profile building: auto-register user + observe message
         if let Some(ref pb) = self.profile_builder {
@@ -233,6 +239,14 @@ impl QqBotService {
             .await;
 
         // 3. Evaluate trigger
+        info!(
+            group_id,
+            user_id = ?persisted.qq_user_id,
+            at_bot = persisted.at_bot,
+            command = ?persisted.command_name,
+            text = %persisted.normalized_text,
+            "trigger: evaluating message"
+        );
         let decision = match self
             .trigger
             .evaluate(&persisted, &bot_account, group_config.as_ref())
@@ -252,6 +266,8 @@ impl QqBotService {
                 return;
             }
         };
+
+        info!(group_id, decision = ?decision, "trigger: decision result");
 
         match decision {
             TriggerDecision::Skip | TriggerDecision::Wait => {
