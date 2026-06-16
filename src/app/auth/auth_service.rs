@@ -221,21 +221,23 @@ impl AuthService {
             return Err(AppError::Forbidden("user is disabled".into()));
         }
 
-        if !self
-            .password_service
-            .verify(&input.password, &user.password_hash)?
-        {
-            self.record_failure(&input.username);
-            let _ = self
-                .task_publisher
-                .publish(TaskEvent::LoginAudit(LoginAuditTask::failed(
-                    input.username,
-                    input.device_id,
-                    "invalid credentials",
-                )))
-                .await;
-            return Err(AppError::Unauthorized);
-        }
+            // password_hash 为 None（对应 sentinel 标记用户，如 QQ 自动注册）→ 禁止密码登录
+            let password_ok = match &user.password_hash {
+                Some(hash) => self.password_service.verify(&input.password, hash)?,
+                None => false,
+            };
+            if !password_ok {
+                self.record_failure(&input.username);
+                let _ = self
+                    .task_publisher
+                    .publish(TaskEvent::LoginAudit(LoginAuditTask::failed(
+                        input.username,
+                        input.device_id,
+                        "invalid credentials",
+                    )))
+                    .await;
+                return Err(AppError::Unauthorized);
+            }
 
         self.clear_failures(&input.username);
 
@@ -282,7 +284,7 @@ impl AuthService {
         let hash = self.password_service.hash(&password)?;
         let user = self
             .user_repo
-            .save(NewUser::new(username.clone(), hash, UserStatus::Active))
+            .save(NewUser::new(username.clone(), Some(hash), UserStatus::Active))
             .await?;
 
         let (access_token, refresh_token, expires_in) =

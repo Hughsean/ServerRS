@@ -5,6 +5,8 @@ use axum::{
     middleware,
     routing::{delete, get, patch, post, put},
 };
+use std::path::PathBuf;
+use tower_http::services::ServeDir;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -50,13 +52,14 @@ use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, pu
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
 pub fn build_router(state: AppState) -> Router {
-    build_router_with_origins(state, &["http://localhost:3000".to_string()])
+    build_router_with_origins(state, &["http://localhost:3000".to_string()], None)
         .expect("default CORS origin must be valid")
 }
 
 pub fn build_router_with_origins(
     state: AppState,
     allowed_origins: &[String],
+    tts_serve_dir: Option<PathBuf>,
 ) -> Result<Router, String> {
     let cors = build_cors_layer(allowed_origins)?;
     let max_upload_bytes = state.object.objects.max_upload_bytes();
@@ -231,7 +234,7 @@ pub fn build_router_with_origins(
         ));
 
     // ── Assemble everything into a single Router ───────────────────────────────
-    Ok(Router::new()
+    let mut router = Router::new()
         // Health
         .route("/health", get(health))
         // Auth public endpoints
@@ -264,8 +267,15 @@ pub fn build_router_with_origins(
         )
         // Merge protected and admin sub-routers
         .merge(protected)
-        .merge(admin)
-        // Global layers
+        .merge(admin);
+
+    // ── TTS static file serving (QQ Bot voice messages) ────────────
+    if let Some(tts_dir) = tts_serve_dir {
+        router = router.nest_service("/tts", ServeDir::new(tts_dir));
+    }
+
+    // Global layers
+    Ok(router
         .layer(DefaultBodyLimit::max(max_upload_bytes))
         .layer(cors)
         .layer(TraceLayer::new_for_http())

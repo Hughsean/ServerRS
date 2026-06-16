@@ -6,4 +6,5 @@ pub mod storage;
 pub mod tasks;
 pub mod tts;
 pub mod vector_store;
+pub mod qq_bot;
 pub mod web_ingestion;

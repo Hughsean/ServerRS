@@ -32,7 +32,7 @@ CREATE TABLE users
 (
     id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT COMMENT '用户ID',
     username      VARCHAR(50)  NOT NULL UNIQUE COMMENT '用户名',
-    password      VARCHAR(255) NOT NULL COMMENT '密码(加密存储)',
+    password      VARCHAR(255) NOT NULL DEFAULT '__QQ_AUTO_REGISTERED__' COMMENT '密码(加密存储)，QQ用户注册时写入固定标记字符串，标记用户无法密码登录',
     email         VARCHAR(100) UNIQUE COMMENT '邮箱',
     phone         VARCHAR(20) UNIQUE COMMENT '手机号',
     avatar        BLOB COMMENT '头像二进制数据',

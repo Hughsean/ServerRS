@@ -390,6 +390,67 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         config.storage.clone(),
     ));
 
+    // ── QQ Bot (赛博猫猫) ──────────────────────────────────────────────
+    use crate::bootstrap::qq_bot::init_qq_bot;
+    use crate::infra::qq_bot::repositories::seaorm_bot_account_repository::SeaOrmBotAccountRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_repository::SeaOrmGroupRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_member_repository::SeaOrmGroupMemberRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_message_repository::SeaOrmGroupMessageRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_summary_repository::SeaOrmGroupSummaryRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_memory_repository::SeaOrmGroupMemoryRepository;
+    use crate::infra::qq_bot::repositories::seaorm_agent_turn_repository::SeaOrmAgentTurnRepository;
+    use crate::infra::qq_bot::repositories::seaorm_outbox_repository::SeaOrmOutboxRepository;
+    use crate::infra::qq_bot::repositories::seaorm_external_user_repository::SeaOrmExternalUserRepository;
+    use crate::infra::qq_bot::repositories::seaorm_user_profile_repository::SeaOrmQqUserProfileRepository;
+    use crate::infra::tts::volcengine_provider::VolcengineTtsProvider;
+    use crate::domain::tts::TtsProvider;
+
+    let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
+    let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
+    let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
+    let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
+    let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
+    let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
+    let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepository>;
+    let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
+    let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
+    let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
+
+    // TTS provider for QQ Bot voice messages
+    let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> = if config.qq_bot.enabled && config.qq_bot.self_qq_id != 0 && !config.tts.api_key.is_empty() {
+        tracing::info!("initialising VolcengineTtsProvider for QQ Bot voice messages");
+        Some(Arc::new(VolcengineTtsProvider::new(&config.tts)) as Arc<dyn TtsProvider>)
+    } else {
+        if config.qq_bot.enabled {
+            tracing::warn!("TTS API key not configured — voice messages will be unavailable");
+        }
+        None
+    };
+
+    let _qq_bot_deps = init_qq_bot(
+        &config,
+        Arc::clone(&ollama_provider),
+        qq_bot_tts_provider,
+        &mut background,
+        qq_bot_bot_account_repo,
+        qq_bot_group_repo,
+        qq_bot_group_member_repo,
+        qq_bot_group_message_repo,
+        qq_bot_group_summary_repo,
+        qq_bot_group_memory_repo,
+        qq_bot_agent_turn_repo,
+        qq_bot_outbox_repo,
+        // profile & user repos (optional — same pattern as existing code)
+        Some(Arc::clone(&user_repo) as Arc<dyn crate::domain::user::user_repository::UserRepository>),
+        Some(Arc::clone(&qq_bot_external_user_repo)),
+        Some(Arc::clone(&qq_bot_user_profile_repo)),
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "qq_bot init failed — continuing without it");
+        None
+    });
+
     // ── Web Ingestion ──────────────────────────────────────────────────
     // The review service remains available for inspection when workers are
     // disabled; submitting a publish request then returns a conflict.
@@ -425,7 +486,12 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     };
 
     let state = bootstrap::state::build_state(&services);
-    let app = api::router::build_router_with_origins(state, &config.cors.allowed_origins)
+    let tts_dir = if config.qq_bot.enabled && !config.tts.api_key.is_empty() {
+        Some(std::path::PathBuf::from(&config.qq_bot.tts_output_dir))
+    } else {
+        None
+    };
+    let app = api::router::build_router_with_origins(state, &config.cors.allowed_origins, tts_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let addr = format!("{}:{}", config.server.host, config.server.port);

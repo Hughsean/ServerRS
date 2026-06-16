@@ -2,6 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::fmt;
 
+/// 用于标记 QQ 自动注册用户的密码占位符。
+/// 此字符串不会被任何 bcrypt/argon2 hash 匹配到，
+/// 因此标记用户无法通过密码登录。
+pub const QQ_AUTO_REGISTERED_SENTINEL: &str = "__QQ_AUTO_REGISTERED__";
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserStatus {
@@ -69,7 +74,7 @@ impl fmt::Display for UserRole {
 #[derive(Debug, Clone)]
 pub struct NewUser {
     pub username: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
     pub nickname: Option<String>,
@@ -80,16 +85,29 @@ pub struct NewUser {
 impl NewUser {
     pub fn new(
         username: impl Into<String>,
-        password_hash: impl Into<String>,
+        password_hash: Option<String>,
         status: UserStatus,
     ) -> Self {
         Self {
             username: username.into(),
-            password_hash: password_hash.into(),
+            password_hash,
             email: None,
             phone: None,
             nickname: None,
             status,
+            role: UserRole::User,
+        }
+    }
+
+    /// Create a new user without a password (for QQ auto-registration).
+    pub fn new_without_password(username: impl Into<String>, nickname: Option<String>) -> Self {
+        Self {
+            username: username.into(),
+            password_hash: None,
+            email: None,
+            phone: None,
+            nickname,
+            status: UserStatus::Active,
             role: UserRole::User,
         }
     }
@@ -115,7 +133,7 @@ pub struct User {
     pub id: u64,
     pub username: String,
     #[serde(skip_serializing)]
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
     pub nickname: Option<String>,

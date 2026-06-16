@@ -20,6 +20,7 @@ pub mod auth_storage;
 pub mod llm_agent_rag;
 pub mod mail_cors_log;
 pub mod plugins;
+pub mod qq_bot;
 pub mod qdrant;
 pub mod server;
 pub mod tts;
@@ -39,6 +40,7 @@ pub use self::plugins::{
     BaiduBaikePluginConfig, FetchWebContentPluginConfig, NewsPluginConfig, PluginsConfig,
     WeatherPluginConfig, WebSearchPluginConfig,
 };
+pub use self::qq_bot::QqBotConfig;
 pub use self::qdrant::QdrantConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::tts::TtsConfig;
@@ -86,6 +88,8 @@ pub struct AppConfig {
     pub web_ingestion: WebIngestionConfig,
     #[serde(default)]
     pub tts: TtsConfig,
+    #[serde(default)]
+    pub qq_bot: QqBotConfig,
 }
 
 impl Default for AppConfig {
@@ -110,6 +114,7 @@ impl Default for AppConfig {
             embedding: Default::default(),
             web_ingestion: Default::default(),
             tts: Default::default(),
+            qq_bot: Default::default(),
         }
     }
 }
@@ -481,6 +486,17 @@ impl AppConfig {
         if let Ok(val) = std::env::var("TTS_SAMPLE_RATE") {
             if let Ok(n) = val.parse::<u32>() {
                 self.tts.sample_rate = n;
+            }
+        }
+        // ── QQ Bot TTS output ──
+        if let Ok(val) = std::env::var("QQ_BOT_TTS_OUTPUT_DIR") {
+            if !val.is_empty() {
+                self.qq_bot.tts_output_dir = val;
+            }
+        }
+        if let Ok(val) = std::env::var("QQ_BOT_TTS_PUBLIC_URL_BASE") {
+            if !val.is_empty() {
+                self.qq_bot.tts_public_url_base = val;
             }
         }
     }

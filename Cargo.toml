@@ -26,12 +26,14 @@ sha2 = "0.11.0"
 dotenvy = "0.15"
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
 toml = "1.1.2"
 # time 0.3.48 introduces blanket impls that conflict with sea-query 1.0.1
 # and sqlx-core 0.9.0 on Rust >=1.96 (E0119). Pin to 0.3.47 until upstream
 # resolves the conflict. Remove this pin after upgrading sea-orm >rc.40.
 time = ">=0.3.47, <0.3.48"
-tower-http = { version = "0.6.11", features = ["cors", "trace", "timeout", "compression-br"] }
+tower-http = { version = "0.6.11", features = ["cors", "trace", "timeout", "compression-br", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 urlencoding = "2"
@@ -40,8 +42,16 @@ validator = { version = "0.20.0", features = ["derive"] }
 qdrant-client = { version = "1.15", optional = true }
 
 [features]
-default = ["qdrant"]
+default = []
 qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
+
+[[bin]]
+name = "server-rs"
+path = "src/main.rs"
+
+[[bin]]
+name = "qq_bot_init"
+path = "src/bin/qq_bot_init.rs"

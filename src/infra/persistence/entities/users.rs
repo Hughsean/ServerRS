@@ -67,6 +67,8 @@ pub enum Relation {
     DepressionAssessments,
     KnowledgeDocuments,
     PostConversationRiskAudits,
+    QqAgentTurns,
+    QqExternalUsers,
     RefreshTokens,
     StoredObjects,
     UserContextVersions,
@@ -122,6 +124,8 @@ impl RelationTrait for Relation {
             Self::PostConversationRiskAudits => {
                 Entity::has_many(super::post_conversation_risk_audits::Entity).into()
             }
+            Self::QqAgentTurns => Entity::has_many(super::qq_agent_turns::Entity).into(),
+            Self::QqExternalUsers => Entity::has_many(super::qq_external_users::Entity).into(),
             Self::RefreshTokens => Entity::has_many(super::refresh_tokens::Entity).into(),
             Self::StoredObjects => Entity::has_many(super::stored_objects::Entity).into(),
             Self::UserContextVersions => {
@@ -194,6 +198,18 @@ impl Related<super::knowledge_documents::Entity> for Entity {
 impl Related<super::post_conversation_risk_audits::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::PostConversationRiskAudits.def()
+    }
+}
+
+impl Related<super::qq_agent_turns::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::QqAgentTurns.def()
+    }
+}
+
+impl Related<super::qq_external_users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::QqExternalUsers.def()
     }
 }
 

@@ -260,41 +260,31 @@ impl TtsProvider for VolcengineTtsProvider {
             return Err(TtsError::ProviderError(format!("HTTP {status}: {text}")));
         }
 
-        // 解析 JSON 响应（允许尾部有额外数据，流式接口可能返回多个 JSON 值或换行）
-        let volc_resp: VolcTtsV3Response = {
-            use serde::Deserialize;
-            let mut de = serde_json::Deserializer::from_slice(&body_bytes);
-            VolcTtsV3Response::deserialize(&mut de).map_err(|e| {
-                TtsError::InvalidResponse(format!(
-                    "Failed to parse TTS response: {e}, body: {}",
-                    String::from_utf8_lossy(&body_bytes)
-                ))
-            })?
-        };
-
-        // v3 接口成功 code 为 0（v1 曾用 20000000）
-        if volc_resp.code != 0 {
-            return Err(TtsError::ProviderError(format!(
-                "TTS API error (code {}): {}",
-                volc_resp.code,
-                volc_resp.message.unwrap_or_default()
-            )));
-        }
-
-        // 解码 base64 音频
-        let audio_data = match &volc_resp.data {
-            Some(data) if !data.is_empty() => {
+        // 解析 JSON 响应。v3 接口返回多个 JSON 行（\n 分隔），每行包含一段 base64 音频，
+        // 需要将所有 data 字段解码后拼接成完整的音频数据。
+        let response_text = String::from_utf8_lossy(&body_bytes);
+        let audio_data: Vec<u8> = response_text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || !trimmed.starts_with('{') {
+                    return None;
+                }
+                let resp: VolcTtsV3Response = serde_json::from_str(trimmed).ok()?;
+                if resp.code != 0 {
+                    return None;
+                }
+                let data = resp.data.as_ref()?;
                 use base64::Engine;
-                base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| {
-                    TtsError::InvalidResponse(format!("Failed to decode base64 audio: {e}"))
-                })?
-            }
-            _ => {
-                return Err(TtsError::InvalidResponse(
-                    "TTS response contains no audio data".to_string(),
-                ));
-            }
-        };
+                base64::engine::general_purpose::STANDARD.decode(data).ok()
+            })
+            .reduce(|mut acc, chunk| {
+                acc.extend_from_slice(&chunk);
+                acc
+            })
+            .ok_or_else(|| {
+                TtsError::InvalidResponse("no audio data found in any JSON chunk".to_string())
+            })?;
 
         if audio_data.is_empty() {
             return Err(TtsError::InvalidResponse(
@@ -361,6 +351,9 @@ mod tests {
 
         match result {
             Ok(response) => {
+                tokio::fs::write("test_output.wav", &response.audio_data)
+                    .await
+                    .expect("Failed to write test_output.wav");
                 assert!(
                     !response.audio_data.is_empty(),
                     "audio data should not be empty"
@@ -382,7 +375,7 @@ mod tests {
                     b"WAVE",
                     "audio data should contain WAVE format identifier"
                 );
-                eprintln!(
+                println!(
                     "PASS: synthesized {} bytes of WAV audio (voice: {})",
                     response.audio_data.len(),
                     VOICE_ZH_FEMALE_WANWAN_XIAOHE,
@@ -454,6 +447,6 @@ mod tests {
         assert_eq!(ratio_to_pitch(2.0), 12);
         assert_eq!(ratio_to_pitch(0.5), -6);
         assert_eq!(ratio_to_pitch(0.0), -12); // clamp
-        assert_eq!(ratio_to_pitch(3.0), 12);  // clamp
+        assert_eq!(ratio_to_pitch(3.0), 12); // clamp
     }
 }

@@ -422,6 +422,13 @@
  │   └── mod.rs                  向量索引数据结构
  ├── agent/
  │   └── mod.rs                  Agent 事件数据结构
+ │
+ ├── tts/                       ★★★ TTS 语音合成
+ │   ├── mod.rs                 音频格式、请求/响应结构体
+ │   │                          TtsRequest/TtsResponse/TtsError
+ │   │                          └ AudioFormat(Wav/Mp3/Pcm/OggOpus)
+ │   └── (TtsProvider trait)    语音合成接口（async trait）
+ │
  └── tasks/
      └── ...                     任务相关
  ```
@@ -499,6 +506,12 @@
  │   ├── bcrypt_password_hasher.rs  密码加密
  │   └── in_memory_refresh_token_revocation_repository.rs 令牌吊销
  │
+ ├── tts/                          语音合成
+ │   ├── mod.rs                    模块声明
+ │   └── volcengine_provider.rs    ★ 火山引擎（豆包语音）TTS 实现
+ │                                  └ 调用 v3 API 合成语音
+ │                                  └ 支持中文/英文/日文 13 种音色
+ │
  ├── detector/                      风险检测实现
  │   ├── mod.rs
  │   └── rule_based_detector.rs    ★ 基于规则的风险检测器
@@ -567,6 +580,7 @@
  - `qdrant`：向量数据库配置
  - `embedding`：向量嵌入配置
  - `web_ingestion`：知识摄入全部配置
+ - `tts`：语音合成配置（火山引擎 API Key、模型、音色等）
  - `plugins`：Agent 工具配置（天气、新闻、搜索等）
  - `mail`：邮件配置
  - `cors`：跨域配置
@@ -799,10 +813,11 @@
  | `[agent]` | enabled, memory_enabled | true, true | Agent 开关 |
  | `[qdrant]` | enabled, url | true, http://127.0.0.1:6334 | 向量数据库 |
  | `[web_ingestion]` | enabled, auto_publish | true, true | 知识摄入 |
+ | `[tts]` | provider, api_key, resource_id, model | volcengine, "", "", seed-tts-2.0-standard | 语音合成 |
  | `[plugins.weather]` | api_key | "" | 天气 API |
  | `[plugins.news]` | rss_urls | 中国新闻网 | 新闻源 |
- 
- 环境变量会覆盖配置文件（如 `DATABASE_URL`、`JWT_SECRET`、`LLM_BASE_URL` 等）。
+
+ 环境变量会覆盖配置文件（如 `DATABASE_URL`、`JWT_SECRET`、`LLM_BASE_URL`、`TTS_API_KEY` 等）。
  
  ---
  
@@ -903,7 +918,11 @@
  
  **Q：有哪些外部依赖？**  
  A：MySQL（数据存储）、Ollama（AI 推理）、Qdrant（向量搜索，可选），  
- 以及和风天气（查天气）、中国新闻网 RSS（新闻）等外部 API。
+ 以及和风天气（查天气）、中国新闻网 RSS（新闻）、火山引擎豆包语音（TTS 语音合成）等外部 API。
+ 
+ **Q：TTS（文字转语音）功能是怎么实现的？**  
+ A：通过火山引擎（豆包语音）v3 API 将文字合成为语音（WAV/MP3/OGG 格式），  
+ 提供 13 种音色（中/英/日文），支持语速、音量、音调调节。
  
  **Q：什么是向量搜索？为什么需要 Qdrant？**  
  A：传统搜索是"关键字匹配"（搜"苹果"只能找到有"苹果"二字的文章），  
@@ -920,5 +939,5 @@
  
  ---
  
- *项目地图生成时间：2026-06-15*  
+ *项目地图生成时间：2026-06-16*  
  *基于 commit 时点的全量代码分析*
