@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
+use crate::app::qq_bot::relationship_service::RelationshipService;
+use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::ChatMessage;
 use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
@@ -20,6 +22,8 @@ use crate::domain::qq_bot::QqBotError;
 /// - Recent N messages from the group
 /// - Active group summary (rolling)
 /// - Known group memories
+/// - Current topic context
+/// - Relationship context (optional)
 /// - Current attention state info
 pub struct ContextBuilder {
     message_repo: Arc<dyn GroupMessageRepository>,
@@ -29,6 +33,8 @@ pub struct ContextBuilder {
     persona: BotPersona,
     max_recent_messages: u32,
     emotional_service: Option<Arc<EmotionalStateService>>,
+    topic_service: Option<Arc<TopicService>>,
+    relationship_service: Option<Arc<RelationshipService>>,
 }
 
 impl ContextBuilder {
@@ -40,6 +46,8 @@ impl ContextBuilder {
         persona: BotPersona,
         max_recent_messages: u32,
         emotional_service: Option<Arc<EmotionalStateService>>,
+        topic_service: Option<Arc<TopicService>>,
+        relationship_service: Option<Arc<RelationshipService>>,
     ) -> Self {
         Self {
             message_repo,
@@ -49,6 +57,8 @@ impl ContextBuilder {
             persona,
             max_recent_messages,
             emotional_service,
+            topic_service,
+            relationship_service,
         }
     }
 
@@ -154,13 +164,42 @@ impl ContextBuilder {
         let now_ts = chrono::Utc::now().timestamp();
         let last_msg_minutes_ago = ((now_ts - msg.sent_at) / 60).max(0) as u64;
 
+        // 从最近消息中计算真实的时间上下文数据
+        let mut hours_since_bot_spoke: Option<u64> = None;
+        let mut is_first_today = true;
+        let mut message_count_today: u32 = 0;
+
+        let today_start = {
+            let now_local = chrono::Local::now();
+            now_local.date_naive().and_hms_opt(0, 0, 0)
+                .map(|d| d.and_utc().timestamp())
+                .unwrap_or(0)
+        };
+
+        for m in recent_messages.iter().rev() {
+            if m.direction == crate::domain::qq_bot::message::MessageDirection::Outbound {
+                message_count_today += 1;
+                // 取最近一条 outbound 消息
+                if hours_since_bot_spoke.is_none() && m.sent_at >= today_start {
+                    let hours_ago = ((now_ts - m.sent_at) / 3600).max(0) as u64;
+                    hours_since_bot_spoke = Some(hours_ago);
+                }
+            }
+            if m.sent_at >= today_start {
+                is_first_today = false;
+            }
+        }
+
         let temporal = crate::domain::qq_bot::bot_state::TemporalContext::from_now(
             last_msg_minutes_ago,
-            None,
-            false,
-            0,
+            hours_since_bot_spoke,
+            is_first_today,
+            message_count_today,
         );
 
+        let state_line = temporal.describe();
+
+        // ── 情绪段落 ──
         let emotion_text = if let Some(ref es) = self.emotional_service {
             let state = es.get_state(msg.qq_group_id).await;
             state.describe()
@@ -168,23 +207,20 @@ impl ContextBuilder {
             String::new()
         };
 
-        let mut state_line = format!("当前时间：{} {}", temporal.date_str.clone(), chrono::Local::now().format("%H:%M").to_string());
+        let mut state_paragraph = state_line;
         if !emotion_text.is_empty() {
-            state_line.push_str(&format!("\n{}", emotion_text));
-            state_line.push_str("\n你的情绪会影响你的语气，但不要让情绪完全主导行为。");
+            state_paragraph.push_str(&format!("\n\n{}", emotion_text));
         }
 
-        // ── 对话状态（防重复、防刷屏） ──
-        let conv = crate::domain::qq_bot::conversation_state::ConversationState::from_recent_messages(
-            recent_messages,
-            0,
-        );
-        let conv_text = conv.describe();
-        if !conv_text.is_empty() {
-            state_line.push_str(&format!("\n{}", conv_text));
-        }
+        parts.push(state_paragraph);
 
-        parts.push(state_line);
+        // ── 情绪表现指导 ──
+        if !emotion_text.is_empty() {
+            parts.push(
+                r#"## 情绪对回复的影响
+你的情绪会影响你的语气，但不要让情绪完全主导行为。"#.to_string(),
+            );
+        }
 
         // Group summary (if available)
         if let Ok(Some(summary)) = self.summary_repo.find_active_rolling(msg.qq_group_id).await {
@@ -205,21 +241,29 @@ impl ContextBuilder {
         }
 
         // ── 话题状态 ──
-        let conv_state = crate::domain::qq_bot::conversation_state::ConversationState::from_recent_messages(
-            recent_messages,
-            0, // bot_qq_id — 暂不校验
-        );
-        let conv_text = conv_state.describe();
-        if !conv_text.is_empty() {
-            parts.push(format!("## 对话状态\n{}", conv_text));
+        if let Some(ref ts) = self.topic_service {
+            let topic_ctx = ts.get_topic_context(msg.qq_group_id).await;
+            if let Some(ref ctx) = topic_ctx {
+                parts.push(format!("## 当前话题\n{}", ctx));
+            }
         }
 
-        // ── 情绪表现指导 ──
-        if !emotion_text.is_empty() {
-            parts.push(
-                r#"## 情绪对回复的影响
-你的情绪会影响你的语气，但不要让情绪完全主导行为。"#.to_string(),
-            );
+        // ── 群友关系 ──
+        if let Some(ref rs) = self.relationship_service {
+            // Collect participants from recent messages
+            let participant_ids: Vec<i64> = recent_messages
+                .iter()
+                .filter_map(|m| m.qq_user_id)
+                .collect();
+            if !participant_ids.is_empty() {
+                let rel_ctx = rs.build_relationship_context(
+                    msg.qq_group_id,
+                    &participant_ids,
+                ).await;
+                if !rel_ctx.is_empty() {
+                    parts.push(rel_ctx);
+                }
+            }
         }
 
         // Format rules
@@ -266,16 +310,25 @@ impl ContextBuilder {
 - surprised：惊讶
 - tired：疲惫
 
-要求：
-- segments 数组包含 1~4 段回复
-- 每段 text 不超过 40 字
-- 多段回复之间用不同内容分段，模拟真人分次发送
-- poke 应适度使用，不要频繁拍群友
-- record 用于想用语音表达的内容
-- timing_hint 控制发送节奏
-- emotion_change 告诉猫猫现在的心情，可选但建议填写，intensity 填 0.0~1.0
-- 不要在回复中包含本格式说明的思考过程
-- 回复要像是群聊中的真实发言，不要像机器人朗诵"#.to_string(),
+可选字段 relationship_hints：
+- 当你在回复中叫了某个群友的名字（特别是用了昵称），可以用 relationship_hints 告诉猫猫
+- target_user_id：群友的 QQ 号
+- nickname_preference：你称呼他用的昵称（可选）
+- known_interests：你从他的对话中了解的兴趣（可选，填字符串数组）
+- known_avoid_topics：应回避的话题（可选）
+
+	要求：
+	- segments 数组包含 1~4 段回复
+	- 每段 text 不超过 40 字
+	- 多段回复之间用不同内容分段，模拟真人分次发送
+	- poke 应适度使用，不要频繁拍群友
+	- record 用于想用语音表达的内容
+	- timing_hint 控制发送节奏
+	- emotion_change 告诉猫猫现在的心情，可选但建议填写，intensity 填 0.0~1.0
+	- 不要在回复中包含本格式说明的思考过程
+	- 回复要像是群聊中的真实发言，不要像机器人朗诵
+	- 注意不要重复自己说过的话或相同的建议，每次回复都要提供新的信息"#.to_string(),
+
         );
 
         Ok(parts.join("\n\n"))

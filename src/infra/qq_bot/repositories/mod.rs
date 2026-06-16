@@ -8,4 +8,5 @@ pub mod seaorm_group_message_repository;
 pub mod seaorm_group_repository;
 pub mod seaorm_group_summary_repository;
 pub mod seaorm_outbox_repository;
+pub mod seaorm_relationship_repository;
 pub mod seaorm_user_profile_repository;

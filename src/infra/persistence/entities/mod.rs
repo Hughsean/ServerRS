@@ -35,6 +35,7 @@ pub mod qq_group_messages;
 pub mod qq_group_summaries;
 pub mod qq_groups;
 pub mod qq_message_outbox;
+pub mod qq_relationships;
 pub mod qq_user_profiles;
 pub mod refresh_tokens;
 pub mod stored_objects;

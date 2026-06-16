@@ -3,6 +3,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use tracing::{info, warn};
 
+use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
+use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::{ChatCompletionRequest, LlmProvider};
 use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::config::{GroupConfig, TriggerPolicy};
@@ -31,6 +33,8 @@ pub struct TriggerEvaluator {
     llm_provider: Arc<dyn LlmProvider>,
     attention_store: Arc<InMemoryAttentionStore>,
     persona: BotPersona,
+    topic_service: Option<Arc<TopicService>>,
+    emotional_service: Option<Arc<EmotionalStateService>>,
 }
 
 impl TriggerEvaluator {
@@ -38,11 +42,15 @@ impl TriggerEvaluator {
         llm_provider: Arc<dyn LlmProvider>,
         attention_store: Arc<InMemoryAttentionStore>,
         persona: BotPersona,
+        topic_service: Option<Arc<TopicService>>,
+        emotional_service: Option<Arc<EmotionalStateService>>,
     ) -> Self {
         Self {
             llm_provider,
             attention_store,
             persona,
+            topic_service,
+            emotional_service,
         }
     }
 
@@ -141,6 +149,24 @@ impl TriggerEvaluator {
 
     /// Ask the LLM whether to respond to this message.
     async fn llm_decide(&self, msg: &NormalizedMessage) -> Result<TriggerDecision, QqBotError> {
+        let topic_context = match &self.topic_service {
+            Some(ts) => ts.get_current_topic_label(msg.qq_group_id).await,
+            None => None,
+        };
+
+        let topic_hint = match &topic_context {
+            Some(label) => format!("\n当前话题：{}", label),
+            None => String::new(),
+        };
+
+        let emotion_hint = match &self.emotional_service {
+            Some(es) => {
+                let state = es.get_state(msg.qq_group_id).await;
+                format!("\n当前情绪：{}（强度 {:.1}）", state.mood.label(), state.intensity)
+            }
+            None => String::new(),
+        };
+
         let system_prompt = format!(
             r#"你是{}，一个群聊机器人。你需要判断是否应该回复以下消息。
 
@@ -150,12 +176,16 @@ impl TriggerEvaluator {
 - 如果消息是闲聊、打招呼、表情包轰炸、群内日常水群，可以跳过。
 - 如果消息是敏感内容、引战、广告，必须跳过。
 - 不要每条消息都回复 — 你只在有充分理由时才回复。
+- 如果你的当前情绪状态不适合回复（如疲惫、生气），可以 wait。
+- 如果消息和当前话题无关，且话题还在进行中，可以 skip 以免打扰。
 
 请只回复一个单词：respond / wait / skip
 
-当前时间：{}"#,
+当前时间：{}{}{}"#,
             self.persona.nickname,
             Utc::now().format("%Y-%m-%d %H:%M:%S"),
+            topic_hint,
+            emotion_hint,
         );
 
         let user_prompt = format!(

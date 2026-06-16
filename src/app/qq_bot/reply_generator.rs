@@ -76,9 +76,41 @@ impl ReplyGenerator {
         // Parse the LLM response as BotReply JSON
         let reply = self.parse_reply(&response.content)?;
         info!(
-            group_id = msg.qq_group_id,
             segment_count = reply.segments.len(),
             "reply generated"
+        );
+
+        Ok(reply)
+    }
+
+    /// Generate a proactive reply (no triggering user message).
+    ///
+    /// Instead of appending a user message, appends a system instruction
+    /// that tells the LLM to proactively say something.
+    pub async fn generate_proactive_reply(
+        &self,
+        context: Vec<ChatMessage>,
+    ) -> Result<BotReply, QqBotError> {
+        let mut messages = context;
+        messages.push(ChatMessage {
+            role: "system".into(),
+            content: "现在群里有些冷场，你决定主动说点什么来活跃气氛。\n请根据上面的上下文直接输出回复 JSON，不要包含本指令的思考过程。".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+
+        let request = ChatCompletionRequest::new(messages)
+            .with_temperature(0.7);
+
+        let response = self.llm_provider.chat(request).await.map_err(|e| {
+            QqBotError::Internal(format!("LLM proactive reply generation failed: {e}"))
+        })?;
+
+        let reply = self.parse_reply(&response.content)?;
+        info!(
+            segment_count = reply.segments.len(),
+            "proactive reply generated"
         );
 
         Ok(reply)
@@ -143,6 +175,7 @@ impl ReplyGenerator {
                         show_typing: true,
                     },
                     emotion_change: None,
+                    relationship_hints: None,
                 });
             }
 
@@ -161,7 +194,7 @@ impl ReplyGenerator {
                 show_typing: reply.timing_hint.show_typing,
             };
 
-            return Ok(BotReply { segments, timing_hint: timing, emotion_change: reply.emotion_change });
+            return Ok(BotReply { segments, timing_hint: timing, emotion_change: reply.emotion_change, relationship_hints: reply.relationship_hints });
         }
 
         // Fallback: wrap raw text as single segment
@@ -176,6 +209,7 @@ impl ReplyGenerator {
                 show_typing: true,
             },
             emotion_change: None,
+            relationship_hints: None,
         })
     }
 }

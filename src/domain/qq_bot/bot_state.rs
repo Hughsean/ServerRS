@@ -1,4 +1,4 @@
-use chrono::Datelike;
+use chrono::{Datelike, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// 主情绪枚举
@@ -140,12 +140,61 @@ impl TimeOfDay {
     }
 }
 
+/// 季节
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Season {
+    Spring,
+    Summer,
+    Autumn,
+    Winter,
+}
+
+impl Season {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Spring => "春季",
+            Self::Summer => "夏季",
+            Self::Autumn => "秋季",
+            Self::Winter => "冬季",
+        }
+    }
+
+    pub fn from_month(month: u32) -> Self {
+        match month {
+            3..=5 => Self::Spring,
+            6..=8 => Self::Summer,
+            9..=11 => Self::Autumn,
+            _ => Self::Winter,
+        }
+    }
+}
+
+/// 判断今天是否是某个节日，返回节日名称
+fn get_holiday(month: u32, day: u32) -> Option<&'static str> {
+    match (month, day) {
+        (1, 1) => Some("元旦"),
+        (2, 14) => Some("情人节"),
+        (3, 8) => Some("妇女节"),
+        (4, 5) => Some("清明节"),
+        (5, 1) => Some("劳动节"),
+        (6, 1) => Some("儿童节"),
+        (8, 1) => Some("建军节"),
+        (9, 10) => Some("教师节"),
+        (10, 1) => Some("国庆节"),
+        (12, 25) => Some("圣诞节"),
+        // 农历节日简化：用固定公历近似
+        _ => None,
+    }
+}
+
 /// 时间上下文（每个请求动态构建）
 #[derive(Debug, Clone)]
 pub struct TemporalContext {
     pub time_of_day: TimeOfDay,
-    pub weekday: u32,
+    pub weekday: Weekday,
     pub is_weekend: bool,
+    pub season: Season,
+    pub upcoming_holiday: Option<String>,
     pub date_str: String,
     pub minutes_since_last_activity: u64,
     pub hours_since_bot_spoke: Option<u64>,
@@ -163,13 +212,20 @@ impl TemporalContext {
     ) -> Self {
         let now = chrono::Local::now();
         let hour: u32 = now.format("%H").to_string().parse().unwrap_or(12);
-        let weekday = now.weekday().num_days_from_monday() + 1;
-        let is_weekend = matches!(now.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+        let weekday = now.weekday();
+        let is_weekend = matches!(weekday, chrono::Weekday::Sat | chrono::Weekday::Sun);
+        let month = now.month();
+        let day = now.day();
+
+        let season = Season::from_month(month);
+        let upcoming_holiday = get_holiday(month, day).map(|s| s.to_string());
 
         Self {
             time_of_day: TimeOfDay::from_hour(hour),
             weekday,
             is_weekend,
+            season,
+            upcoming_holiday,
             date_str: now.format("%Y-%m-%d %A").to_string(),
             minutes_since_last_activity: last_message_minutes_ago,
             hours_since_bot_spoke,
@@ -189,8 +245,17 @@ impl TemporalContext {
                 self.time_of_day.label(),
                 now.format("%H:%M").to_string()
             ),
-            format!("群里上一条消息是 {} 分钟前", self.minutes_since_last_activity),
+            format!("季节：{}", self.season.label()),
         ];
+
+        if let Some(ref holiday) = self.upcoming_holiday {
+            parts.push(format!("今天节日：{} 🎉", holiday));
+        }
+
+        parts.push(format!(
+            "群里上一条消息是 {} 分钟前",
+            self.minutes_since_last_activity
+        ));
 
         if self.is_weekend {
             parts.push("今天是周末 ~".into());
@@ -222,13 +287,19 @@ impl TemporalContext {
 pub struct BotState {
     pub emotional: EmotionalState,
     pub temporal: TemporalContext,
+    pub conversation: crate::domain::qq_bot::conversation_state::ConversationState,
 }
 
 impl BotState {
-    pub fn new(emotional: EmotionalState, temporal: TemporalContext) -> Self {
+    pub fn new(
+        emotional: EmotionalState,
+        temporal: TemporalContext,
+        conversation: crate::domain::qq_bot::conversation_state::ConversationState,
+    ) -> Self {
         Self {
             emotional,
             temporal,
+            conversation,
         }
     }
 }

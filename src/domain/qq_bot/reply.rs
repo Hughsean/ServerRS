@@ -14,6 +14,27 @@ pub struct BotReply {
     /// The LLM can include this to tell the bot how it feels after saying the reply.
     #[serde(default)]
     pub emotion_change: Option<EmotionChange>,
+    /// Optional relationship hints extracted from the LLM's reply.
+    /// The LLM can suggest how to address a specific user.
+    #[serde(default)]
+    pub relationship_hints: Option<RelationshipHints>,
+}
+
+/// Relationship hints that the LLM can include in its reply.
+/// Used to automatically update nickname preferences and known interests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipHints {
+    /// The QQ user this hint applies to.
+    pub target_user_id: i64,
+    /// Preferred nickname to call this user.
+    #[serde(default)]
+    pub nickname_preference: Option<String>,
+    /// Known interests the LLM inferred from the conversation.
+    #[serde(default)]
+    pub known_interests: Vec<String>,
+    /// Topics to avoid with this user.
+    #[serde(default)]
+    pub known_avoid_topics: Vec<String>,
 }
 
 /// Hint for updating the bot's emotional state after a reply.

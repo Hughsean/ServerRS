@@ -22,8 +22,10 @@ use super::emotional_state_service::EmotionalStateService;
 use super::message_ingestion::MessageIngestionService;
 use super::outbox_worker::OutboxWorker;
 use super::profile_builder::ProfileBuilder;
+use super::relationship_service::RelationshipService;
 use super::reply_generator::ReplyGenerator;
 use super::segment_dispatcher::SegmentDispatcher;
+use super::topic_service::TopicService;
 use super::trigger_evaluator::TriggerEvaluator;
 
 /// Main orchestrator for the QQ Bot (赛博猫猫).
@@ -31,7 +33,7 @@ use super::trigger_evaluator::TriggerEvaluator;
 /// Coordinates the full message lifecycle:
 /// 1. Ingest raw message (dedup, normalize, persist)
 /// 2. Evaluate trigger (Layer 1 rules → Layer 2 LLM)
-/// 3. Build conversation context
+/// 3. Build conversation context (time, emotion, topic, relationship)
 /// 4. Generate reply
 /// 5. Dispatch reply segments
 /// 6. Record agent turn
@@ -59,6 +61,12 @@ pub struct QqBotService {
     // Emotional state
     emotional_service: Arc<EmotionalStateService>,
 
+    // Topic tracking
+    topic_service: Arc<TopicService>,
+
+    // Relationship tracking
+    relationship_service: Option<Arc<RelationshipService>>,
+
     // Bot identity
     bot_account: Arc<RwLock<Option<BotAccount>>>,
     persona: BotPersona,
@@ -80,6 +88,8 @@ impl QqBotService {
         attention_store: Arc<InMemoryAttentionStore>,
         persona: BotPersona,
         emotional_service: Arc<EmotionalStateService>,
+        topic_service: Arc<TopicService>,
+        relationship_service: Option<Arc<RelationshipService>>,
     ) -> Self {
         Self {
             ingestion,
@@ -94,6 +104,8 @@ impl QqBotService {
             message_repo,
             attention_store,
             emotional_service,
+            topic_service,
+            relationship_service,
             bot_account: Arc::new(RwLock::new(None)),
             persona,
         }
@@ -179,6 +191,20 @@ impl QqBotService {
                 Some(format!("群友 {}: {}", persisted.qq_user_id.unwrap_or(0), event)),
             ).await;
         }
+
+        // 关系更新：每次收到消息更新互动计数
+        if let Some(ref rs) = self.relationship_service {
+            if let Some(qq_user_id) = persisted.qq_user_id {
+                if let Err(e) = rs.update_interaction(group_id, qq_user_id, Some(persisted.sent_at)).await {
+                    error!(group_id, user_id = qq_user_id, error = %e, "failed to update relationship");
+                }
+            }
+        }
+
+        // 话题分析：每次收到消息更新话题状态（在 trigger 之前，供 trigger 使用）
+        let recent_for_topic = self.message_repo.recent_by_group(group_id, 20).await
+            .unwrap_or_default();
+        self.topic_service.analyze(group_id, &recent_for_topic, persisted.sent_at).await;
 
         // 3. Evaluate trigger
         let decision = match self.trigger.evaluate(&persisted, &bot_account, group_config.as_ref()).await {
@@ -290,6 +316,41 @@ impl QqBotService {
                         ec.intensity,
                         ec.reason.clone(),
                     ).await;
+                }
+
+                // 从回复的 relationship_hints 字段自动更新关系
+                if let Some(ref hints) = reply.relationship_hints {
+                    if let Some(ref rs) = self.relationship_service {
+                        if let Some(ref nickname) = hints.nickname_preference {
+                            let _ = rs.update_nickname_preference(
+                                group_id,
+                                hints.target_user_id,
+                                nickname.clone(),
+                            ).await;
+                        }
+                        if !hints.known_interests.is_empty() || !hints.known_avoid_topics.is_empty() {
+                            // 获取现有关系，合并兴趣和回避话题
+                            if let Ok(Some(mut rel)) = rs.get_relationship(group_id, hints.target_user_id).await {
+                                for interest in &hints.known_interests {
+                                    if !rel.known_interests.contains(interest) {
+                                        rel.known_interests.push(interest.clone());
+                                    }
+                                }
+                                for topic in &hints.known_avoid_topics {
+                                    if !rel.known_avoid_topics.contains(topic) {
+                                        rel.known_avoid_topics.push(topic.clone());
+                                    }
+                                }
+                                // 持久化更新（通过 upsert）
+                                let _ = rs.update_known_info(
+                                    group_id,
+                                    hints.target_user_id,
+                                    &hints.known_interests,
+                                    &hints.known_avoid_topics,
+                                ).await;
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {

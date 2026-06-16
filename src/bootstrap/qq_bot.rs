@@ -17,15 +17,19 @@ use crate::app::qq_bot::context_builder::ContextBuilder;
 use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
 use crate::app::qq_bot::message_ingestion::MessageIngestionService;
 use crate::app::qq_bot::outbox_worker::OutboxWorker;
+use crate::app::qq_bot::proactive_evaluator::ProactiveEvaluator;
 use crate::app::qq_bot::profile_builder::{ProfileBuilder, ProfileBuilderConfig};
 use crate::app::qq_bot::qq_bot_service::QqBotService;
+use crate::app::qq_bot::relationship_service::RelationshipService;
 use crate::app::qq_bot::reply_generator::ReplyGenerator;
 use crate::app::qq_bot::segment_dispatcher::SegmentDispatcher;
+use crate::app::qq_bot::topic_service::TopicService;
 use crate::app::qq_bot::trigger_evaluator::TriggerEvaluator;
 use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::llm::LlmProvider;
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
+use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
 use crate::domain::qq_bot::repository::{
     AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
     GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummaryRepository,
@@ -68,6 +72,8 @@ pub async fn init_qq_bot(
     user_repo: Option<Arc<dyn UserRepository>>,
     external_user_repo: Option<Arc<dyn ExternalUserRepository>>,
     user_profile_repo: Option<Arc<dyn QqUserProfileRepository>>,
+    // Relationship repo (optional)
+    relationship_repo: Option<Arc<dyn RelationshipRepository>>,
 ) -> Result<Option<QqBotDependencies>, AppError> {
     let qc = &config.qq_bot;
 
@@ -157,6 +163,14 @@ pub async fn init_qq_bot(
     // ── Domain services ────────────────────────────────────────────
     let emotional_service = Arc::new(EmotionalStateService::new());
 
+    // Topic service (纯内存，无外部依赖)
+    let topic_service = Arc::new(TopicService::new());
+
+    // Relationship service (可选)
+    let relationship_service = relationship_repo.map(|repo| {
+        Arc::new(RelationshipService::new(repo))
+    });
+
     let ingestion = Arc::new(MessageIngestionService::new(
         Arc::clone(&group_message_repo),
     ));
@@ -165,6 +179,8 @@ pub async fn init_qq_bot(
         trigger_llm,
         Arc::clone(&attention_store),
         persona.clone(),
+        Some(Arc::clone(&topic_service)),
+        Some(Arc::clone(&emotional_service)),
     ));
 
     let context_builder = Arc::new(ContextBuilder::new(
@@ -175,6 +191,8 @@ pub async fn init_qq_bot(
         persona.clone(),
         20, // max_recent_messages
         Some(Arc::clone(&emotional_service)),
+        Some(Arc::clone(&topic_service)),
+        relationship_service.clone(),
     ));
 
     let reply_generator = Arc::new(ReplyGenerator::new(
@@ -198,9 +216,9 @@ pub async fn init_qq_bot(
     let service = Arc::new(QqBotService::new(
         ingestion,
         trigger,
-        context_builder,
-        reply_generator,
-        segment_dispatcher,
+        context_builder.clone(),
+        reply_generator.clone(),
+        segment_dispatcher.clone(),
         profile_builder,
         Arc::clone(&bot_account_repo),
         Arc::clone(&group_repo),
@@ -208,7 +226,9 @@ pub async fn init_qq_bot(
         Arc::clone(&group_message_repo),
         Arc::clone(&attention_store),
         persona,
-        emotional_service,
+        emotional_service.clone(),
+        topic_service.clone(),
+        relationship_service,
     ));
 
     // ── Initialise bot account cache ───────────────────────────────
@@ -281,6 +301,34 @@ pub async fn init_qq_bot(
             tracing::error!(error = %e, "NapCat listener stopped with error");
         }
     }));
+
+    // ── Proactive evaluator (后台轮询) ────────────────────────────
+    if qc.proactive_check_interval_secs > 0 {
+        let evaluator = Arc::new(ProactiveEvaluator::new(
+            Arc::clone(&group_repo),
+            Arc::clone(&group_message_repo),
+            context_builder,
+            reply_generator,
+            segment_dispatcher,
+            Arc::clone(&attention_store),
+            topic_service,
+            emotional_service,
+            llm_provider,
+            qc.self_qq_id,
+            bot_account_id,
+            std::time::Duration::from_secs(qc.proactive_check_interval_secs),
+            std::time::Duration::from_secs(qc.proactive_cooldown_secs),
+        ));
+
+        background.spawn(tokio::spawn(async move {
+            evaluator.run().await;
+        }));
+        info!(
+            interval_secs = qc.proactive_check_interval_secs,
+            cooldown_secs = qc.proactive_cooldown_secs,
+            "qq_bot proactive evaluator started"
+        );
+    }
 
     info!("QQ Bot (赛博猫猫) module initialised");
 

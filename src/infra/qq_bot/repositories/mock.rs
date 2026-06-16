@@ -7,6 +7,8 @@ use crate::domain::qq_bot::attention::BotAccount;
 use crate::domain::qq_bot::config::{ExternalUser, GroupConfig, GroupMember, TriggerPolicy};
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
+use crate::domain::qq_bot::relationship::RelationshipState;
+use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
 use crate::domain::qq_bot::repository::{
     AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
     GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository,
@@ -29,6 +31,7 @@ pub struct MockQqBotRepositories {
     pub summaries: Arc<MockGroupSummaryRepo>,
     pub memories: Arc<MockGroupMemoryRepo>,
     pub user_profiles: Arc<MockUserProfileRepo>,
+    pub relationships: Arc<MockRelationshipRepo>,
 }
 
 impl MockQqBotRepositories {
@@ -45,6 +48,7 @@ impl MockQqBotRepositories {
             summaries: Arc::new(MockGroupSummaryRepo::new()),
             memories: Arc::new(MockGroupMemoryRepo::new()),
             user_profiles: Arc::new(MockUserProfileRepo::new()),
+            relationships: Arc::new(MockRelationshipRepo::new()),
         }
     }
 }
@@ -467,6 +471,84 @@ impl QqUserProfileRepository for MockUserProfileRepo {
     async fn update_summary_at(&self, qq_user_id: i64, last_summary_at: i64) -> Result<(), AppError> {
         if let Some(p) = self.store.write().await.get_mut(&qq_user_id) {
             p.last_summary_at = Some(last_summary_at);
+        }
+        Ok(())
+    }
+}
+
+// ── Relationship ────────────────────────────────────────────────────────
+
+type RelKey = (i64, i64); // (qq_group_id, qq_user_id)
+
+pub struct MockRelationshipRepo {
+    store: Arc<RwLock<HashMap<RelKey, RelationshipState>>>,
+    next_id: Arc<RwLock<u64>>,
+}
+
+impl MockRelationshipRepo {
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
+    }
+}
+
+#[async_trait]
+impl RelationshipRepository for MockRelationshipRepo {
+    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<RelationshipState>, AppError> {
+        let store = self.store.read().await;
+        Ok(store.get(&(qq_group_id, qq_user_id)).cloned())
+    }
+
+    async fn upsert(&self, rel: &RelationshipState) -> Result<RelationshipState, AppError> {
+        let mut store = self.store.write().await;
+        let key = (rel.qq_group_id, rel.qq_user_id);
+        let mut updated = rel.clone();
+        if updated.id.is_none() {
+            let mut next_id = self.next_id.write().await;
+            updated.id = Some(*next_id);
+            *next_id += 1;
+        }
+        store.insert(key, updated.clone());
+        Ok(updated)
+    }
+
+    async fn find_by_group(&self, qq_group_id: i64) -> Result<Vec<RelationshipState>, AppError> {
+        let store = self.store.read().await;
+        let rels: Vec<RelationshipState> = store
+            .iter()
+            .filter(|((gid, _), _)| *gid == qq_group_id)
+            .map(|(_, v)| v.clone())
+            .collect();
+        Ok(rels)
+    }
+
+    async fn increment_interaction(&self, qq_group_id: i64, qq_user_id: i64) -> Result<(), AppError> {
+        let mut store = self.store.write().await;
+        let key = (qq_group_id, qq_user_id);
+        if let Some(rel) = store.get_mut(&key) {
+            rel.interaction_count = rel.interaction_count.saturating_add(1);
+            rel.familiarity = (0.1 + rel.interaction_count as f32 * 0.015).min(1.0);
+            rel.last_interaction_at = Some(chrono::Utc::now().timestamp());
+            rel.rapport = crate::domain::qq_bot::RapportLevel::from_familiarity(rel.familiarity);
+        } else {
+            // Create new
+            let mut next_id = self.next_id.write().await;
+            let new_rel = RelationshipState {
+                id: Some(*next_id),
+                qq_group_id,
+                qq_user_id,
+                familiarity: 0.1,
+                interaction_count: 1,
+                last_interaction_at: Some(chrono::Utc::now().timestamp()),
+                rapport: crate::domain::qq_bot::RapportLevel::Neutral,
+                nickname_preference: None,
+                known_interests: Vec::new(),
+                known_avoid_topics: Vec::new(),
+            };
+            *next_id += 1;
+            store.insert(key, new_rel);
         }
         Ok(())
     }

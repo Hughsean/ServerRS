@@ -5,9 +5,13 @@ pub mod conversation_state;
 pub mod error;
 pub mod message;
 pub mod persona;
+pub mod proactive;
 pub mod qq_profile_repository;
+pub mod relationship;
+pub mod relationship_repository;
 pub mod reply;
 pub mod repository;
+pub mod topic_state;
 pub mod turn;
 pub mod user_profile;
 
@@ -20,12 +24,16 @@ pub use conversation_state::ConversationState;
 pub use error::QqBotError;
 pub use message::{MessageDirection, MessageSegment, NormalizedMessage, ProcessStatus};
 pub use persona::{BotPersona, EmojiHabits, ToneProfile};
+pub use proactive::{ProactiveAction, ProactiveIntent};
 pub use qq_profile_repository::QqUserProfileRepository;
-pub use reply::{BotReply, EmotionChange, ReplySegment, TimingHint};
+pub use relationship::{RapportLevel, RelationshipState};
+pub use relationship_repository::RelationshipRepository;
+pub use reply::{BotReply, EmotionChange, RelationshipHints, ReplySegment, TimingHint};
 pub use repository::{
     AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
     GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository,
     GroupSummary, GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
 };
+pub use topic_state::{TopicInfo, TopicState};
 pub use turn::{AgentTurn, TriggerType, TurnStatus};
 pub use user_profile::UserProfile;

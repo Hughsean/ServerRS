@@ -405,6 +405,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     use crate::infra::tts::volcengine_provider::VolcengineTtsProvider;
     use crate::domain::tts::TtsProvider;
 
+    use crate::infra::qq_bot::repositories::seaorm_relationship_repository::SeaOrmRelationshipRepository;
+
     let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
     let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
     let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
@@ -415,6 +417,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
     let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
     let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
+    let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
 
     // TTS provider for QQ Bot voice messages
     let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> = if config.qq_bot.enabled && config.qq_bot.self_qq_id != 0 && !config.tts.api_key.is_empty() {
@@ -444,6 +447,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Some(Arc::clone(&user_repo) as Arc<dyn crate::domain::user::user_repository::UserRepository>),
         Some(Arc::clone(&qq_bot_external_user_repo)),
         Some(Arc::clone(&qq_bot_user_profile_repo)),
+        // relationship repo
+        Some(Arc::clone(&qq_bot_relationship_repo)),
     )
     .await
     .unwrap_or_else(|e| {

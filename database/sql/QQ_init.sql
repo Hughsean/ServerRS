@@ -269,6 +269,26 @@ CREATE TABLE qq_user_profiles
     created_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
     updated_at        DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
     FOREIGN KEY (qq_user_id) REFERENCES qq_external_users (qq_user_id) ON DELETE CASCADE
+	) ENGINE = InnoDB
+	  DEFAULT CHARSET = utf8mb4
+	  COLLATE = utf8mb4_unicode_ci COMMENT = 'QQ用户画像数据表';
+
+-- 11. 猫猫与群友关系表
+CREATE TABLE IF NOT EXISTS qq_relationships (
+    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+    qq_group_id        BIGINT          NOT NULL COMMENT '群号',
+    qq_user_id         BIGINT          NOT NULL COMMENT '群友QQ号',
+    familiarity        FLOAT           NOT NULL DEFAULT 0.1 COMMENT '熟悉度 0.0~1.0',
+    interaction_count  INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '累计互动次数',
+    last_interaction_at BIGINT         NULL COMMENT '上次互动时间戳',
+    rapport            VARCHAR(32)     NOT NULL DEFAULT 'neutral' COMMENT '亲密度等级: friendly/neutral/awkward/playful/respectful',
+    nickname_preference VARCHAR(64)    NULL COMMENT '偏好的称呼',
+    known_interests    JSON            NULL COMMENT '已知兴趣列表',
+    known_avoid_topics JSON            NULL COMMENT '应避免的话题列表',
+    created_at         DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    updated_at         DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_group_user (qq_group_id, qq_user_id),
+    FOREIGN KEY (qq_user_id) REFERENCES qq_external_users (qq_user_id) ON DELETE CASCADE
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COLLATE = utf8mb4_unicode_ci COMMENT = 'QQ用户画像数据表';
+  COLLATE = utf8mb4_unicode_ci COMMENT = '猫猫与群友关系状态表';

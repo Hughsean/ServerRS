@@ -33,6 +33,7 @@ pub use super::qq_group_messages::Entity as QqGroupMessages;
 pub use super::qq_group_summaries::Entity as QqGroupSummaries;
 pub use super::qq_groups::Entity as QqGroups;
 pub use super::qq_message_outbox::Entity as QqMessageOutbox;
+pub use super::qq_relationships::Entity as QqRelationships;
 pub use super::qq_user_profiles::Entity as QqUserProfiles;
 pub use super::refresh_tokens::Entity as RefreshTokens;
 pub use super::stored_objects::Entity as StoredObjects;

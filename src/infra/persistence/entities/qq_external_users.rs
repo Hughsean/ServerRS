@@ -54,6 +54,7 @@ impl PrimaryKeyTrait for PrimaryKey {
 pub enum Relation {
     QqGroupMembers,
     QqGroupMessages,
+    QqRelationships,
     QqUserProfiles,
     Users,
 }
@@ -80,6 +81,7 @@ impl RelationTrait for Relation {
         match self {
             Self::QqGroupMembers => Entity::has_many(super::qq_group_members::Entity).into(),
             Self::QqGroupMessages => Entity::has_many(super::qq_group_messages::Entity).into(),
+            Self::QqRelationships => Entity::has_many(super::qq_relationships::Entity).into(),
             Self::QqUserProfiles => Entity::has_one(super::qq_user_profiles::Entity).into(),
             Self::Users => Entity::belongs_to(super::users::Entity)
                 .from(Column::InternalUserId)
@@ -98,6 +100,12 @@ impl Related<super::qq_group_members::Entity> for Entity {
 impl Related<super::qq_group_messages::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::QqGroupMessages.def()
+    }
+}
+
+impl Related<super::qq_relationships::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::QqRelationships.def()
     }
 }
 

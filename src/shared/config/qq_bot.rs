@@ -68,6 +68,13 @@ pub struct QqBotConfig {
     /// TTS 音频文件对外提供的 URL 前缀
     #[serde(default = "default_tts_public_url_base")]
     pub tts_public_url_base: String,
+    // ── 主动行为（ProactiveEvaluator）配置 ──
+    /// 主动行为检查间隔（秒），设为 0 表示禁用
+    #[serde(default = "default_proactive_check_interval_secs")]
+    pub proactive_check_interval_secs: u64,
+    /// 主动行为冷却时间（秒），同一群两次主动行为的最小间隔
+    #[serde(default = "default_proactive_cooldown_secs")]
+    pub proactive_cooldown_secs: u64,
 }
 
 impl Default for QqBotConfig {
@@ -94,6 +101,8 @@ impl Default for QqBotConfig {
             profile_llm: QqBotProfileLlmConfig::default(),
             tts_output_dir: default_tts_output_dir(),
             tts_public_url_base: default_tts_public_url_base(),
+            proactive_check_interval_secs: default_proactive_check_interval_secs(),
+            proactive_cooldown_secs: default_proactive_cooldown_secs(),
         }
     }
 }
@@ -231,3 +240,8 @@ fn default_profile_max_tokens() -> u32 { 2048 }
 
 fn default_tts_output_dir() -> String { "./data/tts/".into() }
 fn default_tts_public_url_base() -> String { "http://127.0.0.1:3001/tts/".into() }
+
+// ── 主动行为默认值 ──
+
+fn default_proactive_check_interval_secs() -> u64 { 30 }
+fn default_proactive_cooldown_secs() -> u64 { 120 }

@@ -290,8 +290,11 @@ impl CloneInner {
 {{
   "interest_tags": ["编程", "二次元", "音乐"],
   "speaking_style": "简洁",
+  "topic_frequency": {{"游戏": 15, "学习": 3, "美食": 8}},
   "raw_profile": "一段自然语言描述（100字以内）"
 }}
+
+topic_frequency 是该用户常聊的话题及其估计次数，最多 5 个话题。
 
 聊天记录：
 {}"#,
@@ -313,7 +316,10 @@ impl CloneInner {
                 active_hours: None,
                 speaking_style: parsed.get("speaking_style")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
-                topic_frequency: None,
+                topic_frequency: parsed.get("topic_frequency")
+                    .and_then(|v| {
+                        if v.is_object() { Some(v.clone()) } else { None }
+                    }),
                 total_messages: 0,
                 avg_message_length: 0.0,
                 emoji_usage_rate: 0.0,
