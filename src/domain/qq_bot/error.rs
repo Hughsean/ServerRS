@@ -25,7 +25,11 @@ impl fmt::Display for QqBotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Connection(msg) => write!(f, "NapCat connection error: {msg}"),
-            Self::Api { action, code, message } => {
+            Self::Api {
+                action,
+                code,
+                message,
+            } => {
                 write!(f, "NapCat API error [{action}]: code={code}, {message}")
             }
             Self::MessageProcessing(msg) => write!(f, "message processing error: {msg}"),
@@ -39,9 +43,13 @@ impl From<QqBotError> for AppError {
     fn from(e: QqBotError) -> Self {
         match e {
             QqBotError::Connection(msg) => AppError::Infrastructure(msg),
-            QqBotError::Api { action, code, message } => {
-                AppError::Internal(format!("NapCat API error [{action}]: code={code}, {message}"))
-            }
+            QqBotError::Api {
+                action,
+                code,
+                message,
+            } => AppError::Internal(format!(
+                "NapCat API error [{action}]: code={code}, {message}"
+            )),
             QqBotError::MessageProcessing(msg) => AppError::Validation(msg),
             QqBotError::NotFound(msg) => AppError::NotFound(msg),
             QqBotError::Internal(msg) => AppError::Internal(msg),

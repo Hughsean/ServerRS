@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::domain::user::user::{NewUser, User, UserStatus, UserUpdate, QQ_AUTO_REGISTERED_SENTINEL};
+use crate::domain::user::user::{
+    NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserStatus, UserUpdate,
+};
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
 
@@ -108,7 +110,9 @@ impl UserRepository for SeaOrmUserRepository {
         let now = chrono::Utc::now();
         let model = users::ActiveModel {
             username: Set(new_user.username),
-            password: Set(new_user.password_hash.unwrap_or_else(|| QQ_AUTO_REGISTERED_SENTINEL.to_string())),
+            password: Set(new_user
+                .password_hash
+                .unwrap_or_else(|| QQ_AUTO_REGISTERED_SENTINEL.to_string())),
             email: Set(new_user.email),
             phone: Set(new_user.phone),
             nickname: Set(new_user.nickname),

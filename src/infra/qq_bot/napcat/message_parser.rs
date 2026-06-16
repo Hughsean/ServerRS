@@ -20,7 +20,9 @@ pub fn parse_message_segments(raw: &str) -> Vec<MessageSegment> {
     if raw.contains("[CQ:") {
         parse_cq_codes(raw)
     } else {
-        vec![MessageSegment::Text { content: raw.to_string() }]
+        vec![MessageSegment::Text {
+            content: raw.to_string(),
+        }]
     }
 }
 
@@ -34,7 +36,9 @@ fn parse_cq_codes(raw: &str) -> Vec<MessageSegment> {
         if start > 0 {
             let text = &remaining[..start];
             if !text.trim().is_empty() {
-                segments.push(MessageSegment::Text { content: text.to_string() });
+                segments.push(MessageSegment::Text {
+                    content: text.to_string(),
+                });
             }
         }
 
@@ -54,62 +58,75 @@ fn parse_cq_codes(raw: &str) -> Vec<MessageSegment> {
 
             match cq_type {
                 "at" => {
-                    let qq = params.iter()
+                    let qq = params
+                        .iter()
                         .find(|p| p.starts_with("qq="))
                         .map(|p| p[3..].to_string())
                         .unwrap_or_default();
                     segments.push(MessageSegment::At { qq });
                 }
                 "face" => {
-                    let id = params.iter()
+                    let id = params
+                        .iter()
                         .find(|p| p.starts_with("id="))
                         .and_then(|p| p[3..].parse::<i32>().ok())
                         .unwrap_or(0);
-                    let text = params.iter()
+                    let text = params
+                        .iter()
                         .find(|p| p.starts_with("text="))
                         .map(|p| p[5..].to_string());
                     segments.push(MessageSegment::Face { id, text });
                 }
                 "image" => {
-                    let file = params.iter()
+                    let file = params
+                        .iter()
                         .find(|p| p.starts_with("file="))
                         .map(|p| p[5..].to_string())
                         .unwrap_or_default();
-                    let url = params.iter()
+                    let url = params
+                        .iter()
                         .find(|p| p.starts_with("url="))
                         .map(|p| p[4..].to_string());
                     segments.push(MessageSegment::Image { file, url });
                 }
                 "reply" => {
-                    let id = params.iter()
+                    let id = params
+                        .iter()
                         .find(|p| p.starts_with("id="))
                         .map(|p| p[3..].to_string())
                         .unwrap_or_default();
                     segments.push(MessageSegment::Reply { id });
                 }
                 "record" => {
-                    let file = params.iter()
+                    let file = params
+                        .iter()
                         .find(|p| p.starts_with("file="))
                         .map(|p| p[5..].to_string())
                         .unwrap_or_default();
                     segments.push(MessageSegment::Record { file });
                 }
                 _ => {
-                    segments.push(MessageSegment::Unknown { raw: cq_content.to_string() });
+                    segments.push(MessageSegment::Unknown {
+                        raw: cq_content.to_string(),
+                    });
                 }
             }
 
             remaining = &remaining[end..];
         } else {
             // Malformed CQ code, treat as text
-            segments.push(MessageSegment::Text { content: remaining.to_string() });
+            segments.push(MessageSegment::Text {
+                content: remaining.to_string(),
+            });
             remaining = "";
         }
     }
 
     // Remaining text
     if !remaining.is_empty() && !remaining.trim().is_empty() {
-        segments.push(MessageSegment::Text { content: remaining.to_string() });
+        segments.push(MessageSegment::Text {
+            content: remaining.to_string(),
+        });
     }
 
     segments
@@ -171,14 +188,20 @@ mod tests {
         let segments = parse_message_segments("[CQ:at,qq=123456] 今天天气怎么样");
         assert_eq!(segments.len(), 2);
         assert!(matches!(segments[0], MessageSegment::At { ref qq } if qq == "123456"));
-        assert!(matches!(segments[1], MessageSegment::Text { ref content } if content.trim() == "今天天气怎么样"));
+        assert!(
+            matches!(segments[1], MessageSegment::Text { ref content } if content.trim() == "今天天气怎么样")
+        );
     }
 
     #[test]
     fn test_parse_image() {
-        let segments = parse_message_segments("看这个 [CQ:image,file=test.jpg,url=https://example.com/test.jpg]");
+        let segments = parse_message_segments(
+            "看这个 [CQ:image,file=test.jpg,url=https://example.com/test.jpg]",
+        );
         assert_eq!(segments.len(), 2);
-        assert!(matches!(segments[1], MessageSegment::Image { ref file, .. } if file == "test.jpg"));
+        assert!(
+            matches!(segments[1], MessageSegment::Image { ref file, .. } if file == "test.jpg")
+        );
     }
 
     #[test]

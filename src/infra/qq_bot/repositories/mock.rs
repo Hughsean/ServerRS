@@ -11,8 +11,8 @@ use crate::domain::qq_bot::relationship::RelationshipState;
 use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
 use crate::domain::qq_bot::repository::{
     AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
-    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository,
-    GroupSummary, GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
+    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummary,
+    GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TurnStatus};
 use crate::domain::qq_bot::user_profile::UserProfile;
@@ -60,7 +60,11 @@ pub struct MockBotAccountRepo {
 }
 
 impl MockBotAccountRepo {
-    pub fn new() -> Self { Self { store: Arc::new(RwLock::new(HashMap::new())) } }
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -69,10 +73,20 @@ impl BotAccountRepository for MockBotAccountRepo {
         Ok(self.store.read().await.get(&self_qq_id).cloned())
     }
     async fn find_enabled(&self) -> Result<Vec<BotAccount>, AppError> {
-        Ok(self.store.read().await.values().filter(|a| a.enabled).cloned().collect())
+        Ok(self
+            .store
+            .read()
+            .await
+            .values()
+            .filter(|a| a.enabled)
+            .cloned()
+            .collect())
     }
     async fn upsert(&self, account: &BotAccount) -> Result<BotAccount, AppError> {
-        self.store.write().await.insert(account.self_qq_id, account.clone());
+        self.store
+            .write()
+            .await
+            .insert(account.self_qq_id, account.clone());
         Ok(account.clone())
     }
 }
@@ -84,7 +98,11 @@ pub struct MockExternalUserRepo {
 }
 
 impl MockExternalUserRepo {
-    pub fn new() -> Self { Self { store: Arc::new(RwLock::new(HashMap::new())) } }
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -93,7 +111,10 @@ impl ExternalUserRepository for MockExternalUserRepo {
         Ok(self.store.read().await.get(&qq_user_id).cloned())
     }
     async fn upsert(&self, user: &ExternalUser) -> Result<ExternalUser, AppError> {
-        self.store.write().await.insert(user.qq_user_id, user.clone());
+        self.store
+            .write()
+            .await
+            .insert(user.qq_user_id, user.clone());
         Ok(user.clone())
     }
     async fn update_last_seen(&self, qq_user_id: i64, _last_seen_at: i64) -> Result<(), AppError> {
@@ -111,7 +132,11 @@ pub struct MockGroupRepo {
 }
 
 impl MockGroupRepo {
-    pub fn new() -> Self { Self { store: Arc::new(RwLock::new(HashMap::new())) } }
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -119,11 +144,24 @@ impl GroupRepository for MockGroupRepo {
     async fn find_by_group_id(&self, qq_group_id: i64) -> Result<Option<GroupConfig>, AppError> {
         Ok(self.store.read().await.get(&qq_group_id).cloned())
     }
-    async fn find_enabled_by_bot(&self, _bot_account_id: u64) -> Result<Vec<GroupConfig>, AppError> {
-        Ok(self.store.read().await.values().filter(|g| g.enabled).cloned().collect())
+    async fn find_enabled_by_bot(
+        &self,
+        _bot_account_id: u64,
+    ) -> Result<Vec<GroupConfig>, AppError> {
+        Ok(self
+            .store
+            .read()
+            .await
+            .values()
+            .filter(|g| g.enabled)
+            .cloned()
+            .collect())
     }
     async fn upsert(&self, group: &GroupConfig) -> Result<GroupConfig, AppError> {
-        self.store.write().await.insert(group.qq_group_id, group.clone());
+        self.store
+            .write()
+            .await
+            .insert(group.qq_group_id, group.clone());
         Ok(group.clone())
     }
     async fn update_last_seen(&self, qq_group_id: i64, _last_seen_at: i64) -> Result<(), AppError> {
@@ -132,7 +170,11 @@ impl GroupRepository for MockGroupRepo {
         }
         Ok(())
     }
-    async fn update_trigger_policy(&self, qq_group_id: i64, policy: TriggerPolicy) -> Result<(), AppError> {
+    async fn update_trigger_policy(
+        &self,
+        qq_group_id: i64,
+        policy: TriggerPolicy,
+    ) -> Result<(), AppError> {
         if let Some(g) = self.store.write().await.get_mut(&qq_group_id) {
             g.trigger_policy = policy;
         }
@@ -153,26 +195,54 @@ pub struct MockGroupMemberRepo {
 }
 
 impl MockGroupMemberRepo {
-    pub fn new() -> Self { Self { store: Arc::new(RwLock::new(HashMap::new())) } }
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 #[async_trait]
 impl GroupMemberRepository for MockGroupMemberRepo {
-    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<GroupMember>, AppError> {
-        Ok(self.store.read().await.get(&(qq_group_id, qq_user_id)).cloned())
+    async fn find(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<Option<GroupMember>, AppError> {
+        Ok(self
+            .store
+            .read()
+            .await
+            .get(&(qq_group_id, qq_user_id))
+            .cloned())
     }
     async fn upsert(&self, member: &GroupMember) -> Result<GroupMember, AppError> {
-        self.store.write().await.insert((member.qq_group_id, member.qq_user_id), member.clone());
+        self.store
+            .write()
+            .await
+            .insert((member.qq_group_id, member.qq_user_id), member.clone());
         Ok(member.clone())
     }
-    async fn update_last_seen(&self, qq_group_id: i64, qq_user_id: i64, _last_seen_at: i64) -> Result<(), AppError> {
+    async fn update_last_seen(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+        _last_seen_at: i64,
+    ) -> Result<(), AppError> {
         if let Some(m) = self.store.write().await.get_mut(&(qq_group_id, qq_user_id)) {
             m.last_seen_at = Some(_last_seen_at);
         }
         Ok(())
     }
     async fn list_by_group(&self, qq_group_id: i64) -> Result<Vec<GroupMember>, AppError> {
-        Ok(self.store.read().await.values().filter(|m| m.qq_group_id == qq_group_id).cloned().collect())
+        Ok(self
+            .store
+            .read()
+            .await
+            .values()
+            .filter(|m| m.qq_group_id == qq_group_id)
+            .cloned()
+            .collect())
     }
 }
 
@@ -211,15 +281,27 @@ impl GroupMessageRepository for MockGroupMessageRepo {
         *id += 1;
         Ok(m)
     }
-    async fn find_by_platform_id(&self, bot_account_id: u64, platform_message_id: &str) -> Result<Option<NormalizedMessage>, AppError> {
+    async fn find_by_platform_id(
+        &self,
+        bot_account_id: u64,
+        platform_message_id: &str,
+    ) -> Result<Option<NormalizedMessage>, AppError> {
         let key = (bot_account_id, platform_message_id.to_string());
         if let Some(id) = self.by_platform.read().await.get(&key) {
             return Ok(self.store.read().await.get(id).cloned());
         }
         Ok(None)
     }
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<NormalizedMessage>, AppError> {
-        let mut msgs: Vec<NormalizedMessage> = self.store.read().await.values()
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<NormalizedMessage>, AppError> {
+        let mut msgs: Vec<NormalizedMessage> = self
+            .store
+            .read()
+            .await
+            .values()
             .filter(|m| m.qq_group_id == qq_group_id)
             .cloned()
             .collect();
@@ -227,7 +309,12 @@ impl GroupMessageRepository for MockGroupMessageRepo {
         msgs.truncate(limit as usize);
         Ok(msgs)
     }
-    async fn update_status(&self, id: u64, status: ProcessStatus, error: Option<&str>) -> Result<(), AppError> {
+    async fn update_status(
+        &self,
+        id: u64,
+        status: ProcessStatus,
+        error: Option<&str>,
+    ) -> Result<(), AppError> {
         if let Some(_m) = self.store.write().await.get_mut(&id) {
             let _ = status;
             let _ = error;
@@ -246,7 +333,10 @@ pub struct MockAgentTurnRepo {
 
 impl MockAgentTurnRepo {
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())), next_id: Arc::new(RwLock::new(1)) }
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
     }
 }
 
@@ -260,14 +350,24 @@ impl AgentTurnRepository for MockAgentTurnRepo {
         *id += 1;
         Ok(t)
     }
-    async fn update_response(&self, turn_id: u64, response_message_id: u64, status: TurnStatus) -> Result<(), AppError> {
+    async fn update_response(
+        &self,
+        turn_id: u64,
+        response_message_id: u64,
+        status: TurnStatus,
+    ) -> Result<(), AppError> {
         if let Some(t) = self.store.write().await.get_mut(&turn_id) {
             t.response_message_id = Some(response_message_id);
             t.status = status;
         }
         Ok(())
     }
-    async fn update_status(&self, turn_id: u64, status: TurnStatus, error: Option<&str>) -> Result<(), AppError> {
+    async fn update_status(
+        &self,
+        turn_id: u64,
+        status: TurnStatus,
+        error: Option<&str>,
+    ) -> Result<(), AppError> {
         if let Some(t) = self.store.write().await.get_mut(&turn_id) {
             t.status = status;
             t.error_message = error.map(|s| s.to_string());
@@ -275,10 +375,24 @@ impl AgentTurnRepository for MockAgentTurnRepo {
         Ok(())
     }
     async fn find_by_trace_id(&self, _trace_id: &str) -> Result<Option<AgentTurn>, AppError> {
-        Ok(self.store.read().await.values().find(|t| t.trace_id.as_deref() == Some(_trace_id)).cloned())
+        Ok(self
+            .store
+            .read()
+            .await
+            .values()
+            .find(|t| t.trace_id.as_deref() == Some(_trace_id))
+            .cloned())
     }
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<AgentTurn>, AppError> {
-        let mut turns: Vec<AgentTurn> = self.store.read().await.values()
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<AgentTurn>, AppError> {
+        let mut turns: Vec<AgentTurn> = self
+            .store
+            .read()
+            .await
+            .values()
             .filter(|t| t.qq_group_id == qq_group_id)
             .cloned()
             .collect();
@@ -297,7 +411,10 @@ pub struct MockOutboxRepo {
 
 impl MockOutboxRepo {
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())), next_id: Arc::new(RwLock::new(1)) }
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
     }
 }
 
@@ -313,8 +430,14 @@ impl OutboxRepository for MockOutboxRepo {
     }
     async fn fetch_due(&self, limit: u32) -> Result<Vec<OutboxEntry>, AppError> {
         let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
-        let mut entries: Vec<OutboxEntry> = self.store.read().await.values()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let mut entries: Vec<OutboxEntry> = self
+            .store
+            .read()
+            .await
+            .values()
             .filter(|e| matches!(e.status, OutboxStatus::Pending) && e.next_run_at <= now)
             .cloned()
             .collect();
@@ -354,14 +477,24 @@ pub struct MockGroupSummaryRepo {
 
 impl MockGroupSummaryRepo {
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())), next_id: Arc::new(RwLock::new(1)) }
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
     }
 }
 
 #[async_trait]
 impl GroupSummaryRepository for MockGroupSummaryRepo {
-    async fn find_active_rolling(&self, qq_group_id: i64) -> Result<Option<GroupSummary>, AppError> {
-        Ok(self.store.read().await.values()
+    async fn find_active_rolling(
+        &self,
+        qq_group_id: i64,
+    ) -> Result<Option<GroupSummary>, AppError> {
+        Ok(self
+            .store
+            .read()
+            .await
+            .values()
             .find(|s| s.qq_group_id == qq_group_id && s.status)
             .cloned())
     }
@@ -390,18 +523,33 @@ pub struct MockGroupMemoryRepo {
 
 impl MockGroupMemoryRepo {
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())), next_id: Arc::new(RwLock::new(1)) }
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
     }
 }
 
 #[async_trait]
 impl GroupMemoryRepository for MockGroupMemoryRepo {
-    async fn find_active_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<GroupMemory>, AppError> {
-        let mut memories: Vec<GroupMemory> = self.store.read().await.values()
+    async fn find_active_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<GroupMemory>, AppError> {
+        let mut memories: Vec<GroupMemory> = self
+            .store
+            .read()
+            .await
+            .values()
             .filter(|m| m.qq_group_id == qq_group_id && m.status == 1)
             .cloned()
             .collect();
-        memories.sort_by(|a, b| b.salience.partial_cmp(&a.salience).unwrap_or(std::cmp::Ordering::Equal));
+        memories.sort_by(|a, b| {
+            b.salience
+                .partial_cmp(&a.salience)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         memories.truncate(limit as usize);
         Ok(memories)
     }
@@ -409,7 +557,9 @@ impl GroupMemoryRepository for MockGroupMemoryRepo {
         let mut store = self.store.write().await;
         // Try to find existing by same memory_key / canonical_form for dedup
         if let Some(mem_key) = &memory.memory_key {
-            if let Some(existing) = store.values_mut().find(|m| m.memory_key.as_deref() == Some(mem_key) && m.qq_group_id == memory.qq_group_id) {
+            if let Some(existing) = store.values_mut().find(|m| {
+                m.memory_key.as_deref() == Some(mem_key) && m.qq_group_id == memory.qq_group_id
+            }) {
                 // 更新现有记录
                 existing.content = memory.content.clone();
                 existing.confidence = memory.confidence;
@@ -441,7 +591,9 @@ pub struct MockUserProfileRepo {
 
 impl MockUserProfileRepo {
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            store: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 }
 
@@ -451,7 +603,10 @@ impl QqUserProfileRepository for MockUserProfileRepo {
         Ok(self.store.read().await.get(&qq_user_id).cloned())
     }
     async fn upsert(&self, profile: &UserProfile) -> Result<UserProfile, AppError> {
-        self.store.write().await.insert(profile.qq_user_id, profile.clone());
+        self.store
+            .write()
+            .await
+            .insert(profile.qq_user_id, profile.clone());
         Ok(profile.clone())
     }
     async fn update_stats(
@@ -468,7 +623,11 @@ impl QqUserProfileRepository for MockUserProfileRepo {
         }
         Ok(())
     }
-    async fn update_summary_at(&self, qq_user_id: i64, last_summary_at: i64) -> Result<(), AppError> {
+    async fn update_summary_at(
+        &self,
+        qq_user_id: i64,
+        last_summary_at: i64,
+    ) -> Result<(), AppError> {
         if let Some(p) = self.store.write().await.get_mut(&qq_user_id) {
             p.last_summary_at = Some(last_summary_at);
         }
@@ -496,7 +655,11 @@ impl MockRelationshipRepo {
 
 #[async_trait]
 impl RelationshipRepository for MockRelationshipRepo {
-    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<RelationshipState>, AppError> {
+    async fn find(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<Option<RelationshipState>, AppError> {
         let store = self.store.read().await;
         Ok(store.get(&(qq_group_id, qq_user_id)).cloned())
     }
@@ -524,7 +687,11 @@ impl RelationshipRepository for MockRelationshipRepo {
         Ok(rels)
     }
 
-    async fn increment_interaction(&self, qq_group_id: i64, qq_user_id: i64) -> Result<(), AppError> {
+    async fn increment_interaction(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<(), AppError> {
         let mut store = self.store.write().await;
         let key = (qq_group_id, qq_user_id);
         if let Some(rel) = store.get_mut(&key) {

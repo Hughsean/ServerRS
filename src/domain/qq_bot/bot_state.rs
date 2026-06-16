@@ -273,9 +273,7 @@ impl TemporalContext {
         ));
 
         if self.is_first_interaction_today {
-            parts.push(
-                "这是你今天第一次在群里说话。如果时间还早可以问候早安。".into(),
-            );
+            parts.push("这是你今天第一次在群里说话。如果时间还早可以问候早安。".into());
         }
 
         parts.join("\n")

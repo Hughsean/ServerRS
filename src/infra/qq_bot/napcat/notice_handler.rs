@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::{ExternalUser, GroupMember};
 use crate::domain::qq_bot::repository::{ExternalUserRepository, GroupMemberRepository};
-use crate::domain::qq_bot::QqBotError;
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
 use super::listener::GroupNoticeHandler;
@@ -50,7 +50,8 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
         );
 
         // 1. Ensure external_user exists (create placeholder if needed)
-        let external = self.external_user_repo
+        let external = self
+            .external_user_repo
             .find_by_qq_user_id(user_id)
             .await
             .map_err(|e| QqBotError::Internal(format!("find external user: {e}")))?;
@@ -139,7 +140,8 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
         );
 
         // Fetch existing member record to update status
-        let existing = self.member_repo
+        let existing = self
+            .member_repo
             .find(group_id, user_id)
             .await
             .map_err(|e| QqBotError::Internal(format!("find group member: {e}")))?;
@@ -150,7 +152,12 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
                 .upsert(&member)
                 .await
                 .map_err(|e| QqBotError::Internal(format!("upsert group member: {e}")))?;
-            info!(group_id, user_id, new_status = status, "group member status updated");
+            info!(
+                group_id,
+                user_id,
+                new_status = status,
+                "group member status updated"
+            );
         } else {
             // Member not in our DB yet — create a record with left/kicked status
             let member = GroupMember {
@@ -168,7 +175,12 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
                 .upsert(&member)
                 .await
                 .map_err(|e| QqBotError::Internal(format!("upsert group member: {e}")))?;
-            info!(group_id, user_id, new_status = status, "group member created (was not in DB)");
+            info!(
+                group_id,
+                user_id,
+                new_status = status,
+                "group member created (was not in DB)"
+            );
         }
 
         Ok(())

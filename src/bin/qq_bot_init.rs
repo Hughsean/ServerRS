@@ -16,11 +16,11 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use server_rs::domain::qq_bot::{
-    BotAccount, ExternalUser, GroupConfig, GroupMember, MemoryPolicy, ReplyPolicy, TriggerPolicy,
-};
 use server_rs::domain::qq_bot::repository::{
     BotAccountRepository, ExternalUserRepository, GroupMemberRepository, GroupRepository,
+};
+use server_rs::domain::qq_bot::{
+    BotAccount, ExternalUser, GroupConfig, GroupMember, MemoryPolicy, ReplyPolicy, TriggerPolicy,
 };
 use server_rs::infra::persistence::seaorm_db::init_db;
 use server_rs::infra::qq_bot::napcat::api::NapCatApiClient;
@@ -64,8 +64,7 @@ async fn main() {
 
     let bot_account_repo: Arc<dyn BotAccountRepository> =
         Arc::new(SeaOrmBotAccountRepository::new(db.clone()));
-    let group_repo: Arc<dyn GroupRepository> =
-        Arc::new(SeaOrmGroupRepository::new(db.clone()));
+    let group_repo: Arc<dyn GroupRepository> = Arc::new(SeaOrmGroupRepository::new(db.clone()));
     let group_member_repo: Arc<dyn GroupMemberRepository> =
         Arc::new(SeaOrmGroupMemberRepository::new(db.clone()));
     let external_user_repo: Arc<dyn ExternalUserRepository> =

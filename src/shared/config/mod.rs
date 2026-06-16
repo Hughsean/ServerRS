@@ -20,8 +20,8 @@ pub mod auth_storage;
 pub mod llm_agent_rag;
 pub mod mail_cors_log;
 pub mod plugins;
-pub mod qq_bot;
 pub mod qdrant;
+pub mod qq_bot;
 pub mod server;
 pub mod tts;
 pub mod web_ingestion;
@@ -35,13 +35,15 @@ use serde::Deserialize;
 
 pub use self::auth_storage::{AuthConfig, JwtConfig, StorageConfig};
 pub use self::llm_agent_rag::{AgentConfig, EmbeddingConfig, LlmConfig, RagConfig};
-pub use self::mail_cors_log::{CorsConfig, DetectorConfig, LoggingConfig, MailConfig, OllamaConfig};
+pub use self::mail_cors_log::{
+    CorsConfig, DetectorConfig, LoggingConfig, MailConfig, OllamaConfig,
+};
 pub use self::plugins::{
     BaiduBaikePluginConfig, FetchWebContentPluginConfig, NewsPluginConfig, PluginsConfig,
     WeatherPluginConfig, WebSearchPluginConfig,
 };
-pub use self::qq_bot::QqBotConfig;
 pub use self::qdrant::QdrantConfig;
+pub use self::qq_bot::QqBotConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::tts::TtsConfig;
 pub use self::web_ingestion::{DistillLlmConfig, WebIngestionConfig};

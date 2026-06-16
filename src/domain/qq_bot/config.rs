@@ -36,9 +36,15 @@ pub struct ReplyPolicy {
     pub keywords: Vec<String>,
 }
 
-fn default_cooldown_secs() -> u64 { 30 }
-fn default_max_segments() -> u32 { 5 }
-fn default_max_chars_per_segment() -> u32 { 80 }
+fn default_cooldown_secs() -> u64 {
+    30
+}
+fn default_max_segments() -> u32 {
+    5
+}
+fn default_max_chars_per_segment() -> u32 {
+    80
+}
 
 /// 群组级别配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,9 +87,9 @@ pub struct GroupMember {
     pub qq_user_id: i64,
     pub card: Option<String>,
     pub nickname: Option<String>,
-    pub role: Option<String>,   // owner | admin | member
+    pub role: Option<String>, // owner | admin | member
     pub title: Option<String>,
     pub join_time: Option<i64>,
     pub last_seen_at: Option<i64>,
-    pub status: String,         // active | left | kicked | unknown
+    pub status: String, // active | left | kicked | unknown
 }

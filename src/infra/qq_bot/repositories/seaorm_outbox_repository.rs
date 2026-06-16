@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use sea_orm::sea_query::SimpleExpr;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Value};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Value,
+};
 
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
 use crate::shared::error::AppError;

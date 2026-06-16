@@ -6,11 +6,11 @@ use tracing::{info, warn};
 use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
 use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::{ChatCompletionRequest, LlmProvider};
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::config::{GroupConfig, TriggerPolicy};
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
-use crate::domain::qq_bot::QqBotError;
 use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
 
 /// Two-layer trigger evaluator:
@@ -96,7 +96,9 @@ impl TriggerEvaluator {
                     .map(|g| g.reply_policy.keywords.clone())
                     .unwrap_or_default();
                 let matched = keywords.iter().any(|kw| {
-                    msg.normalized_text.to_lowercase().contains(&kw.to_lowercase())
+                    msg.normalized_text
+                        .to_lowercase()
+                        .contains(&kw.to_lowercase())
                 });
                 if !matched && !msg.at_bot {
                     return Ok(TriggerDecision::Skip);
@@ -162,7 +164,11 @@ impl TriggerEvaluator {
         let emotion_hint = match &self.emotional_service {
             Some(es) => {
                 let state = es.get_state(msg.qq_group_id).await;
-                format!("\n当前情绪：{}（强度 {:.1}）", state.mood.label(), state.intensity)
+                format!(
+                    "\n当前情绪：{}（强度 {:.1}）",
+                    state.mood.label(),
+                    state.intensity
+                )
             }
             None => String::new(),
         };
@@ -213,9 +219,11 @@ impl TriggerEvaluator {
         ])
         .with_temperature(0.3);
 
-        let response = self.llm_provider.chat(request).await.map_err(|e| {
-            QqBotError::Internal(format!("LLM trigger evaluation failed: {e}"))
-        })?;
+        let response = self
+            .llm_provider
+            .chat(request)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("LLM trigger evaluation failed: {e}")))?;
 
         let decision_text = response.content.trim().to_lowercase();
         Ok(match decision_text.as_str() {

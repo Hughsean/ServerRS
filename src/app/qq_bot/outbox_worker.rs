@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use tracing::{error, info, warn};
 
-use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository};
 use crate::domain::qq_bot::QqBotError;
+use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository};
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
 /// Background worker that polls the outbox table and sends pending messages.
@@ -56,9 +56,11 @@ impl OutboxWorker {
 
     /// Process a single batch of due outbox entries.
     async fn process_batch(&self) -> Result<(), QqBotError> {
-        let entries = self.outbox_repo.fetch_due(self.batch_size).await.map_err(|e| {
-            QqBotError::Internal(format!("outbox fetch_due failed: {e}"))
-        })?;
+        let entries = self
+            .outbox_repo
+            .fetch_due(self.batch_size)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("outbox fetch_due failed: {e}")))?;
 
         if entries.is_empty() {
             return Ok(());
@@ -76,7 +78,8 @@ impl OutboxWorker {
 
                 // Mark as failed after max attempts
                 if entry.attempts + 1 >= entry.max_attempts {
-                    if let Err(inner) = self.outbox_repo
+                    if let Err(inner) = self
+                        .outbox_repo
                         .mark_failed(entry.outbox_id.unwrap_or(0), &e.to_string())
                         .await
                     {
@@ -91,17 +94,20 @@ impl OutboxWorker {
 
     /// Process a single outbox entry: send via NapCat API.
     async fn process_entry(&self, entry: &OutboxEntry) -> Result<(), QqBotError> {
-        let api = self.napcat_api.as_ref().ok_or_else(|| {
-            QqBotError::Internal("NapCat API client not configured".into())
-        })?;
+        let api = self
+            .napcat_api
+            .as_ref()
+            .ok_or_else(|| QqBotError::Internal("NapCat API client not configured".into()))?;
 
         let outbox_id = entry.outbox_id.unwrap_or(0);
 
         // Extract parameters from payload
-        let group_id = entry.qq_group_id.ok_or_else(|| {
-            QqBotError::Internal("outbox entry missing group_id".into())
-        })?;
-        let message = entry.payload.get("message")
+        let group_id = entry
+            .qq_group_id
+            .ok_or_else(|| QqBotError::Internal("outbox entry missing group_id".into()))?;
+        let message = entry
+            .payload
+            .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 QqBotError::Internal("outbox entry missing message in payload".into())
@@ -112,9 +118,10 @@ impl OutboxWorker {
 
         // Mark as sent
         let platform_id = response.message_id.unwrap_or_default();
-        self.outbox_repo.mark_sent(outbox_id, &platform_id).await.map_err(|e| {
-            QqBotError::Internal(format!("failed to mark outbox as sent: {e}"))
-        })?;
+        self.outbox_repo
+            .mark_sent(outbox_id, &platform_id)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("failed to mark outbox as sent: {e}")))?;
 
         info!(
             outbox_id,

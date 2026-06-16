@@ -241,7 +241,9 @@ impl LlmProvider for OllamaProvider {
             top_p: request.top_p,
             max_tokens: request.max_tokens,
             tools,
-            reasoning: request.reasoning.map(|r| ReasoningConfig { enabled: r.enabled }),
+            reasoning: request
+                .reasoning
+                .map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
         debug!("OllamaProvider.chat -> {url}");
@@ -304,7 +306,9 @@ impl LlmProvider for OllamaProvider {
             top_p: request.top_p,
             max_tokens: request.max_tokens,
             tools: Some(tool_defs),
-            reasoning: request.reasoning.map(|r| ReasoningConfig { enabled: r.enabled }),
+            reasoning: request
+                .reasoning
+                .map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
         debug!("OllamaProvider.chat_with_tools -> {url}");

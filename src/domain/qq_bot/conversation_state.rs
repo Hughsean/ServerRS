@@ -19,9 +19,10 @@ impl ConversationState {
         _bot_qq_id: i64,
     ) -> Self {
         // 找出猫猫自己发的最后一条消息
-        let last_self_msg = recent_messages.iter().rev().find(|m| {
-            m.direction == crate::domain::qq_bot::message::MessageDirection::Outbound
-        });
+        let last_self_msg = recent_messages
+            .iter()
+            .rev()
+            .find(|m| m.direction == crate::domain::qq_bot::message::MessageDirection::Outbound);
 
         let last_self_message_summary = last_self_msg.map(|m| {
             let text: String = m.normalized_text.chars().take(30).collect();
@@ -33,9 +34,12 @@ impl ConversationState {
         });
 
         // 统计猫猫在最后 10 条中说了几句
-        let self_msg_count = recent_messages.iter().rev().take(10).filter(|m| {
-            m.direction == crate::domain::qq_bot::message::MessageDirection::Outbound
-        }).count() as u32;
+        let self_msg_count = recent_messages
+            .iter()
+            .rev()
+            .take(10)
+            .filter(|m| m.direction == crate::domain::qq_bot::message::MessageDirection::Outbound)
+            .count() as u32;
 
         Self {
             last_self_message_summary,

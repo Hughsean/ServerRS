@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use server_rs::{api, app, bootstrap, domain, infra, shared};
 use app::agent::agent_context::AgentContextBuilder;
 use app::agent::agent_runtime::AgentRuntime;
 use app::community::community_service::CommunityService;
@@ -36,6 +35,7 @@ use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
 use infra::tasks::in_memory_task_flow::new_task_channel;
 use infra::tasks::logging_handler::LoggingHandler;
 use infra::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
+use server_rs::{api, app, bootstrap, domain, infra, shared};
 
 use shared::config::AppConfig;
 use tracing::info;
@@ -392,43 +392,56 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     // ── QQ Bot (赛博猫猫) ──────────────────────────────────────────────
     use crate::bootstrap::qq_bot::init_qq_bot;
-    use crate::infra::qq_bot::repositories::seaorm_bot_account_repository::SeaOrmBotAccountRepository;
-    use crate::infra::qq_bot::repositories::seaorm_group_repository::SeaOrmGroupRepository;
-    use crate::infra::qq_bot::repositories::seaorm_group_member_repository::SeaOrmGroupMemberRepository;
-    use crate::infra::qq_bot::repositories::seaorm_group_message_repository::SeaOrmGroupMessageRepository;
-    use crate::infra::qq_bot::repositories::seaorm_group_summary_repository::SeaOrmGroupSummaryRepository;
-    use crate::infra::qq_bot::repositories::seaorm_group_memory_repository::SeaOrmGroupMemoryRepository;
+    use crate::domain::tts::TtsProvider;
     use crate::infra::qq_bot::repositories::seaorm_agent_turn_repository::SeaOrmAgentTurnRepository;
-    use crate::infra::qq_bot::repositories::seaorm_outbox_repository::SeaOrmOutboxRepository;
+    use crate::infra::qq_bot::repositories::seaorm_bot_account_repository::SeaOrmBotAccountRepository;
     use crate::infra::qq_bot::repositories::seaorm_external_user_repository::SeaOrmExternalUserRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_member_repository::SeaOrmGroupMemberRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_memory_repository::SeaOrmGroupMemoryRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_message_repository::SeaOrmGroupMessageRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_repository::SeaOrmGroupRepository;
+    use crate::infra::qq_bot::repositories::seaorm_group_summary_repository::SeaOrmGroupSummaryRepository;
+    use crate::infra::qq_bot::repositories::seaorm_outbox_repository::SeaOrmOutboxRepository;
     use crate::infra::qq_bot::repositories::seaorm_user_profile_repository::SeaOrmQqUserProfileRepository;
     use crate::infra::tts::volcengine_provider::VolcengineTtsProvider;
-    use crate::domain::tts::TtsProvider;
 
     use crate::infra::qq_bot::repositories::seaorm_relationship_repository::SeaOrmRelationshipRepository;
 
-    let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
-    let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
-    let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
-    let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
-    let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
-    let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
-    let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepository>;
-    let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
-    let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
-    let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
-    let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
+    let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
+    let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
+    let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
+    let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
+    let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
+    let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
+    let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepository>;
+    let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
+    let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
+    let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
+    let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(db.clone()))
+        as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
 
     // QQ 机器人语音消息的 TTS Provider
-    let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> = if config.qq_bot.enabled && config.qq_bot.self_qq_id != 0 && !config.tts.api_key.is_empty() {
-        tracing::info!("正在为 QQ 机器人语音消息初始化 VolcengineTtsProvider");
-        Some(Arc::new(VolcengineTtsProvider::new(&config.tts)) as Arc<dyn TtsProvider>)
-    } else {
-        if config.qq_bot.enabled {
-            tracing::warn!("未配置 TTS API 密钥 — 语音消息将不可用");
-        }
-        None
-    };
+    let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> =
+        if config.qq_bot.enabled && config.qq_bot.self_qq_id != 0 && !config.tts.api_key.is_empty()
+        {
+            tracing::info!("正在为 QQ 机器人语音消息初始化 VolcengineTtsProvider");
+            Some(Arc::new(VolcengineTtsProvider::new(&config.tts)) as Arc<dyn TtsProvider>)
+        } else {
+            if config.qq_bot.enabled {
+                tracing::warn!("未配置 TTS API 密钥 — 语音消息将不可用");
+            }
+            None
+        };
 
     let _qq_bot_deps = init_qq_bot(
         &config,
@@ -444,7 +457,10 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         qq_bot_agent_turn_repo,
         qq_bot_outbox_repo,
         // 画像与用户仓库（可选 — 与现有代码模式相同）
-        Some(Arc::clone(&user_repo) as Arc<dyn crate::domain::user::user_repository::UserRepository>),
+        Some(Arc::clone(&user_repo)
+            as Arc<
+                dyn crate::domain::user::user_repository::UserRepository,
+            >),
         Some(Arc::clone(&qq_bot_external_user_repo)),
         Some(Arc::clone(&qq_bot_user_profile_repo)),
         // 关系仓库

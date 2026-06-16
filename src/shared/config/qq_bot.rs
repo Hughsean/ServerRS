@@ -107,21 +107,49 @@ impl Default for QqBotConfig {
     }
 }
 
-fn default_ws_host() -> String { "0.0.0.0".into() }
-fn default_ws_port() -> u16 { 6700 }
-fn default_http_base_url() -> String { "http://127.0.0.1:3000".into() }
-fn default_self_qq_id() -> i64 { 0 }
-fn default_cooldown_secs() -> u64 { 30 }
-fn default_idle_timeout_secs() -> u64 { 120 }
-fn default_inter_segment_delay_ms() -> u64 { 800 }
-fn default_initial_delay_ms() -> u64 { 1500 }
-fn default_outbox_poll_interval_secs() -> u64 { 3 }
-fn default_outbox_batch_size() -> u32 { 10 }
+fn default_ws_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_ws_port() -> u16 {
+    6700
+}
+fn default_http_base_url() -> String {
+    "http://127.0.0.1:3000".into()
+}
+fn default_self_qq_id() -> i64 {
+    0
+}
+fn default_cooldown_secs() -> u64 {
+    30
+}
+fn default_idle_timeout_secs() -> u64 {
+    120
+}
+fn default_inter_segment_delay_ms() -> u64 {
+    800
+}
+fn default_initial_delay_ms() -> u64 {
+    1500
+}
+fn default_outbox_poll_interval_secs() -> u64 {
+    3
+}
+fn default_outbox_batch_size() -> u32 {
+    10
+}
 
-fn default_profile_enabled() -> bool { true }
-fn default_user_profile_threshold() -> u32 { 50 }
-fn default_group_profile_threshold() -> u32 { 500 }
-fn default_profile_cleanup_interval_secs() -> u64 { 86400 }
+fn default_profile_enabled() -> bool {
+    true
+}
+fn default_user_profile_threshold() -> u32 {
+    50
+}
+fn default_group_profile_threshold() -> u32 {
+    500
+}
+fn default_profile_cleanup_interval_secs() -> u64 {
+    86400
+}
 
 // ── Trigger LLM 子配置 ──
 
@@ -154,9 +182,15 @@ impl Default for QqBotTriggerLlmConfig {
     }
 }
 
-fn default_trigger_temperature() -> f64 { 0.3 }
-fn default_trigger_top_p() -> f64 { 0.9 }
-fn default_trigger_timeout_secs() -> u64 { 10 }
+fn default_trigger_temperature() -> f64 {
+    0.3
+}
+fn default_trigger_top_p() -> f64 {
+    0.9
+}
+fn default_trigger_timeout_secs() -> u64 {
+    10
+}
 
 // ── Reply LLM 子配置 ──
 
@@ -192,10 +226,18 @@ impl Default for QqBotReplyLlmConfig {
     }
 }
 
-fn default_reply_temperature() -> f64 { 0.7 }
-fn default_reply_top_p() -> f64 { 0.9 }
-fn default_reply_timeout_secs() -> u64 { 30 }
-fn default_reply_max_tokens() -> u32 { 1024 }
+fn default_reply_temperature() -> f64 {
+    0.7
+}
+fn default_reply_top_p() -> f64 {
+    0.9
+}
+fn default_reply_timeout_secs() -> u64 {
+    30
+}
+fn default_reply_max_tokens() -> u32 {
+    1024
+}
 
 // ── Profile LLM 子配置 ──
 
@@ -231,17 +273,33 @@ impl Default for QqBotProfileLlmConfig {
     }
 }
 
-fn default_profile_temperature() -> f64 { 0.3 }
-fn default_profile_top_p() -> f64 { 0.9 }
-fn default_profile_timeout_secs() -> u64 { 30 }
-fn default_profile_max_tokens() -> u32 { 2048 }
+fn default_profile_temperature() -> f64 {
+    0.3
+}
+fn default_profile_top_p() -> f64 {
+    0.9
+}
+fn default_profile_timeout_secs() -> u64 {
+    30
+}
+fn default_profile_max_tokens() -> u32 {
+    2048
+}
 
 // ── TTS 文件输出配置 ──
 
-fn default_tts_output_dir() -> String { "./data/tts/".into() }
-fn default_tts_public_url_base() -> String { "http://127.0.0.1:3001/tts/".into() }
+fn default_tts_output_dir() -> String {
+    "./data/tts/".into()
+}
+fn default_tts_public_url_base() -> String {
+    "http://127.0.0.1:3001/tts/".into()
+}
 
 // ── 主动行为默认值 ──
 
-fn default_proactive_check_interval_secs() -> u64 { 30 }
-fn default_proactive_cooldown_secs() -> u64 { 120 }
+fn default_proactive_check_interval_secs() -> u64 {
+    30
+}
+fn default_proactive_cooldown_secs() -> u64 {
+    120
+}

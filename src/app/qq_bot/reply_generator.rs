@@ -4,11 +4,11 @@ use serde_json;
 use tracing::{info, warn};
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::reply::{BotReply, ReplySegment, TimingHint};
-use crate::domain::qq_bot::QqBotError;
 
 /// Generates structured multi-segment replies using LLM.
 ///
@@ -66,19 +66,17 @@ impl ReplyGenerator {
             name: None,
         });
 
-        let request = ChatCompletionRequest::new(messages)
-            .with_temperature(0.7);
+        let request = ChatCompletionRequest::new(messages).with_temperature(0.7);
 
-        let response = self.llm_provider.chat(request).await.map_err(|e| {
-            QqBotError::Internal(format!("LLM reply generation failed: {e}"))
-        })?;
+        let response = self
+            .llm_provider
+            .chat(request)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("LLM reply generation failed: {e}")))?;
 
         // Parse the LLM response as BotReply JSON
         let reply = self.parse_reply(&response.content)?;
-        info!(
-            segment_count = reply.segments.len(),
-            "reply generated"
-        );
+        info!(segment_count = reply.segments.len(), "reply generated");
 
         Ok(reply)
     }
@@ -100,8 +98,7 @@ impl ReplyGenerator {
             name: None,
         });
 
-        let request = ChatCompletionRequest::new(messages)
-            .with_temperature(0.7);
+        let request = ChatCompletionRequest::new(messages).with_temperature(0.7);
 
         let response = self.llm_provider.chat(request).await.map_err(|e| {
             QqBotError::Internal(format!("LLM proactive reply generation failed: {e}"))
@@ -148,14 +145,24 @@ impl ReplyGenerator {
                 .into_iter()
                 .take(self.max_segments as usize)
                 .map(|s| match s {
-                    ReplySegment::Text { ref content } if content.len() > self.max_chars_per_segment as usize => {
+                    ReplySegment::Text { ref content }
+                        if content.len() > self.max_chars_per_segment as usize =>
+                    {
                         ReplySegment::Text {
-                            content: content.chars().take(self.max_chars_per_segment as usize).collect(),
+                            content: content
+                                .chars()
+                                .take(self.max_chars_per_segment as usize)
+                                .collect(),
                         }
                     }
-                    ReplySegment::Record { ref text, voice } if text.len() > self.max_chars_per_segment as usize => {
+                    ReplySegment::Record { ref text, voice }
+                        if text.len() > self.max_chars_per_segment as usize =>
+                    {
                         ReplySegment::Record {
-                            text: text.chars().take(self.max_chars_per_segment as usize).collect(),
+                            text: text
+                                .chars()
+                                .take(self.max_chars_per_segment as usize)
+                                .collect(),
                             voice,
                         }
                     }
@@ -167,7 +174,10 @@ impl ReplyGenerator {
                 // Fallback: use raw text if parsed to empty
                 return Ok(BotReply {
                     segments: vec![ReplySegment::Text {
-                        content: text.chars().take(self.max_chars_per_segment as usize).collect(),
+                        content: text
+                            .chars()
+                            .take(self.max_chars_per_segment as usize)
+                            .collect(),
                     }],
                     timing_hint: TimingHint {
                         initial_delay_ms: self.default_initial_delay_ms,
@@ -194,14 +204,22 @@ impl ReplyGenerator {
                 show_typing: reply.timing_hint.show_typing,
             };
 
-            return Ok(BotReply { segments, timing_hint: timing, emotion_change: reply.emotion_change, relationship_hints: reply.relationship_hints });
+            return Ok(BotReply {
+                segments,
+                timing_hint: timing,
+                emotion_change: reply.emotion_change,
+                relationship_hints: reply.relationship_hints,
+            });
         }
 
         // Fallback: wrap raw text as single segment
         warn!("无法将 LLM 回复解析为 BotReply JSON，使用回退方案");
         Ok(BotReply {
             segments: vec![ReplySegment::Text {
-                content: text.chars().take(self.max_chars_per_segment as usize).collect(),
+                content: text
+                    .chars()
+                    .take(self.max_chars_per_segment as usize)
+                    .collect(),
             }],
             timing_hint: TimingHint {
                 initial_delay_ms: self.default_initial_delay_ms,

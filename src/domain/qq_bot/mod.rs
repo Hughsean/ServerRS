@@ -31,8 +31,8 @@ pub use relationship_repository::RelationshipRepository;
 pub use reply::{BotReply, EmotionChange, RelationshipHints, ReplySegment, TimingHint};
 pub use repository::{
     AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
-    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository,
-    GroupSummary, GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
+    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummary,
+    GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
 };
 pub use topic_state::{TopicInfo, TopicState};
 pub use turn::{AgentTurn, TriggerType, TurnStatus};

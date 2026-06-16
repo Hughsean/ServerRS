@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::sync::RwLock;
 use tracing::info;
@@ -101,9 +101,7 @@ impl InMemoryAttentionStore {
         let state = self.state.read().await;
         match *state {
             AttentionState::Idle => true,
-            AttentionState::Engaging(gid) | AttentionState::Engaged(gid) => {
-                gid == group_id
-            }
+            AttentionState::Engaging(gid) | AttentionState::Engaged(gid) => gid == group_id,
             AttentionState::Cooldown(_, _) => false,
         }
     }
@@ -117,11 +115,17 @@ impl InMemoryAttentionStore {
                 if last > 0 && (now_ms() - last) > self.idle_timeout_ms {
                     drop(state);
                     let mut state = self.state.write().await;
-                    if matches!(*state, AttentionState::Engaged(_) | AttentionState::Engaging(_)) {
+                    if matches!(
+                        *state,
+                        AttentionState::Engaged(_) | AttentionState::Engaging(_)
+                    ) {
                         let until = now_ms() + self.cooldown_duration_ms;
                         *state = AttentionState::Cooldown(gid, until as u64);
                         self.cooldown_until_ms.store(until, Ordering::SeqCst);
-                        info!(group_id = gid, "attention: idle timeout, cooldown until {until}");
+                        info!(
+                            group_id = gid,
+                            "attention: idle timeout, cooldown until {until}"
+                        );
                     }
                 }
             }
@@ -145,7 +149,10 @@ mod tests {
     async fn test_idle_to_engaged() {
         let store = InMemoryAttentionStore::new(10, 60);
         assert!(store.try_engage(100).await);
-        assert!(matches!(store.get_state().await, AttentionState::Engaging(100)));
+        assert!(matches!(
+            store.get_state().await,
+            AttentionState::Engaging(100)
+        ));
     }
 
     #[tokio::test]

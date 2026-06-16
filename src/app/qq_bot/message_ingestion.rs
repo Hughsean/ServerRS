@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage, ProcessStatus};
 use crate::domain::qq_bot::repository::GroupMessageRepository;
-use crate::domain::qq_bot::QqBotError;
 use crate::infra::qq_bot::napcat::message_parser::{normalize_text, parse_message_segments};
 
 /// Handles ingestion of raw OneBot group messages into the system.
@@ -54,18 +54,26 @@ impl MessageIngestionService {
         };
 
         // Persist (idempotent)
-        let persisted = self.message_repo.insert(&msg).await.map_err(|e| {
-            QqBotError::Internal(format!("failed to persist message: {e}"))
-        })?;
+        let persisted = self
+            .message_repo
+            .insert(&msg)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("failed to persist message: {e}")))?;
 
         Ok(persisted)
     }
 
     /// Mark a message as processed (or failed).
-    pub async fn mark_processed(&self, message_id: u64, status: ProcessStatus, error: Option<&str>) -> Result<(), QqBotError> {
-        self.message_repo.update_status(message_id, status, error).await.map_err(|e| {
-            QqBotError::Internal(format!("failed to update message status: {e}"))
-        })?;
+    pub async fn mark_processed(
+        &self,
+        message_id: u64,
+        status: ProcessStatus,
+        error: Option<&str>,
+    ) -> Result<(), QqBotError> {
+        self.message_repo
+            .update_status(message_id, status, error)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("failed to update message status: {e}")))?;
         Ok(())
     }
 }

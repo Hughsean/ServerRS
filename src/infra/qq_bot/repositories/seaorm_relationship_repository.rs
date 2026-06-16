@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::relationship::{RapportLevel, RelationshipState};
 use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
@@ -30,10 +28,12 @@ fn model_to_domain(m: qq_relationships::Model) -> RelationshipState {
         rapport: serde_json::from_value(serde_json::json!(m.rapport))
             .unwrap_or(RapportLevel::Neutral),
         nickname_preference: m.nickname_preference,
-        known_interests: m.known_interests
+        known_interests: m
+            .known_interests
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default(),
-        known_avoid_topics: m.known_avoid_topics
+        known_avoid_topics: m
+            .known_avoid_topics
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default(),
     }
@@ -45,7 +45,11 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 
 #[async_trait]
 impl RelationshipRepository for SeaOrmRelationshipRepository {
-    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<RelationshipState>, AppError> {
+    async fn find(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<Option<RelationshipState>, AppError> {
         qq_relationships::Entity::find()
             .filter(qq_relationships::Column::QqGroupId.eq(qq_group_id))
             .filter(qq_relationships::Column::QqUserId.eq(qq_user_id))
@@ -67,11 +71,12 @@ impl RelationshipRepository for SeaOrmRelationshipRepository {
             serde_json::to_value(&rel.known_interests).ok()
         };
 
-        let known_avoid_topics_json: Option<serde_json::Value> = if rel.known_avoid_topics.is_empty() {
-            None
-        } else {
-            serde_json::to_value(&rel.known_avoid_topics).ok()
-        };
+        let known_avoid_topics_json: Option<serde_json::Value> =
+            if rel.known_avoid_topics.is_empty() {
+                None
+            } else {
+                serde_json::to_value(&rel.known_avoid_topics).ok()
+            };
 
         // Try to find existing record first
         let existing = qq_relationships::Entity::find()
@@ -120,7 +125,11 @@ impl RelationshipRepository for SeaOrmRelationshipRepository {
             .map(|models| models.into_iter().map(model_to_domain).collect())
     }
 
-    async fn increment_interaction(&self, qq_group_id: i64, qq_user_id: i64) -> Result<(), AppError> {
+    async fn increment_interaction(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<(), AppError> {
         let existing = qq_relationships::Entity::find()
             .filter(qq_relationships::Column::QqGroupId.eq(qq_group_id))
             .filter(qq_relationships::Column::QqUserId.eq(qq_user_id))
@@ -136,7 +145,9 @@ impl RelationshipRepository for SeaOrmRelationshipRepository {
             let familiarity = (0.1_f32 + new_count as f32 * 0.015).min(1.0);
             active.familiarity = Set(familiarity);
             active.last_interaction_at = Set(Some(chrono::Utc::now().timestamp()));
-            active.rapport = Set(RapportLevel::from_familiarity(familiarity).label().to_string());
+            active.rapport = Set(RapportLevel::from_familiarity(familiarity)
+                .label()
+                .to_string());
             active.update(&self.db).await.map_err(map_db_err)?;
         } else {
             let now = chrono::Utc::now().timestamp();

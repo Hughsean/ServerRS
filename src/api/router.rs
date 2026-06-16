@@ -6,8 +6,8 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use std::path::PathBuf;
-use tower_http::services::ServeDir;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use super::AppState;

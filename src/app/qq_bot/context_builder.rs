@@ -6,13 +6,13 @@ use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
 use crate::app::qq_bot::relationship_service::RelationshipService;
 use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::ChatMessage;
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::repository::{
-    GroupMemberRepository, GroupMessageRepository, GroupMemoryRepository, GroupSummaryRepository,
+    GroupMemberRepository, GroupMemoryRepository, GroupMessageRepository, GroupSummaryRepository,
 };
-use crate::domain::qq_bot::QqBotError;
 
 /// Builds conversation context for the LLM when generating a reply.
 ///
@@ -74,7 +74,8 @@ impl ContextBuilder {
         let mut messages: Vec<ChatMessage> = Vec::new();
 
         // ── Recent history (loaded first for conversation analysis) ────
-        let recent = self.message_repo
+        let recent = self
+            .message_repo
             .recent_by_group(msg.qq_group_id, self.max_recent_messages)
             .await
             .map_err(|e| QqBotError::Internal(format!("failed to load recent messages: {e}")))?;
@@ -101,7 +102,8 @@ impl ContextBuilder {
             };
 
             let display_name = if role == "user" {
-                self.resolve_sender_name(hist_msg.qq_group_id, hist_msg.qq_user_id.unwrap_or(0)).await
+                self.resolve_sender_name(hist_msg.qq_group_id, hist_msg.qq_user_id.unwrap_or(0))
+                    .await
             } else {
                 self.persona.nickname.clone()
             };
@@ -171,7 +173,9 @@ impl ContextBuilder {
 
         let today_start = {
             let now_local = chrono::Local::now();
-            now_local.date_naive().and_hms_opt(0, 0, 0)
+            now_local
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
                 .map(|d| d.and_utc().timestamp())
                 .unwrap_or(0)
         };
@@ -218,7 +222,8 @@ impl ContextBuilder {
         if !emotion_text.is_empty() {
             parts.push(
                 r#"## 情绪对回复的影响
-你的情绪会影响你的语气，但不要让情绪完全主导行为。"#.to_string(),
+你的情绪会影响你的语气，但不要让情绪完全主导行为。"#
+                    .to_string(),
             );
         }
 
@@ -230,7 +235,11 @@ impl ContextBuilder {
         }
 
         // Group memories (if available)
-        if let Ok(memories) = self.memory_repo.find_active_by_group(msg.qq_group_id, 5).await {
+        if let Ok(memories) = self
+            .memory_repo
+            .find_active_by_group(msg.qq_group_id, 5)
+            .await
+        {
             if !memories.is_empty() {
                 let mem_lines: Vec<String> = memories
                     .iter()
@@ -256,10 +265,9 @@ impl ContextBuilder {
                 .filter_map(|m| m.qq_user_id)
                 .collect();
             if !participant_ids.is_empty() {
-                let rel_ctx = rs.build_relationship_context(
-                    msg.qq_group_id,
-                    &participant_ids,
-                ).await;
+                let rel_ctx = rs
+                    .build_relationship_context(msg.qq_group_id, &participant_ids)
+                    .await;
                 if !rel_ctx.is_empty() {
                     parts.push(rel_ctx);
                 }

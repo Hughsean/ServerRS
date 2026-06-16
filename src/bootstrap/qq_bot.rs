@@ -140,7 +140,8 @@ pub async fn init_qq_bot(
             ));
 
             // 启动定期清理任务
-            let cleanup_interval = tokio::time::Duration::from_secs(qc.profile_cleanup_interval_secs);
+            let cleanup_interval =
+                tokio::time::Duration::from_secs(qc.profile_cleanup_interval_secs);
             let pb_cleanup = Arc::clone(&pb);
             background.spawn(tokio::spawn(async move {
                 loop {
@@ -167,13 +168,12 @@ pub async fn init_qq_bot(
     let topic_service = Arc::new(TopicService::new());
 
     // Relationship service (可选)
-    let relationship_service = relationship_repo.map(|repo| {
-        Arc::new(RelationshipService::new(repo))
-    });
+    let relationship_service =
+        relationship_repo.map(|repo| Arc::new(RelationshipService::new(repo)));
 
-    let ingestion = Arc::new(MessageIngestionService::new(
-        Arc::clone(&group_message_repo),
-    ));
+    let ingestion = Arc::new(MessageIngestionService::new(Arc::clone(
+        &group_message_repo,
+    )));
 
     let trigger = Arc::new(TriggerEvaluator::new(
         trigger_llm,
@@ -198,8 +198,8 @@ pub async fn init_qq_bot(
     let reply_generator = Arc::new(ReplyGenerator::new(
         reply_llm,
         persona.clone(),
-        4,   // max_segments
-        80,  // max_chars_per_segment
+        4,  // max_segments
+        80, // max_chars_per_segment
         qc.inter_segment_delay_ms,
         qc.initial_delay_ms,
     ));
@@ -276,21 +276,23 @@ pub async fn init_qq_bot(
     };
 
     // 创建通知处理器（需要 external_user_repo）
-    let notice_handler: Option<Arc<dyn crate::infra::qq_bot::napcat::listener::GroupNoticeHandler>> =
-        if let Some(ref external_user_repo) = external_user_repo {
-            Some(Arc::new(NapCatGroupNoticeHandler::new(
-                Arc::clone(&group_member_repo),
-                Arc::clone(external_user_repo),
-                napcat_api.clone(),
-                bot_account_id,
-            )))
-        } else {
-            tracing::warn!("external_user_repo 不可用 — 群通知事件将不会同步");
-            None
-        };
+    let notice_handler: Option<
+        Arc<dyn crate::infra::qq_bot::napcat::listener::GroupNoticeHandler>,
+    > = if let Some(ref external_user_repo) = external_user_repo {
+        Some(Arc::new(NapCatGroupNoticeHandler::new(
+            Arc::clone(&group_member_repo),
+            Arc::clone(external_user_repo),
+            napcat_api.clone(),
+            bot_account_id,
+        )))
+    } else {
+        tracing::warn!("external_user_repo 不可用 — 群通知事件将不会同步");
+        None
+    };
 
     // 构建并在后台任务中启动监听器
-    let listener_handler: Arc<dyn GroupMessageHandler> = Arc::clone(&service) as Arc<dyn GroupMessageHandler>;
+    let listener_handler: Arc<dyn GroupMessageHandler> =
+        Arc::clone(&service) as Arc<dyn GroupMessageHandler>;
     let mut listener_builder = NapCatListener::new(ws_url, qc.self_qq_id, listener_handler);
     if let Some(ref nh) = notice_handler {
         listener_builder = listener_builder.with_notice_handler(Arc::clone(nh));

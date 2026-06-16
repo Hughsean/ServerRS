@@ -6,11 +6,7 @@ use super::AppConfig;
 /// 不记录密钥（API 密钥、密码、JWT 密钥）。
 impl fmt::Display for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "server   → {}:{}",
-            self.server.host, self.server.port
-        )?;
+        writeln!(f, "server   → {}:{}", self.server.host, self.server.port)?;
 
         writeln!(
             f,
@@ -64,10 +60,7 @@ impl fmt::Display for AppConfig {
         writeln!(
             f,
             "llm      → provider={}, model={}, embedding={}, timeout={}s",
-            self.llm.provider,
-            self.llm.chat_model,
-            self.llm.embedding_model,
-            self.llm.timeout_secs
+            self.llm.provider, self.llm.chat_model, self.llm.embedding_model, self.llm.timeout_secs
         )?;
 
         writeln!(

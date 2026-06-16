@@ -10,8 +10,7 @@ use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 use crate::domain::llm::{
-    ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig,
-    ToolDefinition as LlmToolDef,
+    ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig, ToolDefinition as LlmToolDef,
 };
 use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;

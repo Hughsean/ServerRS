@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{error, info, warn};
 
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::reply::{BotReply, ReplySegment};
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::tts::{TtsProvider, TtsRequest};
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
@@ -66,9 +66,10 @@ impl SegmentDispatcher {
         reply: &BotReply,
         related_turn_id: Option<u64>,
     ) -> Result<Vec<String>, QqBotError> {
-        let api = self.napcat_api.as_ref().ok_or_else(|| {
-            QqBotError::Internal("NapCat API client not configured".into())
-        })?;
+        let api = self
+            .napcat_api
+            .as_ref()
+            .ok_or_else(|| QqBotError::Internal("NapCat API client not configured".into()))?;
 
         let mut sent_ids = Vec::new();
 
@@ -96,18 +97,16 @@ impl SegmentDispatcher {
                 // ── Record: TTS → audio file → CQ:record → send_group_msg ─
                 ReplySegment::Record { text, voice } => {
                     match self.synthesize_record(text, voice).await {
-                        Ok(cq_string) => {
-                            match api.send_group_msg(group_id, &cq_string).await {
-                                Ok(data) => {
-                                    info!(group_id, segment = i, "语音消息已发送");
-                                    Ok(data.message_id)
-                                }
-                                Err(e) => {
-                                    error!(group_id, error = %e, "发送语音消息失败");
-                                    Err(e)
-                                }
+                        Ok(cq_string) => match api.send_group_msg(group_id, &cq_string).await {
+                            Ok(data) => {
+                                info!(group_id, segment = i, "语音消息已发送");
+                                Ok(data.message_id)
                             }
-                        }
+                            Err(e) => {
+                                error!(group_id, error = %e, "发送语音消息失败");
+                                Err(e)
+                            }
+                        },
                         Err(e) => {
                             error!(group_id, error = %e, "TTS 语音合成失败");
                             Err(e)
@@ -140,12 +139,10 @@ impl SegmentDispatcher {
                 Err(e) => {
                     // Enqueue remaining segments to outbox for retry
                     for remaining in &reply.segments[i..] {
-                        if let Err(inner) = self.enqueue_segment(
-                            group_id,
-                            None,
-                            remaining,
-                            related_turn_id,
-                        ).await {
+                        if let Err(inner) = self
+                            .enqueue_segment(group_id, None, remaining, related_turn_id)
+                            .await
+                        {
                             warn!(error = %inner, "将剩余消息段加入队列失败");
                         }
                     }
@@ -183,7 +180,11 @@ impl SegmentDispatcher {
         related_turn_id: Option<u64>,
     ) -> Result<OutboxEntry, QqBotError> {
         // ── Poke: send immediately, return a no-op entry ───────────────
-        if let ReplySegment::Poke { user_id: target_user, .. } = segment {
+        if let ReplySegment::Poke {
+            user_id: target_user,
+            ..
+        } = segment
+        {
             if let Some(api) = &self.napcat_api {
                 if let Err(e) = api.group_poke(group_id, *target_user).await {
                     warn!(group_id, target_user, error = %e, "poke enqueue: direct send failed");
@@ -236,9 +237,10 @@ impl SegmentDispatcher {
             last_error: None,
         };
 
-        let persisted = self.outbox_repo.insert(&entry).await.map_err(|e| {
-            QqBotError::Internal(format!("failed to enqueue outbox entry: {e}"))
-        })?;
+        let persisted =
+            self.outbox_repo.insert(&entry).await.map_err(|e| {
+                QqBotError::Internal(format!("failed to enqueue outbox entry: {e}"))
+            })?;
 
         info!(
             outbox_id = ?persisted.outbox_id,
@@ -261,11 +263,18 @@ impl SegmentDispatcher {
     ) -> Result<Vec<OutboxEntry>, QqBotError> {
         let mut entries = Vec::new();
         for segment in &reply.segments {
-            let entry = self.enqueue_segment(group_id, None, segment, related_turn_id).await?;
+            let entry = self
+                .enqueue_segment(group_id, None, segment, related_turn_id)
+                .await?;
             entries.push(entry);
 
             // If enqueuing to outbox, we still add delays so segments aren't all sent at once
-            let delay = reply.timing_hint.inter_segment_delays_ms.first().copied().unwrap_or(800);
+            let delay = reply
+                .timing_hint
+                .inter_segment_delays_ms
+                .first()
+                .copied()
+                .unwrap_or(800);
             if delay > 0 {
                 sleep(Duration::from_millis(delay)).await;
             }
@@ -281,9 +290,10 @@ impl SegmentDispatcher {
         })?;
 
         let request = TtsRequest::new(text, voice);
-        let response = provider.synthesize(request).await.map_err(|e| {
-            QqBotError::Internal(format!("TTS synthesis failed: {e}"))
-        })?;
+        let response = provider
+            .synthesize(request)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("TTS synthesis failed: {e}")))?;
 
         // Determine file extension from the audio format
         let ext = match response.format {
@@ -303,11 +313,15 @@ impl SegmentDispatcher {
             })?;
         }
 
-        tokio::fs::write(&file_path, &response.audio_data).await.map_err(|e| {
-            QqBotError::Internal(format!("failed to write TTS audio file: {e}"))
-        })?;
+        tokio::fs::write(&file_path, &response.audio_data)
+            .await
+            .map_err(|e| QqBotError::Internal(format!("failed to write TTS audio file: {e}")))?;
 
-        let url = format!("{}{}", self.tts_public_url_base.trim_end_matches('/'), filename);
+        let url = format!(
+            "{}{}",
+            self.tts_public_url_base.trim_end_matches('/'),
+            filename
+        );
         info!(filename = %filename, size = response.audio_data.len(), "TTS audio file written");
 
         Ok(format!("[CQ:record,file={}]", url))

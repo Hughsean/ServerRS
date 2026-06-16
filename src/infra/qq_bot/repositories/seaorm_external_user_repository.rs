@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+};
 
 use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::repository::ExternalUserRepository;

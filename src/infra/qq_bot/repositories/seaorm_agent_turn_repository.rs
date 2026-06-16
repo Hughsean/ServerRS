@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
+};
 
 use crate::domain::qq_bot::repository::AgentTurnRepository;
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
@@ -127,7 +130,9 @@ impl AgentTurnRepository for SeaOrmAgentTurnRepository {
             )
             .col_expr(
                 qq_agent_turns::Column::Status,
-                SimpleExpr::Value(sea_orm::Value::String(Some(turn_status_to_str(status).to_string()))),
+                SimpleExpr::Value(sea_orm::Value::String(Some(
+                    turn_status_to_str(status).to_string(),
+                ))),
             )
             .filter(qq_agent_turns::Column::TurnId.eq(turn_id))
             .exec(&self.db)
@@ -168,7 +173,11 @@ impl AgentTurnRepository for SeaOrmAgentTurnRepository {
             .map(|opt| opt.map(model_to_domain))
     }
 
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<AgentTurn>, AppError> {
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<AgentTurn>, AppError> {
         qq_agent_turns::Entity::find()
             .filter(qq_agent_turns::Column::QqGroupId.eq(qq_group_id))
             .order_by_desc(qq_agent_turns::Column::CreatedAt)

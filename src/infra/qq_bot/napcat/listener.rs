@@ -6,10 +6,10 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::QqBotError;
+use crate::domain::qq_bot::message::NormalizedMessage;
 
-use super::message_parser::{normalize_text, parse_message_segments, ParsedEvent};
+use super::message_parser::{ParsedEvent, normalize_text, parse_message_segments};
 
 /// Raw OneBot group message event.
 #[derive(Debug, serde::Deserialize)]
@@ -112,11 +112,7 @@ pub struct NapCatListener {
 }
 
 impl NapCatListener {
-    pub fn new(
-        ws_url: String,
-        self_qq_id: i64,
-        handler: Arc<dyn GroupMessageHandler>,
-    ) -> Self {
+    pub fn new(ws_url: String, self_qq_id: i64, handler: Arc<dyn GroupMessageHandler>) -> Self {
         Self {
             ws_url,
             self_qq_id,
@@ -135,9 +131,9 @@ impl NapCatListener {
     /// Start listening via forward WebSocket (we connect to NapCat).
     pub async fn run_forward(&mut self) -> Result<(), QqBotError> {
         info!(url = %self.ws_url, "connecting to NapCat via WebSocket");
-        let (ws_stream, _) = connect_async(&self.ws_url).await.map_err(|e| {
-            QqBotError::Connection(format!("WebSocket connect failed: {e}"))
-        })?;
+        let (ws_stream, _) = connect_async(&self.ws_url)
+            .await
+            .map_err(|e| QqBotError::Connection(format!("WebSocket connect failed: {e}")))?;
 
         info!("NapCat WebSocket connected");
         let (mut write, mut read) = ws_stream.split();
@@ -187,9 +183,8 @@ impl NapCatListener {
 
     /// Handle a raw message from the WebSocket.
     async fn handle_ws_message(&self, text: &str) -> Result<(), QqBotError> {
-        let value: Value = serde_json::from_str(text).map_err(|e| {
-            QqBotError::MessageProcessing(format!("invalid JSON: {e}"))
-        })?;
+        let value: Value = serde_json::from_str(text)
+            .map_err(|e| QqBotError::MessageProcessing(format!("invalid JSON: {e}")))?;
 
         // Try parsing as a notice event first (member join/leave)
         if let Ok(event) = serde_json::from_value::<OneBotNoticeEvent>(value.clone()) {
@@ -198,7 +193,11 @@ impl NapCatListener {
                     "group_increase" => {
                         if let Some(ref handler) = self.notice_handler {
                             if let Err(e) = handler
-                                .handle_group_increase(event.group_id, event.user_id, event.operator_id)
+                                .handle_group_increase(
+                                    event.group_id,
+                                    event.user_id,
+                                    event.operator_id,
+                                )
                                 .await
                             {
                                 warn!(
@@ -213,7 +212,11 @@ impl NapCatListener {
                     "group_decrease" => {
                         if let Some(ref handler) = self.notice_handler {
                             if let Err(e) = handler
-                                .handle_group_decrease(event.group_id, event.user_id, &event.sub_type)
+                                .handle_group_decrease(
+                                    event.group_id,
+                                    event.user_id,
+                                    &event.sub_type,
+                                )
                                 .await
                             {
                                 warn!(

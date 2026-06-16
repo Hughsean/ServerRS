@@ -28,7 +28,9 @@ impl RelationshipService {
         qq_user_id: i64,
         _sent_at: Option<i64>,
     ) -> Result<(), AppError> {
-        self.repo.increment_interaction(qq_group_id, qq_user_id).await
+        self.repo
+            .increment_interaction(qq_group_id, qq_user_id)
+            .await
     }
 
     /// 构建关系上下文字符串（供 context_builder 注入 LLM prompt）

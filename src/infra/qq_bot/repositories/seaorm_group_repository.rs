@@ -85,7 +85,9 @@ fn domain_to_active_model(group: &GroupConfig) -> qq_groups::ActiveModel {
     let keywords = if group.reply_policy.keywords.is_empty() {
         None
     } else {
-        Some(JsonValue::from(serde_json::to_value(&group.reply_policy.keywords).unwrap()))
+        Some(JsonValue::from(
+            serde_json::to_value(&group.reply_policy.keywords).unwrap(),
+        ))
     };
 
     qq_groups::ActiveModel {
@@ -97,7 +99,11 @@ fn domain_to_active_model(group: &GroupConfig) -> qq_groups::ActiveModel {
         cooldown_secs: Set(group.reply_policy.cooldown_secs),
         max_segments: Set(group.reply_policy.max_segments),
         max_chars_per_segment: Set(group.reply_policy.max_chars_per_segment),
-        allow_proactive: Set(if group.reply_policy.allow_proactive { 1 } else { 0 }),
+        allow_proactive: Set(if group.reply_policy.allow_proactive {
+            1
+        } else {
+            0
+        }),
         keywords: Set(keywords),
         memory_policy: Set(memory_policy_to_str(group.memory_policy).to_string()),
         last_seen_at: Set(None),
@@ -149,12 +155,18 @@ impl GroupRepository for SeaOrmGroupRepository {
         Ok(())
     }
 
-    async fn update_trigger_policy(&self, qq_group_id: i64, policy: TriggerPolicy) -> Result<(), AppError> {
+    async fn update_trigger_policy(
+        &self,
+        qq_group_id: i64,
+        policy: TriggerPolicy,
+    ) -> Result<(), AppError> {
         use sea_orm::sea_query::SimpleExpr;
         qq_groups::Entity::update_many()
             .col_expr(
                 qq_groups::Column::TriggerPolicy,
-                SimpleExpr::Value(sea_orm::Value::String(Some(trigger_policy_to_str(policy).to_string()))),
+                SimpleExpr::Value(sea_orm::Value::String(Some(
+                    trigger_policy_to_str(policy).to_string(),
+                ))),
             )
             .filter(qq_groups::Column::QqGroupId.eq(qq_group_id))
             .exec(&self.db)
@@ -168,7 +180,11 @@ impl GroupRepository for SeaOrmGroupRepository {
         qq_groups::Entity::update_many()
             .col_expr(
                 qq_groups::Column::Enabled,
-                SimpleExpr::Value(sea_orm::Value::TinyInt(Some(if enabled { 1i8 } else { 0i8 }))),
+                SimpleExpr::Value(sea_orm::Value::TinyInt(Some(if enabled {
+                    1i8
+                } else {
+                    0i8
+                }))),
             )
             .filter(qq_groups::Column::QqGroupId.eq(qq_group_id))
             .exec(&self.db)

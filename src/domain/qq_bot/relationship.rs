@@ -111,17 +111,12 @@ impl RelationshipState {
         let header = if nickname.is_empty() {
             format!(
                 "用户[{}]：熟悉度 {:.2}（{}）",
-                self.qq_user_id,
-                self.familiarity,
-                rapport_label,
+                self.qq_user_id, self.familiarity, rapport_label,
             )
         } else {
             format!(
                 "用户[{}]（你叫他\"{}\"）：熟悉度 {:.2}（{}）",
-                self.qq_user_id,
-                nickname,
-                self.familiarity,
-                rapport_label,
+                self.qq_user_id, nickname, self.familiarity, rapport_label,
             )
         };
         parts.push(header);

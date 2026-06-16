@@ -1,6 +1,9 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Value};
 use sea_orm::sea_query::SimpleExpr;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Value,
+};
 
 use crate::domain::qq_bot::repository::{GroupMemory, GroupMemoryRepository};
 use crate::shared::error::AppError;
@@ -39,7 +42,11 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 
 #[async_trait]
 impl GroupMemoryRepository for SeaOrmGroupMemoryRepository {
-    async fn find_active_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<GroupMemory>, AppError> {
+    async fn find_active_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<GroupMemory>, AppError> {
         qq_group_memories::Entity::find()
             .filter(qq_group_memories::Column::QqGroupId.eq(qq_group_id))
             .filter(qq_group_memories::Column::Status.eq(1))

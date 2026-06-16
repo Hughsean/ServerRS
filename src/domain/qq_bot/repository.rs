@@ -9,40 +9,92 @@ use super::turn::AgentTurn;
 
 #[async_trait]
 pub trait BotAccountRepository: Send + Sync {
-    async fn find_by_self_qq_id(&self, self_qq_id: i64) -> Result<Option<BotAccount>, crate::shared::error::AppError>;
+    async fn find_by_self_qq_id(
+        &self,
+        self_qq_id: i64,
+    ) -> Result<Option<BotAccount>, crate::shared::error::AppError>;
     async fn find_enabled(&self) -> Result<Vec<BotAccount>, crate::shared::error::AppError>;
-    async fn upsert(&self, account: &BotAccount) -> Result<BotAccount, crate::shared::error::AppError>;
+    async fn upsert(
+        &self,
+        account: &BotAccount,
+    ) -> Result<BotAccount, crate::shared::error::AppError>;
 }
 
 // ── ExternalUser Repository ─────────────────────────────────────────────
 
 #[async_trait]
 pub trait ExternalUserRepository: Send + Sync {
-    async fn find_by_qq_user_id(&self, qq_user_id: i64) -> Result<Option<ExternalUser>, crate::shared::error::AppError>;
-    async fn upsert(&self, user: &ExternalUser) -> Result<ExternalUser, crate::shared::error::AppError>;
-    async fn update_last_seen(&self, qq_user_id: i64, last_seen_at: i64) -> Result<(), crate::shared::error::AppError>;
+    async fn find_by_qq_user_id(
+        &self,
+        qq_user_id: i64,
+    ) -> Result<Option<ExternalUser>, crate::shared::error::AppError>;
+    async fn upsert(
+        &self,
+        user: &ExternalUser,
+    ) -> Result<ExternalUser, crate::shared::error::AppError>;
+    async fn update_last_seen(
+        &self,
+        qq_user_id: i64,
+        last_seen_at: i64,
+    ) -> Result<(), crate::shared::error::AppError>;
 }
 
 // ── Group Repository ────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait GroupRepository: Send + Sync {
-    async fn find_by_group_id(&self, qq_group_id: i64) -> Result<Option<GroupConfig>, crate::shared::error::AppError>;
-    async fn find_enabled_by_bot(&self, bot_account_id: u64) -> Result<Vec<GroupConfig>, crate::shared::error::AppError>;
-    async fn upsert(&self, group: &GroupConfig) -> Result<GroupConfig, crate::shared::error::AppError>;
-    async fn update_last_seen(&self, qq_group_id: i64, last_seen_at: i64) -> Result<(), crate::shared::error::AppError>;
-    async fn update_trigger_policy(&self, qq_group_id: i64, policy: TriggerPolicy) -> Result<(), crate::shared::error::AppError>;
-    async fn set_enabled(&self, qq_group_id: i64, enabled: bool) -> Result<(), crate::shared::error::AppError>;
+    async fn find_by_group_id(
+        &self,
+        qq_group_id: i64,
+    ) -> Result<Option<GroupConfig>, crate::shared::error::AppError>;
+    async fn find_enabled_by_bot(
+        &self,
+        bot_account_id: u64,
+    ) -> Result<Vec<GroupConfig>, crate::shared::error::AppError>;
+    async fn upsert(
+        &self,
+        group: &GroupConfig,
+    ) -> Result<GroupConfig, crate::shared::error::AppError>;
+    async fn update_last_seen(
+        &self,
+        qq_group_id: i64,
+        last_seen_at: i64,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn update_trigger_policy(
+        &self,
+        qq_group_id: i64,
+        policy: TriggerPolicy,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn set_enabled(
+        &self,
+        qq_group_id: i64,
+        enabled: bool,
+    ) -> Result<(), crate::shared::error::AppError>;
 }
 
 // ── GroupMember Repository ──────────────────────────────────────────────
 
 #[async_trait]
 pub trait GroupMemberRepository: Send + Sync {
-    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<GroupMember>, crate::shared::error::AppError>;
-    async fn upsert(&self, member: &GroupMember) -> Result<GroupMember, crate::shared::error::AppError>;
-    async fn update_last_seen(&self, qq_group_id: i64, qq_user_id: i64, last_seen_at: i64) -> Result<(), crate::shared::error::AppError>;
-    async fn list_by_group(&self, qq_group_id: i64) -> Result<Vec<GroupMember>, crate::shared::error::AppError>;
+    async fn find(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<Option<GroupMember>, crate::shared::error::AppError>;
+    async fn upsert(
+        &self,
+        member: &GroupMember,
+    ) -> Result<GroupMember, crate::shared::error::AppError>;
+    async fn update_last_seen(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+        last_seen_at: i64,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn list_by_group(
+        &self,
+        qq_group_id: i64,
+    ) -> Result<Vec<GroupMember>, crate::shared::error::AppError>;
 }
 
 // ── GroupMessage Repository ─────────────────────────────────────────────
@@ -51,12 +103,28 @@ pub trait GroupMemberRepository: Send + Sync {
 pub trait GroupMessageRepository: Send + Sync {
     /// 插入标准化后的消息。返回内部 ID。
     /// 幂等性：如果 `platform_message_id` + `bot_account_id` 已存在，返回现有记录。
-    async fn insert(&self, msg: &NormalizedMessage) -> Result<NormalizedMessage, crate::shared::error::AppError>;
-    async fn find_by_platform_id(&self, bot_account_id: u64, platform_message_id: &str) -> Result<Option<NormalizedMessage>, crate::shared::error::AppError>;
+    async fn insert(
+        &self,
+        msg: &NormalizedMessage,
+    ) -> Result<NormalizedMessage, crate::shared::error::AppError>;
+    async fn find_by_platform_id(
+        &self,
+        bot_account_id: u64,
+        platform_message_id: &str,
+    ) -> Result<Option<NormalizedMessage>, crate::shared::error::AppError>;
     /// 获取群组的最近消息（用于上下文构建）。
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<NormalizedMessage>, crate::shared::error::AppError>;
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<NormalizedMessage>, crate::shared::error::AppError>;
     /// 更新处理状态。
-    async fn update_status(&self, id: u64, status: super::message::ProcessStatus, error: Option<&str>) -> Result<(), crate::shared::error::AppError>;
+    async fn update_status(
+        &self,
+        id: u64,
+        status: super::message::ProcessStatus,
+        error: Option<&str>,
+    ) -> Result<(), crate::shared::error::AppError>;
 }
 
 // ── AgentTurn Repository ────────────────────────────────────────────────
@@ -64,21 +132,52 @@ pub trait GroupMessageRepository: Send + Sync {
 #[async_trait]
 pub trait AgentTurnRepository: Send + Sync {
     async fn insert(&self, turn: &AgentTurn) -> Result<AgentTurn, crate::shared::error::AppError>;
-    async fn update_response(&self, turn_id: u64, response_message_id: u64, status: super::turn::TurnStatus) -> Result<(), crate::shared::error::AppError>;
-    async fn update_status(&self, turn_id: u64, status: super::turn::TurnStatus, error: Option<&str>) -> Result<(), crate::shared::error::AppError>;
-    async fn find_by_trace_id(&self, trace_id: &str) -> Result<Option<AgentTurn>, crate::shared::error::AppError>;
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<AgentTurn>, crate::shared::error::AppError>;
+    async fn update_response(
+        &self,
+        turn_id: u64,
+        response_message_id: u64,
+        status: super::turn::TurnStatus,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn update_status(
+        &self,
+        turn_id: u64,
+        status: super::turn::TurnStatus,
+        error: Option<&str>,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn find_by_trace_id(
+        &self,
+        trace_id: &str,
+    ) -> Result<Option<AgentTurn>, crate::shared::error::AppError>;
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<AgentTurn>, crate::shared::error::AppError>;
 }
 
 // ── Outbox Repository ───────────────────────────────────────────────────
 
 #[async_trait]
 pub trait OutboxRepository: Send + Sync {
-    async fn insert(&self, entry: &OutboxEntry) -> Result<OutboxEntry, crate::shared::error::AppError>;
+    async fn insert(
+        &self,
+        entry: &OutboxEntry,
+    ) -> Result<OutboxEntry, crate::shared::error::AppError>;
     /// 获取下一批等待发送的条目。
-    async fn fetch_due(&self, limit: u32) -> Result<Vec<OutboxEntry>, crate::shared::error::AppError>;
-    async fn mark_sent(&self, outbox_id: u64, platform_message_id: &str) -> Result<(), crate::shared::error::AppError>;
-    async fn mark_failed(&self, outbox_id: u64, error: &str) -> Result<(), crate::shared::error::AppError>;
+    async fn fetch_due(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutboxEntry>, crate::shared::error::AppError>;
+    async fn mark_sent(
+        &self,
+        outbox_id: u64,
+        platform_message_id: &str,
+    ) -> Result<(), crate::shared::error::AppError>;
+    async fn mark_failed(
+        &self,
+        outbox_id: u64,
+        error: &str,
+    ) -> Result<(), crate::shared::error::AppError>;
     async fn mark_cancelled(&self, outbox_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 
@@ -116,8 +215,14 @@ pub enum OutboxStatus {
 #[async_trait]
 pub trait GroupSummaryRepository: Send + Sync {
     /// 查找群组的活跃滚动摘要。
-    async fn find_active_rolling(&self, qq_group_id: i64) -> Result<Option<GroupSummary>, crate::shared::error::AppError>;
-    async fn insert(&self, summary: &GroupSummary) -> Result<GroupSummary, crate::shared::error::AppError>;
+    async fn find_active_rolling(
+        &self,
+        qq_group_id: i64,
+    ) -> Result<Option<GroupSummary>, crate::shared::error::AppError>;
+    async fn insert(
+        &self,
+        summary: &GroupSummary,
+    ) -> Result<GroupSummary, crate::shared::error::AppError>;
     async fn disable(&self, summary_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 
@@ -141,8 +246,15 @@ pub struct GroupSummary {
 #[async_trait]
 pub trait GroupMemoryRepository: Send + Sync {
     /// 查找群组的活跃记忆，按显著性排序。
-    async fn find_active_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<GroupMemory>, crate::shared::error::AppError>;
-    async fn upsert(&self, memory: &GroupMemory) -> Result<GroupMemory, crate::shared::error::AppError>;
+    async fn find_active_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<GroupMemory>, crate::shared::error::AppError>;
+    async fn upsert(
+        &self,
+        memory: &GroupMemory,
+    ) -> Result<GroupMemory, crate::shared::error::AppError>;
     async fn disable(&self, group_memory_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 

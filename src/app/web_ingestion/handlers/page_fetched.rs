@@ -6,9 +6,7 @@
 
 use crate::app::web_ingestion::event_types::event as ev;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
-use crate::app::web_ingestion::services::{
-    artifact_service, html_cleaner, terminal_events,
-};
+use crate::app::web_ingestion::services::{artifact_service, html_cleaner, terminal_events};
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::{DomainEvent, NewAuditLog};

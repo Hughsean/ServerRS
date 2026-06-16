@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+};
 
 use crate::domain::qq_bot::config::GroupMember;
 use crate::domain::qq_bot::repository::GroupMemberRepository;
@@ -37,7 +39,11 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 
 #[async_trait]
 impl GroupMemberRepository for SeaOrmGroupMemberRepository {
-    async fn find(&self, qq_group_id: i64, qq_user_id: i64) -> Result<Option<GroupMember>, AppError> {
+    async fn find(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+    ) -> Result<Option<GroupMember>, AppError> {
         qq_group_members::Entity::find_by_id((qq_group_id, qq_user_id))
             .one(&self.db)
             .await
@@ -62,7 +68,12 @@ impl GroupMemberRepository for SeaOrmGroupMemberRepository {
         Ok(model_to_domain(result.try_into_model().unwrap()))
     }
 
-    async fn update_last_seen(&self, qq_group_id: i64, qq_user_id: i64, _last_seen_at: i64) -> Result<(), AppError> {
+    async fn update_last_seen(
+        &self,
+        qq_group_id: i64,
+        qq_user_id: i64,
+        _last_seen_at: i64,
+    ) -> Result<(), AppError> {
         use sea_orm::sea_query::SimpleExpr;
         qq_group_members::Entity::update_many()
             .col_expr(

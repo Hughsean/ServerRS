@@ -4,6 +4,7 @@ use chrono::Utc;
 use tracing::{error, info};
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::message::{MessageSegment, NormalizedMessage};
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
@@ -11,7 +12,6 @@ use crate::domain::qq_bot::repository::{
     ExternalUserRepository, GroupMemory, GroupMemoryRepository, GroupMessageRepository,
 };
 use crate::domain::qq_bot::user_profile::UserProfile;
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::user::user::NewUser;
 use crate::domain::user::user_repository::UserRepository;
 
@@ -89,7 +89,10 @@ impl ProfileBuilder {
         now_ms: i64,
     ) -> Result<ExternalUser, QqBotError> {
         // 查找是否已注册
-        if let Some(existing) = self.external_user_repo.find_by_qq_user_id(qq_user_id).await
+        if let Some(existing) = self
+            .external_user_repo
+            .find_by_qq_user_id(qq_user_id)
+            .await
             .map_err(|e| QqBotError::Internal(format!("failed to find external user: {e}")))?
         {
             // 已有记录但没有关联内部用户 → 补创建
@@ -99,8 +102,9 @@ impl ProfileBuilder {
                     internal_user_id: Some(new_user.id),
                     ..existing
                 };
-                return self.external_user_repo.upsert(&updated).await
-                    .map_err(|e| QqBotError::Internal(format!("failed to update external user: {e}")));
+                return self.external_user_repo.upsert(&updated).await.map_err(|e| {
+                    QqBotError::Internal(format!("failed to update external user: {e}"))
+                });
             }
             return Ok(existing);
         }
@@ -117,23 +121,29 @@ impl ProfileBuilder {
             memory_enabled: false,
             persona_enabled: false,
         };
-        let external = self.external_user_repo.upsert(&external).await
+        let external = self
+            .external_user_repo
+            .upsert(&external)
+            .await
             .map_err(|e| QqBotError::Internal(format!("failed to create external user: {e}")))?;
 
         // 同时创建初始画像记录
-        let _ = self.user_profile_repo.upsert(&UserProfile {
-            qq_user_id,
-            interest_tags: None,
-            active_hours: None,
-            speaking_style: None,
-            topic_frequency: None,
-            total_messages: 0,
-            avg_message_length: 0.0,
-            emoji_usage_rate: 0.0,
-            first_seen_at: Some(now_ms),
-            last_summary_at: None,
-            raw_profile: None,
-        }).await;
+        let _ = self
+            .user_profile_repo
+            .upsert(&UserProfile {
+                qq_user_id,
+                interest_tags: None,
+                active_hours: None,
+                speaking_style: None,
+                topic_frequency: None,
+                total_messages: 0,
+                avg_message_length: 0.0,
+                emoji_usage_rate: 0.0,
+                first_seen_at: Some(now_ms),
+                last_summary_at: None,
+                raw_profile: None,
+            })
+            .await;
 
         info!(
             qq_user_id,
@@ -152,7 +162,10 @@ impl ProfileBuilder {
         };
 
         // 加载或创建画像记录
-        let profile = self.user_profile_repo.find_by_qq_user_id(qq_user_id).await
+        let profile = self
+            .user_profile_repo
+            .find_by_qq_user_id(qq_user_id)
+            .await
             .ok()
             .flatten()
             .unwrap_or(UserProfile {
@@ -170,8 +183,16 @@ impl ProfileBuilder {
             });
 
         let msg_len = msg.normalized_text.len() as f64;
-        let has_emoji = msg.segments.iter().any(|s| matches!(s, MessageSegment::Face { .. }))
-            || msg.normalized_text.contains(&['😀', '😂', '😊', '🥰', '😍', '🤔', '😭', '😤', '👍', '❤', '🔥', '✨', '🎉', '💀', '🙏'][..]);
+        let has_emoji = msg
+            .segments
+            .iter()
+            .any(|s| matches!(s, MessageSegment::Face { .. }))
+            || msg.normalized_text.contains(
+                &[
+                    '😀', '😂', '😊', '🥰', '😍', '🤔', '😭', '😤', '👍', '❤', '🔥', '✨', '🎉',
+                    '💀', '🙏',
+                ][..],
+            );
 
         let total = profile.total_messages + 1;
         let old_avg = profile.avg_message_length;
@@ -180,16 +201,24 @@ impl ProfileBuilder {
         let new_emoji = old_emoji + (if has_emoji { 1.0 } else { 0.0 } - old_emoji) / total as f64;
 
         // 更新计数器（轻量，不阻塞）
-        if let Err(e) = self.user_profile_repo.update_stats(qq_user_id, total, new_avg, new_emoji).await {
+        if let Err(e) = self
+            .user_profile_repo
+            .update_stats(qq_user_id, total, new_avg, new_emoji)
+            .await
+        {
             error!(qq_user_id, error = %e, "更新画像统计数据失败");
         }
 
         // 更新 external_user 的 last_seen_at
-        let _ = self.external_user_repo.update_last_seen(qq_user_id, msg.sent_at).await;
+        let _ = self
+            .external_user_repo
+            .update_last_seen(qq_user_id, msg.sent_at)
+            .await;
 
         // 达到阈值 → 后台构建用户画像（使用群消息样本）
         if total == self.config.user_profile_threshold
-            || (total > self.config.user_profile_threshold && total % self.config.user_profile_threshold == 0)
+            || (total > self.config.user_profile_threshold
+                && total % self.config.user_profile_threshold == 0)
         {
             let builder = CloneInner {
                 user_profile_repo: Arc::clone(&self.user_profile_repo),
@@ -241,14 +270,19 @@ impl ProfileBuilder {
 
     // ─── 内部辅助 ──────────────────────────────────────────────────────
 
-    async fn create_platform_user(&self, qq_user_id: i64, nickname: Option<&str>) -> Result<crate::domain::user::user::User, QqBotError> {
+    async fn create_platform_user(
+        &self,
+        qq_user_id: i64,
+        nickname: Option<&str>,
+    ) -> Result<crate::domain::user::user::User, QqBotError> {
         let username = format!("qq_{}", qq_user_id);
-        let new_user = NewUser::new_without_password(
-            &username,
-            nickname.map(|s| s.to_string()),
-        );
-        self.user_repo.save(new_user).await
-            .map_err(|e| QqBotError::Internal(format!("failed to create platform user for QQ {}: {}", qq_user_id, e)))
+        let new_user = NewUser::new_without_password(&username, nickname.map(|s| s.to_string()));
+        self.user_repo.save(new_user).await.map_err(|e| {
+            QqBotError::Internal(format!(
+                "failed to create platform user for QQ {}: {}",
+                qq_user_id, e
+            ))
+        })
     }
 }
 
@@ -266,10 +300,14 @@ impl CloneInner {
         // 获取该用户所属群的最近消息（简化：取全部活跃群）
         // 注：更精确的实现应新增 `GroupMessageRepository::recent_by_user` 方法
         // 当前简化版本从各群消息中过滤
-        let messages = self.message_repo.recent_by_group(0, 100).await
+        let messages = self
+            .message_repo
+            .recent_by_group(0, 100)
+            .await
             .map_err(|e| QqBotError::Internal(format!("failed to fetch messages: {e}")))?;
 
-        let user_msgs: Vec<&NormalizedMessage> = messages.iter()
+        let user_msgs: Vec<&NormalizedMessage> = messages
+            .iter()
             .filter(|m| m.qq_user_id == Some(qq_user_id))
             .take(100)
             .collect();
@@ -278,7 +316,8 @@ impl CloneInner {
             return Ok(());
         }
 
-        let sample: Vec<String> = user_msgs.iter()
+        let sample: Vec<String> = user_msgs
+            .iter()
             .map(|m| format!("[群{}] {}", m.qq_group_id % 10000, m.normalized_text))
             .collect();
         let conversation_sample = sample.join("\n");
@@ -301,34 +340,46 @@ topic_frequency 是该用户常聊的话题及其估计次数，最多 5 个话�
             conversation_sample
         );
 
-        let request = ChatCompletionRequest::new(vec![
-            ChatMessage { role: "system".into(), content: prompt, tool_calls: None, tool_call_id: None, name: None },
-        ]).with_temperature(0.3);
+        let request = ChatCompletionRequest::new(vec![ChatMessage {
+            role: "system".into(),
+            content: prompt,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }])
+        .with_temperature(0.3);
 
-        let response = self.llm_provider.chat(request).await
+        let response = self
+            .llm_provider
+            .chat(request)
+            .await
             .map_err(|e| QqBotError::Internal(format!("LLM profile build failed: {e}")))?;
 
         if let Ok(parsed) = Self::parse_json_response(&response.content) {
             let profile = UserProfile {
                 qq_user_id,
-                interest_tags: parsed.get("interest_tags")
+                interest_tags: parsed
+                    .get("interest_tags")
                     .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok()),
                 active_hours: None,
-                speaking_style: parsed.get("speaking_style")
+                speaking_style: parsed
+                    .get("speaking_style")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
-                topic_frequency: parsed.get("topic_frequency")
-                    .and_then(|v| {
-                        if v.is_object() { Some(v.clone()) } else { None }
-                    }),
+                topic_frequency: parsed
+                    .get("topic_frequency")
+                    .and_then(|v| if v.is_object() { Some(v.clone()) } else { None }),
                 total_messages: 0,
                 avg_message_length: 0.0,
                 emoji_usage_rate: 0.0,
                 first_seen_at: None,
                 last_summary_at: Some(Utc::now().timestamp_millis()),
-                raw_profile: parsed.get("raw_profile")
+                raw_profile: parsed
+                    .get("raw_profile")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
             };
-            self.user_profile_repo.upsert(&profile).await
+            self.user_profile_repo
+                .upsert(&profile)
+                .await
                 .map_err(|e| QqBotError::Internal(format!("failed to save profile: {e}")))?;
             info!(qq_user_id, "user profile built via LLM");
         }
@@ -338,14 +389,18 @@ topic_frequency 是该用户常聊的话题及其估计次数，最多 5 个话�
 
     /// 构建群聊画像（写入 qq_group_memories）
     async fn build_group_profile(&self, qq_group_id: i64) -> Result<(), QqBotError> {
-        let messages = self.message_repo.recent_by_group(qq_group_id, 100).await
+        let messages = self
+            .message_repo
+            .recent_by_group(qq_group_id, 100)
+            .await
             .map_err(|e| QqBotError::Internal(format!("failed to fetch messages: {e}")))?;
 
         if messages.is_empty() {
             return Ok(());
         }
 
-        let sample: Vec<String> = messages.iter()
+        let sample: Vec<String> = messages
+            .iter()
             .map(|m| {
                 let user = m.qq_user_id.unwrap_or(0) % 10000;
                 format!("[User{}] {}", user, m.normalized_text)
@@ -372,11 +427,19 @@ memory_type 可选：group_preference / group_fact / group_rule / recurring_topi
             conversation_sample
         );
 
-        let request = ChatCompletionRequest::new(vec![
-            ChatMessage { role: "system".into(), content: prompt, tool_calls: None, tool_call_id: None, name: None },
-        ]).with_temperature(0.3);
+        let request = ChatCompletionRequest::new(vec![ChatMessage {
+            role: "system".into(),
+            content: prompt,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }])
+        .with_temperature(0.3);
 
-        let response = self.llm_provider.chat(request).await
+        let response = self
+            .llm_provider
+            .chat(request)
+            .await
             .map_err(|e| QqBotError::Internal(format!("LLM group profile failed: {e}")))?;
 
         let cleaned = Self::clean_json(&response.content);
@@ -392,17 +455,29 @@ memory_type 可选：group_preference / group_fact / group_rule / recurring_topi
                     qq_group_id,
                     memory_key: None,
                     canonical_form: None,
-                    memory_type: item.get("memory_type").and_then(|v| v.as_str()).unwrap_or("group_fact").to_string(),
-                    content: item.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    confidence: item.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5),
+                    memory_type: item
+                        .get("memory_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("group_fact")
+                        .to_string(),
+                    content: item
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    confidence: item
+                        .get("confidence")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.5),
                     salience: item.get("salience").and_then(|v| v.as_f64()).unwrap_or(0.5),
                     source_message_id: None,
                     reinforce_count: 0,
                     status: 1,
                 };
                 if !memory.content.is_empty() {
-                    self.group_memory_repo.upsert(&memory).await
-                        .map_err(|e| QqBotError::Internal(format!("failed to save group memory: {e}")))?;
+                    self.group_memory_repo.upsert(&memory).await.map_err(|e| {
+                        QqBotError::Internal(format!("failed to save group memory: {e}"))
+                    })?;
                 }
             }
             info!(qq_group_id, count = items.len(), "group profile built");

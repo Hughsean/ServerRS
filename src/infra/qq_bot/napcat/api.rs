@@ -89,7 +89,11 @@ impl NapCatApiClient {
         }
     }
 
-    async fn call_api(&self, action: &str, params: Value) -> Result<OneBotResponse, super::super::QqBotError> {
+    async fn call_api(
+        &self,
+        action: &str,
+        params: Value,
+    ) -> Result<OneBotResponse, super::super::QqBotError> {
         let url = format!("{}/{}", self.base_url, action);
         let mut req = self.http_client.post(&url).json(&params);
         if let Some(ref token) = self.token {
@@ -126,7 +130,11 @@ impl NapCatApiClient {
     ///
     /// Calls the OneBot `group_poke` action.
     /// Returns Ok(()) on success (retcode == 0).
-    pub async fn group_poke(&self, group_id: i64, user_id: i64) -> Result<(), super::super::QqBotError> {
+    pub async fn group_poke(
+        &self,
+        group_id: i64,
+        user_id: i64,
+    ) -> Result<(), super::super::QqBotError> {
         let params = serde_json::json!({
             "group_id": group_id,
             "user_id": user_id,
@@ -135,50 +143,79 @@ impl NapCatApiClient {
         Ok(())
     }
 
-    pub async fn send_group_msg(&self, group_id: i64, message: &str) -> Result<SendGroupMsgData, super::super::QqBotError> {
+    pub async fn send_group_msg(
+        &self,
+        group_id: i64,
+        message: &str,
+    ) -> Result<SendGroupMsgData, super::super::QqBotError> {
         let params = serde_json::json!({
             "group_id": group_id,
             "message": message,
             "auto_escape": false,
         });
         let resp = self.call_api("send_group_msg", params).await?;
-        Ok(serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
-            super::super::QqBotError::MessageProcessing(format!("parse send_group_msg data: {e}"))
-        })?)
+        Ok(
+            serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
+                super::super::QqBotError::MessageProcessing(format!(
+                    "parse send_group_msg data: {e}"
+                ))
+            })?,
+        )
     }
 
     pub async fn get_login_info(&self) -> Result<LoginInfoData, super::super::QqBotError> {
-        let resp = self.call_api("get_login_info", serde_json::json!({})).await?;
-        Ok(serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
-            super::super::QqBotError::MessageProcessing(format!("parse login_info: {e}"))
-        })?)
+        let resp = self
+            .call_api("get_login_info", serde_json::json!({}))
+            .await?;
+        Ok(
+            serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
+                super::super::QqBotError::MessageProcessing(format!("parse login_info: {e}"))
+            })?,
+        )
     }
 
-    pub async fn get_group_info(&self, group_id: i64) -> Result<GroupInfoData, super::super::QqBotError> {
+    pub async fn get_group_info(
+        &self,
+        group_id: i64,
+    ) -> Result<GroupInfoData, super::super::QqBotError> {
         let params = serde_json::json!({"group_id": group_id, "no_cache": false});
         let resp = self.call_api("get_group_info", params).await?;
-        Ok(serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
-            super::super::QqBotError::MessageProcessing(format!("parse group_info: {e}"))
-        })?)
+        Ok(
+            serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
+                super::super::QqBotError::MessageProcessing(format!("parse group_info: {e}"))
+            })?,
+        )
     }
 
-    pub async fn get_group_member_info(&self, group_id: i64, user_id: i64) -> Result<GroupMemberInfoData, super::super::QqBotError> {
-        let params = serde_json::json!({"group_id": group_id, "user_id": user_id, "no_cache": false});
+    pub async fn get_group_member_info(
+        &self,
+        group_id: i64,
+        user_id: i64,
+    ) -> Result<GroupMemberInfoData, super::super::QqBotError> {
+        let params =
+            serde_json::json!({"group_id": group_id, "user_id": user_id, "no_cache": false});
         let resp = self.call_api("get_group_member_info", params).await?;
-        Ok(serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
-            super::super::QqBotError::MessageProcessing(format!("parse group_member_info: {e}"))
-        })?)
+        Ok(
+            serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
+                super::super::QqBotError::MessageProcessing(format!("parse group_member_info: {e}"))
+            })?,
+        )
     }
 
     pub async fn get_group_list(&self) -> Result<Vec<GroupInfoData>, super::super::QqBotError> {
-        let resp = self.call_api("get_group_list", serde_json::json!({})).await?;
+        let resp = self
+            .call_api("get_group_list", serde_json::json!({}))
+            .await?;
         let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
         Ok(serde_json::from_value(data).map_err(|e| {
             super::super::QqBotError::MessageProcessing(format!("parse group_list: {e}"))
         })?)
     }
 
-    pub async fn get_group_member_list(&self, group_id: i64) -> Result<Vec<GroupMemberInfoData>, super::super::QqBotError> {
+    pub async fn get_group_member_list(
+        &self,
+        group_id: i64,
+    ) -> Result<Vec<GroupMemberInfoData>, super::super::QqBotError> {
         let params = serde_json::json!({"group_id": group_id, "no_cache": false});
         let resp = self.call_api("get_group_member_list", params).await?;
         let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
@@ -189,8 +226,10 @@ impl NapCatApiClient {
 
     pub async fn get_status(&self) -> Result<StatusData, super::super::QqBotError> {
         let resp = self.call_api("get_status", serde_json::json!({})).await?;
-        Ok(serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
-            super::super::QqBotError::MessageProcessing(format!("parse status: {e}"))
-        })?)
+        Ok(
+            serde_json::from_value(resp.data.unwrap_or_default()).map_err(|e| {
+                super::super::QqBotError::MessageProcessing(format!("parse status: {e}"))
+            })?,
+        )
     }
 }

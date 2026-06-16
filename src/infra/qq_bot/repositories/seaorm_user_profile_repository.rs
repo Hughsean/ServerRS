@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+};
 
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
 use crate::domain::qq_bot::user_profile::UserProfile;
@@ -101,7 +103,11 @@ impl QqUserProfileRepository for SeaOrmQqUserProfileRepository {
         Ok(())
     }
 
-    async fn update_summary_at(&self, qq_user_id: i64, last_summary_at: i64) -> Result<(), AppError> {
+    async fn update_summary_at(
+        &self,
+        qq_user_id: i64,
+        last_summary_at: i64,
+    ) -> Result<(), AppError> {
         use sea_orm::sea_query::SimpleExpr;
         qq_user_profiles::Entity::update_many()
             .col_expr(

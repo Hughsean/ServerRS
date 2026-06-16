@@ -1,6 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, Value};
 use sea_orm::sea_query::SimpleExpr;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, Value,
+};
 
 use crate::domain::qq_bot::repository::{GroupSummary, GroupSummaryRepository};
 use crate::shared::error::AppError;
@@ -38,7 +40,10 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 
 #[async_trait]
 impl GroupSummaryRepository for SeaOrmGroupSummaryRepository {
-    async fn find_active_rolling(&self, qq_group_id: i64) -> Result<Option<GroupSummary>, AppError> {
+    async fn find_active_rolling(
+        &self,
+        qq_group_id: i64,
+    ) -> Result<Option<GroupSummary>, AppError> {
         qq_group_summaries::Entity::find()
             .filter(qq_group_summaries::Column::QqGroupId.eq(qq_group_id))
             .filter(qq_group_summaries::Column::SummaryType.eq("rolling_group"))

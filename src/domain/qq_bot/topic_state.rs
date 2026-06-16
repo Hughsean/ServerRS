@@ -23,14 +23,22 @@ impl TopicInfo {
         } else if duration_secs < 3600 {
             format!("{} 分钟", duration_secs / 60)
         } else {
-            format!("{} 小时 {} 分", duration_secs / 3600, (duration_secs % 3600) / 60)
+            format!(
+                "{} 小时 {} 分",
+                duration_secs / 3600,
+                (duration_secs % 3600) / 60
+            )
         };
 
         format!(
             "话题：{}（置信度 {:.1}）\n参与者：{}\n话题已持续 {}",
             self.label,
             self.confidence,
-            self.participants.iter().map(|id| id.to_string()).collect::<Vec<_>>().join("、"),
+            self.participants
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join("、"),
             duration_str,
         )
     }

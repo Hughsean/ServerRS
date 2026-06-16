@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
+use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
 use crate::domain::qq_bot::persona::BotPersona;
@@ -12,7 +13,6 @@ use crate::domain::qq_bot::repository::{
     AgentTurnRepository, BotAccountRepository, GroupMessageRepository, GroupRepository,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
-use crate::domain::qq_bot::QqBotError;
 use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 use crate::infra::qq_bot::napcat::listener::GroupMessageHandler;
@@ -113,7 +113,8 @@ impl QqBotService {
 
     /// Initialise the bot account cache.
     pub async fn init(&self, self_qq_id: i64) -> Result<(), QqBotError> {
-        let account = self.bot_account_repo
+        let account = self
+            .bot_account_repo
             .find_by_self_qq_id(self_qq_id)
             .await
             .map_err(|e| QqBotError::Internal(format!("failed to load bot account: {e}")))?;
@@ -135,15 +136,17 @@ impl QqBotService {
         let group_id = msg.qq_group_id;
 
         // 1. Ingest the message
-        let persisted = match self.ingestion.ingest(
-            msg.bot_account_id,
-            msg.qq_group_id,
-            msg.qq_user_id.unwrap_or(0),
-            &msg.platform_message_id,
-            &msg.raw_text,
-            msg.sent_at,
-        )
-        .await
+        let persisted = match self
+            .ingestion
+            .ingest(
+                msg.bot_account_id,
+                msg.qq_group_id,
+                msg.qq_user_id.unwrap_or(0),
+                &msg.platform_message_id,
+                &msg.raw_text,
+                msg.sent_at,
+            )
+            .await
         {
             Ok(m) => m,
             Err(e) => {
@@ -156,11 +159,14 @@ impl QqBotService {
         if let Some(ref pb) = self.profile_builder {
             if let Some(qq_user_id) = persisted.qq_user_id {
                 // Auto-register if first time
-                if let Err(e) = pb.ensure_user_registered(
-                    qq_user_id,
-                    None, // nickname will be filled from group member info later
-                    persisted.sent_at,
-                ).await {
+                if let Err(e) = pb
+                    .ensure_user_registered(
+                        qq_user_id,
+                        None, // nickname will be filled from group member info later
+                        persisted.sent_at,
+                    )
+                    .await
+                {
                     error!(qq_user_id, error = %e, "QQ 用户自动注册失败");
                 }
                 // Lightweight observation
@@ -179,63 +185,88 @@ impl QqBotService {
             enabled: true,
         });
 
-        let group_config = self.group_repo.find_by_group_id(group_id).await.ok()
+        let group_config = self
+            .group_repo
+            .find_by_group_id(group_id)
+            .await
+            .ok()
             .and_then(|g| g);
 
         // 从用户消息中反推情绪变化
-        if let Some((mood, intensity, event)) = EmotionalStateService::detect_mood_from_text(&persisted.normalized_text) {
-            self.emotional_service.trigger_emotion(
-                group_id,
-                mood,
-                intensity,
-                Some(format!("群友 {}: {}", persisted.qq_user_id.unwrap_or(0), event)),
-            ).await;
+        if let Some((mood, intensity, event)) =
+            EmotionalStateService::detect_mood_from_text(&persisted.normalized_text)
+        {
+            self.emotional_service
+                .trigger_emotion(
+                    group_id,
+                    mood,
+                    intensity,
+                    Some(format!(
+                        "群友 {}: {}",
+                        persisted.qq_user_id.unwrap_or(0),
+                        event
+                    )),
+                )
+                .await;
         }
 
         // 关系更新：每次收到消息更新互动计数
         if let Some(ref rs) = self.relationship_service {
             if let Some(qq_user_id) = persisted.qq_user_id {
-                if let Err(e) = rs.update_interaction(group_id, qq_user_id, Some(persisted.sent_at)).await {
+                if let Err(e) = rs
+                    .update_interaction(group_id, qq_user_id, Some(persisted.sent_at))
+                    .await
+                {
                     error!(group_id, user_id = qq_user_id, error = %e, "failed to update relationship");
                 }
             }
         }
 
         // 话题分析：每次收到消息更新话题状态（在 trigger 之前，供 trigger 使用）
-        let recent_for_topic = self.message_repo.recent_by_group(group_id, 20).await
+        let recent_for_topic = self
+            .message_repo
+            .recent_by_group(group_id, 20)
+            .await
             .unwrap_or_default();
-        self.topic_service.analyze(group_id, &recent_for_topic, persisted.sent_at).await;
+        self.topic_service
+            .analyze(group_id, &recent_for_topic, persisted.sent_at)
+            .await;
 
         // 3. Evaluate trigger
-        let decision = match self.trigger.evaluate(&persisted, &bot_account, group_config.as_ref()).await {
+        let decision = match self
+            .trigger
+            .evaluate(&persisted, &bot_account, group_config.as_ref())
+            .await
+        {
             Ok(d) => d,
             Err(e) => {
                 error!(group_id, error = %e, "trigger evaluation failed");
-                let _ = self.ingestion.mark_processed(
-                    persisted.id.unwrap_or(0),
-                    ProcessStatus::Failed,
-                    Some(&e.to_string()),
-                ).await;
+                let _ = self
+                    .ingestion
+                    .mark_processed(
+                        persisted.id.unwrap_or(0),
+                        ProcessStatus::Failed,
+                        Some(&e.to_string()),
+                    )
+                    .await;
                 return;
             }
         };
 
         match decision {
             TriggerDecision::Skip | TriggerDecision::Wait => {
-                let _ = self.ingestion.mark_processed(
-                    persisted.id.unwrap_or(0),
-                    ProcessStatus::Ignored,
-                    None,
-                ).await;
+                let _ = self
+                    .ingestion
+                    .mark_processed(persisted.id.unwrap_or(0), ProcessStatus::Ignored, None)
+                    .await;
                 return;
             }
             TriggerDecision::Respond => {
                 // Proceed
-                let _ = self.ingestion.mark_processed(
-                    persisted.id.unwrap_or(0),
-                    ProcessStatus::Processed,
-                    None,
-                ).await;
+                let _ = self
+                    .ingestion
+                    .mark_processed(persisted.id.unwrap_or(0), ProcessStatus::Processed, None)
+                    .await;
             }
         }
 
@@ -243,7 +274,11 @@ impl QqBotService {
         self.attention_store.confirm_engagement(group_id).await;
 
         // 4. Build context
-        let context = match self.context_builder.build_context(&persisted, group_config.as_ref()).await {
+        let context = match self
+            .context_builder
+            .build_context(&persisted, group_config.as_ref())
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 error!(group_id, error = %e, "context building failed");
@@ -252,7 +287,11 @@ impl QqBotService {
         };
 
         // 5. Generate reply
-        let reply = match self.reply_generator.generate_reply(&persisted, context, group_config.as_ref()).await {
+        let reply = match self
+            .reply_generator
+            .generate_reply(&persisted, context, group_config.as_ref())
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 error!(group_id, error = %e, "reply generation failed");
@@ -267,7 +306,11 @@ impl QqBotService {
             qq_group_id: group_id,
             trigger_message_id: persisted.id.unwrap_or(0),
             response_message_id: None,
-            trigger_type: if persisted.at_bot { TriggerType::Mention } else { TriggerType::Keyword },
+            trigger_type: if persisted.at_bot {
+                TriggerType::Mention
+            } else {
+                TriggerType::Keyword
+            },
             qq_user_id: persisted.qq_user_id,
             internal_user_id: None,
             prompt_version: None,
@@ -293,7 +336,11 @@ impl QqBotService {
 
         // 7. Dispatch reply segments
         let related_turn_id = turn.turn_id;
-        match self.segment_dispatcher.send_direct(group_id, &reply, related_turn_id).await {
+        match self
+            .segment_dispatcher
+            .send_direct(group_id, &reply, related_turn_id)
+            .await
+        {
             Ok(_platform_ids) => {
                 info!(
                     group_id,
@@ -302,35 +349,40 @@ impl QqBotService {
                 );
 
                 // Update turn status
-                let _ = self.turn_repo.update_response(
-                    related_turn_id.unwrap_or(0),
-                    0, // response_message_id (not available from NapCat API easily)
-                    TurnStatus::Responded,
-                ).await;
+                let _ = self
+                    .turn_repo
+                    .update_response(
+                        related_turn_id.unwrap_or(0),
+                        0, // response_message_id (not available from NapCat API easily)
+                        TurnStatus::Responded,
+                    )
+                    .await;
 
                 // 从回复的 emotion_change 字段更新情绪状态
                 if let Some(ref ec) = reply.emotion_change {
-                    self.emotional_service.trigger_emotion(
-                        group_id,
-                        ec.mood,
-                        ec.intensity,
-                        ec.reason.clone(),
-                    ).await;
+                    self.emotional_service
+                        .trigger_emotion(group_id, ec.mood, ec.intensity, ec.reason.clone())
+                        .await;
                 }
 
                 // 从回复的 relationship_hints 字段自动更新关系
                 if let Some(ref hints) = reply.relationship_hints {
                     if let Some(ref rs) = self.relationship_service {
                         if let Some(ref nickname) = hints.nickname_preference {
-                            let _ = rs.update_nickname_preference(
-                                group_id,
-                                hints.target_user_id,
-                                nickname.clone(),
-                            ).await;
+                            let _ = rs
+                                .update_nickname_preference(
+                                    group_id,
+                                    hints.target_user_id,
+                                    nickname.clone(),
+                                )
+                                .await;
                         }
-                        if !hints.known_interests.is_empty() || !hints.known_avoid_topics.is_empty() {
+                        if !hints.known_interests.is_empty() || !hints.known_avoid_topics.is_empty()
+                        {
                             // 获取现有关系，合并兴趣和回避话题
-                            if let Ok(Some(mut rel)) = rs.get_relationship(group_id, hints.target_user_id).await {
+                            if let Ok(Some(mut rel)) =
+                                rs.get_relationship(group_id, hints.target_user_id).await
+                            {
                                 for interest in &hints.known_interests {
                                     if !rel.known_interests.contains(interest) {
                                         rel.known_interests.push(interest.clone());
@@ -342,12 +394,14 @@ impl QqBotService {
                                     }
                                 }
                                 // 持久化更新（通过 upsert）
-                                let _ = rs.update_known_info(
-                                    group_id,
-                                    hints.target_user_id,
-                                    &hints.known_interests,
-                                    &hints.known_avoid_topics,
-                                ).await;
+                                let _ = rs
+                                    .update_known_info(
+                                        group_id,
+                                        hints.target_user_id,
+                                        &hints.known_interests,
+                                        &hints.known_avoid_topics,
+                                    )
+                                    .await;
                             }
                         }
                     }
@@ -357,13 +411,19 @@ impl QqBotService {
                 error!(group_id, error = %e, "reply dispatch failed, fallback to outbox");
 
                 // Fallback: enqueue remaining segments to outbox
-                let _ = self.segment_dispatcher.enqueue_reply(group_id, &reply, related_turn_id).await;
+                let _ = self
+                    .segment_dispatcher
+                    .enqueue_reply(group_id, &reply, related_turn_id)
+                    .await;
 
-                let _ = self.turn_repo.update_status(
-                    related_turn_id.unwrap_or(0),
-                    TurnStatus::Failed,
-                    Some(&e.to_string()),
-                ).await;
+                let _ = self
+                    .turn_repo
+                    .update_status(
+                        related_turn_id.unwrap_or(0),
+                        TurnStatus::Failed,
+                        Some(&e.to_string()),
+                    )
+                    .await;
             }
         }
 

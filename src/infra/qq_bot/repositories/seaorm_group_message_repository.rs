@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
-    Set,
+    QuerySelect, Set,
 };
 
 use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage, ProcessStatus};
@@ -72,8 +71,8 @@ impl GroupMessageRepository for SeaOrmGroupMessageRepository {
             return Ok(model_to_domain(existing));
         }
 
-        let segments_json = serde_json::to_value(&msg.segments)
-            .unwrap_or_else(|_| serde_json::Value::Null);
+        let segments_json =
+            serde_json::to_value(&msg.segments).unwrap_or_else(|_| serde_json::Value::Null);
 
         let model = qq_group_messages::ActiveModel {
             bot_account_id: Set(msg.bot_account_id),
@@ -108,7 +107,11 @@ impl GroupMessageRepository for SeaOrmGroupMessageRepository {
             .map(|opt| opt.map(model_to_domain))
     }
 
-    async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<NormalizedMessage>, AppError> {
+    async fn recent_by_group(
+        &self,
+        qq_group_id: i64,
+        limit: u32,
+    ) -> Result<Vec<NormalizedMessage>, AppError> {
         qq_group_messages::Entity::find()
             .filter(qq_group_messages::Column::QqGroupId.eq(qq_group_id))
             .order_by_asc(qq_group_messages::Column::SentAt)
@@ -119,7 +122,12 @@ impl GroupMessageRepository for SeaOrmGroupMessageRepository {
             .map(|rows| rows.into_iter().map(model_to_domain).collect())
     }
 
-    async fn update_status(&self, id: u64, _status: ProcessStatus, error: Option<&str>) -> Result<(), AppError> {
+    async fn update_status(
+        &self,
+        id: u64,
+        _status: ProcessStatus,
+        error: Option<&str>,
+    ) -> Result<(), AppError> {
         let status_str = match _status {
             ProcessStatus::Pending => "pending",
             ProcessStatus::Ignored => "ignored",
