@@ -45,6 +45,8 @@ export interface HealthResponse {
   timestamp: string
 }
 
+// ── User ────────────────────────────────────────────────────────────────────
+
 export interface UserMe {
   id: number
   username: string
@@ -81,40 +83,125 @@ export interface UpsertProfileRequest {
   learningRecords?: string[]
 }
 
-export interface SessionCreateRequest {
-  user_id?: number
-  dialogue_id?: number
+// ── Chat API (sessionless, per-user conversation) ──────────────────────────
+
+export interface ChatOpenRequest {
+  // No required fields; user_id comes from the Bearer token.
+}
+
+export interface ChatConversationInfo {
+  id: number
+  message_count: number
+  last_message_at: string | null
+}
+
+export interface ChatOpenResponse {
+  conversation: ChatConversationInfo
+  personalization_enabled: boolean
+}
+
+export interface ChatMessageRequest {
+  text: string
+  emotion?: string
   location?: Record<string, JsonValue>
 }
 
-export interface SessionCreateResponse {
-  session_id: string
-  prompt: string
-  location: Record<string, JsonValue> | null
-  user_profile: JsonValue | null
-  timeout_seconds: number
-  dialogue_id: number | null
+export interface ChatToolCallItem {
+  name: string
+  arguments: JsonValue
 }
 
-export interface MessageRequest {
-  text: string
-  emotion?: string
-}
-
-export interface MessageResponse {
-  session_id: string
+export interface ChatMessageResponse {
+  conversation_id: number
   reply: string
-  session_closed: boolean
-  dialogue_id: number | null
-  title?: string
+  tool_calls: ChatToolCallItem[]
 }
 
-export interface SessionStatus {
-  session_id: string
-  user_id: number
-  dialogue_id: number | null
-  timeout_seconds: number
+export interface ChatHistoryQuery {
+  before_id?: number
+  limit?: number
 }
+
+export interface ChatMessageItem {
+  id: number
+  sender_role: string
+  message_type: string
+  content: JsonValue
+  created_at: string
+}
+
+export interface ChatHistoryResponse {
+  messages: ChatMessageItem[]
+  next_before_id: number | null
+}
+
+export interface ChatMemoryQuery {
+  /** Query param: `type` */
+  type?: string
+  limit?: number
+}
+
+export interface ChatMemoryItem {
+  memory_id: number
+  memory_type: string
+  content: string
+  confidence: number
+  reinforce_count: number
+  created_at: string
+  reinforced_at: string | null
+}
+
+export interface ChatMemoryResponse {
+  memories: ChatMemoryItem[]
+  total_active: number
+}
+
+export interface ChatPersonaSnapshotSummary {
+  communication_preferences_count: number
+  stable_facts_count: number
+  recurring_topics_count: number
+  goals_count: number
+  sensitive_context_count: number
+}
+
+export interface ChatPersonaResponse {
+  has_active_persona: boolean
+  generated_at: string | null
+  snapshot_summary: ChatPersonaSnapshotSummary
+  personalization_enabled: boolean
+}
+
+export interface DisableMemoryResponse {
+  memory_id: number
+  disabled: boolean
+}
+
+export interface PersonaResetResponse {
+  reset: boolean
+}
+
+export interface PersonaRebuildResponse {
+  snapshot_id: number
+}
+
+export interface TranscriptClearResponse {
+  cleared_messages: boolean
+  cleared_summaries: boolean
+  memories_preserved: boolean
+  persona_preserved: boolean
+  post_risk_audits_cleared: boolean
+}
+
+export interface ForgetResponse {
+  messages_cleared: boolean
+  summaries_cleared: boolean
+  memories_disabled: number
+  persona_expired: boolean
+  post_risk_audits_deleted: boolean
+  personalization_disabled: boolean
+}
+
+// ── Conversation (legacy/admin) ────────────────────────────────────────────
 
 export interface Conversation {
   id: number
@@ -137,23 +224,105 @@ export interface ConversationMessage {
   created_at: string
 }
 
-export interface RiskDetection {
-  id: number
-  conversation_id: number | null
-  risk_level: string
-  polarity: string
-  intent: string
-  reason: string | null
-  confidence: number
-  created_at: string
+// ── Depression ─────────────────────────────────────────────────────────────
+
+export interface DepressionScale {
+  scaleId: number
+  scaleName: string
+  scaleDescription: string | null
+  minScore: number
+  maxScore: number
 }
 
-export interface RiskDetectionPage {
-  items: RiskDetection[]
-  total: number
-  page: number
-  size: number
+export interface DepressionAssessment {
+  assessmentId: number
+  userId: number
+  scaleId: number
+  assessmentDate: string
+  answers: JsonValue
+  totalScore: number
+  severityLevel: string
+  notes: string | null
+  createdAt: string
+  updatedAt: string
 }
+
+export interface DepressionAssessmentPage {
+  items: DepressionAssessment[]
+  total: number
+}
+
+export interface CreateDepressionAssessmentRequest {
+  scaleId: number
+  answers: JsonValue
+  notes?: string
+}
+
+// ── Diary ──────────────────────────────────────────────────────────────────
+
+export interface Diary {
+  id: number
+  userId: number
+  title: string
+  content: string
+  moodDescription: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateDiaryRequest {
+  content: string
+  title?: string
+}
+
+export interface UpdateDiaryRequest {
+  title?: string
+  content?: string
+}
+
+// ── Community ──────────────────────────────────────────────────────────────
+
+export interface CommunityPost {
+  post_id: number
+  user_id: number
+  title: string | null
+  content: string
+  likes_count: number
+  comments_count: number
+}
+
+export interface CommunityPage<T> {
+  items: T[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export interface CreateCommunityPostRequest {
+  title?: string
+  content: string
+}
+
+export interface UpdateCommunityPostRequest {
+  title?: string
+  content?: string
+}
+
+export interface CreateCommunityCommentRequest {
+  content: string
+  parent_comment_id?: number
+}
+
+export interface CommunityComment {
+  comment_id: number
+  post_id: number
+  user_id: number
+  parent_comment_id: number | null
+  content: string
+  likes_count: number
+}
+
+// ── Psychology ─────────────────────────────────────────────────────────────
 
 export interface Category {
   categoryId: number
@@ -250,7 +419,8 @@ export interface PsychologyResourceWriteRequest {
   categoryId: number
   title: string
   description?: string
-  resourceType: 'VIDEO' | 'AUDIO' | 'PDF' | 'LINK' | 'TOOL'
+  /** Server allows any string, not a fixed enum */
+  resourceType: string
   externalUrl?: string
   tags?: JsonValue
   isPublished?: boolean
@@ -277,97 +447,7 @@ export interface LikeStatus {
   liked: boolean
 }
 
-export interface DepressionScale {
-  scaleId: number
-  scaleName: string
-  scaleDescription: string | null
-  minScore: number
-  maxScore: number
-}
-
-export interface DepressionAssessment {
-  assessmentId: number
-  userId: number
-  scaleId: number
-  assessmentDate: string
-  answers: JsonValue
-  totalScore: number
-  severityLevel: string
-  notes: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface DepressionAssessmentPage {
-  items: DepressionAssessment[]
-  total: number
-}
-
-export interface CreateDepressionAssessmentRequest {
-  scaleId: number
-  answers: JsonValue
-  notes?: string
-}
-
-export interface Diary {
-  id: number
-  userId: number
-  title: string
-  content: string
-  moodDescription: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface CreateDiaryRequest {
-  content: string
-  title?: string
-}
-
-export interface UpdateDiaryRequest {
-  title?: string
-  content?: string
-}
-
-export interface CommunityPost {
-  post_id: number
-  user_id: number
-  title: string | null
-  content: string
-  likes_count: number
-  comments_count: number
-}
-
-export interface CommunityPage<T> {
-  items: T[]
-  page: number
-  page_size: number
-  total: number
-}
-
-export interface CreateCommunityPostRequest {
-  title?: string
-  content: string
-}
-
-export interface UpdateCommunityPostRequest {
-  title?: string
-  content?: string
-}
-
-export interface CreateCommunityCommentRequest {
-  content: string
-  parent_comment_id?: number
-}
-
-export interface CommunityComment {
-  comment_id: number
-  post_id: number
-  user_id: number
-  parent_comment_id: number | null
-  content: string
-  likes_count: number
-}
+// ── Music ──────────────────────────────────────────────────────────────────
 
 export interface MusicTrack {
   musicId: number
@@ -420,6 +500,8 @@ export interface UpdateMusicTrackRequest {
   status?: number
 }
 
+// ── Object Storage ─────────────────────────────────────────────────────────
+
 export interface StoredObject {
   id: number
   bucket: string
@@ -429,6 +511,8 @@ export interface StoredObject {
   publicUrl: string
   createdAt: string
 }
+
+// ── Admin ──────────────────────────────────────────────────────────────────
 
 export interface AdminUser {
   id: number
@@ -459,23 +543,27 @@ export interface PaginatedAdminUsers {
   total: number
 }
 
-export interface AdminRiskDetection {
-  id: number
-  conversation_id: number | null
-  risk_level: string
-  polarity: string
-  intent: string
-  confidence: number
-  reason: string | null
-  is_processed: boolean
-  process_notes: string | null
+/**
+ * Admin-facing risk audit row from post_conversation_risk_audit.
+ * Replaces the old AdminRiskDetection model.
+ */
+export interface RiskAuditAdminDto {
+  audit_id: number
+  conversation_id: number
+  audit_scope: string
+  status: string
+  risk_level: string | null
+  confidence: number | null
+  detector_name: string | null
+  error_message: string | null
+  source_deleted: boolean
   created_at: string
 }
 
 export interface AdminRiskConversationDetail {
   conversation: Conversation
   messages: ConversationMessage[]
-  risk_detections: AdminRiskDetection[]
+  risk_audits: RiskAuditAdminDto[]
 }
 
 export interface PaginatedRiskConversations {

@@ -6,13 +6,17 @@ import {
 import type {
   AdminPatchUserRequest,
   AdminRiskConversationDetail,
-  AdminRiskDetection,
   AdminUser,
   Article,
   ArticleWriteRequest,
   AuthUser,
   Category,
   CategoryWriteRequest,
+  ChatHistoryResponse,
+  ChatMessageResponse,
+  ChatMemoryResponse,
+  ChatOpenResponse,
+  ChatPersonaResponse,
   CommunityComment,
   CommunityPage,
   CommunityPost,
@@ -28,22 +32,24 @@ import type {
   DepressionAssessmentPage,
   DepressionScale,
   Diary,
+  DisableMemoryResponse,
   Favorite,
   FavoriteStatus,
+  ForgetResponse,
   HealthResponse,
   KnowledgeReviewDetail,
   KnowledgeReviewPage,
   LikeStatus,
   LoginRequest,
   LoginResponse,
-  MessageRequest,
-  MessageResponse,
   MusicTrack,
   MusicTrackPage,
   Paginated,
   PaginatedAdminUsers,
   PaginatedRiskConversations,
   PatchMeRequest,
+  PersonaRebuildResponse,
+  PersonaResetResponse,
   PsychologyResource,
   PsychologyResourceWriteRequest,
   Qna,
@@ -51,11 +57,9 @@ import type {
   RefreshResponse,
   RegisterRequest,
   ReviewPublishRequest,
-  RiskDetectionPage,
-  SessionCreateRequest,
-  SessionCreateResponse,
-  SessionStatus,
+  RiskAuditAdminDto,
   StoredObject,
+  TranscriptClearResponse,
   UpdateCommunityPostRequest,
   UpdateDiaryRequest,
   UpdateMusicTrackRequest,
@@ -100,7 +104,7 @@ export class ServerRsClient {
   readonly http: HttpClient
   readonly auth: AuthApi
   readonly users: UserApi
-  readonly sessions: SessionApi
+  readonly chat: ChatApi
   readonly psychology: PsychologyApi
   readonly depression: DepressionApi
   readonly diaries: DiaryApi
@@ -113,7 +117,7 @@ export class ServerRsClient {
     this.http = new HttpClient(config)
     this.auth = new AuthApi(this.http)
     this.users = new UserApi(this.http)
-    this.sessions = new SessionApi(this.http)
+    this.chat = new ChatApi(this.http)
     this.psychology = new PsychologyApi(this.http)
     this.depression = new DepressionApi(this.http)
     this.diaries = new DiaryApi(this.http)
@@ -210,36 +214,67 @@ class UserApi {
   }
 }
 
-class SessionApi {
+/**
+ * Chat API — sessionless, per-user conversation.
+ * Replaces the old SessionApi.
+ */
+class ChatApi {
   constructor(private readonly http: HttpClient) {}
 
-  create(payload: SessionCreateRequest): Promise<SessionCreateResponse> {
-    return this.http.request('POST', '/api/v1/llm/sessions', { body: payload })
+  /** POST /api/v1/chat/open — start a new conversation */
+  open(
+    payload: Record<string, never> = {},
+  ): Promise<ChatOpenResponse> {
+    return this.http.request('POST', '/api/v1/chat/open', { body: payload })
   }
 
-  sendMessage(sessionId: string, payload: MessageRequest): Promise<MessageResponse> {
-    return this.http.request('POST', `/api/v1/llm/sessions/${segment(sessionId)}/messages`, {
-      body: payload,
-    })
+  /** POST /api/v1/chat/messages — send a message */
+  sendMessage(payload: {
+    text: string
+    emotion?: string
+    location?: Record<string, unknown>
+  }): Promise<ChatMessageResponse> {
+    return this.http.request('POST', '/api/v1/chat/messages', { body: payload })
   }
 
-  status(sessionId: string): Promise<SessionStatus> {
-    return this.http.request('GET', `/api/v1/llm/sessions/${segment(sessionId)}`)
+  /** GET /api/v1/chat/history — conversation history */
+  history(query?: { beforeId?: number; limit?: number }): Promise<ChatHistoryResponse> {
+    return this.http.request('GET', '/api/v1/chat/history', { query })
   }
 
-  conversations(userId: number): Promise<Conversation[]> {
-    return this.http.request('GET', `/api/v1/users/${userId}/conversations`)
+  /** GET /api/v1/chat/memories — list memories */
+  memories(query?: { type?: string; limit?: number }): Promise<ChatMemoryResponse> {
+    return this.http.request('GET', '/api/v1/chat/memories', { query })
   }
 
-  messages(userId: number, conversationId: number): Promise<ConversationMessage[]> {
-    return this.http.request(
-      'GET',
-      `/api/v1/users/${userId}/conversations/${conversationId}`,
-    )
+  /** GET /api/v1/chat/persona — persona status */
+  persona(): Promise<ChatPersonaResponse> {
+    return this.http.request('GET', '/api/v1/chat/persona')
   }
 
-  riskDetections(query: { page?: number; size?: number } = {}): Promise<RiskDetectionPage> {
-    return this.http.request('GET', '/api/v1/risk-detections', { query })
+  /** POST /api/v1/chat/memory/{id}/disable — disable a memory */
+  disableMemory(id: number): Promise<DisableMemoryResponse> {
+    return this.http.request('POST', `/api/v1/chat/memory/${id}/disable`)
+  }
+
+  /** POST /api/v1/chat/persona/reset — reset persona */
+  personaReset(): Promise<PersonaResetResponse> {
+    return this.http.request('POST', '/api/v1/chat/persona/reset')
+  }
+
+  /** POST /api/v1/chat/persona/rebuild — rebuild persona */
+  personaRebuild(): Promise<PersonaRebuildResponse> {
+    return this.http.request('POST', '/api/v1/chat/persona/rebuild')
+  }
+
+  /** POST /api/v1/chat/transcript/clear — clear transcript */
+  transcriptClear(): Promise<TranscriptClearResponse> {
+    return this.http.request('POST', '/api/v1/chat/transcript/clear')
+  }
+
+  /** POST /api/v1/chat/forget — forget everything */
+  forget(): Promise<ForgetResponse> {
+    return this.http.request('POST', '/api/v1/chat/forget')
   }
 }
 
@@ -287,19 +322,19 @@ class PsychologyApi {
 
   toggleFavorite(contentType: string, contentId: number): Promise<FavoriteStatus> {
     return this.http.request('POST', '/api/v1/psychology/favorites', {
-      body: { contentType, contentId },
+      body: { content_type: contentType, content_id: contentId },
     })
   }
 
   favoriteStatus(contentType: string, contentId: number): Promise<FavoriteStatus> {
     return this.http.request('GET', '/api/v1/psychology/favorites/check', {
-      query: { contentType, contentId },
+      query: { content_type: contentType, content_id: contentId },
     })
   }
 
   toggleLike(contentType: string, contentId: number): Promise<LikeStatus> {
     return this.http.request('POST', '/api/v1/psychology/likes', {
-      body: { contentType, contentId },
+      body: { content_type: contentType, content_id: contentId },
     })
   }
 }
@@ -500,9 +535,11 @@ class AdminApi {
     return this.http.request('GET', `/api/v1/admin/risk-conversations/${id}`)
   }
 
-  processRiskDetection(id: number, notes?: string): Promise<AdminRiskDetection> {
-    return this.http.request('POST', `/api/v1/admin/risk-detections/${id}/process`, {
-      body: { notes },
+  /** @deprecated This endpoint now always returns 404 in the new post-conversation audit model. */
+  processRiskDetection(_id: number, _notes?: string): Promise<RiskAuditAdminDto> {
+    // Server always returns 404; kept for type compatibility.
+    return this.http.request('POST', `/api/v1/admin/risk-detections/${_id}/process`, {
+      body: { notes: _notes },
     })
   }
 
@@ -510,7 +547,7 @@ class AdminApi {
     return this.http.request('POST', '/api/v1/admin/music', { body: payload })
   }
 
-  tracks(query: MusicListQuery & { status?: 0 | 1 } = {}): Promise<MusicTrackPage> {
+  tracks(query: MusicListQuery & { status?: number } = {}): Promise<MusicTrackPage> {
     return this.http.request('GET', '/api/v1/admin/music', { query })
   }
 
@@ -629,8 +666,4 @@ async function saveLogin(store: TokenStore | undefined, response: LoginResponse)
     accessToken: response.accessToken,
     refreshToken: response.refreshToken,
   })
-}
-
-function segment(value: string): string {
-  return encodeURIComponent(value)
 }

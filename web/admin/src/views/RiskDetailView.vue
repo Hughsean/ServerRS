@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { AdminRiskConversationDetail, AdminRiskDetection } from '@serverrs/sdk'
-import { ArrowLeft, CheckCircle2, ShieldAlert } from '@lucide/vue'
+import type { AdminRiskConversationDetail, RiskAuditAdminDto } from '@serverrs/sdk'
+import { ArrowLeft, ShieldAlert } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -11,9 +11,7 @@ const route = useRoute()
 const id = computed(() => Number(route.params.id))
 const detail = ref<AdminRiskConversationDetail | null>(null)
 const loading = ref(false)
-const processingId = ref<number | null>(null)
 const error = ref('')
-const notes = ref<Record<number, string>>({})
 
 async function load() {
   loading.value = true
@@ -24,18 +22,6 @@ async function load() {
     error.value = errorMessage(cause)
   } finally {
     loading.value = false
-  }
-}
-
-async function processDetection(item: AdminRiskDetection) {
-  processingId.value = item.id
-  try {
-    const updated = await api.admin.processRiskDetection(item.id, notes.value[item.id])
-    Object.assign(item, updated)
-  } catch (cause) {
-    error.value = errorMessage(cause)
-  } finally {
-    processingId.value = null
   }
 }
 
@@ -82,45 +68,28 @@ onMounted(load)
 
         <aside class="detections">
           <article
-            v-for="item in detail.risk_detections"
-            :key="item.id"
+            v-for="item in detail.risk_audits"
+            :key="item.audit_id"
             class="card detection-card"
           >
             <div class="detection-heading">
               <div class="stat-icon"><ShieldAlert :size="18" /></div>
               <div>
-                <span class="badge" :class="statusTone(item.risk_level)">{{ item.risk_level }}</span>
-                <strong>检测 #{{ item.id }}</strong>
+                <span class="badge" :class="statusTone(item.risk_level ?? 'none')">{{ item.risk_level || 'none' }}</span>
+                <strong>审计 #{{ item.audit_id }}</strong>
               </div>
             </div>
             <dl class="detail-list">
-              <div class="detail-row"><dt>意图</dt><dd>{{ item.intent }}</dd></div>
-              <div class="detail-row"><dt>情绪极性</dt><dd>{{ item.polarity }}</dd></div>
-              <div class="detail-row"><dt>置信度</dt><dd>{{ Math.round(item.confidence * 100) }}%</dd></div>
-              <div class="detail-row"><dt>检测原因</dt><dd>{{ item.reason || '-' }}</dd></div>
+              <div class="detail-row"><dt>检测范围</dt><dd>{{ item.audit_scope }}</dd></div>
+              <div class="detail-row"><dt>检测器</dt><dd>{{ item.detector_name || '-' }}</dd></div>
+              <div class="detail-row"><dt>状态</dt><dd>{{ item.status }}</dd></div>
+              <div class="detail-row"><dt>置信度</dt><dd>{{ item.confidence != null ? Math.round(item.confidence * 100) + '%' : '-' }}</dd></div>
+              <div class="detail-row"><dt>错误信息</dt><dd>{{ item.error_message || '-' }}</dd></div>
+              <div class="detail-row"><dt>来源已删除</dt><dd>{{ item.source_deleted ? '是' : '否' }}</dd></div>
               <div class="detail-row"><dt>检测时间</dt><dd>{{ formatDate(item.created_at) }}</dd></div>
             </dl>
-
-            <div v-if="item.is_processed" class="processed-box">
-              <CheckCircle2 :size="17" />
-              <div><strong>已处理</strong><p>{{ item.process_notes || '未填写处理说明' }}</p></div>
-            </div>
-            <div v-else class="process-form">
-              <textarea
-                v-model="notes[item.id]"
-                class="textarea"
-                placeholder="填写核查情况或处置说明"
-              ></textarea>
-              <button
-                class="button primary"
-                :disabled="processingId === item.id"
-                @click="processDetection(item)"
-              >
-                {{ processingId === item.id ? '提交中...' : '标记为已处理' }}
-              </button>
-            </div>
           </article>
-          <div v-if="!detail.risk_detections.length" class="card empty-state">暂无风险检测记录</div>
+          <div v-if="!detail.risk_audits.length" class="card empty-state">暂无风险审计记录</div>
         </aside>
       </section>
     </template>
