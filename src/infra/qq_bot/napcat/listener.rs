@@ -52,7 +52,7 @@ struct OneBotSender {
     role: Option<String>,
 }
 
-/// Raw OneBot group notice event (member join/leave).
+/// Raw OneBot group notice event (member join/leave, poke, etc.).
 #[derive(Debug, serde::Deserialize)]
 struct OneBotNoticeEvent {
     #[serde(default)]
@@ -68,6 +68,9 @@ struct OneBotNoticeEvent {
     #[allow(dead_code)]
     #[serde(default)]
     operator_id: Option<i64>,
+    /// Who was poked (for notify/poke events).
+    #[serde(default)]
+    target_id: Option<i64>,
     #[serde(default)]
     time: i64,
 }
@@ -78,7 +81,7 @@ pub trait GroupMessageHandler: Send + Sync {
     async fn handle_group_message(&self, msg: NormalizedMessage, raw_json: Value);
 }
 
-/// Event handler trait for group notice events (member join/leave).
+/// Event handler trait for group notice events (member join/leave, poke, etc.).
 #[async_trait::async_trait]
 pub trait GroupNoticeHandler: Send + Sync {
     async fn handle_group_increase(
@@ -93,6 +96,13 @@ pub trait GroupNoticeHandler: Send + Sync {
         group_id: i64,
         user_id: i64,
         sub_type: &str,
+    ) -> Result<(), QqBotError>;
+
+    /// Someone poked the bot in a group.
+    async fn handle_group_poke(
+        &self,
+        group_id: i64,
+        user_id: i64,
     ) -> Result<(), QqBotError>;
 }
 
@@ -208,7 +218,7 @@ impl NapCatListener {
                                 );
                             }
                         }
-                    }
+	                }
                     "group_decrease" => {
                         if let Some(ref handler) = self.notice_handler {
                             if let Err(e) = handler
@@ -226,6 +236,24 @@ impl NapCatListener {
                                     error = %e,
                                     "handle_group_decrease failed"
                                 );
+                            }
+                        }
+                    }
+                    "notify" if event.sub_type == "poke" => {
+                        // Only respond if the bot itself was poked
+                        if event.target_id == Some(self.self_qq_id) {
+                            if let Some(ref handler) = self.notice_handler {
+                                if let Err(e) = handler
+                                    .handle_group_poke(event.group_id, event.user_id)
+                                    .await
+                                {
+                                    warn!(
+                                        group_id = event.group_id,
+                                        user_id = event.user_id,
+                                        error = %e,
+                                        "handle_group_poke failed"
+                                    );
+                                }
                             }
                         }
                     }
