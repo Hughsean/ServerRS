@@ -1,4 +1,4 @@
-//! Status and stage constants for web ingestion entities.
+//! 网页知识摄取实体的状态和阶段常量。
 //!
 //! All status/stage values are defined here as string constants so the
 //! application layer does not scatter magic strings.
@@ -120,7 +120,7 @@ pub mod audit_action {
 
 // ── Known terminal (final) statuses ──────────────────────────────────────────
 
-/// Ingestion run statuses that are terminal (no further transitions allowed).
+/// 终态的摄取运行状态 (no further transitions allowed).
 pub fn is_terminal_run_status(s: &str) -> bool {
     matches!(
         s,
@@ -133,7 +133,7 @@ pub fn is_terminal_run_status(s: &str) -> bool {
     )
 }
 
-/// Publish record statuses that are terminal.
+/// 终态的发布记录状态。
 pub fn is_terminal_publish_status(s: &str) -> bool {
     matches!(
         s,

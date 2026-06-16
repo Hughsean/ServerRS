@@ -5,13 +5,13 @@ use serde::Serialize;
 
 use crate::shared::error::AppError;
 
-/// Represents the status of a community post or comment.
+/// 表示社区帖子或评论的状态。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArticleStatus {
-    /// Visible to all users.
+    /// 对所有用户可见。
     Published,
-    /// Hidden / soft-deleted.
+    /// 隐藏 / 软删除。
     Hidden,
 }
 
@@ -95,7 +95,7 @@ impl NewPost {
     }
 }
 
-/// Partial update payload for a post (all fields optional).
+/// 帖子的部分更新负载（所有字段可选）。
 #[derive(Debug, Clone)]
 pub struct PostUpdate {
     pub title: Option<Option<String>>,

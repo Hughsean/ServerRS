@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Trigger type for an agent turn.
+/// 代理轮次的触发类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerType {
@@ -12,7 +12,7 @@ pub enum TriggerType {
     Manual,
 }
 
-/// Status of an agent turn.
+/// 代理轮次的状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
@@ -22,15 +22,15 @@ pub enum TurnStatus {
     Cancelled,
 }
 
-/// Record of a single Agent invocation triggered by a group message.
+/// 由群消息触发的单次代理调用记录。
 #[derive(Debug, Clone)]
 pub struct AgentTurn {
     pub turn_id: Option<u64>,
     pub bot_account_id: u64,
     pub qq_group_id: i64,
-    /// ID of the inbound message that triggered the agent.
+    /// 触发代理的入站消息 ID。
     pub trigger_message_id: u64,
-    /// ID of the outbound message that was sent as response (if any).
+    /// 作为回复发送的出站消息 ID（如果有）。
     pub response_message_id: Option<u64>,
     pub trigger_type: TriggerType,
     pub qq_user_id: Option<i64>,

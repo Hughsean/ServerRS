@@ -37,8 +37,8 @@ pub struct TaskWorker {
     handlers: Vec<Arc<dyn TaskHandler>>,
 }
 
-/// Creates a channel pair. The worker starts with **no handlers** —
-/// use `TaskWorker::with_handler` to inject `LoggingHandler` or custom handlers.
+/// 创建通道对。Worker 启动时**没有处理器** —
+/// 使用 `TaskWorker::with_handler` 注入 `LoggingHandler` 或自定义处理器。
 pub fn new_task_channel(_buffer: usize) -> (ResilientTaskPublisher, TaskWorker) {
     let (tx, rx) = mpsc::unbounded_channel();
     let worker = TaskWorker {

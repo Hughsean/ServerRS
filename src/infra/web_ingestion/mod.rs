@@ -1,7 +1,7 @@
-//! Infrastructure implementations for the web ingestion pipeline.
+//! 网页知识摄取流水线的基础设施实现。
 //!
-//! Contains:
-//! - SeaORM repositories (all 10 tables)
+//! 包含：
+//! - SeaORM 仓库（全部 10 张表）
 //! - HTTP fetcher with SSRF protection
 //! - (LLM/embedding providers live in their own infrastructure modules)
 

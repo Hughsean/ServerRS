@@ -2,55 +2,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::qq_bot::bot_state::Mood;
 
-/// A structured reply that simulates human-like multi-segment conversation.
+/// 模拟人类多段对话的结构化回复。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotReply {
-    /// Ordered list of reply segments.
+    /// 有序的回复段列表。
     pub segments: Vec<ReplySegment>,
-    /// Timing hints for delivering segments.
+    /// 段的发送时序提示。
     #[serde(default)]
     pub timing_hint: TimingHint,
-    /// Optional emotion change hint for the bot to update its emotional state.
-    /// The LLM can include this to tell the bot how it feels after saying the reply.
+    /// 可选的机器人情绪变化提示。
+    /// LLM 可以包含此字段，告诉机器人发出回复后的感受。
     #[serde(default)]
     pub emotion_change: Option<EmotionChange>,
-    /// Optional relationship hints extracted from the LLM's reply.
-    /// The LLM can suggest how to address a specific user.
+    /// 从 LLM 回复中提取的可选关系提示。
+    /// LLM 可以建议如何称呼特定用户。
     #[serde(default)]
     pub relationship_hints: Option<RelationshipHints>,
 }
 
-/// Relationship hints that the LLM can include in its reply.
-/// Used to automatically update nickname preferences and known interests.
+/// LLM 可以在回复中包含的关系提示。
+/// 用于自动更新昵称偏好和已知兴趣。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipHints {
-    /// The QQ user this hint applies to.
+    /// 此提示适用的 QQ 用户。
     pub target_user_id: i64,
-    /// Preferred nickname to call this user.
+    /// 称呼此用户的首选昵称。
     #[serde(default)]
     pub nickname_preference: Option<String>,
-    /// Known interests the LLM inferred from the conversation.
+    /// LLM 从对话中推断出的已知兴趣。
     #[serde(default)]
     pub known_interests: Vec<String>,
-    /// Topics to avoid with this user.
+    /// 与此用户应避免的话题。
     #[serde(default)]
     pub known_avoid_topics: Vec<String>,
 }
 
-/// Hint for updating the bot's emotional state after a reply.
-/// The LLM fills this in to express how the reply reflects its mood.
+/// 回复后更新机器人情绪状态的提示。
+/// LLM 填充此字段以表达回复如何反映其心情。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmotionChange {
-    /// New mood.
+    /// 新情绪。
     pub mood: Mood,
-    /// Intensity of the mood (0.0~1.0).
+    /// 情绪强度 (0.0~1.0)。
     pub intensity: f32,
-    /// Why the emotion changed.
+    /// 情绪变化的原因。
     #[serde(default)]
     pub reason: Option<String>,
 }
 
-/// A single segment of the reply.
+/// 回复的单个段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplySegment {

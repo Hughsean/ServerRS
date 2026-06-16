@@ -81,14 +81,14 @@ impl SegmentDispatcher {
             let result = match segment {
                 // ── Poke: direct API call, no message id ────────────────
                 ReplySegment::Poke { user_id, .. } => {
-                    info!(group_id, target_user = user_id, "sending group poke");
+                    info!(group_id, target_user = user_id, "正在发送群戳一戳");
                     match api.group_poke(group_id, *user_id).await {
                         Ok(_) => {
-                            info!(group_id, "poke sent");
+                            info!(group_id, "戳一戳已发送");
                             Ok(None)
                         }
                         Err(e) => {
-                            error!(group_id, error = %e, "failed to send poke");
+                            error!(group_id, error = %e, "发送戳一戳失败");
                             Err(e)
                         }
                     }
@@ -99,17 +99,17 @@ impl SegmentDispatcher {
                         Ok(cq_string) => {
                             match api.send_group_msg(group_id, &cq_string).await {
                                 Ok(data) => {
-                                    info!(group_id, segment = i, "voice record sent");
+                                    info!(group_id, segment = i, "语音消息已发送");
                                     Ok(data.message_id)
                                 }
                                 Err(e) => {
-                                    error!(group_id, error = %e, "failed to send voice record");
+                                    error!(group_id, error = %e, "发送语音消息失败");
                                     Err(e)
                                 }
                             }
                         }
                         Err(e) => {
-                            error!(group_id, error = %e, "failed to synthesise TTS for record");
+                            error!(group_id, error = %e, "TTS 语音合成失败");
                             Err(e)
                         }
                     }
@@ -119,11 +119,11 @@ impl SegmentDispatcher {
                     let message_str = segment_to_onebot_string(segment);
                     match api.send_group_msg(group_id, &message_str).await {
                         Ok(data) => {
-                            info!(group_id, segment = i, "segment sent via NapCat API");
+                            info!(group_id, segment = i, "消息段已通过 NapCat API 发送");
                             Ok(data.message_id)
                         }
                         Err(e) => {
-                            error!(group_id, segment = i, error = %e, "failed to send segment via NapCat API");
+                            error!(group_id, segment = i, error = %e, "通过 NapCat API 发送消息段失败");
                             Err(e)
                         }
                     }
@@ -146,7 +146,7 @@ impl SegmentDispatcher {
                             remaining,
                             related_turn_id,
                         ).await {
-                            warn!(error = %inner, "failed to enqueue remaining segment");
+                            warn!(error = %inner, "将剩余消息段加入队列失败");
                         }
                     }
                     return Err(e);

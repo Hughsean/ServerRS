@@ -1,4 +1,4 @@
-//! Repository traits for the web ingestion domain.
+//! 网页知识摄取领域的仓库接口。
 //!
 //! Each trait corresponds to one aggregate / table. They live in the domain
 //! layer and are implemented by SeaORM repositories in the infrastructure layer.
@@ -356,7 +356,7 @@ pub trait PublishRecordRepository: Send + Sync {
         &self,
         record_id: u64,
     ) -> Result<Option<KnowledgePublishRecord>, WebIngestionError>;
-    /// Acquire a transactional lock for publish/rollback on a page.
+    /// 为页面发布/回滚获取事务锁。
     async fn lock_page_for_publish(
         &self,
         source_id: u64,

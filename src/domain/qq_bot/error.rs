@@ -2,22 +2,22 @@ use std::fmt;
 
 use crate::shared::error::AppError;
 
-/// Domain-specific error type for QQ Bot operations.
+/// QQ 机器人操作的领域特定错误类型。
 #[derive(Debug)]
 pub enum QqBotError {
-    /// NapCat connection or communication failure.
+    /// NapCat 连接或通信失败。
     Connection(String),
-    /// NapCat API returned an error code.
+    /// NapCat API 返回了错误码。
     Api {
         action: String,
         code: i32,
         message: String,
     },
-    /// Message parsing / normalization failed.
+    /// 消息解析/标准化失败。
     MessageProcessing(String),
-    /// Requested entity was not found.
+    /// 请求的实体未找到。
     NotFound(String),
-    /// Internal / unexpected error.
+    /// 内部/意外错误。
     Internal(String),
 }
 

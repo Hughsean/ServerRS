@@ -49,13 +49,13 @@ pub trait GroupMemberRepository: Send + Sync {
 
 #[async_trait]
 pub trait GroupMessageRepository: Send + Sync {
-    /// Insert a normalized message. Returns the internal id.
-    /// Idempotent: if `platform_message_id` + `bot_account_id` already exists, returns the existing record.
+    /// 插入标准化后的消息。返回内部 ID。
+    /// 幂等性：如果 `platform_message_id` + `bot_account_id` 已存在，返回现有记录。
     async fn insert(&self, msg: &NormalizedMessage) -> Result<NormalizedMessage, crate::shared::error::AppError>;
     async fn find_by_platform_id(&self, bot_account_id: u64, platform_message_id: &str) -> Result<Option<NormalizedMessage>, crate::shared::error::AppError>;
-    /// Get recent messages for a group (for context building).
+    /// 获取群组的最近消息（用于上下文构建）。
     async fn recent_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<NormalizedMessage>, crate::shared::error::AppError>;
-    /// Update processing status.
+    /// 更新处理状态。
     async fn update_status(&self, id: u64, status: super::message::ProcessStatus, error: Option<&str>) -> Result<(), crate::shared::error::AppError>;
 }
 
@@ -75,14 +75,14 @@ pub trait AgentTurnRepository: Send + Sync {
 #[async_trait]
 pub trait OutboxRepository: Send + Sync {
     async fn insert(&self, entry: &OutboxEntry) -> Result<OutboxEntry, crate::shared::error::AppError>;
-    /// Fetch the next batch of entries that are due for sending.
+    /// 获取下一批等待发送的条目。
     async fn fetch_due(&self, limit: u32) -> Result<Vec<OutboxEntry>, crate::shared::error::AppError>;
     async fn mark_sent(&self, outbox_id: u64, platform_message_id: &str) -> Result<(), crate::shared::error::AppError>;
     async fn mark_failed(&self, outbox_id: u64, error: &str) -> Result<(), crate::shared::error::AppError>;
     async fn mark_cancelled(&self, outbox_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 
-/// Outbox entry for reliable message sending.
+/// 用于可靠消息发送的发件箱条目。
 #[derive(Debug, Clone)]
 pub struct OutboxEntry {
     pub outbox_id: Option<u64>,
@@ -91,7 +91,7 @@ pub struct OutboxEntry {
     pub qq_user_id: Option<i64>,
     /// "group" | "private"
     pub target_type: String,
-    /// JSON payload to send
+    /// 要发送的 JSON 负载
     pub payload: serde_json::Value,
     pub related_turn_id: Option<u64>,
     pub status: OutboxStatus,
@@ -115,13 +115,13 @@ pub enum OutboxStatus {
 
 #[async_trait]
 pub trait GroupSummaryRepository: Send + Sync {
-    /// Find the active rolling summary for a group.
+    /// 查找群组的活跃滚动摘要。
     async fn find_active_rolling(&self, qq_group_id: i64) -> Result<Option<GroupSummary>, crate::shared::error::AppError>;
     async fn insert(&self, summary: &GroupSummary) -> Result<GroupSummary, crate::shared::error::AppError>;
     async fn disable(&self, summary_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 
-/// Group summary record.
+/// 群组摘要记录。
 #[derive(Debug, Clone)]
 pub struct GroupSummary {
     pub summary_id: Option<u64>,
@@ -140,13 +140,13 @@ pub struct GroupSummary {
 
 #[async_trait]
 pub trait GroupMemoryRepository: Send + Sync {
-    /// Find active memories for a group, ordered by salience.
+    /// 查找群组的活跃记忆，按显著性排序。
     async fn find_active_by_group(&self, qq_group_id: i64, limit: u32) -> Result<Vec<GroupMemory>, crate::shared::error::AppError>;
     async fn upsert(&self, memory: &GroupMemory) -> Result<GroupMemory, crate::shared::error::AppError>;
     async fn disable(&self, group_memory_id: u64) -> Result<(), crate::shared::error::AppError>;
 }
 
-/// Group-level memory.
+/// 群组级别记忆。
 #[derive(Debug, Clone)]
 pub struct GroupMemory {
     pub group_memory_id: Option<u64>,

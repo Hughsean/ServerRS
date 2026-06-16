@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Core types ─────────────────────────────────────────────────────────────────
 
-/// Chat message — used by both legacy LlmClient and new LlmProvider.
+/// 聊天消息 — 旧版 LlmClient 和新版 LlmProvider 均使用。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,

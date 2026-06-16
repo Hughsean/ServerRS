@@ -9,12 +9,12 @@ use crate::domain::risk::detection_types::RiskLevel;
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
 
-/// Configuration for the alert handler.
+/// 告警处理的配置。
 #[derive(Debug, Clone)]
 pub struct AlertConfig {
-    /// Webhook URL for alert delivery (e.g. Slack, DingTalk, Feishu).
+    /// 告警投递的 Webhook URL（如 Slack、钉钉、飞书）。
     pub webhook_url: Option<String>,
-    /// Minimum interval between alerts for the same user (seconds), to avoid spam.
+    /// 同一用户的最短告警间隔（秒），避免重复推送。
     pub min_interval_secs: u64,
 }
 
@@ -27,15 +27,15 @@ impl Default for AlertConfig {
     }
 }
 
-/// Sends alerts for high-risk events via webhook and structured logging.
+/// 通过 Webhook 和结构化日志发送高风险事件告警。
 ///
-/// Monitored events:
-/// - `RiskDetected` with Crisis / High level → immediate alert
+/// 监控的事件：
+/// - `RiskDetected` 危机/高风险级别 → 立即告警
 /// - `LoginAudit` failures (if frequency threshold crossed → delegated to RateLimitHandler)
 pub struct AlertHandler {
     config: AlertConfig,
     client: reqwest::Client,
-    /// Tracks last alert time per (event_type, user_id) to suppress duplicates.
+    /// 跟踪每个 (事件类型, 用户ID) 的最后告警时间，用于去重。
     last_alert: RwLock<HashMap<String, Instant>>,
 }
 
@@ -48,7 +48,7 @@ impl AlertHandler {
         }
     }
 
-    /// Check whether an alert for the given key should be suppressed.
+    /// 检查给定 key 的告警是否应被抑制。
     async fn should_throttle(&self, key: &str) -> bool {
         let map = self.last_alert.read().await;
         if let Some(last) = map.get(key) {
@@ -59,7 +59,7 @@ impl AlertHandler {
         false
     }
 
-    /// Record that an alert was just sent.
+    /// 记录刚刚发送的告警。
     async fn record_alert(&self, key: String) {
         self.last_alert.write().await.insert(key, Instant::now());
     }
@@ -85,18 +85,18 @@ impl AlertHandler {
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                info!("alert delivered: {title}");
+                info!("告警已投递: {title}");
             }
             Ok(resp) => {
-                warn!(status = %resp.status(), "webhook rejected: {title}");
+                warn!(status = %resp.status(), "Webhook 拒绝: {title}");
             }
             Err(e) => {
-                warn!(error = %e, "webhook failed: {title}");
+                warn!(error = %e, "Webhook 失败: {title}");
             }
         }
     }
 
-    /// Clean up expired throttle records (call periodically).
+    /// 清理过期的节流记录（定期调用）。
     pub async fn cleanup(&self) {
         let threshold = Duration::from_secs(self.config.min_interval_secs);
         let mut map = self.last_alert.write().await;
@@ -104,7 +104,7 @@ impl AlertHandler {
     }
 }
 
-/// Human-readable label for a RiskLevel.
+/// 人类可读的风险等级标签。
 fn risk_level_label(level: RiskLevel) -> &'static str {
     match level {
         RiskLevel::Crisis => "Crisis",
@@ -150,7 +150,7 @@ impl TaskHandler for AlertHandler {
                     t.conversation_id
                 );
 
-                warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "ALERT: {title}");
+                warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "告警: {title}");
                 self.send_webhook(&title, &body).await;
             }
 

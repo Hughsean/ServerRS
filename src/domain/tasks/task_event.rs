@@ -92,7 +92,7 @@ pub struct RiskDetectedTask {
 
 // ── Conversation turn lifecycle payloads ──
 
-/// Published after a chat turn completes: user message + assistant message both persisted,
+/// 在聊天轮次完成后发布: user message + assistant message both persisted,
 /// HTTP/SSE connection closed, no further effect on current reply.
 #[derive(Debug, Clone)]
 pub struct TurnClosedEvent {

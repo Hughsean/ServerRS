@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::domain::qq_bot::AttentionState;
 
-/// In-memory attention store for the QQ bot.
+/// QQ 机器人的内存注意力存储。
 /// Manages attention state across groups with atomic operations.
 pub struct InMemoryAttentionStore {
     state: Arc<RwLock<AttentionState>>,
@@ -40,7 +40,7 @@ impl InMemoryAttentionStore {
                 *state = AttentionState::Engaging(group_id);
                 self.engaged_group_id.store(group_id, Ordering::SeqCst);
                 self.last_activity_ms.store(now_ms(), Ordering::SeqCst);
-                info!(group_id, "attention: engaging");
+                info!(group_id, "注意力：正在互动");
                 true
             }
             AttentionState::Engaging(gid) | AttentionState::Engaged(gid) if gid == group_id => {
@@ -76,7 +76,7 @@ impl InMemoryAttentionStore {
         let mut state = self.state.write().await;
         if *state == AttentionState::Engaging(group_id) {
             *state = AttentionState::Engaged(group_id);
-            info!(group_id, "attention: engaged");
+            info!(group_id, "注意力：已投入");
         }
     }
 
@@ -87,7 +87,7 @@ impl InMemoryAttentionStore {
         let until = now_ms() + self.cooldown_duration_ms;
         *state = AttentionState::Cooldown(group_id, until as u64);
         self.cooldown_until_ms.store(until, Ordering::SeqCst);
-        info!(group_id, "attention: cooldown until {until}");
+        info!(group_id, "注意力：冷却到 {until}");
     }
 
     /// Get current attention state (read-only).

@@ -247,7 +247,7 @@ static PH_CRISES_SELF: &[&str] = &[
     "重开",
     "人生重开",
     "寻短见",
-    // English crisis self-harm phrases
+    // 英文危机自残短语
     "kill myself",
     "suicide",
     "end my life",
@@ -263,7 +263,7 @@ static PH_CRISES_SELF: &[&str] = &[
     "overdose",
     "hang myself",
     "jump off",
-    // Pinyin / mixed expressions
+    // 拼音 / 混合表达
     "zi sha",
     "zisha",
     "qing sheng",
@@ -324,7 +324,7 @@ static PH_HIGH: &[&str] = &[
     "彻夜难眠",
     "精神恍惚",
     "精神崩溃",
-    // English high risk
+    // 英文高风险
     "hopeless",
     "no hope",
     "can't go on",
@@ -628,8 +628,8 @@ mod tests {
 
     #[test]
     fn crisis_response_does_not_contain_us_hotlines() {
-        // We test the crisis response via the agent runtime
-        // but we can at least verify the keywords are not in the detection
+        // 危机响应通过 agent 运行时进行测试
+        // 但至少可以验证关键词不在检测结果中
         let det = RuleBasedRiskDetector::new();
         let result = det.evaluate("I want to kill myself");
         let evidence_str = result.evidence.join(" ");

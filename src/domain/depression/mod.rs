@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::shared::error::AppError;
 
-/// Matches depression_scales entity: scale_id (u16), scale_name, min_score, max_score.
-/// created_at/updated_at are Option in the real DB.
+/// 匹配 depression_scales 实体：scale_id (u16), scale_name, min_score, max_score.
+/// created_at/updated_at 在真实数据库中为 Option。
 /// There is no is_active column in the current database.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepressionScale {
@@ -20,8 +20,8 @@ pub struct DepressionScale {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-/// Matches depression_assessments entity: assessment_date is Date, total_score is i16.
-/// There is NO severity_level column — it is computed in the service layer and returned
+/// 匹配 depression_assessments 实体：assessment_date 是 Date 类型, total_score is i16.
+/// 当前数据库中没有 severity_level 列 — it is computed in the service layer and returned
 /// only via the response DTO.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepressionAssessment {

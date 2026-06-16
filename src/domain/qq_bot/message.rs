@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Direction of a group message.
+/// 群消息的方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageDirection {
@@ -8,7 +8,7 @@ pub enum MessageDirection {
     Outbound,
 }
 
-/// Processing status of a message.
+/// 消息的处理状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessStatus {
@@ -18,7 +18,7 @@ pub enum ProcessStatus {
     Failed,
 }
 
-/// A single segment inside a QQ message (e.g. text, image, face).
+/// QQ 消息中的单个段（如文本、图片、表情）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageSegment {
@@ -33,31 +33,31 @@ pub enum MessageSegment {
     Unknown { raw: String },
 }
 
-/// Normalized group message, ready for LLM consumption.
+/// 标准化后的群消息，可供 LLM 使用。
 #[derive(Debug, Clone)]
 pub struct NormalizedMessage {
-    /// Internal DB id (populated after persistence).
+    /// 内部数据库 ID（持久化后填充）。
     pub id: Option<u64>,
-    /// Which bot account received this.
+    /// 哪个机器人账号接收了此消息。
     pub bot_account_id: u64,
-    /// QQ group id.
+    /// QQ 群号。
     pub qq_group_id: i64,
-    /// Sender QQ (may be None for outbound).
+    /// 发送者 QQ（出站消息可能为 None）。
     pub qq_user_id: Option<i64>,
-    /// Platform message id (used for idempotency).
+    /// 平台消息 ID（用于幂等性）。
     pub platform_message_id: String,
-    /// inbound | outbound.
+    /// 入站 | 出站。
     pub direction: MessageDirection,
-    /// Raw original text (from CQ code or plain text).
+    /// 原始文本（来自 CQ 码或纯文本）。
     pub raw_text: String,
-    /// Cleaned text, with CQ codes removed and @bot stripped.
+    /// 清理后的文本，去除了 CQ 码和 @bot。
     pub normalized_text: String,
-    /// Parsed message segments.
+    /// 解析后的消息段。
     pub segments: Vec<MessageSegment>,
-    /// Whether the bot was @-mentioned.
+    /// 机器人是否被 @。
     pub at_bot: bool,
-    /// Recognized command (e.g. "bind", "help"), if any.
+    /// 识别的命令（如 "bind"、"help"），如果有。
     pub command_name: Option<String>,
-    /// Unix timestamp of the message.
+    /// 消息的 Unix 时间戳。
     pub sent_at: i64,
 }

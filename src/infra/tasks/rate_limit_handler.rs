@@ -11,14 +11,14 @@ use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::user::user::UserStatus;
 use crate::domain::user::user_repository::UserRepository;
 
-/// Configuration for the rate-limit / brute-force protection handler.
+/// 速率限制/暴力破解防护处理的配置。
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
-    /// Maximum failed login attempts before triggering lock.
+    /// 触发锁定前的最大失败登录次数。
     pub max_failures: usize,
-    /// Time window for counting failures (seconds).
+    /// 计数失败次数的时间窗口（秒）。
     pub window_secs: u64,
-    /// How long to lock the account (seconds). 0 = no auto-unlock.
+    /// 锁定账号的持续时间（秒）。0 表示不自动解锁。
     pub lock_duration_secs: u64,
 }
 
@@ -32,7 +32,7 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// Tracks per-account login failures and locks accounts when thresholds are exceeded.
+/// 跟踪每个账号的登录失败次数，并在超过阈值时锁定账号。
 ///
 /// Uses in-memory state. On lock, updates the user's status via `UserRepository`.
 pub struct RateLimitHandler {
@@ -54,7 +54,7 @@ impl RateLimitHandler {
         }
     }
 
-    /// Check if an account is currently locked.
+    /// 检查账号当前是否被锁定。
     pub async fn is_locked(&self, username: &str) -> bool {
         let locked = self.locked.read().await;
         if let Some(until) = locked.get(username) {
@@ -65,12 +65,12 @@ impl RateLimitHandler {
         false
     }
 
-    /// Manually unlock an account.
+    /// 手动解锁账号。
     pub async fn unlock(&self, username: &str) {
         self.locked.write().await.remove(username);
     }
 
-    /// Clean up expired entries (call periodically).
+    /// 清理过期的条目（定期调用）。
     pub async fn cleanup(&self) {
         let now = Instant::now();
         {
@@ -121,7 +121,7 @@ impl TaskHandler for RateLimitHandler {
                     username = %t.username,
                     failures = self.config.max_failures,
                     window_secs = self.config.window_secs,
-                    "rate limit exceeded: locking account"
+                    "超出速率限制：正在锁定账号"
                 );
 
                 {
@@ -154,7 +154,7 @@ impl TaskHandler for RateLimitHandler {
                             },
                         )
                         .await;
-                    warn!(user_id = user.id, username = %t.username, "account locked due to rate limit");
+                    warn!(user_id = user.id, username = %t.username, "账号因速率限制已被锁定");
                 }
             }
 

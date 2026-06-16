@@ -21,7 +21,7 @@ pub struct NewContentLike {
 
 #[async_trait]
 pub trait ContentLikeRepository: Send + Sync {
-    /// Toggle a like for the given user and content.
+    /// 切换给定用户和内容的点赞状态。
     /// Returns `true` if the content is now liked, `false` if it has been unliked.
     async fn toggle(
         &self,
@@ -30,7 +30,7 @@ pub trait ContentLikeRepository: Send + Sync {
         content_id: u64,
     ) -> Result<bool, AppError>;
 
-    /// Check whether the given user has liked the given content.
+    /// 检查给定用户是否已点赞给定内容。
     async fn is_liked(
         &self,
         user_id: u64,
@@ -38,10 +38,10 @@ pub trait ContentLikeRepository: Send + Sync {
         content_id: u64,
     ) -> Result<bool, AppError>;
 
-    /// Return the total number of likes for the given content.
+    /// 返回给定内容的点赞总数。
     async fn count_by_content(&self, content_type: &str, content_id: u64) -> Result<u64, AppError>;
 
-    /// Delete a specific like record.
+    /// 删除特定的点赞记录。
     /// Returns `true` if a record was actually deleted, `false` if none existed.
     async fn delete(
         &self,

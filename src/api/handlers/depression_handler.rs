@@ -56,7 +56,7 @@ pub struct AssessmentDto {
     pub assessment_date: String,
     pub answers: serde_json::Value,
     pub total_score: i16,
-    /// Computed field — not persisted in the database.
+    /// 计算字段 — 不在数据库中持久化。
     pub severity_level: String,
     pub notes: Option<String>,
     pub created_at: String,

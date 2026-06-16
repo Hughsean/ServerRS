@@ -6,21 +6,21 @@ use serde_json::Value;
 
 // ── Agent event ──
 
-/// A structured log entry recording an agent's internal action.
+/// 记录代理内部操作的结构化日志条目。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentEvent {
     pub event_id: u64,
     pub user_id: u64,
     pub conversation_id: Option<u64>,
     pub trace_id: Option<String>,
-    /// One of: plan, tool_call, tool_result, rag_retrieval, memory_write, safety_block.
+    /// 取值之一：plan, tool_call, tool_result, rag_retrieval, memory_write, safety_block。
     pub event_type: String,
     pub tool_name: Option<String>,
     pub payload: Value,
     pub created_at: DateTime<Utc>,
 }
 
-/// Input used when persisting a new agent event (without a pre-assigned id or timestamp).
+/// 持久化新代理事件时使用的输入（没有预分配的 id 或时间戳）。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NewAgentEvent {
     pub user_id: u64,
@@ -32,7 +32,7 @@ pub struct NewAgentEvent {
 
 // ── Agent context ──
 
-/// All contextual information the agent needs to process a single turn.
+/// 代理处理单轮所需的所有上下文信息。
 #[derive(Debug, Clone)]
 pub struct AgentContext {
     pub user_id: u64,
@@ -46,17 +46,17 @@ pub struct AgentContext {
     pub location: Option<Value>,
 }
 
-/// Description of a tool as presented to the agent (and to the LLM).
+/// 呈现给代理（和 LLM）的工具描述。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
-    /// JSON Schema for the tool's input parameters.
+    /// 工具输入参数的 JSON Schema。
     pub parameters: Value,
 }
 
 impl ToolDefinition {
-    /// Build a definition from an `LlmTool` implementor.
+    /// 从 `LlmTool` 实现者构建定义。
     pub fn from_tool(tool: &dyn LlmTool) -> Self {
         let def = tool.tool_definition();
         Self {
@@ -77,7 +77,7 @@ impl ToolDefinition {
 
 // ── Agent action ──
 
-/// The decision an agent produces after processing a turn.
+/// 代理处理完一轮后产生的决策。
 #[derive(Debug, Clone)]
 pub enum AgentAction {
     /// Produce a final textual response to the user.
@@ -92,7 +92,7 @@ pub enum AgentAction {
 
 // ── Agent policy ──
 
-/// The current policy state governing agent behaviour.
+/// 控制代理行为的当前策略状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentPolicy {
     /// Normal operation — agent executes freely.
@@ -107,9 +107,9 @@ pub enum AgentPolicy {
 
 // ── Repository ──
 
-/// Port for persisting agent events.
+/// 持久化代理事件的端口。
 #[async_trait]
 pub trait AgentEventRepository: Send + Sync {
-    /// Persist a new agent event and return the fully populated record.
+    /// 持久化新代理事件并返回完整填充的记录。
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent;
 }

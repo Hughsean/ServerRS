@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::error::AppError;
 
-/// A record tracking the indexing status of an object in the vector store.
+/// 跟踪对象在向量存储中索引状态的记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexRecord {
     pub record_id: u64,
@@ -41,7 +41,7 @@ pub struct NewVectorIndexRecord {
     pub index_status: String,
 }
 
-/// An async job for index management (upsert, delete, rebuild).
+/// 用于索引管理（更新、删除、重建）的异步任务。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexJob {
     pub job_id: u64,
@@ -67,7 +67,7 @@ pub struct NewVectorIndexJob {
     pub priority: i32,
 }
 
-/// Repository for vector index metadata and job queue.
+/// 向量索引元数据和任务队列的仓库。
 #[async_trait]
 pub trait VectorIndexRepository: Send + Sync {
     async fn upsert_record(

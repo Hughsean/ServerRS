@@ -1,11 +1,11 @@
-//! Web ingestion error types.
+//! 网页知识摄取错误类型。
 
 use std::fmt;
 
-/// Errors specific to the web ingestion pipeline.
+/// 网页知识摄取流水线特有的错误。
 #[derive(Debug)]
 pub enum WebIngestionError {
-    /// SSRF check failed for the given URL.
+    /// 给定 URL 的 SSRF 检查失败。
     SsrfRejected { url: String, reason: String },
     /// HTTP fetch failed.
     FetchFailed { url: String, reason: String },

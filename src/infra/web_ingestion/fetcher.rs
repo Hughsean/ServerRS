@@ -1,4 +1,4 @@
-//! SSRF-safe HTTP fetcher for web ingestion.
+//! 用于网页抓取的防 SSRF HTTP 抓取器。
 //!
 //! Guards: only http/https, blocks private/localhost/link-local/multicast IPs,
 //! blocks metadata IPs (169.254.169.254), Content-Type allowlist, body size limit,
@@ -78,7 +78,7 @@ impl WebFetcher {
         })
     }
 
-    /// Fetch a URL with SSRF protection and optional domain allowlist.
+    /// 使用 SSRF 保护和可选的域名白名单抓取 URL。
     ///
     /// `allowed_domains` — when non-empty, the hostname must match one of the
     /// allowed domains (exact or subdomain).  Domain matching uses suffix-match:

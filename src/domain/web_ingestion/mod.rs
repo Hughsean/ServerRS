@@ -1,7 +1,7 @@
-//! Web Ingestion domain module — status constants, event types, state machine,
+//! 网页知识摄取领域模块 — 状态常量、事件类型、 state machine,
 //! value objects, error types, and repository traits.
 //!
-//! Design principle: DB state machine is the authoritative source of truth.
+//! 设计原则：数据库状态机是权威事实来源。
 //! Outbox events drive the pipeline. Each worker is idempotent.
 
 pub mod distiller;

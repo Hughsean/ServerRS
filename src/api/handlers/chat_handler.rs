@@ -191,9 +191,9 @@ pub async fn chat_persona(
 
 /// POST /api/v1/chat/memory/{id}/disable
 ///
-/// Disables a memory after verifying it belongs to the authenticated user
-/// (prevents IDOR — users cannot disable other users' memories by guessing
-/// ids). Also syncs the Qdrant index deletion.
+/// 在验证属于已认证用户后禁用该记忆
+/// （防止 IDOR — 用户不能通过猜测 ID 来禁用其他用户的记忆）
+/// 同步删除 Qdrant 索引。
 pub async fn chat_disable_memory(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,

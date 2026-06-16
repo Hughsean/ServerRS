@@ -346,9 +346,9 @@ pub async fn process_risk_detection(
     Path(_id): Path<u64>,
     Json(_body): Json<ProcessNotes>,
 ) -> Result<StatusCode, AppError> {
-    // Manual "mark processed" is no longer applicable: post-conversation risk
-    // audits are completed by the PostConversationRiskAuditWorker, not by an
-    // admin. This handler is retained only to keep the route mount valid until
+    // 手动"标记已处理"已不再适用：对话后风险审计由
+    // PostConversationRiskAuditWorker 完成，不再由管理员操作。
+    // 保留此处理器仅为了保持路由挂载有效 until
     // the router is updated to drop it.
     Err(AppError::NotFound(
         "manual risk processing is not supported in the post-conversation audit model".into(),

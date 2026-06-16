@@ -7,11 +7,11 @@ use crate::domain::llm::{
     LlmProvider, TokenUsage, ToolCall,
 };
 
-/// A provider backed by Ollama (or any OpenAI-compatible endpoint).
+/// 基于 Ollama（或任意兼容 OpenAI 的端点）的 Provider。
 ///
 /// For chat it sends requests to `POST {base_url}/chat/completions`
 /// (OpenAI-compatible).  For embedding it sends to
-/// `POST {base_url}/embeddings` (also OpenAI-compatible).
+/// `POST {base_url}/embeddings`（同样兼容 OpenAI）。
 ///
 /// If you need the legacy Ollama-native `/api/chat` or `/api/embeddings`
 /// endpoints, you can override `base_url` to omit the `/v1` prefix and
@@ -132,10 +132,10 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 // ── Impl ────────────────────────────────────────────────────────────
 
 impl OllamaProvider {
-    /// Create a new `OllamaProvider`.
+    /// 创建一个新的 `OllamaProvider`。
     ///
-    /// Use the same `base_url` pattern as the existing `OllamaClient` so
-    /// both can coexist during the migration:
+    /// 使用与现有 `OllamaClient` 相同的 `base_url` 模式，以便
+    /// 在迁移期间两者可以共存：
     ///   `http://127.0.0.1:11434/v1`
     pub fn new(base_url: String, model: String, temperature: f64, top_p: f64) -> Self {
         let _ = (temperature, top_p);
@@ -154,17 +154,17 @@ impl OllamaProvider {
         }
     }
 
-    /// The chat-completions URL (OpenAI-compatible).
+    /// 聊天补全 URL（兼容 OpenAI）。
     fn chat_url(&self) -> String {
         format!("{}/chat/completions", self.base_url)
     }
 
-    /// The embeddings URL (OpenAI-compatible).
+    /// 嵌入 URL（兼容 OpenAI）。
     fn embed_url(&self) -> String {
         format!("{}/embeddings", self.base_url)
     }
 
-    /// Shared helper: POST JSON, classify errors, deserialize.
+    /// 通用辅助方法：POST JSON，分类错误，反序列化。
     async fn post_json<T: for<'de> Deserialize<'de>>(
         &self,
         url: &str,
@@ -355,7 +355,7 @@ impl EmbeddingProvider for OllamaProvider {
             input: texts.to_vec(),
         };
 
-        debug!("OllamaProvider.embed -> {url} ({} texts)", texts.len());
+        debug!("OllamaProvider.embed -> {url} ({} 个文本)", texts.len());
 
         let response: EmbedResponse = self.post_json(&url, &body).await?;
 

@@ -49,7 +49,7 @@ impl OutboxWorker {
             ticker.tick().await;
 
             if let Err(e) = self.process_batch().await {
-                warn!(error = %e, "outbox worker batch processing failed");
+                warn!(error = %e, "发件箱 Worker 批次处理失败");
             }
         }
     }

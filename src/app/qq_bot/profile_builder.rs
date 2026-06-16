@@ -181,7 +181,7 @@ impl ProfileBuilder {
 
         // 更新计数器（轻量，不阻塞）
         if let Err(e) = self.user_profile_repo.update_stats(qq_user_id, total, new_avg, new_emoji).await {
-            error!(qq_user_id, error = %e, "failed to update profile stats");
+            error!(qq_user_id, error = %e, "更新画像统计数据失败");
         }
 
         // 更新 external_user 的 last_seen_at
@@ -199,7 +199,7 @@ impl ProfileBuilder {
             };
             tokio::spawn(async move {
                 if let Err(e) = builder.build_user_profile_from_group(qq_user_id).await {
-                    error!(qq_user_id, error = %e, "user profile build failed");
+                    error!(qq_user_id, error = %e, "用户画像构建失败");
                 }
             });
         }

@@ -1,6 +1,6 @@
 use crate::domain::llm::PromptProvider as PromptProviderTrait;
 
-/// Provides the system prompt template for LLM conversations.
+/// 提供 LLM 对话的系统提示词模板。
 #[derive(Clone)]
 pub struct PromptProvider {
     template: String,

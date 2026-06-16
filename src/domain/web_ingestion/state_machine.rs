@@ -1,4 +1,4 @@
-//! State machine validation for `knowledge_ingestion_runs`.
+//! `knowledge_ingestion_runs` 的状态机验证。
 //!
 //! Every transition must pass `can_transition_run(from_status, from_stage,
 //! to_status, to_stage) -> bool`. Replaying an already-reached target is

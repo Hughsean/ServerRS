@@ -24,7 +24,7 @@ fn vector_id_to_point_id(vector_id: &str) -> PointId {
     PointId::from(hash)
 }
 
-/// FNV-1a 64-bit hash — fast, deterministic, no external dependency needed.
+/// FNV-1a 64 位哈希 — 快速、确定、无需额外依赖。
 fn fnv_hash(s: &str) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -37,7 +37,7 @@ fn fnv_hash(s: &str) -> u64 {
 }
 
 /// Extract the business `vector_id` from a Qdrant `ScoredPoint`.
-/// Prefers the `vector_id` payload field; falls back to the Qdrant point-id.
+/// 优先使用 payload 中的 `vector_id` 字段；回退到 Qdrant point-id。
 fn hit_vector_id(pt: &ScoredPoint) -> String {
     if let Some(vid) = pt.payload.get("vector_id") {
         if let Some(qdrant_client::qdrant::value::Kind::StringValue(ref s)) = vid.kind {
@@ -60,7 +60,7 @@ fn hit_vector_id(pt: &ScoredPoint) -> String {
 
 // ══════════════════════════════════════════════════════════════════════
 
-/// Qdrant-backed implementation of [`VectorStore`].
+/// 基于 Qdrant 的 [`VectorStore`] 实现。
 pub struct QdrantVectorStore {
     client: Qdrant,
 }

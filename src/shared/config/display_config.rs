@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::AppConfig;
 
-/// Expose parts of the configuration for diagnostic purposes.
-/// Does NOT log secrets (api keys, passwords, jwt secrets).
+/// 暴露部分配置用于诊断目的。
+/// 不记录密钥（API 密钥、密码、JWT 密钥）。
 impl fmt::Display for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(

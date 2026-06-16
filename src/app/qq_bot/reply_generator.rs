@@ -198,7 +198,7 @@ impl ReplyGenerator {
         }
 
         // Fallback: wrap raw text as single segment
-        warn!("failed to parse LLM reply as BotReply JSON, using fallback");
+        warn!("无法将 LLM 回复解析为 BotReply JSON，使用回退方案");
         Ok(BotReply {
             segments: vec![ReplySegment::Text {
                 content: text.chars().take(self.max_chars_per_segment as usize).collect(),

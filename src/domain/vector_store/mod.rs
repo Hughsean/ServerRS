@@ -5,13 +5,13 @@ use async_trait::async_trait;
 use crate::shared::error::AppError;
 pub use types::*;
 
-/// Abstraction over a vector similarity search backend (Qdrant, in-memory mock, etc.).
+/// 向量相似性搜索后端的抽象 (Qdrant, in-memory mock, etc.).
 ///
 /// This trait lives in the domain layer — no Qdrant-specific types leak through.
 /// Implementations map Qdrant / mock internals to these domain types.
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    /// Ensure a named collection exists with the given dimension and distance metric.
+    /// 确保指定名称的集合存在，具有给定的维度和距离度量。
     /// If the collection already exists with matching parameters, this is a no-op.
     /// If it exists with different parameters, return an error.
     async fn ensure_collection(
@@ -21,14 +21,14 @@ pub trait VectorStore: Send + Sync {
         distance: VectorDistance,
     ) -> Result<(), AppError>;
 
-    /// Upsert (insert or update) a batch of points.
+    /// 批量更新（插入或更新）向量点。
     async fn upsert_points(
         &self,
         collection: &str,
         points: Vec<VectorPoint>,
     ) -> Result<(), AppError>;
 
-    /// Search for the nearest neighbours of `query` vector, respecting the given filter.
+    /// 搜索 `query` 向量的最近邻, respecting the given filter.
     async fn search(
         &self,
         collection: &str,
@@ -37,6 +37,6 @@ pub trait VectorStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<VectorSearchHit>, AppError>;
 
-    /// Delete points by their IDs from a collection.
+    /// 从集合中按 ID 删除向量点。
     async fn delete_points(&self, collection: &str, ids: Vec<String>) -> Result<(), AppError>;
 }

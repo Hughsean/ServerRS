@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Distance metric used for vector similarity.
+/// 用于向量相似性的距离度量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VectorDistance {
     Cosine,
@@ -8,7 +8,7 @@ pub enum VectorDistance {
     Euclid,
 }
 
-/// A single point to be upserted into a vector collection.
+/// 要更新到向量集合的单个点。
 #[derive(Debug, Clone)]
 pub struct VectorPoint {
     pub id: String,
@@ -16,7 +16,7 @@ pub struct VectorPoint {
     pub payload: serde_json::Value,
 }
 
-/// A filter applied during vector search.
+/// 向量搜索时应用的过滤器。
 #[derive(Debug, Clone, Default)]
 pub struct VectorFilter {
     pub must: Vec<VectorCondition>,
@@ -33,7 +33,7 @@ impl VectorFilter {
     }
 }
 
-/// A single filter condition for vector search payloads.
+/// 向量搜索 payload 的单个过滤条件。
 #[derive(Debug, Clone)]
 pub enum VectorCondition {
     MatchString { key: String, value: String },
@@ -42,7 +42,7 @@ pub enum VectorCondition {
     MatchBool { key: String, value: bool },
 }
 
-/// A search hit returned by a vector store.
+/// 向量存储返回的搜索结果项。
 #[derive(Debug, Clone)]
 pub struct VectorSearchHit {
     pub id: String,

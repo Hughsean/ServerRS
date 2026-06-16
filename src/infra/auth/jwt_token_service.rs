@@ -34,7 +34,7 @@ struct JwtClaims {
 
 impl JwtTokenService {
     pub fn new(secret: &str, access_ttl_seconds: u64) -> Self {
-        let refresh_ttl_seconds = access_ttl_seconds * 7; // refresh lives 7x longer
+        let refresh_ttl_seconds = access_ttl_seconds * 7; // refresh Token 有效期是 access 的 7 倍
         Self::new_with_ttls(secret, access_ttl_seconds, refresh_ttl_seconds)
     }
 

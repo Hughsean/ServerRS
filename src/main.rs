@@ -48,7 +48,7 @@ async fn main() {
     let config = AppConfig::load();
     init_tracing(&config.logging.level);
     if let Err(err) = run(config).await {
-        tracing::error!(error = %err, "server stopped with error");
+        tracing::error!(error = %err, "服务器运行出错");
     }
 }
 
@@ -57,7 +57,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         .await
         .expect("db init");
 
-    // ── Repositories ──
+    // ── 仓库 ──
     let repos = bootstrap::repos::build_repos(
         &db,
         &config.qdrant.memory_collection,
@@ -81,7 +81,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let memory_repo = Arc::clone(&repos.memory_repo);
     let summary_repo = Arc::clone(&repos.summary_repo);
 
-    // ── Tasks ──
+    // ── 任务系统 ──
     let mut background = bootstrap::tasks::BackgroundTasks::new();
 
     let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));
@@ -97,7 +97,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>);
     let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
 
-    // Periodic cleanup for stateful handlers
+    // 有状态处理器的定期清理
     background.spawn({
         let h = Arc::clone(&alert_handler);
         tokio::spawn(async move {
@@ -119,7 +119,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         })
     });
 
-    // ── Auth infra ──
+    // ── 认证基础设施 ──
     let auth_graph =
         bootstrap::auth::build_auth(&db, &config.jwt, &config.auth, &user_repo, &task_publisher);
     background.spawn({
@@ -127,21 +127,21 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         tokio::spawn(periodic_revocation(store))
     });
 
-    // ── LLM (infrastructure → domain trait) ──
-    // Legacy LlmClient (used by DiaryService for title generation)
+    // ── LLM（基础设施层 → 领域层接口）──
+    // 旧版 LlmClient（DiaryService 用于标题生成）
     let ollama_client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(
         config.ollama.base_url.clone(),
         config.ollama.model.clone(),
         config.ollama.temperature,
         config.ollama.top_p,
     ));
-    // ── Chat LLM provider (Agent uses config.llm.*) ──
+    // ── Chat LLM Provider（Agent 使用 config.llm.*）──
     let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::with_timeout(
         config.llm.base_url.clone(),
         config.llm.chat_model.clone(),
         config.llm.timeout_secs,
     ));
-    // ── Dedicated embedding provider (separate from chat LLM) ──
+    // ── 专用 Embedding Provider（与 Chat LLM 分离）──
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
         infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
             config.embedding.base_url.clone(),
@@ -152,7 +152,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         ),
     );
 
-    // ── Qdrant VectorStore (optional, enabled via config) ──
+    // ── Qdrant 向量存储（可选，通过配置启用）──
     use domain::vector_store::VectorStore;
     let vector_store: Option<Arc<dyn VectorStore>> = if config.qdrant.enabled {
         #[cfg(feature = "qdrant")]
@@ -205,7 +205,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         ))
     });
 
-    // ── Ensure vector collections exist (only when Qdrant is enabled) ──
+    // ── 确保向量集合已存在（仅在 Qdrant 启用时）──
     if let Some(ref vi) = vector_index {
         vi.ensure_collections().await.map_err(|e| {
             std::io::Error::new(
@@ -215,7 +215,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         })?;
     }
 
-    // ── Risk detector + detection service ──
+    // ── 风险检测器 + 检测服务 ──
     let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
 
     let risk_detection_service = Arc::new(RiskDetectionService::new(
@@ -228,7 +228,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&risk_detection_service),
     ));
 
-    // ── Services ──
+    // ── 服务 ──
     let auth = Arc::clone(&auth_graph.auth_service);
     let user: Arc<UserService> = Arc::new(UserService::new(
         Arc::clone(&user_repo),
@@ -239,7 +239,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&risk_repo),
     ));
 
-    // ── RAG & Memory services (constructed early — needed by AgentContextBuilder) ──
+    // ── RAG 与记忆服务（提前构建 — AgentContextBuilder 需要它们）──
     let mut retrieval_svc =
         RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&embedding_provider)))
             .with_hybrid_weights(
@@ -250,9 +250,9 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         retrieval_svc =
             retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
     }
-    // Surface published web-ingestion content (only when web ingestion is on).
-    // Staged/superseded versions are excluded by the active filter + MySQL
-    // status re-validation; legacy RAG is unaffected.
+    // 公开已发布的网页知识摄取内容（仅在网页摄取启用时）
+    // 已暂存/已取代的版本被活跃过滤器 + MySQL 状态重新验证排除；
+    // 旧版 RAG 不受影响。
     if config.web_ingestion.enabled {
         retrieval_svc =
             retrieval_svc.with_web_collection(config.web_ingestion.qdrant_collection.clone());
@@ -309,7 +309,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
             .run(),
     ));
 
-    // ── Agent Runtime ──
+    // ── 代理运行时 ──
     let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
         Arc::clone(&memory_svc),
         Arc::clone(&retrieval),
@@ -358,8 +358,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         agent_settings,
     ));
 
-    // ── ChatService (the business entry point) ──
-    // Must be built AFTER agent_runtime, which it depends on.
+    // ── ChatService（业务入口点）──
+    // 必须在 agent_runtime 之后构建，因为它依赖于 agent_runtime。
     let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
         Arc::clone(&task_publisher),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
@@ -369,7 +369,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         vector_index.clone(),
     ));
 
-    // ── Domain services with real SeaORM repositories ──
+    // ── 使用真实 SeaORM 仓库的领域服务 ──
     let psychology: Arc<PsychologyService> =
         Arc::new(PsychologyService::new(Arc::clone(&psychology_repo)));
     let depression: Arc<DepressionService> =
@@ -419,13 +419,13 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
     let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(db.clone())) as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
 
-    // TTS provider for QQ Bot voice messages
+    // QQ 机器人语音消息的 TTS Provider
     let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> = if config.qq_bot.enabled && config.qq_bot.self_qq_id != 0 && !config.tts.api_key.is_empty() {
-        tracing::info!("initialising VolcengineTtsProvider for QQ Bot voice messages");
+        tracing::info!("正在为 QQ 机器人语音消息初始化 VolcengineTtsProvider");
         Some(Arc::new(VolcengineTtsProvider::new(&config.tts)) as Arc<dyn TtsProvider>)
     } else {
         if config.qq_bot.enabled {
-            tracing::warn!("TTS API key not configured — voice messages will be unavailable");
+            tracing::warn!("未配置 TTS API 密钥 — 语音消息将不可用");
         }
         None
     };
@@ -443,22 +443,22 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         qq_bot_group_memory_repo,
         qq_bot_agent_turn_repo,
         qq_bot_outbox_repo,
-        // profile & user repos (optional — same pattern as existing code)
+        // 画像与用户仓库（可选 — 与现有代码模式相同）
         Some(Arc::clone(&user_repo) as Arc<dyn crate::domain::user::user_repository::UserRepository>),
         Some(Arc::clone(&qq_bot_external_user_repo)),
         Some(Arc::clone(&qq_bot_user_profile_repo)),
-        // relationship repo
+        // 关系仓库
         Some(Arc::clone(&qq_bot_relationship_repo)),
     )
     .await
     .unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "qq_bot init failed — continuing without it");
+        tracing::warn!(error = %e, "qq_bot 初始化失败 — 将继续运行而不启动它");
         None
     });
 
-    // ── Web Ingestion ──────────────────────────────────────────────────
-    // The review service remains available for inspection when workers are
-    // disabled; submitting a publish request then returns a conflict.
+    // ── 网页知识摄取 ──────────────────────────────────────────────────
+    // 审查服务在 worker 禁用时仍可用于检查；
+    // 此时提交发布请求将返回冲突。
     let knowledge_review = bootstrap::web_ingestion::init_web_ingestion(
         &config,
         &db,
@@ -501,7 +501,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    info!("server listening on http://{addr}");
+    info!("服务器正在监听 http://{addr}");
 
     let r = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -517,14 +517,14 @@ async fn periodic_revocation(repo: Arc<dyn RefreshTokenStore>) {
         let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(d) => d.as_secs(),
             Err(e) => {
-                tracing::warn!(error = %e, "clock");
+                tracing::warn!(error = %e, "时钟错误");
                 continue;
             }
         };
         match repo.cleanup_expired(now).await {
-            Ok(n) if n > 0 => tracing::info!(n, "expired tokens cleaned"),
+            Ok(n) if n > 0 => tracing::info!(n, "已清理过期令牌"),
             Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "cleanup failed"),
+            Err(e) => tracing::warn!(error = %e, "清理失败"),
         }
     }
 }
@@ -550,10 +550,10 @@ fn init_tracing(configured_level: &str) {
     let combined = if env_filter.is_empty() {
         format!("{configured_level},sqlx=warn")
     } else if env_filter.contains("sqlx") {
-        // User explicitly set sqlx level — respect it.
+        // 用户明确设置了 sqlx 级别 — 尊重它。
         env_filter
     } else {
-        // Append sqlx=warn so sqlx query logs are suppressed by default.
+        // 追加 sqlx=warn 以默认抑制 sqlx 查询日志。
         format!("{},sqlx=warn", env_filter)
     };
     let f = tracing_subscriber::EnvFilter::new(&combined);

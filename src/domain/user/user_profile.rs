@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// User psychological profile / behavioral traits.
-/// JSON-array fields are stored as `Vec<String>` in Rust.
+/// 用户心理画像 / 行为特征。
+/// JSON 数组字段在 Rust 中存储为 `Vec<String>`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProfile {
     pub id: u64,

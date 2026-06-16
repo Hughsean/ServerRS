@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::shared::error::AppError;
 
-/// Matches user_diaries entity. No tags or mood_score columns in current DB.
+/// 匹配 user_diaries 实体。当前数据库中没有 tags 或 mood_score 列。
 /// mood_description is the only optional mood field persisted.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserDiary {

@@ -96,7 +96,7 @@ impl KnowledgeDistiller for OpenAiKnowledgeDistiller {
 
         match self.call_llm(&body).await {
             Err(WebIngestionError::DistillJsonParseFailed { error }) => {
-                tracing::warn!(%error, "distill JSON parse failed; retrying once");
+                tracing::warn!(%error, "提取 JSON 解析失败，重试一次");
                 self.call_llm(&body).await
             }
             result => result,

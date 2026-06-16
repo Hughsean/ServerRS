@@ -5,9 +5,9 @@ use super::post_conversation_risk_audit::{
 };
 use crate::shared::error::AppError;
 
-/// Repository for `post_conversation_risk_audits`.
+/// `post_conversation_risk_audits` 的仓库。
 ///
-/// This is the **only** risk data store in the new architecture. It is strictly
+/// 这是**唯一**的风险数据存储 in the new architecture. It is strictly
 /// decoupled from the conversation generation path: ChatService, AgentRuntime,
 /// PromptBuilder, Persona, Memory and Summary never read from here.
 #[async_trait]

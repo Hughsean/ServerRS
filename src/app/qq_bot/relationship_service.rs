@@ -43,7 +43,7 @@ impl RelationshipService {
         let all_rels = match self.repo.find_by_group(qq_group_id).await {
             Ok(rels) => rels,
             Err(e) => {
-                tracing::warn!(group_id = qq_group_id, error = %e, "failed to load relationships");
+                tracing::warn!(group_id = qq_group_id, error = %e, "加载关系失败");
                 return String::new();
             }
         };

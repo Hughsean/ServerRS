@@ -17,19 +17,19 @@ impl TaskHandler for LoggingHandler {
         match event {
             TaskEvent::LoginAudit(t) => {
                 if t.success {
-                    info!(username = %t.username, "login: success");
+                    info!(username = %t.username, "登录：成功");
                 } else {
-                    warn!(username = %t.username, reason = %t.reason.as_deref().unwrap_or("?"), "login: failed");
+                    warn!(username = %t.username, reason = %t.reason.as_deref().unwrap_or("?"), "登录：失败");
                 }
             }
             TaskEvent::UserRegistered(t) => {
-                info!(user_id = t.user_id, username = %t.username, "user registered")
+                info!(user_id = t.user_id, username = %t.username, "用户已注册")
             }
             TaskEvent::RefreshTokenRevoked(t) => {
-                info!(user_id = t.user_id, username = %t.username, "token revoked")
+                info!(user_id = t.user_id, username = %t.username, "令牌已撤销")
             }
             TaskEvent::RefreshTokenRotated(t) => {
-                info!(user_id = t.user_id, username = %t.username, "token rotated")
+                info!(user_id = t.user_id, username = %t.username, "令牌已轮换")
             }
             TaskEvent::ConversationCreated(t) => info!(
                 conversation_id = t.conversation_id,
@@ -38,13 +38,13 @@ impl TaskHandler for LoggingHandler {
             ),
             TaskEvent::RiskDetected(t) => {
                 if t.risk_level == RiskLevel::Crisis || t.risk_level == RiskLevel::High {
-                    warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "HIGH RISK");
+                    warn!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "高风险");
                 } else {
-                    info!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "risk detected");
+                    info!(user_id = t.user_id, risk_level = ?t.risk_level, confidence = t.confidence, "检测到风险");
                 }
             }
             TaskEvent::TurnClosed(_) => {
-                tracing::debug!("turn closed");
+                tracing::debug!("轮次已关闭");
             }
         }
     }

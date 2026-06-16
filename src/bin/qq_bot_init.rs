@@ -60,7 +60,7 @@ async fn main() {
     let db = init_db(&config.database.url, 5)
         .await
         .expect("failed to connect to database");
-    tracing::info!("database connected");
+    tracing::info!("数据库已连接");
 
     let bot_account_repo: Arc<dyn BotAccountRepository> =
         Arc::new(SeaOrmBotAccountRepository::new(db.clone()));

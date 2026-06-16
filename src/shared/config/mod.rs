@@ -26,7 +26,7 @@ pub mod server;
 pub mod tts;
 pub mod web_ingestion;
 
-/// Shared default helper used by several submodules.
+/// 多个子模块共享的默认值辅助函数。
 fn default_true() -> bool {
     true
 }
@@ -128,13 +128,13 @@ impl AppConfig {
         let mut cfg = match std::fs::read_to_string(&path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(cfg) => {
-                    tracing::info!(path = %path, "configuration loaded");
+                    tracing::info!(path = %path, "配置已加载");
                     cfg
                 }
                 Err(e) => panic!("failed to parse configuration file {path}: {e}"),
             },
             Err(e) => {
-                tracing::warn!(path = %path, error = %e, "config file not found, using defaults");
+                tracing::warn!(path = %path, error = %e, "未找到配置文件，使用默认配置");
                 Self::default()
             }
         };

@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use crate::domain::memory::{ConversationSummary, NewSummary};
 use crate::shared::error::AppError;
 
-/// Repository for conversation summaries.
+/// 对话摘要的仓库。
 ///
-/// Lives in the domain layer so infrastructure implementations can depend
+/// 位于领域层，以便基础设施实现可以依赖
 /// on it without coupling to the application layer.
 #[async_trait]
 pub trait SummaryRepository: Send + Sync {

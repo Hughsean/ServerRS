@@ -1,37 +1,37 @@
 use serde::{Deserialize, Serialize};
 
-/// Bot persona — defines how the bot behaves and expresses itself in a group.
+/// 机器人人设 — 定义机器人在群中的行为和表达方式。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotPersona {
-    /// Nickname the bot goes by in the group (e.g. "赛博猫猫").
+    /// 机器人在群中的昵称（如"赛博猫猫"）。
     pub nickname: String,
-    /// Tone / style profile.
+    /// 语气 / 风格画像。
     pub tone: ToneProfile,
-    /// Emoji usage habits.
+    /// 表情使用习惯。
     pub emoji_habits: EmojiHabits,
-    /// Behavioral rules as plain-text directives.
+    /// 以纯文本指令形式存在的行为规则。
     pub rules: Vec<String>,
-    /// Optional persona id for DB persistence.
+    /// 可选的数据库持久化人设 ID。
     pub persona_id: Option<String>,
 }
 
-/// Tone and style profile.
+/// 语气和风格画像。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToneProfile {
-    /// Style label: "简短", "详细", "幽默", "温柔", etc.
+    /// 风格标签：如"简短"、"详细"、"幽默"、"温柔"等。
     pub style: String,
-    /// Kaomoji usage tendency 0.0~1.0.
+    /// 颜文字使用倾向 0.0~1.0。
     pub kaomoji_affinity: f64,
-    /// Sticker / emoji usage tendency 0.0~1.0.
+    /// 贴图/表情使用倾向 0.0~1.0。
     pub sticker_affinity: f64,
-    /// Address pattern (e.g. "喵", "~", "呀").
+    /// 称呼模式（如"喵"、"~"、"呀"）。
     pub address_pattern: String,
 }
 
-/// Emoji usage habits.
+/// 表情使用习惯。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmojiHabits {
-    /// Favorite emoji characters.
+    /// 喜爱的表情字符。
     #[serde(default)]
     pub favorites: Vec<String>,
     /// Emojis used when expressing happiness.

@@ -1,37 +1,37 @@
 use serde::{Deserialize, Serialize};
 
-/// Trigger policy for a group.
+/// 群组的触发策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerPolicy {
-    /// Only respond when @-mentioned.
+    /// 仅在被 @ 时回复。
     Mention,
-    /// Respond when specific keywords are matched.
+    /// 匹配到特定关键词时回复。
     Keyword,
-    /// Respond to command-style messages (e.g. /ask).
+    /// 回复命令风格的消息（如 /ask）。
     Command,
-    /// Respond to every message (test groups only).
+    /// 回复每一条消息（仅测试群）。
     Always,
-    /// Record messages but never respond.
+    /// 记录消息但不回复。
     Silent,
 }
 
-/// Reply policy for a group — controls response style and rate.
+/// 群组的回复策略 — 控制回复风格和频率。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReplyPolicy {
-    /// Cooldown in seconds between responses in the same group.
+    /// 同一群组中回复之间的冷却时间（秒）。
     #[serde(default = "default_cooldown_secs")]
     pub cooldown_secs: u64,
-    /// Max segments per reply.
+    /// 每条回复的最大段数。
     #[serde(default = "default_max_segments")]
     pub max_segments: u32,
-    /// Max characters per segment.
+    /// 每段的最大字符数。
     #[serde(default = "default_max_chars_per_segment")]
     pub max_chars_per_segment: u32,
-    /// Whether to allow the bot to proactively send messages (not just reply).
+    /// 是否允许机器人主动发送消息（不仅仅是回复）。
     #[serde(default)]
     pub allow_proactive: bool,
-    /// Keywords that trigger a response (when policy is Keyword).
+    /// 触发回复的关键词（当策略为 Keyword 时）。
     #[serde(default)]
     pub keywords: Vec<String>,
 }
@@ -40,7 +40,7 @@ fn default_cooldown_secs() -> u64 { 30 }
 fn default_max_segments() -> u32 { 5 }
 fn default_max_chars_per_segment() -> u32 { 80 }
 
-/// Group-level configuration.
+/// 群组级别配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupConfig {
     pub qq_group_id: i64,
@@ -49,11 +49,11 @@ pub struct GroupConfig {
     pub enabled: bool,
     pub trigger_policy: TriggerPolicy,
     pub reply_policy: ReplyPolicy,
-    /// How to handle memories for this group.
+    /// 如何处理此群的记忆。
     pub memory_policy: MemoryPolicy,
 }
 
-/// How memories are handled for a group.
+/// 群组记忆的处理方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryPolicy {
@@ -62,7 +62,7 @@ pub enum MemoryPolicy {
     OptInUser,
 }
 
-/// External QQ user (not necessarily a registered system user).
+/// 外部 QQ 用户（不一定是系统注册用户）。
 #[derive(Debug, Clone)]
 pub struct ExternalUser {
     pub qq_user_id: i64,
@@ -74,7 +74,7 @@ pub struct ExternalUser {
     pub persona_enabled: bool,
 }
 
-/// QQ group member (membership within a specific group).
+/// QQ 群成员（特定群内的成员身份）。
 #[derive(Debug, Clone)]
 pub struct GroupMember {
     pub qq_group_id: i64,

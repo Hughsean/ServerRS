@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::shared::error::AppError;
 
-/// Matches the `music` table entity. Uses file_data / file_size / mime_type / cover_image
+/// 匹配 `music` 表实体。使用 file_data / file_size / mime_type / cover_image
 /// for BLOB storage (no stored_objects/object_id in current DB).
 /// PK is music_id, duration is Option<u32>, status is i8 (1=active).
 #[derive(Debug, Clone, Serialize)]

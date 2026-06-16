@@ -1,8 +1,7 @@
-//! Bootstrap the web ingestion subsystem.
+//! 启动网页知识摄取子系统。
 //!
-//! Responsibilities (task-book §4.1): dependency assembly, master-switch gate,
-//! scheduler/dispatcher initialisation. NO business logic — that lives in
-//! `application::web_ingestion`.
+//! 职责（task-book §4.1）：依赖组装、主开关、调度器/分发器初始化。不含业务逻辑——业务逻辑在
+//! `application::web_ingestion` 中。
 
 use std::sync::Arc;
 
@@ -37,16 +36,15 @@ pub async fn init_web_ingestion(
         wc.enabled && wc.dispatcher_enabled,
     ));
 
-    // ── Master switch (§5.1) ───────────────────────────────────────────────
-    // Even if scheduler_enabled / dispatcher_enabled are true, nothing starts
-    // unless web_ingestion.enabled is true. Defence-in-depth: main.rs also
-    // gates on this, but the gate is enforced here too so it is directly
-    // testable and impossible to bypass.
+    // ── 主开关（§5.1）───────────────────────────────────────────────
+    // 即使 scheduler_enabled / dispatcher_enabled 为 true，除非
+    // web_ingestion.enabled 为 true，否则什么也不启动。纵深防御：main.rs
+    // 也设置了同样的门，但这里也强制执行，使得代码可直接测试且无法绕过。
     let gate = WorkerGate::from_config(wc);
     if !gate.any() {
         info!(
             enabled = wc.enabled,
-            "web ingestion: no workers to start (master switch off or both workers disabled)"
+            "网页知识摄取：没有要启动的 Worker（主开关关闭或两个 Worker 均禁用）"
         );
         return Ok(review_service);
     }
@@ -86,10 +84,10 @@ pub async fn init_web_ingestion(
         dispatcher = wc.dispatcher_enabled,
         auto_publish = wc.auto_publish,
         proxy_enabled = !wc.fetch_proxy_url.trim().is_empty(),
-        "web ingestion infrastructure initialised"
+        "网页知识摄取基础设施初始化完成"
     );
 
-    // ── Scheduler loop ──────────────────────────────────────────────────────
+    // ── 调度器循环 ──────────────────────────────────────────────────────
     if gate.scheduler {
         let source_repo = Arc::clone(&ctx.source_repo);
         let crawl_job_repo = Arc::clone(&ctx.crawl_job_repo);
@@ -110,11 +108,11 @@ pub async fn init_web_ingestion(
                 )
                 .await
                 {
-                    tracing::warn!(error = %e, "web ingestion scheduler tick failed");
+                    tracing::warn!(error = %e, "网页知识摄取调度器周期执行失败");
                 }
             }
         }));
-        info!("web ingestion scheduler started");
+        info!("网页知识摄取调度器已启动");
     }
 
     // ── Dispatcher loop ──────────────────────────────────────────────────────
@@ -127,7 +125,7 @@ pub async fn init_web_ingestion(
             loop {
                 interval.tick().await;
                 if let Err(e) = dispatcher::run_tick(&ctx).await {
-                    tracing::warn!(error = %e, "web ingestion dispatcher tick failed");
+                    tracing::warn!(error = %e, "网页知识摄取分发器周期执行失败");
                 }
             }
         }));

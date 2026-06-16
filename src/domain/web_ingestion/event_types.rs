@@ -1,4 +1,4 @@
-//! Domain event type constants for the outbox-driven web ingestion pipeline.
+//! 发件箱驱动网页知识摄取流水线的事件类型常量。
 //!
 //! Every event type is a fixed string used as `event_type` in `domain_event_outbox`.
 

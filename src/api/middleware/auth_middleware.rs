@@ -8,8 +8,8 @@ use crate::api::AuthState;
 use crate::app::auth::auth_service::{AuthenticatedUser, Role};
 use crate::shared::error::AppError;
 
-/// NOTE: Uses State<AuthState>, NOT State<Arc<AuthState>>.
-/// Called via `from_fn_with_state(state: AppState, require_bearer_auth)`. AuthState is extracted via FromRef.
+/// 注意：使用 State<AuthState>，而不是 State<Arc<AuthState>>。
+/// 通过 `from_fn_with_state(state: AppState, require_bearer_auth)` 调用。AuthState 通过 FromRef 提取。
 pub async fn require_bearer_auth(
     State(state): State<AuthState>,
     _req_method: axum::http::Method, // dummy second extractor for Axum 0.8 compat
@@ -29,7 +29,7 @@ pub async fn require_bearer_auth(
     Ok(next.run(request).await)
 }
 
-/// Middleware that checks the authenticated user has Admin or SuperAdmin role.
+/// 检查已认证用户是否具有 Admin 或 SuperAdmin 角色的中间件。
 /// Must be placed after `require_bearer_auth` (or equivalent) so that
 /// the `AuthenticatedUser` extension is present in the request.
 ///

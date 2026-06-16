@@ -99,7 +99,7 @@ impl NewUser {
         }
     }
 
-    /// Create a new user without a password (for QQ auto-registration).
+    /// 创建无密码的新用户（用于 QQ 自动注册）。
     pub fn new_without_password(username: impl Into<String>, nickname: Option<String>) -> Self {
         Self {
             username: username.into(),
@@ -154,7 +154,7 @@ impl User {
     }
 }
 
-/// Partial update payload for a user (all fields optional).
+/// 用户的部分更新负载（所有字段可选）。
 #[derive(Debug, Clone)]
 pub struct UserUpdate {
     pub email: Option<Option<String>>,

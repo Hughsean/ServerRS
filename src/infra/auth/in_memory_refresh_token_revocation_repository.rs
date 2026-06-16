@@ -48,11 +48,11 @@ impl RefreshTokenRevocationRepository for InMemoryRefreshTokenRevocationReposito
     }
 }
 
-// RefreshTokenStore adapter for the new AuthService
+// 为新 AuthService 提供的 RefreshTokenStore 适配器
 #[async_trait]
 impl RefreshTokenStore for InMemoryRefreshTokenRevocationRepository {
     async fn store(&self, _user_id: u64, token_hash: String) -> Result<(), AppError> {
-        // In-memory: nothing to persist; tokens are valid until revoked
+        // 内存模式：无需持久化；Token 在被撤销前始终有效
         let _ = token_hash;
         Ok(())
     }

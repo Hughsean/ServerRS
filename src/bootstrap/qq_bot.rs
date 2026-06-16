@@ -1,12 +1,12 @@
-//! Bootstrap the QQ Bot (赛博猫猫) subsystem.
+//! 启动 QQ 机器人（赛博猫猫）子系统。
 //!
-//! Responsibilities:
-//! - Dependency assembly for all QQ Bot services
-//! - Master switch gate (qq_bot.enabled)
-//! - Attention store initialisation
-//! - LLM provider wiring with optional override config
-//! - Outbox worker spawning via BackgroundTasks
-//! - NapCat WebSocket listener startup for message + notice events
+//! 职责：
+//! - 组装所有 QQ 机器人服务的依赖
+//! - 主开关（qq_bot.enabled）
+//! - 注意力存储初始化
+//! - LLM Provider 接线（可选覆盖配置）
+//! - 通过 BackgroundTasks 启动发件箱 Worker
+//! - NapCat WebSocket 监听器启动（消息 + 通知事件）
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,7 +59,7 @@ pub async fn init_qq_bot(
     llm_provider: Arc<dyn LlmProvider>,
     tts_provider: Option<Arc<dyn TtsProvider>>,
     background: &mut BackgroundTasks,
-    // Repositories (pass in mock or real impls from bootstrap)
+    // 仓库（从 bootstrap 传入 mock 或真实实现）
     bot_account_repo: Arc<dyn BotAccountRepository>,
     group_repo: Arc<dyn GroupRepository>,
     group_member_repo: Arc<dyn GroupMemberRepository>,
@@ -77,26 +77,26 @@ pub async fn init_qq_bot(
 ) -> Result<Option<QqBotDependencies>, AppError> {
     let qc = &config.qq_bot;
 
-    // ── Master switch ──────────────────────────────────────────────
+    // ── 主开关 ──────────────────────────────────────────────
     if !qc.enabled {
-        info!("qq_bot module is disabled");
+        info!("qq_bot 模块已禁用");
         return Ok(None);
     }
 
-    // ── Bot persona ────────────────────────────────────────────────
+    // ── 机器人人设 ────────────────────────────────────────────────
     let persona = BotPersona::default();
     info!(
         nickname = %persona.nickname,
-        "QQ Bot persona loaded"
+        "QQ Bot 人设已加载"
     );
 
-    // ── Attention store ────────────────────────────────────────────
+    // ── 注意力存储 ────────────────────────────────────────────
     let attention_store = Arc::new(InMemoryAttentionStore::new(
         qc.cooldown_secs,
         qc.idle_timeout_secs,
     ));
 
-    // ── NapCat API client ──────────────────────────────────────────
+    // ── NapCat API 客户端 ──────────────────────────────────────────
     let napcat_api = if qc.self_qq_id != 0 {
         let token = if qc.http_token.is_empty() {
             None
@@ -111,13 +111,13 @@ pub async fn init_qq_bot(
         None
     };
 
-    // ── LLM provider (with optional override config) ───────────────
+    // ── LLM Provider（可选覆盖配置）───────────────
     let trigger_llm = Arc::clone(&llm_provider);
     let reply_llm = Arc::clone(&llm_provider);
     let profile_llm = Arc::clone(&llm_provider);
 
-    // ── Profile builder (optional) ─────────────────────────────────
-    // Clone before potential move — notice handler needs them later
+    // ── 画像构建器（可选）────────────────────────────────
+    // 在可能移动前克隆 — 通知处理器后续需要它们
     let pb_user_repo = user_repo.clone();
     let pb_external_user_repo = external_user_repo.clone();
     let pb_user_profile_repo = user_profile_repo.clone();
@@ -139,28 +139,28 @@ pub async fn init_qq_bot(
                 },
             ));
 
-            // Spawn periodic cleanup task
+            // 启动定期清理任务
             let cleanup_interval = tokio::time::Duration::from_secs(qc.profile_cleanup_interval_secs);
             let pb_cleanup = Arc::clone(&pb);
             background.spawn(tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(cleanup_interval).await;
                     if let Err(e) = pb_cleanup.cleanup().await {
-                        tracing::error!(error = %e, "profile cleanup failed");
+                        tracing::error!(error = %e, "画像清理失败");
                     }
                 }
             }));
-            info!("QQ Bot profile builder enabled");
+            info!("QQ Bot 画像构建器已启用");
             Some(pb)
         } else {
-            tracing::warn!("qq_bot profile_enabled=true but missing user/external_user/profile repos");
+            tracing::warn!("qq_bot profile_enabled=true 但缺少用户/外部用户/画像仓库");
             None
         }
     } else {
         None
     };
 
-    // ── Domain services ────────────────────────────────────────────
+    // ── 领域服务 ────────────────────────────────────────────
     let emotional_service = Arc::new(EmotionalStateService::new());
 
     // Topic service (纯内存，无外部依赖)
@@ -231,14 +231,14 @@ pub async fn init_qq_bot(
         relationship_service,
     ));
 
-    // ── Initialise bot account cache ───────────────────────────────
+    // ── 初始化机器人账号缓存 ───────────────────────────────
     if qc.self_qq_id != 0 {
         if let Err(e) = service.init(qc.self_qq_id).await {
-            tracing::warn!(error = %e, "qq_bot: failed to init bot account, continuing anyway");
+            tracing::warn!(error = %e, "qq_bot: 初始化机器人账号失败，继续运行");
         }
     }
 
-    // ── Spawn outbox worker (background) ───────────────────────────
+    // ── 启动发件箱 Worker（后台）──────────────────────────
     let outbox_worker = OutboxWorker::new(
         Arc::clone(&outbox_repo),
         napcat_api.clone(),
@@ -251,19 +251,19 @@ pub async fn init_qq_bot(
     info!(
         poll_interval_secs = qc.outbox_poll_interval_secs,
         batch_size = qc.outbox_batch_size,
-        "qq_bot outbox worker started"
+        "qq_bot 发件箱 Worker 已启动"
     );
 
-    // ── Spawn NapCat WebSocket listener (forward WS) ───────────────
-    // Derive WS URL from http_base_url by replacing the scheme.
-    // NapCat typically exposes WebSocket on the same host:port as HTTP.
+    // ── 启动 NapCat WebSocket 监听器（正向 WS）──────────────
+    // 通过替换协议从 http_base_url 推导 WS URL。
+    // NapCat 通常在 HTTP 的同一主机端口暴露 WebSocket。
     let ws_url = qc.http_base_url.replace("http://", "ws://");
     info!(
         ws_url = %ws_url,
-        "starting NapCat forward WebSocket listener"
+        "正在启动 NapCat 正向 WebSocket 监听器"
     );
 
-    // Get the bot_account_id for notice handler
+    // 创建通知处理器的 bot_account_id
     let bot_account_id = if qc.self_qq_id != 0 {
         bot_account_repo
             .find_by_self_qq_id(qc.self_qq_id)
@@ -275,7 +275,7 @@ pub async fn init_qq_bot(
         0
     };
 
-    // Create notice handler (requires external_user_repo)
+    // 创建通知处理器（需要 external_user_repo）
     let notice_handler: Option<Arc<dyn crate::infra::qq_bot::napcat::listener::GroupNoticeHandler>> =
         if let Some(ref external_user_repo) = external_user_repo {
             Some(Arc::new(NapCatGroupNoticeHandler::new(
@@ -285,11 +285,11 @@ pub async fn init_qq_bot(
                 bot_account_id,
             )))
         } else {
-            tracing::warn!("external_user_repo not available — group notice events will not be synced");
+            tracing::warn!("external_user_repo 不可用 — 群通知事件将不会同步");
             None
         };
 
-    // Build and start the listener in a background task
+    // 构建并在后台任务中启动监听器
     let listener_handler: Arc<dyn GroupMessageHandler> = Arc::clone(&service) as Arc<dyn GroupMessageHandler>;
     let mut listener_builder = NapCatListener::new(ws_url, qc.self_qq_id, listener_handler);
     if let Some(ref nh) = notice_handler {
@@ -298,11 +298,11 @@ pub async fn init_qq_bot(
 
     background.spawn(tokio::spawn(async move {
         if let Err(e) = listener_builder.run_forward().await {
-            tracing::error!(error = %e, "NapCat listener stopped with error");
+            tracing::error!(error = %e, "NapCat 监听器运行出错");
         }
     }));
 
-    // ── Proactive evaluator (后台轮询) ────────────────────────────
+    // ── 主动评估器（后台轮询）────────────────────────────
     if qc.proactive_check_interval_secs > 0 {
         let evaluator = Arc::new(ProactiveEvaluator::new(
             Arc::clone(&group_repo),
@@ -326,11 +326,11 @@ pub async fn init_qq_bot(
         info!(
             interval_secs = qc.proactive_check_interval_secs,
             cooldown_secs = qc.proactive_cooldown_secs,
-            "qq_bot proactive evaluator started"
+            "qq_bot 主动评估器已启动"
         );
     }
 
-    info!("QQ Bot (赛博猫猫) module initialised");
+    info!("QQ Bot（赛博猫猫）模块初始化完成");
 
     Ok(Some(QqBotDependencies {
         service,

@@ -2,13 +2,13 @@ use async_trait::async_trait;
 
 use super::task_event::TaskEvent;
 
-/// Pluggable handler for TaskEvent processing.
-/// Implementations can do logging, metrics, alerts, etc.
+/// TaskEvent 处理的可插拔处理器。
+/// 实现可以执行日志记录、指标收集、告警等。
 #[async_trait]
 pub trait TaskHandler: Send + Sync {
-    /// Process a task event.
+    /// 处理任务事件。
     async fn handle(&self, event: &TaskEvent);
 
-    /// Human-readable name for logging and diagnostics.
+    /// 用于日志和诊断的人类可读名称。
     fn name(&self) -> &str;
 }

@@ -120,10 +120,10 @@ impl QqBotService {
 
         if let Some(account) = account {
             *self.bot_account.write().await = Some(account);
-            info!(self_qq_id, "QQ bot account loaded");
+            info!(self_qq_id, "QQ 机器人账号已加载");
             Ok(())
         } else {
-            warn!(self_qq_id, "QQ bot account not found in DB, using ephemeral config");
+            warn!(self_qq_id, "数据库中未找到 QQ 机器人账号，使用临时配置");
             Ok(())
         }
     }
@@ -147,7 +147,7 @@ impl QqBotService {
         {
             Ok(m) => m,
             Err(e) => {
-                error!(group_id, error = %e, "failed to ingest message");
+                error!(group_id, error = %e, "消息接收失败");
                 return;
             }
         };
@@ -161,7 +161,7 @@ impl QqBotService {
                     None, // nickname will be filled from group member info later
                     persisted.sent_at,
                 ).await {
-                    error!(qq_user_id, error = %e, "failed to auto-register QQ user");
+                    error!(qq_user_id, error = %e, "QQ 用户自动注册失败");
                 }
                 // Lightweight observation
                 pb.observe_message(&persisted).await;

@@ -65,7 +65,7 @@ pub struct WebIngestionConfig {
     pub scheduler_enabled: bool,
     #[serde(default)]
     pub dispatcher_enabled: bool,
-    /// Global master switch for auto-publish. Default false. When false, the
+    /// 自动发布的全局主开关。默认为 false。 When false, the
     /// quality gate never returns Publishable — everything stops at staged and
     /// requires a manual publish request. §5.1 / §15.
     #[serde(default)]
