@@ -43,6 +43,7 @@ qdrant-client = { version = "1.15", optional = true }
 
 [features]
 default = []
+qq_bot = []
 qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
@@ -55,3 +56,4 @@ path = "src/main.rs"
 [[bin]]
 name = "qq_bot_init"
 path = "src/bin/qq_bot_init.rs"
+required-features = ["qq_bot"]
