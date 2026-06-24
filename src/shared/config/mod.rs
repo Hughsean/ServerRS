@@ -21,6 +21,7 @@ pub mod llm_agent_rag;
 pub mod mail_cors_log;
 pub mod plugins;
 pub mod qdrant;
+#[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod server;
 pub mod tts;
@@ -43,6 +44,7 @@ pub use self::plugins::{
     WeatherPluginConfig, WebSearchPluginConfig,
 };
 pub use self::qdrant::QdrantConfig;
+#[cfg(feature = "qq_bot")]
 pub use self::qq_bot::QqBotConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::tts::TtsConfig;
@@ -90,6 +92,7 @@ pub struct AppConfig {
     pub web_ingestion: WebIngestionConfig,
     #[serde(default)]
     pub tts: TtsConfig,
+    #[cfg(feature = "qq_bot")]
     #[serde(default)]
     pub qq_bot: QqBotConfig,
 }
@@ -116,6 +119,7 @@ impl Default for AppConfig {
             embedding: Default::default(),
             web_ingestion: Default::default(),
             tts: Default::default(),
+            #[cfg(feature = "qq_bot")]
             qq_bot: Default::default(),
         }
     }
@@ -491,6 +495,8 @@ impl AppConfig {
             }
         }
         // ── QQ Bot TTS output ──
+        #[cfg(feature = "qq_bot")]
+        {
         if let Ok(val) = std::env::var("QQ_BOT_TTS_OUTPUT_DIR") {
             if !val.is_empty() {
                 self.qq_bot.tts_output_dir = val;
