@@ -507,6 +507,7 @@ impl AppConfig {
                 self.qq_bot.tts_public_url_base = val;
             }
         }
+        } // cfg(feature = "qq_bot")
     }
 }
 

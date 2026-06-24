@@ -510,11 +510,14 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     };
 
     let state = bootstrap::state::build_state(&services);
+    #[cfg(feature = "qq_bot")]
     let tts_dir = if config.qq_bot.enabled && !config.tts.api_key.is_empty() {
         Some(std::path::PathBuf::from(&config.qq_bot.tts_output_dir))
     } else {
         None
     };
+    #[cfg(not(feature = "qq_bot"))]
+    let tts_dir: Option<std::path::PathBuf> = None;
     let app = api::router::build_router_with_origins(state, &config.cors.allowed_origins, tts_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
