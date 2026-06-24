@@ -390,6 +390,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         config.storage.clone(),
     ));
 
+    #[cfg(feature = "qq_bot")]
+    {
     // ── QQ Bot (赛博猫猫) ──────────────────────────────────────────────
     use crate::bootstrap::qq_bot::init_qq_bot;
     use crate::domain::tts::TtsProvider;
@@ -471,6 +473,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         tracing::warn!(error = %e, "qq_bot 初始化失败 — 将继续运行而不启动它");
         None
     });
+    }
 
     // ── 网页知识摄取 ──────────────────────────────────────────────────
     // 审查服务在 worker 禁用时仍可用于检查；
