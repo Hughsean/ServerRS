@@ -204,10 +204,22 @@ pub async fn init_qq_bot(
         qc.initial_delay_ms,
     ));
 
+    // Dispatcher/outbox entries need the persisted bot account id for FK integrity.
+    let bot_account_id = if qc.self_qq_id != 0 {
+        bot_account_repo
+            .find_by_self_qq_id(qc.self_qq_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to find bot account: {e}")))?
+            .map(|a| a.bot_account_id)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
     let segment_dispatcher = Arc::new(SegmentDispatcher::new(
         napcat_api.clone(),
         Arc::clone(&outbox_repo),
-        0, // bot_account_id — set after account init
+        bot_account_id,
         tts_provider,
         PathBuf::from(&qc.tts_output_dir),
         qc.tts_public_url_base.clone(),
@@ -264,18 +276,6 @@ pub async fn init_qq_bot(
         ws_url = %ws_url,
         "正在启动 NapCat 正向 WebSocket 监听器"
     );
-
-    // 创建通知处理器的 bot_account_id
-    let bot_account_id = if qc.self_qq_id != 0 {
-        bot_account_repo
-            .find_by_self_qq_id(qc.self_qq_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to find bot account: {e}")))?
-            .map(|a| a.bot_account_id)
-            .unwrap_or(0)
-    } else {
-        0
-    };
 
     // 创建通知处理器（需要 external_user_repo）
     let notice_handler: Option<

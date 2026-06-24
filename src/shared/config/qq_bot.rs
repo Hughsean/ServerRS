@@ -297,7 +297,7 @@ fn default_tts_output_dir() -> String {
     "./data/tts/".into()
 }
 fn default_tts_public_url_base() -> String {
-    "http://127.0.0.1:3001/tts/".into()
+    "http://127.0.0.1:8080/tts/".into()
 }
 
 // ── 主动行为默认值 ──

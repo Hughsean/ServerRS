@@ -7,9 +7,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
 use crate::domain::qq_bot::QqBotError;
-use crate::domain::qq_bot::message::{
-    MessageDirection, NormalizedMessage,
-};
+use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage};
 
 use super::message_parser::{ParsedEvent, normalize_text, parse_message_segments};
 
@@ -62,9 +60,7 @@ struct OneBotSender {
 }
 
 /// Deserialize message_id which can be either a number or string in OneBot v11.
-fn deserialize_message_id<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<String, D::Error> {
+fn deserialize_message_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     use serde::de;
     struct V;
     impl<'de> de::Visitor<'de> for V {
@@ -244,7 +240,7 @@ impl NapCatListener {
                                 );
                             }
                         }
-	                }
+                    }
                     "group_decrease" => {
                         if let Some(ref handler) = self.notice_handler {
                             if let Err(e) = handler
@@ -278,14 +274,8 @@ impl NapCatListener {
                                     event.group_id, event.user_id, event.time
                                 ),
                                 direction: MessageDirection::Inbound,
-                                raw_text: format!(
-                                    "用户{}戳了戳你",
-                                    event.user_id
-                                ),
-                                normalized_text: format!(
-                                    "用户{}戳了戳你",
-                                    event.user_id
-                                ),
+                                raw_text: format!("用户{}戳了戳你", event.user_id),
+                                normalized_text: format!("用户{}戳了戳你", event.user_id),
                                 segments: vec![],
                                 at_bot: true,
                                 command_name: Some("poke".to_string()),

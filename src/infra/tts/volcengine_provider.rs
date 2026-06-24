@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::domain::tts::{AudioFormat, TtsError, TtsProvider, TtsRequest, TtsResponse};
 use crate::shared::config::TtsConfig;
@@ -208,10 +208,18 @@ impl TtsProvider for VolcengineTtsProvider {
             encoding
         };
 
-        let voice = if request.voice.is_empty() {
+        let requested_voice = request.voice;
+        let voice = if requested_voice.is_empty() {
+            self.default_voice.clone()
+        } else if is_legacy_voice_alias(&requested_voice) {
+            warn!(
+                requested_voice = %requested_voice,
+                fallback_voice = %self.default_voice,
+                "legacy TTS voice alias is not valid for Volcengine v3, using default voice"
+            );
             self.default_voice.clone()
         } else {
-            request.voice
+            requested_voice
         };
 
         let reqid = uuid::Uuid::new_v4().to_string();
@@ -263,27 +271,54 @@ impl TtsProvider for VolcengineTtsProvider {
         // 解析 JSON 响应。v3 接口返回多个 JSON 行（\n 分隔），每行包含一段 base64 音频，
         // 需要将所有 data 字段解码后拼接成完整的音频数据。
         let response_text = String::from_utf8_lossy(&body_bytes);
-        let audio_data: Vec<u8> = response_text
-            .lines()
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || !trimmed.starts_with('{') {
-                    return None;
+        let mut provider_errors = Vec::new();
+        let mut audio_chunks = Vec::new();
+
+        for line in response_text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || !trimmed.starts_with('{') {
+                continue;
+            }
+
+            match serde_json::from_str::<VolcTtsV3Response>(trimmed) {
+                Ok(resp) if resp.code == 0 => {
+                    if let Some(data) = resp.data.as_ref() {
+                        use base64::Engine;
+                        match base64::engine::general_purpose::STANDARD.decode(data) {
+                            Ok(chunk) => audio_chunks.push(chunk),
+                            Err(e) => provider_errors.push(format!("base64 decode failed: {e}")),
+                        }
+                    }
                 }
-                let resp: VolcTtsV3Response = serde_json::from_str(trimmed).ok()?;
-                if resp.code != 0 {
-                    return None;
+                Ok(resp) => {
+                    provider_errors.push(format!(
+                        "code={}, message={}",
+                        resp.code,
+                        resp.message
+                            .unwrap_or_else(|| "missing message".to_string())
+                    ));
                 }
-                let data = resp.data.as_ref()?;
-                use base64::Engine;
-                base64::engine::general_purpose::STANDARD.decode(data).ok()
-            })
+                Err(e) => {
+                    provider_errors.push(format!("failed to parse JSON chunk: {e}"));
+                }
+            }
+        }
+
+        let audio_data: Vec<u8> = audio_chunks
+            .into_iter()
             .reduce(|mut acc, chunk| {
                 acc.extend_from_slice(&chunk);
                 acc
             })
             .ok_or_else(|| {
-                TtsError::InvalidResponse("no audio data found in any JSON chunk".to_string())
+                if provider_errors.is_empty() {
+                    TtsError::InvalidResponse("no audio data found in any JSON chunk".to_string())
+                } else {
+                    TtsError::ProviderError(format!(
+                        "no audio data; provider returned: {}",
+                        provider_errors.join("; ")
+                    ))
+                }
             })?;
 
         if audio_data.is_empty() {
@@ -298,6 +333,23 @@ impl TtsProvider for VolcengineTtsProvider {
             duration_secs: None,
         })
     }
+}
+
+fn is_legacy_voice_alias(voice: &str) -> bool {
+    matches!(
+        voice,
+        VOICE_ZH_FEMALE_QINGXIN
+            | VOICE_ZH_MALE_CHUNHOU
+            | VOICE_ZH_FEMALE_ZHIXING
+            | VOICE_ZH_MALE_QINQIE
+            | VOICE_ZH_FEMALE_QIAOPI
+            | VOICE_ZH_FEMALE_TIANMEI
+            | VOICE_ZH_MALE_NOVEL_NARRATION
+            | VOICE_EN_MALE_ADAM
+            | VOICE_EN_FEMALE_SARAH
+            | VOICE_JP_FEMALE_HANA
+            | VOICE_JP_MALE_SATOSHI
+    )
 }
 
 // ── 测试 ────────────────────────────────────────────────────────────

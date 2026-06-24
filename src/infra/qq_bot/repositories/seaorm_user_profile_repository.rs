@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
 use crate::domain::qq_bot::user_profile::UserProfile;
@@ -87,11 +85,9 @@ impl QqUserProfileRepository for SeaOrmQqUserProfileRepository {
 
         qq_user_profiles::Entity::insert_many([model])
             .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    qq_user_profiles::Column::QqUserId,
-                ])
-                .update_columns(update_columns)
-                .to_owned(),
+                sea_orm::sea_query::OnConflict::columns([qq_user_profiles::Column::QqUserId])
+                    .update_columns(update_columns)
+                    .to_owned(),
             )
             .exec(&self.db)
             .await

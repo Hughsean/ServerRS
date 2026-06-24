@@ -27,10 +27,7 @@ impl MessageIngestionService {
     /// Returns the persisted `NormalizedMessage` (with internal id populated).
     /// If the message already exists (dedup by platform_message_id + bot_account_id),
     /// returns the existing record without duplicating.
-    pub async fn ingest(
-        &self,
-        msg: &NormalizedMessage,
-    ) -> Result<NormalizedMessage, QqBotError> {
+    pub async fn ingest(&self, msg: &NormalizedMessage) -> Result<NormalizedMessage, QqBotError> {
         // Persist (idempotent)
         let persisted = self
             .message_repo

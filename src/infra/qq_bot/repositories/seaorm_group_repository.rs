@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter, Set};
 
 use crate::domain::qq_bot::config::{GroupConfig, MemoryPolicy, ReplyPolicy, TriggerPolicy};
 use crate::domain::qq_bot::repository::GroupRepository;

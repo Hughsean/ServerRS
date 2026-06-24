@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::sea_query::SimpleExpr;
+use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, Value,
@@ -119,8 +120,38 @@ impl OutboxRepository for SeaOrmOutboxRepository {
         Ok(())
     }
 
+    async fn mark_retry(
+        &self,
+        outbox_id: u64,
+        error: &str,
+        next_run_at: i64,
+    ) -> Result<(), AppError> {
+        qq_message_outbox::Entity::update_many()
+            .col_expr(
+                qq_message_outbox::Column::Attempts,
+                Expr::col(qq_message_outbox::Column::Attempts).add(1).into(),
+            )
+            .col_expr(
+                qq_message_outbox::Column::NextRunAt,
+                SimpleExpr::Value(Value::BigInt(Some(next_run_at))),
+            )
+            .col_expr(
+                qq_message_outbox::Column::LastError,
+                SimpleExpr::Value(Value::String(Some(error.to_string()))),
+            )
+            .filter(qq_message_outbox::Column::OutboxId.eq(outbox_id))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
     async fn mark_failed(&self, outbox_id: u64, error: &str) -> Result<(), AppError> {
         qq_message_outbox::Entity::update_many()
+            .col_expr(
+                qq_message_outbox::Column::Attempts,
+                Expr::col(qq_message_outbox::Column::Attempts).add(1).into(),
+            )
             .col_expr(
                 qq_message_outbox::Column::Status,
                 SimpleExpr::Value(Value::String(Some("failed".to_string()))),

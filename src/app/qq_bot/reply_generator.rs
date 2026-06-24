@@ -144,29 +144,37 @@ impl ReplyGenerator {
                 .segments
                 .into_iter()
                 .take(self.max_segments as usize)
-                .map(|s| match s {
+                .filter_map(|s| match s {
                     ReplySegment::Text { ref content }
                         if content.len() > self.max_chars_per_segment as usize =>
                     {
-                        ReplySegment::Text {
+                        Some(ReplySegment::Text {
                             content: content
                                 .chars()
                                 .take(self.max_chars_per_segment as usize)
                                 .collect(),
-                        }
+                        })
                     }
                     ReplySegment::Record { ref text, voice }
                         if text.len() > self.max_chars_per_segment as usize =>
                     {
-                        ReplySegment::Record {
+                        Some(ReplySegment::Record {
                             text: text
                                 .chars()
                                 .take(self.max_chars_per_segment as usize)
                                 .collect(),
                             voice,
-                        }
+                        })
                     }
-                    other => other,
+                    ReplySegment::Image { path } if is_placeholder_image_path(&path) => {
+                        warn!(path = %path, "LLM generated placeholder image URL, dropping segment");
+                        None
+                    }
+                    ReplySegment::Emoji { id } if !is_allowed_emoji_id(id) => {
+                        warn!(id, "LLM generated unsupported QQ face id, dropping segment");
+                        None
+                    }
+                    other => Some(other),
                 })
                 .collect();
 
@@ -230,4 +238,72 @@ impl ReplyGenerator {
             relationship_hints: None,
         })
     }
+}
+
+fn is_placeholder_image_path(path: &str) -> bool {
+    let normalized = path.trim().to_lowercase();
+    normalized.is_empty()
+        || normalized.contains("example.com")
+        || normalized.contains("placeholder")
+        || normalized.contains("cat.jpg")
+}
+
+fn is_allowed_emoji_id(id: i32) -> bool {
+    matches!(
+        id,
+        1 | 2
+            | 3
+            | 4
+            | 5
+            | 6
+            | 8
+            | 9
+            | 10
+            | 11
+            | 12
+            | 13
+            | 14
+            | 15
+            | 16
+            | 19
+            | 20
+            | 21
+            | 22
+            | 23
+            | 24
+            | 25
+            | 26
+            | 27
+            | 28
+            | 30
+            | 32
+            | 33
+            | 34
+            | 39
+            | 42
+            | 49
+            | 53
+            | 63
+            | 66
+            | 74
+            | 75
+            | 76
+            | 77
+            | 78
+            | 79
+            | 85
+            | 96
+            | 97
+            | 98
+            | 99
+            | 100
+            | 101
+            | 104
+            | 105
+            | 106
+            | 107
+            | 109
+            | 111
+            | 118
+    )
 }

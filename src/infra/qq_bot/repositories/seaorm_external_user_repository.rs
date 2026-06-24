@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::repository::ExternalUserRepository;
@@ -68,11 +66,9 @@ impl ExternalUserRepository for SeaOrmExternalUserRepository {
 
         qq_external_users::Entity::insert_many([model])
             .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    qq_external_users::Column::QqUserId,
-                ])
-                .update_columns(update_columns)
-                .to_owned(),
+                sea_orm::sea_query::OnConflict::columns([qq_external_users::Column::QqUserId])
+                    .update_columns(update_columns)
+                    .to_owned(),
             )
             .exec(&self.db)
             .await

@@ -284,10 +284,9 @@ impl ContextBuilder {
     { "type": "text", "content": "说话内容" },
     { "type": "emoji", "id": 123 },
     { "type": "kaomoji", "text": "(´▽`ʃ♡ƪ)" },
-    { "type": "image", "path": "https://example.com/cat.jpg" },
     { "type": "quote_reply", "message_id": 123456, "text": "回复内容" },
     { "type": "poke", "user_id": 1234567890, "group_id": 123456789 },
-    { "type": "record", "text": "语音内容", "voice": "zh_female_qiaopi" }
+    { "type": "record", "text": "语音内容", "voice": "zh_female_wanwanxiaohe_moon_bigtts" }
   ],
   "timing_hint": {
     "initial_delay_ms": 1500,
@@ -303,12 +302,12 @@ impl ContextBuilder {
 
 可用的回复类型：
 - text：普通文本
-- emoji：QQ 表情（id 为数字）
+- emoji：QQ 内置表情，仅使用这些 id：1 撇嘴、2 色、3 发呆、4 得意、5 流泪、6 害羞、8 睡、9 大哭、10 尴尬、11 发怒、12 调皮、13 呲牙、14 微笑、15 难过、16 酷、19 吐、20 偷笑、21 可爱、22 白眼、23 傲慢、24 饥饿、25 困、26 惊恐、27 流汗、28 憨笑、30 奋斗、32 疑问、33 嘘、34 晕、39 再见、42 爱心、49 拥抱、53 蛋糕、63 玫瑰、66 爱心、74 太阳、75 月亮、76 赞、77 踩、78 握手、79 胜利、85 飞吻、96 冷汗、97 擦汗、98 抠鼻、99 鼓掌、100 糗大了、101 坏笑、104 哈欠、105 鄙视、106 委屈、107 快哭了、109 亲亲、111 可怜、118 抱抱；不要编造其它数字
 - kaomoji：颜文字
-- image：图片（path 为 URL）
+- image：仅当上下文中已有可复用的真实图片 URL 时使用；不要编造 URL，不要使用 example.com 示例地址
 - quote_reply：引用回复（message_id 和 text 都必需）
 - poke：拍一拍群成员（user_id 为目标成员的 QQ 号，group_id 为群号）
-- record：语音消息（text 为要说的话，voice 为音色 ID，可用音色：zh_female_qingxin 清新、zh_female_qiaopi 俏皮、zh_female_tianmei 甜美、zh_male_chunhou 醇厚等）
+- record：语音消息（text 为要说的话，voice 使用 zh_female_wanwanxiaohe_moon_bigtts；不要编造或使用短音色 ID）
 
 可用的情绪（emotion_change.mood）：
 - happy：开心

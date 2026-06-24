@@ -314,6 +314,21 @@
  │   ├── mod.rs
  │   └── object_service.rs     上传/下载/删除文件
  │
+ ├── qq_bot/                   ★★★ QQ 机器人区
+ │   ├── mod.rs
+ │   ├── qq_bot_service.rs     ★ QQ 机器人主服务（接收/发送消息）
+ │   ├── message_ingestion.rs   消息接入与分派
+ │   ├── reply_generator.rs     回复生成
+ │   ├── context_builder.rs     构建对话上下文
+ │   ├── outbox_worker.rs       发件箱消息投递
+ │   ├── segment_dispatcher.rs  消息段分发
+ │   ├── trigger_evaluator.rs   触发条件评估
+ │   ├── topic_service.rs       话题管理
+ │   ├── relationship_service.rs 关系管理
+ │   ├── profile_builder.rs     用户画像构建
+ │   ├── proactive_evaluator.rs 主动推送评估
+ │   └── emotional_state_service.rs 情绪状态服务
+ │
  └── web_ingestion/            ★★★ 知识自动爬取流水线
      ├── mod.rs
      ├── dispatcher.rs          分发器（取任务→执行）
@@ -429,6 +444,26 @@
  │   │                          └ AudioFormat(Wav/Mp3/Pcm/OggOpus)
  │   └── (TtsProvider trait)    语音合成接口（async trait）
  │
+ ├── qq_bot/                    ★★★ QQ 机器人领域
+ │   ├── mod.rs                 模块声明
+ │   ├── bot_state.rs           机器人状态
+ │   ├── config.rs              机器人配置结构
+ │   ├── conversation_state.rs  会话状态
+ │   ├── error.rs               错误类型
+ │   ├── message.rs             消息数据结构
+ │   ├── reply.rs               回复数据结构
+ │   ├── turn.rs                对话轮次结构
+ │   ├── persona.rs             人设定义
+ │   ├── attention.rs           注意力机制
+ │   ├── proactive.rs           主动行为定义
+ │   ├── user_profile.rs        用户画像接口
+ │   ├── relationship.rs        关系数据结构
+ │   ├── repository.rs          ★ 核心仓库接口
+ │   ├── relationship_repository.rs 关系仓库接口
+ │   ├── qq_profile_repository.rs   QQ 画像仓库接口
+ │   ├── topic_state.rs         话题状态
+ │   └── (各类仓库接口)
+ │
  └── tasks/
      └── ...                     任务相关
  ```
@@ -510,9 +545,36 @@
  │   ├── mod.rs                    模块声明
  │   └── volcengine_provider.rs    ★ 火山引擎（豆包语音）TTS 实现
  │                                  └ 调用 v3 API 合成语音
- │                                  └ 支持中文/英文/日文 13 种音色
- │
- ├── detector/                      风险检测实现
+	 │                                  └ 支持中文/英文/日文 13 种音色
+	 │
+	 ├── qq_bot/                        ★★★ QQ 机器人基础设施
+	 │   ├── mod.rs                    模块声明
+	 │   ├── attention_store.rs        注意力存储
+	 │   ├── napcat/                   NapCat 协议适配
+	 │   │   ├── mod.rs
+	 │   │   ├── api.rs                ★ NapCat HTTP API 封装
+	 │   │   ├── listener.rs           ★ WebSocket 事件监听
+	 │   │   ├── notice_handler.rs     通知事件处理
+	 │   │   └── message_parser.rs     消息解析
+	 │   ├── repositories/             ★ 数据库仓库实现
+	 │   │   ├── mod.rs
+	 │   │   ├── seaorm_agent_turn_repository.rs   对话轮次
+	 │   │   ├── seaorm_bot_account_repository.rs  机器人账号
+	 │   │   ├── seaorm_external_user_repository.rs 外部用户
+	 │   │   ├── seaorm_group_member_repository.rs 群成员
+	 │   │   ├── seaorm_group_message_repository.rs 群消息
+	 │   │   ├── seaorm_group_memory_repository.rs 群记忆
+	 │   │   ├── seaorm_group_repository.rs        群组
+	 │   │   ├── seaorm_group_summary_repository.rs 群摘要
+	 │   │   ├── seaorm_outbox_repository.rs       发件箱
+	 │   │   ├── seaorm_relationship_repository.rs  关系
+	 │   │   ├── seaorm_user_profile_repository.rs  用户画像
+	 │   │   └── mock.rs               模拟仓库（测试用）
+	 │   └── models/                   数据模型
+	 │       ├── mod.rs
+	 │       └── qq_bot_accounts.rs
+	 │
+	 ├── detector/                      风险检测实现
  │   ├── mod.rs
  │   └── rule_based_detector.rs    ★ 基于规则的风险检测器
  │
@@ -551,6 +613,7 @@
  ├── mod.rs
  ├── repos.rs       ★ 创建所有 Repository（数据仓库）
  ├── auth.rs        创建认证服务
+ ├── qq_bot.rs      创建 QQ 机器人服务
  ├── state.rs       把所有 Service 打包成 AppState
  ├── tasks.rs       启动后台任务
  └── web_ingestion.rs  初始化知识摄入模块
@@ -559,15 +622,26 @@
  ---
  
  ### 4.8 共享层 `src/shared/`
- 
+
  ```
  src/shared/
  ├── mod.rs
- ├── config.rs      ★★ 配置文件结构（AppConfig 和他的全部子配置）
+ ├── config/          ★★ 配置子模块目录（AppConfig 拆分为多个领域文件）
+ │   ├── mod.rs                配置模块入口 + AppConfig 结构体
+ │   ├── server.rs             ServerConfig, DatabaseConfig, SessionConfig
+ │   ├── auth_storage.rs       JwtConfig, AuthConfig, StorageConfig
+ │   ├── llm_agent_rag.rs      LlmConfig, AgentConfig, RagConfig, EmbeddingConfig
+ │   ├── mail_cors_log.rs      MailConfig, CorsConfig, LoggingConfig, DetectorConfig, OllamaConfig
+ │   ├── plugins.rs            PluginsConfig + 5 个插件配置
+ │   ├── web_ingestion.rs      WebIngestionConfig, DistillLlmConfig
+ │   ├── tts.rs                TtsConfig
+ │   ├── qdrant.rs             QdrantConfig
+ │   ├── qq_bot.rs             QqBotConfig
+ │   └── display_config.rs     Display for AppConfig 实现
  ├── error.rs       错误类型定义
  ```
- 
- `config.rs` 定义了所有配置项：
+
+ `config/` 定义了所有配置项：
  - `server`：监听地址和端口（默认 0.0.0.0:8080）
  - `database`：MySQL 连接
  - `jwt`：JWT 密钥、过期时间
@@ -581,6 +655,7 @@
  - `embedding`：向量嵌入配置
  - `web_ingestion`：知识摄入全部配置
  - `tts`：语音合成配置（火山引擎 API Key、模型、音色等）
+ - `qq_bot`：QQ 机器人配置（QQ 号、NapCat 连接地址等）
  - `plugins`：Agent 工具配置（天气、新闻、搜索等）
  - `mail`：邮件配置
  - `cors`：跨域配置
@@ -588,7 +663,7 @@
  
  ---
  
- ## 五、数据库表全解（41 张表）
+ ## 五、数据库表全解（52 张表）
  
  > 建表语句在：`database/sql/init.sql`
  > 每个表的 Rust 实体在：`src/infra/persistence/entities/`
@@ -648,14 +723,30 @@
  | `content_likes` | 点赞表 |（同 5.4，也用于社区点赞）|
  
  ### 5.7 其他业务（3 张表）
- 
+
  | 表名 | 中文名 | 存什么 |
  |------|--------|--------|
  | `user_diaries` | 日记表 | 用户写的日记 |
  | `music` | 音乐表 | 音乐曲库 |
  | `stored_objects` | 对象存储表 | 上传文件的元数据 |
- 
- ### 5.8 知识摄入（15 张表）— 最复杂的一块
+
+ ### 5.8 QQ 机器人（11 张表）
+
+ | 表名 | 中文名 | 存什么 |
+ |------|--------|--------|
+ | `qq_bot_accounts` | 机器人账号表 | 机器人 QQ 号与登录态 |
+ | `qq_external_users` | 外部用户表 | QQ 用户信息映射 |
+ | `qq_relationships` | 关系表 | 机器人对用户的亲密/信任度 |
+ | `qq_user_profiles` | 用户画像表 | AI 对用户的性格/情绪画像 |
+ | `qq_groups` | 群组表 | 群组信息与配置 |
+ | `qq_group_members` | 群成员表 | 群成员列表与角色 |
+ | `qq_group_messages` | 群消息表 | 群聊消息记录 |
+ | `qq_group_memories` | 群记忆表 | 群聊长期记忆 |
+ | `qq_group_summaries` | 群摘要表 | 群聊话题摘要 |
+ | `qq_agent_turns` | 对话轮次表 | 每次 LLM 调用的完整记录 |
+ | `qq_message_outbox` | 发件箱表 | 待发送的消息队列 |
+
+ ### 5.9 知识摄入（15 张表）— 最复杂的一块
  
  | 表名 | 中文名 | 存什么 |
  |------|--------|--------|
@@ -780,11 +871,13 @@
    ├── domain/        ← 定义接口和数据结构（纯 Rust 结构体 + trait）
    │   └── */         → 被 app/ 和 infra/ 双方引用
    │
-   └── infra/         ← 实现 domain 接口
-       ├── persistence/ → 操作 MySQL（SeaORM）
-       ├── llm/         → 调 Ollama API
-       ├── vector_store/ → 操作 Qdrant
-       └── detector/    → 风险检测规则
+	   └── infra/         ← 实现 domain 接口
+	       ├── persistence/ → 操作 MySQL（SeaORM）
+	       ├── llm/         → 调 Ollama API
+	       ├── tts/         → 调火山引擎语音 API
+	       ├── qq_bot/      → NapCat QQ 协议适配
+	       ├── vector_store/ → 操作 Qdrant
+	       └── detector/    → 风险检测规则
  
  依赖方向（从右到左）：
    main.rs → bootstrap → api/app → domain ← infra
@@ -814,10 +907,11 @@
  | `[qdrant]` | enabled, url | true, http://127.0.0.1:6334 | 向量数据库 |
  | `[web_ingestion]` | enabled, auto_publish | true, true | 知识摄入 |
  | `[tts]` | provider, api_key, resource_id, model | volcengine, "", "", seed-tts-2.0-standard | 语音合成 |
+ | `[qq_bot]` | enabled, self_qq_id, http_base_url, ws_url | true, 0, http://127.0.0.1:3000, ws://127.0.0.1:6700 | QQ 机器人 |
  | `[plugins.weather]` | api_key | "" | 天气 API |
  | `[plugins.news]` | rss_urls | 中国新闻网 | 新闻源 |
 
- 环境变量会覆盖配置文件（如 `DATABASE_URL`、`JWT_SECRET`、`LLM_BASE_URL`、`TTS_API_KEY` 等）。
+	环境变量会覆盖配置文件（如 `DATABASE_URL`、`JWT_SECRET`、`LLM_BASE_URL`、`TTS_API_KEY` 等）。
  
  ---
  
@@ -918,11 +1012,17 @@
  
  **Q：有哪些外部依赖？**  
  A：MySQL（数据存储）、Ollama（AI 推理）、Qdrant（向量搜索，可选），  
- 以及和风天气（查天气）、中国新闻网 RSS（新闻）、火山引擎豆包语音（TTS 语音合成）等外部 API。
+ 以及和风天气（查天气）、中国新闻网 RSS（新闻）、火山引擎豆包语音（TTS 语音合成）、  
+ NapCat（QQ 机器人协议适配）等外部 API。
  
  **Q：TTS（文字转语音）功能是怎么实现的？**  
  A：通过火山引擎（豆包语音）v3 API 将文字合成为语音（WAV/MP3/OGG 格式），  
  提供 13 种音色（中/英/日文），支持语速、音量、音调调节。
+ 
+ **Q：QQ 机器人（QQ Bot）是什么？**  
+ A：ServerRS 内置了一个 QQ 机器人模块，通过 NapCat 协议连接 QQ，  
+ 可自动回复群聊/私聊消息、管理群话题、维护用户画像、主动推送内容。  
+ 机器人有自己的完整数据库（11 张表），支持多账号、多群组、长期记忆。
  
  **Q：什么是向量搜索？为什么需要 Qdrant？**  
  A：传统搜索是"关键字匹配"（搜"苹果"只能找到有"苹果"二字的文章），  

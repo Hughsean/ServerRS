@@ -452,6 +452,19 @@ impl OutboxRepository for MockOutboxRepo {
         }
         Ok(())
     }
+    async fn mark_retry(
+        &self,
+        outbox_id: u64,
+        error: &str,
+        next_run_at: i64,
+    ) -> Result<(), AppError> {
+        if let Some(e) = self.store.write().await.get_mut(&outbox_id) {
+            e.attempts += 1;
+            e.next_run_at = next_run_at;
+            e.last_error = Some(error.to_string());
+        }
+        Ok(())
+    }
     async fn mark_failed(&self, outbox_id: u64, error: &str) -> Result<(), AppError> {
         if let Some(e) = self.store.write().await.get_mut(&outbox_id) {
             e.status = OutboxStatus::Failed;

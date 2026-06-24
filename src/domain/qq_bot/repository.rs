@@ -173,6 +173,12 @@ pub trait OutboxRepository: Send + Sync {
         outbox_id: u64,
         platform_message_id: &str,
     ) -> Result<(), crate::shared::error::AppError>;
+    async fn mark_retry(
+        &self,
+        outbox_id: u64,
+        error: &str,
+        next_run_at: i64,
+    ) -> Result<(), crate::shared::error::AppError>;
     async fn mark_failed(
         &self,
         outbox_id: u64,

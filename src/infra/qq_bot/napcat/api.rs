@@ -1,6 +1,49 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Deserialize a JSON value that may be either a string or a number into `Option<String>`.
+fn deserialize_opt_string_or_number<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<String>, D::Error> {
+    use serde::de;
+
+    struct V;
+
+    impl<'de> de::Visitor<'de> for V {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string, number, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
+            Ok(None)
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
+            Ok(None)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Option<String>, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+    }
+
+    d.deserialize_any(V)
+}
+
 /// OneBot send_group_msg request.
 #[derive(Debug, Clone, Serialize)]
 pub struct SendGroupMsgRequest {
@@ -23,6 +66,7 @@ pub struct OneBotResponse {
 /// Data returned by send_group_msg.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SendGroupMsgData {
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_number")]
     pub message_id: Option<String>,
 }
 
@@ -116,10 +160,15 @@ impl NapCatApiClient {
         })?;
 
         if body.retcode != 0 {
+            let data_detail = body
+                .data
+                .as_ref()
+                .map(|data| format!("; data={data}"))
+                .unwrap_or_default();
             return Err(super::super::QqBotError::Api {
                 action: action.into(),
                 code: body.retcode,
-                message: body.status,
+                message: format!("{}{}", body.status, data_detail),
             });
         }
 
@@ -231,5 +280,25 @@ impl NapCatApiClient {
                 super::super::QqBotError::MessageProcessing(format!("parse status: {e}"))
             })?,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SendGroupMsgData;
+
+    #[test]
+    fn send_group_msg_message_id_accepts_number_string_and_null() {
+        let numeric: SendGroupMsgData =
+            serde_json::from_value(serde_json::json!({ "message_id": 1965026542 })).unwrap();
+        assert_eq!(numeric.message_id.as_deref(), Some("1965026542"));
+
+        let string: SendGroupMsgData =
+            serde_json::from_value(serde_json::json!({ "message_id": "1965026542" })).unwrap();
+        assert_eq!(string.message_id.as_deref(), Some("1965026542"));
+
+        let null: SendGroupMsgData =
+            serde_json::from_value(serde_json::json!({ "message_id": null })).unwrap();
+        assert_eq!(null.message_id, None);
     }
 }

@@ -424,13 +424,16 @@ impl QqBotService {
                 }
             }
             Err(e) => {
-                error!(group_id, error = %e, "reply dispatch failed, fallback to outbox");
+                error!(group_id, error = %e, "reply dispatch failed");
 
-                // Fallback: enqueue remaining segments to outbox
-                let _ = self
-                    .segment_dispatcher
-                    .enqueue_reply(group_id, &reply, related_turn_id)
-                    .await;
+                if matches!(e, QqBotError::Internal(_)) {
+                    // send_direct could fail before it reaches per-segment fallback
+                    // (for example, no NapCat API client). In that case enqueue all.
+                    let _ = self
+                        .segment_dispatcher
+                        .enqueue_reply(group_id, &reply, related_turn_id)
+                        .await;
+                }
 
                 let _ = self
                     .turn_repo

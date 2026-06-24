@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-	use tracing::{info, warn};
+use tracing::{info, warn};
 
 use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::{ExternalUser, GroupMember};
@@ -183,6 +183,6 @@ impl GroupNoticeHandler for NapCatGroupNoticeHandler {
             );
         }
 
-	        Ok(())
-	    }
-	}
+        Ok(())
+    }
+}

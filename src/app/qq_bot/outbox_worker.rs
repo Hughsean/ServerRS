@@ -76,14 +76,24 @@ impl OutboxWorker {
                     "outbox entry processing failed"
                 );
 
-                // Mark as failed after max attempts
+                let outbox_id = entry.outbox_id.unwrap_or(0);
+
                 if entry.attempts + 1 >= entry.max_attempts {
                     if let Err(inner) = self
                         .outbox_repo
-                        .mark_failed(entry.outbox_id.unwrap_or(0), &e.to_string())
+                        .mark_failed(outbox_id, &e.to_string())
                         .await
                     {
                         error!(error = %inner, "failed to mark outbox entry as failed");
+                    }
+                } else {
+                    let next_run_at = now_ms() + retry_delay_ms(entry.attempts);
+                    if let Err(inner) = self
+                        .outbox_repo
+                        .mark_retry(outbox_id, &e.to_string(), next_run_at)
+                        .await
+                    {
+                        error!(error = %inner, "failed to mark outbox entry for retry");
                     }
                 }
             }
@@ -132,4 +142,16 @@ impl OutboxWorker {
 
         Ok(())
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn retry_delay_ms(attempts_before_failure: u32) -> i64 {
+    let multiplier = 1_i64 << attempts_before_failure.min(6);
+    (5_000 * multiplier).min(60_000)
 }

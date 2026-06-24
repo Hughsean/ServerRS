@@ -318,11 +318,16 @@ impl SegmentDispatcher {
             .map_err(|e| QqBotError::Internal(format!("failed to write TTS audio file: {e}")))?;
 
         let url = format!(
-            "{}{}",
+            "{}/{}",
             self.tts_public_url_base.trim_end_matches('/'),
             filename
         );
-        info!(filename = %filename, size = response.audio_data.len(), "TTS audio file written");
+        info!(
+            filename = %filename,
+            size = response.audio_data.len(),
+            url = %url,
+            "TTS audio file written"
+        );
 
         Ok(format!("[CQ:record,file={}]", url))
     }

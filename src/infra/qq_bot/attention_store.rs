@@ -98,11 +98,20 @@ impl InMemoryAttentionStore {
     /// Check if we can process a message from the given group.
     /// Updates last activity timestamp if it's the engaged group.
     pub async fn can_process(&self, group_id: i64) -> bool {
-        let state = self.state.read().await;
+        let mut state = self.state.write().await;
         match *state {
             AttentionState::Idle => true,
             AttentionState::Engaging(gid) | AttentionState::Engaged(gid) => gid == group_id,
-            AttentionState::Cooldown(_, _) => false,
+            AttentionState::Cooldown(_, until) => {
+                if (now_ms() as u64) >= until {
+                    *state = AttentionState::Idle;
+                    self.engaged_group_id.store(0, Ordering::SeqCst);
+                    self.cooldown_until_ms.store(0, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -177,5 +186,16 @@ mod tests {
         store.start_cooldown().await;
         // Should be blocked by cooldown
         assert!(!store.try_engage(100).await);
+    }
+
+    #[tokio::test]
+    async fn test_can_process_allows_after_cooldown_expires() {
+        let store = InMemoryAttentionStore::new(0, 60);
+        assert!(store.try_engage(100).await);
+        store.confirm_engagement(100).await;
+        store.start_cooldown().await;
+
+        assert!(store.can_process(100).await);
+        assert!(matches!(store.get_state().await, AttentionState::Idle));
     }
 }
