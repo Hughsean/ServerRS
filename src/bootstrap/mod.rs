@@ -1,4 +1,5 @@
 pub mod auth;
+#[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod repos;
 pub mod state;

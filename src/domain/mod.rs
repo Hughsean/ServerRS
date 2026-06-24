@@ -9,6 +9,7 @@ pub mod llm;
 pub mod memory;
 pub mod music;
 pub mod psychology;
+#[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod rag;
 pub mod risk;

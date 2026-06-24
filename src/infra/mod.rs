@@ -2,6 +2,7 @@ pub mod auth;
 pub mod detector;
 pub mod llm;
 pub mod persistence;
+#[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod storage;
 pub mod tasks;
