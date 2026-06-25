@@ -216,13 +216,6 @@ pub async fn delete_user(
     Ok(Json(DeleteUserResponse { deleted }))
 }
 
-pub async fn list_users(
-    State(state): State<UserState>,
-) -> Result<Json<Vec<UserResponse>>, AppError> {
-    let users = state.user.list_users().await?;
-    Ok(Json(users.into_iter().map(user_to_response).collect()))
-}
-
 pub async fn upsert_user_profile(
     State(state): State<UserState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
