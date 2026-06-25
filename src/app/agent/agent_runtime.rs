@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -202,6 +203,10 @@ pub struct AgentRuntime {
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn AgentTool>>,
     settings: AgentRuntimeSettings,
+
+    /// When the last memory extraction failed (Instant::now() at failure time).
+    /// Used to throttle extraction after repeated failures.
+    last_extraction_failure: Arc<Mutex<Option<Instant>>>,
 }
 
 impl AgentRuntime {
@@ -228,6 +233,7 @@ impl AgentRuntime {
             prompt_builder: PromptBuilder::new(),
             tools,
             settings,
+            last_extraction_failure: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -760,7 +766,7 @@ impl AgentRuntime {
         })
     }
 
-    /// Fire-and-forget task: extract memories via MemoryService.
+    /// Fire-and-forget task: extract memories via MemoryService with retry + throttle.
     fn spawn_memory_extraction(
         &self,
         user_id: u64,
@@ -770,13 +776,29 @@ impl AgentRuntime {
         assistant_reply: &str,
         task_epoch: u64,
     ) {
-        let memory_service = Arc::clone(&self.memory_service);
+        // Throttle: if the last extraction failed <30s ago, skip this turn
+        {
+            if let Ok(guard) = self.last_extraction_failure.lock() {
+                if let Some(last_fail) = *guard {
+                    if last_fail.elapsed() < std::time::Duration::from_secs(30) {
+                        debug!(
+                            user_id,
+                            ?conversation_id,
+                            seconds_since_failure = last_fail.elapsed().as_secs(),
+                            "skipping memory extraction (recent failure)"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
 
+        let memory_service = Arc::clone(&self.memory_service);
         let user_text = user_message.to_string();
         let asst_text = assistant_reply.to_string();
+        let last_failure = Arc::clone(&self.last_extraction_failure);
 
         tokio::spawn(async move {
-            // Extract memories via MemoryService (uses MemoryExtractor + vector index)
             let messages = vec![
                 crate::domain::llm::ChatMessage {
                     role: "user".into(),
@@ -794,8 +816,11 @@ impl AgentRuntime {
                 },
             ];
 
-            if let Some(cid) = conversation_id {
-                if let Err(e) = memory_service
+            let Some(cid) = conversation_id else { return };
+
+            // Attempt extraction with a single retry on failure
+            let attempt = || async {
+                memory_service
                     .extract_and_save_at_version(
                         user_id,
                         &messages,
@@ -804,8 +829,35 @@ impl AgentRuntime {
                         Some(task_epoch),
                     )
                     .await
-                {
-                    warn!(user_id, conversation_id = cid, error = %e, "memory extraction failed");
+            };
+
+            let result = match attempt().await {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    warn!(
+                        user_id,
+                        conversation_id = cid,
+                        error = %e,
+                        "memory extraction failed (will retry once)"
+                    );
+                    // Single retry with a small backoff
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    attempt().await
+                }
+            };
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(
+                        user_id,
+                        conversation_id = cid,
+                        error = %e,
+                        "memory extraction failed after retry"
+                    );
+                    if let Ok(mut guard) = last_failure.lock() {
+                        *guard = Some(std::time::Instant::now());
+                    }
                 }
             }
         });
