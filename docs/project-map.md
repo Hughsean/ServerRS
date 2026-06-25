@@ -618,7 +618,7 @@
  │   ├── alert_handler.rs           告警处理器
  │   └── rate_limit_handler.rs      限流处理器
  │
- ├── ssh_tunnel.rs                  SSH 隧道管理（ssh -L 子进程）
+ ├── ssh_tunnel.rs                  SSH 隧道管理（ssh -L/-R 子进程）
  │
  └── web_ingestion/                 知识摄入实现
      ├── mod.rs
@@ -935,7 +935,7 @@
  | `[web_ingestion]` | enabled, auto_publish | true, true | 知识摄入 |
  | `[tts]` | provider, api_key, resource_id, model | volcengine, "", "", seed-tts-2.0-standard | 语音合成 |
  | `[qq_bot]` | enabled, self_qq_id, http_base_url, ws_url | true, 0, http://127.0.0.1:3000, ws://127.0.0.1:6700 | QQ 机器人 |
- | `[ssh_tunnels.*]` | host, user, local_port, remote_port | 无 | SSH 隧道（数据库/Ollama 引用） |
+ | `[ssh_tunnels.*]` | host, user, local_port, remote_port, direction, bind_address | 无 | SSH 隧道（数据库/Ollama 引用） |
  | `[plugins.weather]` | api_key | "" | 天气 API |
  | `[plugins.news]` | rss_urls | 中国新闻网 | 新闻源 |
 
