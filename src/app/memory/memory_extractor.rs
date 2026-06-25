@@ -244,6 +244,142 @@ impl MemoryExtractor {
             _ => MemoryMergeDecision::New,
         }
     }
+
+    /// Batch variant: classify multiple proposed memories against candidates
+    /// in one LLM call instead of N separate calls.
+    ///
+    /// Returns one `MemoryMergeDecision` per proposed memory, in order.
+    /// On any error, all memories default to `MemoryMergeDecision::New`.
+    pub async fn classify_merge_batch(
+        &self,
+        proposed: &[NewMemory],
+        candidates: &[UserMemory],
+    ) -> Vec<MemoryMergeDecision> {
+        if proposed.is_empty() {
+            return Vec::new();
+        }
+
+        // Build prompt with all proposed memories and all candidates
+        let proposed_json: Vec<serde_json::Value> = proposed
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                json!({
+                    "index": i,
+                    "memory_type": m.memory_type,
+                    "content": m.content,
+                    "confidence": m.confidence,
+                })
+            })
+            .collect();
+
+        let candidates_json: Vec<serde_json::Value> = candidates
+            .iter()
+            .map(|m| {
+                json!({
+                    "memory_id": m.memory_id,
+                    "memory_type": m.memory_type,
+                    "content": m.content,
+                    "confidence": m.confidence,
+                })
+            })
+            .collect();
+
+        let prompt = format!(
+            r#"Proposed new memories (JSON array, each has an "index" field):
+{}
+
+Existing candidate memories:
+{}
+
+For each proposed memory, decide how it relates to the candidates.
+Return a JSON array of objects — one per proposed memory in index order:
+[{{"index":0,"decision":"new|related|same|new_evidence|contradiction","candidate_memory_id":null|number}}]
+
+Rules:
+- "same": exact duplicate of a candidate → provide its memory_id
+- "related": similar but distinct → save as new independent memory, candidate_memory_id=null
+- "new_evidence": reinforces an existing candidate → provide its memory_id
+- "contradiction": contradicts a specific candidate → provide its memory_id
+- "new": no meaningful relation → candidate_memory_id=null
+- "same" / "new_evidence" / "contradiction" MUST include a valid candidate_memory_id
+- Prefer "new" over forcing an inaccurate relationship"#,
+            serde_json::to_string_pretty(&proposed_json).unwrap_or_default(),
+            serde_json::to_string_pretty(&candidates_json).unwrap_or_default(),
+        );
+
+        let request = ChatCompletionRequest {
+            messages: vec![
+                ChatMessage {
+                    role: "system".into(),
+                    content: "You classify how proposed user memories relate to \
+                              existing memories. Return only a raw JSON array, no markdown."
+                        .into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            ],
+            temperature: 0.0,
+            top_p: 1.0,
+            max_tokens: Some(512),
+            tools: None,
+            reasoning: None,
+        };
+
+        let Ok(response) = self.llm.chat(request).await else {
+            return proposed.iter().map(|_| MemoryMergeDecision::New).collect();
+        };
+
+        let trimmed = response.content.trim();
+        let json_str = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .and_then(|v| v.strip_suffix("```"))
+            .unwrap_or(trimmed)
+            .trim();
+
+        #[derive(Deserialize)]
+        struct BatchDecision {
+            index: usize,
+            decision: String,
+            candidate_memory_id: Option<u64>,
+        }
+
+        let decisions: Vec<BatchDecision> = match serde_json::from_str(json_str) {
+            Ok(d) => d,
+            Err(_) => return proposed.iter().map(|_| MemoryMergeDecision::New).collect(),
+        };
+
+        let valid_ids: std::collections::HashSet<u64> =
+            candidates.iter().map(|c| c.memory_id).collect();
+
+        let mut results: Vec<MemoryMergeDecision> =
+            proposed.iter().map(|_| MemoryMergeDecision::New).collect();
+
+        for d in decisions {
+            if d.index >= results.len() {
+                continue;
+            }
+            let valid_id = d.candidate_memory_id.filter(|id| valid_ids.contains(id));
+            results[d.index] = match (d.decision.as_str(), valid_id) {
+                ("same", Some(_)) => MemoryMergeDecision::Same,
+                ("related", _) => MemoryMergeDecision::Related,
+                ("new_evidence", Some(id)) => MemoryMergeDecision::NewEvidence(id),
+                ("contradiction", Some(id)) => MemoryMergeDecision::Contradiction(id),
+                ("new", _) | _ => MemoryMergeDecision::New,
+            };
+        }
+
+        results
+    }
 }
 
 /// Mock LLM provider used in both the extractor and service unit tests.
@@ -611,5 +747,82 @@ mod tests {
             .classify_merge(&proposed_memory(), &[candidate_memory()])
             .await;
         assert_eq!(decision, MemoryMergeDecision::New);
+    }
+
+    #[tokio::test]
+    async fn batch_merge_defaults_to_new_on_error() {
+        /// Local LLM mock that always returns an error.
+        struct BatchErrLlm;
+        #[async_trait::async_trait]
+        impl LlmProvider for BatchErrLlm {
+            async fn chat(
+                &self,
+                _request: ChatCompletionRequest,
+            ) -> Result<ChatCompletionResponse, LlmError> {
+                Err(LlmError::ProviderError("down".to_string()))
+            }
+
+            async fn chat_with_tools(
+                &self,
+                _request: ChatCompletionRequest,
+                _tools: Vec<crate::domain::llm::ToolDefinition>,
+            ) -> Result<ChatCompletionResponse, LlmError> {
+                Err(LlmError::ProviderError("down".to_string()))
+            }
+        }
+
+        let mock = BatchErrLlm;
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+
+        let proposed = vec![proposed_memory()];
+        let candidates = vec![candidate_memory()];
+        let decisions = extractor.classify_merge_batch(&proposed, &candidates).await;
+
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0], MemoryMergeDecision::New));
+    }
+
+    #[tokio::test]
+    async fn batch_merge_defaults_to_new_on_empty_candidates() {
+        let mock = ConfigurableMockLlm {
+            content: r#"[{"index":0,"decision":"new","candidate_memory_id":null}]"#.into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+
+        let proposed = vec![proposed_memory()];
+        let decisions = extractor.classify_merge_batch(&proposed, &[]).await;
+
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0], MemoryMergeDecision::New));
+    }
+
+    #[tokio::test]
+    async fn batch_merge_accepts_new_evidence() {
+        let mock = ConfigurableMockLlm {
+            content: r#"[{"index":0,"decision":"new_evidence","candidate_memory_id":7}]"#.into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+
+        let proposed = vec![proposed_memory()];
+        let candidates = vec![candidate_memory()];
+        let decisions = extractor.classify_merge_batch(&proposed, &candidates).await;
+
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0], MemoryMergeDecision::NewEvidence(7));
+    }
+
+    #[tokio::test]
+    async fn batch_merge_rejects_unknown_candidate_id() {
+        let mock = ConfigurableMockLlm {
+            content: r#"[{"index":0,"decision":"contradiction","candidate_memory_id":99}]"#.into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+
+        let proposed = vec![proposed_memory()];
+        let candidates = vec![candidate_memory()];
+        let decisions = extractor.classify_merge_batch(&proposed, &candidates).await;
+
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0], MemoryMergeDecision::New);
     }
 }

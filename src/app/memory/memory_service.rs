@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use crate::domain::llm::{ChatMessage, EmbeddingProvider};
 use crate::domain::memory::{
-    MemoryRepository, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
+    MemoryRepository, NewMemory, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
 };
 use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
@@ -199,6 +199,9 @@ impl MemoryService {
         }
 
         let mut saved = Vec::with_capacity(memories.len());
+        // Accumulator for non-key-deduped memories — they'll be batch-merge-classified
+        let mut batch_input: Vec<(NewMemory, NewMemoryEvidence)> = Vec::new();
+
         for mut memory in memories {
             // Skip empty content
             if memory.content.trim().is_empty() {
@@ -218,7 +221,8 @@ impl MemoryService {
             memory.source_conversation_id = Some(conversation_id);
             memory.source_message_id = Some(message_id);
 
-            let mut evidence = NewMemoryEvidence {
+            // ── Evidence (placeholder — evidence_type adjusted per decision later) ──
+            let evidence = NewMemoryEvidence {
                 source_type: "message".into(),
                 source_ref_id: message_id,
                 message_id: Some(message_id),
@@ -227,18 +231,22 @@ impl MemoryService {
                 confidence: Some(memory.confidence),
                 extractor_version: Some("memory-extractor-v1".into()),
             };
+
+            // ── Exact-key dedup ──
             let canonical_form = canonicalize_memory(&memory.content);
             let key = memory_key(&canonical_form);
             memory.canonical_form = Some(canonical_form);
             memory.memory_key = Some(key.clone());
             if let Some(existing) = self.repo.find_by_memory_key(user_id, &key).await? {
                 if policy.includes(&existing) {
-                    evidence.evidence_type = "reinforcement".into();
                     saved.push(
                         self.repo
                             .reinforce_memory_with_evidence(
                                 existing.memory_id,
-                                evidence,
+                                NewMemoryEvidence {
+                                    evidence_type: "reinforcement".into(),
+                                    ..evidence
+                                },
                                 memory.confidence,
                             )
                             .await?,
@@ -248,45 +256,73 @@ impl MemoryService {
                 memory.memory_key = None;
             }
 
-            let candidates = self
-                .recall(user_id, &memory.content, 5)
+            // ── Defer to batch semantic merge ──
+            batch_input.push((memory, evidence));
+        }
+
+        // ── Batch semantic merge ──
+        if !batch_input.is_empty() {
+            let combined_query = batch_input
+                .iter()
+                .map(|(m, _)| m.content.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let all_candidates = self
+                .recall(user_id, &combined_query, 10)
                 .await
                 .unwrap_or_default();
-            let decision = self.extractor.classify_merge(&memory, &candidates).await;
 
-            let persisted = match decision {
-                MemoryMergeDecision::Same => continue,
-                MemoryMergeDecision::Related => {
-                    memory.merge_decision = "related".into();
-                    self.repo
-                        .save_memory_with_evidence(memory, evidence)
-                        .await?
+            let decisions = self
+                .extractor
+                .classify_merge_batch(
+                    &batch_input.iter().map(|(m, _)| m.clone()).collect::<Vec<_>>(),
+                    &all_candidates,
+                )
+                .await;
+
+            for ((mut memory, mut evidence), decision) in
+                batch_input.into_iter().zip(decisions.into_iter())
+            {
+                let persisted = match decision {
+                    MemoryMergeDecision::Same => continue,
+                    MemoryMergeDecision::Related => {
+                        memory.merge_decision = "related".into();
+                        self.repo
+                            .save_memory_with_evidence(memory, evidence)
+                            .await?
+                    }
+                    MemoryMergeDecision::NewEvidence(existing_id) => {
+                        evidence.evidence_type = "reinforcement".into();
+                        self.repo
+                            .reinforce_memory_with_evidence(
+                                existing_id,
+                                evidence,
+                                memory.confidence,
+                            )
+                            .await?
+                    }
+                    MemoryMergeDecision::Contradiction(existing_id) => {
+                        memory.merge_decision = "contradiction".into();
+                        evidence.evidence_type = "contradiction".into();
+                        self.repo
+                            .save_contradicting_memory_with_evidence(
+                                memory, evidence, existing_id,
+                            )
+                            .await?
+                    }
+                    MemoryMergeDecision::New => {
+                        memory.merge_decision = "new".into();
+                        self.repo
+                            .save_memory_with_evidence(memory, evidence)
+                            .await?
+                    }
+                };
+                if !self.context_is_current(user_id, expected_version).await? {
+                    let _ = self.repo.disable_memory(persisted.memory_id).await;
+                    return Ok(Vec::new());
                 }
-                MemoryMergeDecision::NewEvidence(existing_id) => {
-                    evidence.evidence_type = "reinforcement".into();
-                    self.repo
-                        .reinforce_memory_with_evidence(existing_id, evidence, memory.confidence)
-                        .await?
-                }
-                MemoryMergeDecision::Contradiction(existing_id) => {
-                    memory.merge_decision = "contradiction".into();
-                    evidence.evidence_type = "contradiction".into();
-                    self.repo
-                        .save_contradicting_memory_with_evidence(memory, evidence, existing_id)
-                        .await?
-                }
-                MemoryMergeDecision::New => {
-                    memory.merge_decision = "new".into();
-                    self.repo
-                        .save_memory_with_evidence(memory, evidence)
-                        .await?
-                }
-            };
-            if !self.context_is_current(user_id, expected_version).await? {
-                let _ = self.repo.disable_memory(persisted.memory_id).await;
-                return Ok(Vec::new());
+                saved.push(persisted);
             }
-            saved.push(persisted);
         }
 
         // Attempt vector indexing for each saved memory.
