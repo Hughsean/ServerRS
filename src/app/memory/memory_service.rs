@@ -208,6 +208,26 @@ impl MemoryService {
             .collect())
     }
 
+    /// Find memories for a user, optionally filtered by type, with result limits.
+    pub async fn find_by_user_id_filtered(
+        &self,
+        user_id: u64,
+        status: Option<i8>,
+        memory_types: &[String],
+        limit: usize,
+    ) -> Result<Vec<UserMemory>, AppError> {
+        let memories = self.find_by_user_id(user_id, status).await?;
+        let filtered: Vec<UserMemory> = if memory_types.is_empty() {
+            memories
+        } else {
+            memories
+                .into_iter()
+                .filter(|m| memory_types.contains(&m.memory_type))
+                .collect()
+        };
+        Ok(filtered.into_iter().take(limit).collect())
+    }
+
     pub async fn extract_and_save(
         &self,
         user_id: u64,

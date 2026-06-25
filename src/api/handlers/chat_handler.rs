@@ -139,16 +139,12 @@ pub async fn chat_memories(
         ));
     }
 
-    let mut memories = state
+    let memories = state
         .internal
         .memory
-        .find_by_user_id(auth_user.user_id, Some(1))
+        .find_by_user_id_filtered(auth_user.user_id, Some(1), &requested_types, limit)
         .await?;
-    if !requested_types.is_empty() {
-        memories.retain(|memory| requested_types.contains(&memory.memory_type));
-    }
     let total_active = memories.len();
-    memories.truncate(limit);
 
     let items: Vec<ChatMemoryItem> = memories
         .into_iter()
