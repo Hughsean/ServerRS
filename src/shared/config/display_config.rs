@@ -1,5 +1,6 @@
 use std::fmt;
 
+use super::ssh::TunnelDirection;
 use super::AppConfig;
 
 /// 暴露部分配置用于诊断目的。
@@ -113,16 +114,31 @@ impl fmt::Display for AppConfig {
 
         if !self.ssh_tunnels.is_empty() {
             for (name, tunnel) in &self.ssh_tunnels {
+                let direction_label = match tunnel.direction {
+                    TunnelDirection::Local => "-L",
+                    TunnelDirection::Remote => "-R",
+                };
                 match &tunnel.user {
                     Some(user) => writeln!(
                         f,
-                        "ssh      → {}: {}@{}:{} → localhost:{}",
-                        name, user, tunnel.host, tunnel.remote_port, tunnel.local_port
+                        "ssh      → {}: ({}) {}@{}:{} → 127.0.0.1:{} (bind={})",
+                        name,
+                        direction_label,
+                        user,
+                        tunnel.host,
+                        tunnel.remote_port,
+                        tunnel.local_port,
+                        tunnel.bind_address.as_deref().unwrap_or("127.0.0.1"),
                     )?,
                     None => writeln!(
                         f,
-                        "ssh      → {}: {}:{} → localhost:{}",
-                        name, tunnel.host, tunnel.remote_port, tunnel.local_port
+                        "ssh      → {}: ({}) {}:{} → 127.0.0.1:{} (bind={})",
+                        name,
+                        direction_label,
+                        tunnel.host,
+                        tunnel.remote_port,
+                        tunnel.local_port,
+                        tunnel.bind_address.as_deref().unwrap_or("127.0.0.1"),
                     )?,
                 }
             }

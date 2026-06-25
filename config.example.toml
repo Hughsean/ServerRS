@@ -100,8 +100,8 @@ summary_collection = "conversation_summaries"
 
 # ── SSH Tunnels ──────────────────────────────────────────────────────────────
 # 数据库和 Ollama 可通过 SSH 隧道访问。每个隧道定义一个跳板机连接，
-# 服务通过 tunnel 字段引用对应的隧道名称。启动时自动建立 ssh -L 子进程，
-# 连接断开时服务器退出。优先使用 ssh-agent 认证。
+# 服务通过 tunnel 字段引用对应的隧道名称。启动时自动建立 ssh -L 或 ssh -R
+# 子进程，连接断开时服务器退出。优先使用 ssh-agent 认证。
 #
 # 若 ~/.ssh/config 中已定义 Host，可以只写 host 别名，省略 user：
 #
@@ -117,7 +117,7 @@ summary_collection = "conversation_summaries"
 # remote_port = 3306
 #
 # [database]
-# url = "mysql://user:pass@localhost:3307/db"
+# url = "mysql://user:pass@127.0.0.1:3307/db"
 # tunnel = "main"
 #
 # 也可以显式指定 user（适用于 sshd 直接连接）：
@@ -127,6 +127,17 @@ summary_collection = "conversation_summaries"
 # user = "root"
 # local_port = 3308
 # remote_port = 3306
+#
+# ── 远程转发（ssh -R）示例 ─────────────────────────────────────────────────
+# 将本机 8080 端口暴露到公网跳板机，外部通过 公网IP:8080 访问。
+# 需要远程 sshd 开启 GatewayPorts 才能绑定 0.0.0.0。
+#
+# [ssh_tunnels.public]
+# direction = "remote"
+# host = "HP"
+# local_port = 8080
+# remote_port = 8080
+# bind_address = "0.0.0.0"
 
 # ── Web Ingestion Configuration ────────────────────────────────────────────
 # ALL DISABLED BY DEFAULT. Enable only after all P0 fixes are complete.
