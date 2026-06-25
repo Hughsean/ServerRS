@@ -27,6 +27,14 @@ impl MusicService {
         self.repo.find_all(category, search, size, offset).await
     }
 
+    pub async fn count_all(&self) -> Result<u64, AppError> {
+        self.repo.count_all().await
+    }
+
+    pub async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError> {
+        self.repo.count_trend(days).await
+    }
+
     pub async fn get_track(&self, id: u64) -> Result<MusicTrack, AppError> {
         let track = self
             .repo

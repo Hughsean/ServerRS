@@ -57,6 +57,14 @@ impl KnowledgeReviewService {
             })
     }
 
+    pub async fn count_all(&self) -> Result<u64, AppError> {
+        self.repository.count_all().await.map_err(map_review_error)
+    }
+
+    pub async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError> {
+        self.repository.count_trend(days).await.map_err(map_review_error)
+    }
+
     pub async fn request_publish(
         &self,
         publish_record_id: u64,

@@ -37,6 +37,14 @@ impl UserService {
         self.user_repo.find_all().await
     }
 
+    pub async fn count_all(&self) -> Result<u64, AppError> {
+        self.user_repo.count_all().await
+    }
+
+    pub async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError> {
+        self.user_repo.count_trend(days).await
+    }
+
     pub async fn update_user(
         &self,
         actor_user_id: u64,
