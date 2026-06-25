@@ -53,6 +53,9 @@ async fn main() {
 }
 
 async fn run(config: AppConfig) -> Result<(), std::io::Error> {
+    // ── SSH 隧道 ──
+    let _ssh_manager = start_ssh_tunnels(&config)?;
+
     let db = init_db(&config.database.url, config.database.max_connections)
         .await
         .expect("db init");
@@ -534,7 +537,56 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         .with_graceful_shutdown(shutdown_signal())
         .await;
     background.abort_all();
+
+    // 关闭 SSH 隧道
+    if let Some(manager) = _ssh_manager {
+        manager.shutdown().await;
+    }
+
     r
+}
+
+/// 启动 SSH 隧道管理器。
+///
+/// 收集被数据库和 Ollama 引用的隧道配置，建立所有隧道。
+/// 如果配置中没有隧道引用，则返回 `None`。
+fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
+    let used_tunnels: Vec<(String, shared::config::SshTunnelConfig)> = {
+        let mut names = std::collections::BTreeSet::new();
+        if let Some(ref name) = config.database.tunnel {
+            names.insert(name.as_str());
+        }
+        if let Some(ref name) = config.ollama.tunnel {
+            names.insert(name.as_str());
+        }
+        names
+            .into_iter()
+            .filter_map(|name| {
+                config
+                    .ssh_tunnels
+                    .get(name)
+                    .map(|cfg| (name.to_string(), cfg.clone()))
+            })
+            .collect()
+    };
+
+    if used_tunnels.is_empty() {
+        return Ok(None);
+    }
+
+    info!(
+        "正在启动 SSH 隧道: {}",
+        used_tunnels
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    let manager = infra::ssh_tunnel::SshTunnelManager::start(&used_tunnels)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+    Ok(Some(manager))
 }
 
 async fn periodic_revocation(repo: Arc<dyn RefreshTokenStore>) {
