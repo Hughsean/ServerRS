@@ -113,11 +113,18 @@ impl fmt::Display for AppConfig {
 
         if !self.ssh_tunnels.is_empty() {
             for (name, tunnel) in &self.ssh_tunnels {
-                writeln!(
-                    f,
-                    "ssh      → {}: {}@{}:{} → localhost:{}",
-                    name, tunnel.user, tunnel.host, tunnel.remote_port, tunnel.local_port
-                )?;
+                match &tunnel.user {
+                    Some(user) => writeln!(
+                        f,
+                        "ssh      → {}: {}@{}:{} → localhost:{}",
+                        name, user, tunnel.host, tunnel.remote_port, tunnel.local_port
+                    )?,
+                    None => writeln!(
+                        f,
+                        "ssh      → {}: {}:{} → localhost:{}",
+                        name, tunnel.host, tunnel.remote_port, tunnel.local_port
+                    )?,
+                }
             }
         }
         Ok(())

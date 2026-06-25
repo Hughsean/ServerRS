@@ -20,7 +20,10 @@ impl SshTunnel {
     /// 若 ssh 命令不存在或端口被占用，立即返回错误。
     fn start(name: &str, config: &SshTunnelConfig) -> Result<Self, String> {
         let local = format!("{}:localhost:{}", config.local_port, config.remote_port);
-        let addr = format!("{}@{}", config.user, config.host);
+        let addr = match &config.user {
+            Some(user) => format!("{}@{}", user, config.host),
+            None => config.host.clone(),
+        };
 
         let child = Command::new("ssh")
             .args([
