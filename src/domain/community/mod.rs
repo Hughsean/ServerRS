@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sea_orm::JsonValue;
+use serde_json::Value as JsonValue;
 use serde::Serialize;
 
 use crate::shared::error::AppError;
