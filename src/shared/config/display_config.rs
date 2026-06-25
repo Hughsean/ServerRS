@@ -1,7 +1,7 @@
 use std::fmt;
 
-use super::ssh::TunnelDirection;
 use super::AppConfig;
+use super::ssh::TunnelDirection;
 
 /// 暴露部分配置用于诊断目的。
 /// 不记录密钥（API 密钥、密码、JWT 密钥）。

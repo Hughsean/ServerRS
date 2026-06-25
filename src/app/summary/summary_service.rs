@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::app::rag::vector_index_service::VectorIndexService;
-use crate::domain::memory::{
-    ConversationSummary, NewSummary, is_allowed_summary_type,
-};
+use crate::domain::memory::{ConversationSummary, NewSummary, is_allowed_summary_type};
 use crate::domain::summary::SummaryRepository;
 use crate::shared::error::AppError;
 

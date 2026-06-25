@@ -337,7 +337,10 @@ impl MemoryService {
             let decisions = self
                 .extractor
                 .classify_merge_batch(
-                    &batch_input.iter().map(|(m, _)| m.clone()).collect::<Vec<_>>(),
+                    &batch_input
+                        .iter()
+                        .map(|(m, _)| m.clone())
+                        .collect::<Vec<_>>(),
                     &all_candidates,
                 )
                 .await;
@@ -366,17 +369,17 @@ impl MemoryService {
                     MemoryMergeDecision::Contradiction(existing_id) => {
                         memory.merge_decision = "contradiction".into();
                         evidence.evidence_type = "contradiction".into();
-                        let existing = self.repo.find_by_id(existing_id).await?
-                            .ok_or_else(|| AppError::NotFound(format!("memory {existing_id} not found")))?;
+                        let existing =
+                            self.repo.find_by_id(existing_id).await?.ok_or_else(|| {
+                                AppError::NotFound(format!("memory {existing_id} not found"))
+                            })?;
                         if existing.user_id != user_id {
                             return Err(AppError::Forbidden(
                                 "cannot contradict another user's memory".into(),
                             ));
                         }
                         self.repo
-                            .save_contradicting_memory_with_evidence(
-                                memory, evidence, existing_id,
-                            )
+                            .save_contradicting_memory_with_evidence(memory, evidence, existing_id)
                             .await?
                     }
                     MemoryMergeDecision::New => {

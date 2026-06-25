@@ -114,7 +114,9 @@ impl UserService {
         if self.user_repo.delete_by_id(target_user_id).await? {
             Ok(())
         } else {
-            Err(AppError::NotFound(format!("user {target_user_id} not found")))
+            Err(AppError::NotFound(format!(
+                "user {target_user_id} not found"
+            )))
         }
     }
 

@@ -61,7 +61,7 @@ impl SshTunnel {
                 "-o",
                 "ServerAliveCountMax=3",
                 "-o",
-                "PasswordAuthentication=no",       // 优先 ssh-agent
+                "PasswordAuthentication=no", // 优先 ssh-agent
                 "-o",
                 "StrictHostKeyChecking=accept-new", // 自动接受新主机密钥
             ])

@@ -4,10 +4,9 @@ pub mod llm;
 pub mod persistence;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
+pub mod ssh_tunnel;
 pub mod storage;
 pub mod tasks;
 pub mod tts;
 pub mod vector_store;
 pub mod web_ingestion;
-pub mod ssh_tunnel;
-

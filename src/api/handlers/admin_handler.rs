@@ -221,7 +221,10 @@ pub async fn patch_user(
         role,
     };
 
-    let u = state.user.admin_update_user(auth.user_id, id, update).await?;
+    let u = state
+        .user
+        .admin_update_user(auth.user_id, id, update)
+        .await?;
 
     Ok(Json(UserDto {
         id: u.id,

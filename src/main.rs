@@ -551,7 +551,9 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 /// - `-R`（远程转发）隧道无条件启动，用于暴露端口到公网。
 /// - `-L`（本地转发）隧道仅在被 database / ollama 引用时启动。
 /// 如果 `[ssh_tunnels]` 为空则返回 `None`。
-fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
+fn start_ssh_tunnels(
+    config: &AppConfig,
+) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
     if config.ssh_tunnels.is_empty() {
         return Ok(None);
     }
