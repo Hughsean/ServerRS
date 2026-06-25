@@ -49,6 +49,9 @@ use super::handlers::psychology_handler::{
     list_qna, list_resources, toggle_favorite, toggle_like,
 };
 use super::handlers::signature_handler::{create_signature, verify_signature};
+use super::handlers::stats_handler::{
+    stats_music, stats_reviews, stats_risks, stats_users,
+};
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
@@ -225,6 +228,11 @@ pub fn build_router_with_origins(
             "/api/v1/admin/web-ingestion/reviews/{publish_record_id}/publish",
             post(publish_reviewed),
         )
+        // ── Admin statistics ──
+        .route("/api/v1/admin/stats/users", get(stats_users))
+        .route("/api/v1/admin/stats/music", get(stats_music))
+        .route("/api/v1/admin/stats/reviews", get(stats_reviews))
+        .route("/api/v1/admin/stats/risks", get(stats_risks))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_role,
