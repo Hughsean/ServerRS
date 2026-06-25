@@ -212,13 +212,6 @@ pub async fn patch_user(
                 .ok_or_else(|| AppError::Validation(format!("invalid user role: {role}")))
         })
         .transpose()?;
-    if id == auth.user_id
-        && (matches!(status, Some(UserStatus::Disabled)) || matches!(role, Some(UserRole::User)))
-    {
-        return Err(AppError::Validation(
-            "administrators cannot disable or demote their own account".into(),
-        ));
-    }
 
     let update = UserUpdate {
         email: None,
@@ -228,7 +221,7 @@ pub async fn patch_user(
         role,
     };
 
-    let u = state.user.admin_update_user(id, update).await?;
+    let u = state.user.admin_update_user(auth.user_id, id, update).await?;
 
     Ok(Json(UserDto {
         id: u.id,
@@ -249,12 +242,7 @@ pub async fn delete_user(
     Extension(auth): Extension<AuthenticatedUser>,
     Path(id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
-    if id == auth.user_id {
-        return Err(AppError::Validation(
-            "administrators cannot delete their own account".into(),
-        ));
-    }
-    state.user.admin_delete_user(id).await?;
+    state.user.admin_delete_user(auth.user_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::user::user::{User, UserStatus, UserUpdate};
+use crate::domain::user::user::{User, UserRole, UserStatus, UserUpdate};
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile};
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::user::user_repository::UserRepository;
@@ -85,17 +85,36 @@ impl UserService {
 
     pub async fn admin_update_user(
         &self,
-        user_id: u64,
+        admin_user_id: u64,
+        target_user_id: u64,
         update: UserUpdate,
     ) -> Result<User, AppError> {
-        self.user_repo.update(user_id, update).await
+        if admin_user_id == target_user_id {
+            if matches!(update.status, Some(UserStatus::Disabled))
+                || matches!(update.role, Some(UserRole::User))
+            {
+                return Err(AppError::Validation(
+                    "administrators cannot disable or demote their own account".into(),
+                ));
+            }
+        }
+        self.user_repo.update(target_user_id, update).await
     }
 
-    pub async fn admin_delete_user(&self, user_id: u64) -> Result<(), AppError> {
-        if self.user_repo.delete_by_id(user_id).await? {
+    pub async fn admin_delete_user(
+        &self,
+        admin_user_id: u64,
+        target_user_id: u64,
+    ) -> Result<(), AppError> {
+        if admin_user_id == target_user_id {
+            return Err(AppError::Validation(
+                "administrators cannot delete their own account".into(),
+            ));
+        }
+        if self.user_repo.delete_by_id(target_user_id).await? {
             Ok(())
         } else {
-            Err(AppError::NotFound(format!("user {user_id} not found")))
+            Err(AppError::NotFound(format!("user {target_user_id} not found")))
         }
     }
 
