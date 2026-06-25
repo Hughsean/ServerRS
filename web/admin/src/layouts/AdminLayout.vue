@@ -17,6 +17,8 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import ThemeToggle from '@/components/ThemeToggle.vue'
+import ToastProvider from '@/components/ToastProvider.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -96,6 +98,7 @@ async function signOut() {
             <strong>{{ auth.user?.username }}</strong>
             <span>{{ auth.user?.role }}</span>
           </div>
+          <ThemeToggle />
           <button class="icon-button" title="退出登录" @click="signOut">
             <LogOut :size="18" />
           </button>
@@ -106,5 +109,6 @@ async function signOut() {
         <RouterView />
       </main>
     </section>
+    <ToastProvider />
   </div>
 </template>
