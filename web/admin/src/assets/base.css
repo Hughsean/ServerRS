@@ -3,6 +3,7 @@
   --brand: #156354;
   --brand-hover: #1a7c68;
   --brand-soft: #dff0eb;
+  --brand-dark: #123c35;
 
   /* ── 强调色 ── */
   --accent: #d8913a;
@@ -16,6 +17,52 @@
   --surface-soft: #f3f7f4;
   --canvas: #e5ece8;
 
+  /* ── 侧边栏 ── */
+  --sidebar-bg: #123c35;
+  --sidebar-text: rgba(238, 248, 244, 0.72);
+  --sidebar-text-solid: #eef8f4;
+  --sidebar-text-secondary: rgba(238, 248, 244, 0.62);
+  --sidebar-active-bg: #dcece6;
+  --sidebar-active-text: #173c35;
+  --sidebar-border: rgba(255, 255, 255, 0.09);
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.07);
+  --sidebar-hover-text: #ffffff;
+  --sidebar-backdrop: rgba(16, 35, 31, 0.44);
+  --brand-mark-bg: #d9a45b;
+  --brand-mark-text: #123c35;
+  --brand-mark-border: rgba(255, 255, 255, 0.22);
+  --status-dot-bg: #56c49f;
+  --status-dot-shadow: rgba(86, 196, 159, 0.13);
+  --status-text-strong: #9fdbc9;
+
+  /* ── 顶栏 ── */
+  --topbar-bg: rgba(246, 249, 247, 0.88);
+  --topbar-border: rgba(207, 219, 214, 0.85);
+
+  /* ── 卡片 ── */
+  --card-border: rgba(210, 221, 217, 0.9);
+
+  /* ── 输入框 ── */
+  --input-bg: #ffffff;
+  --input-border: #ccd7d3;
+  --input-focus-shadow: rgba(23, 107, 91, 0.11);
+
+  /* ── 标签/表单 ── */
+  --label-color: #4f5d59;
+
+  /* ── 表格 ── */
+  --table-header-bg: #f7f9f8;
+  --table-hover-bg: #fafcfb;
+
+  /* ── 标签 ── */
+  --badge-bg: #edf1ef;
+  --badge-text: #596561;
+
+  /* ── 按钮 ── */
+  --button-hover-border: #aebdb8;
+  --button-danger-border: #efc6c3;
+  --button-danger-bg: #fff8f7;
+
   /* ── 语义色 ── */
   --danger: #b94242;
   --danger-soft: #fbe8e7;
@@ -24,10 +71,23 @@
   --warning: #96611d;
   --warning-soft: #fff0d8;
 
+  /* ── 通知提示 ── */
+  --notice-border: #edd7b4;
+  --notice-text: #79511d;
+  --notice-bg: #fff7e8;
+
+  /* ── 模态/覆盖层 ── */
+  --overlay-backdrop: rgba(13, 31, 27, 0.52);
+  --sidebar-backdrop-color: rgba(16, 35, 31, 0.44);
+  --modal-shadow: 0 30px 80px rgba(10, 29, 24, 0.24);
+
   /* ── 阴影层级 ── */
   --shadow-sm: 0 2px 8px rgba(32, 56, 50, 0.06);
   --shadow-md: 0 8px 24px rgba(32, 56, 50, 0.08);
   --shadow-lg: 0 24px 60px rgba(32, 56, 50, 0.12);
+
+  /* ── 装饰 ── */
+  --body-glow: rgba(23, 107, 91, 0.07);
 
   /* ── 圆角 ── */
   --radius-sm: 8px;
@@ -45,6 +105,7 @@ html.dark {
   --brand: #2f8a76;
   --brand-hover: #3aa082;
   --brand-soft: #1a3d35;
+  --brand-dark: #0f1e1a;
   --ink: #dfeae4;
   --muted: #8ba098;
   --line: rgba(255, 255, 255, 0.07);
@@ -53,9 +114,46 @@ html.dark {
   --canvas: #0f1e1a;
   --accent: #e8b45e;
   --accent-soft: #3d2e16;
+  --sidebar-bg: #0f1e1a;
+  --sidebar-text: rgba(223, 234, 228, 0.72);
+  --sidebar-text-solid: #dfeae4;
+  --sidebar-text-secondary: rgba(223, 234, 228, 0.55);
+  --sidebar-active-bg: #1a3d35;
+  --sidebar-active-text: #80cbb8;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.06);
+  --sidebar-hover-text: #ffffff;
+  --sidebar-backdrop: rgba(0, 0, 0, 0.55);
+  --brand-mark-bg: #d9a45b;
+  --brand-mark-text: #123c35;
+  --brand-mark-border: rgba(255, 255, 255, 0.18);
+  --status-dot-bg: #56c49f;
+  --status-dot-shadow: rgba(86, 196, 159, 0.13);
+  --status-text-strong: #56c49f;
+  --topbar-bg: rgba(22, 41, 35, 0.92);
+  --topbar-border: rgba(255, 255, 255, 0.06);
+  --card-border: rgba(255, 255, 255, 0.07);
+  --input-bg: #0f1e1a;
+  --input-border: #2a423b;
+  --input-focus-shadow: rgba(47, 138, 118, 0.2);
+  --label-color: #8ba098;
+  --table-header-bg: #0f1e1a;
+  --table-hover-bg: #1a332c;
+  --badge-bg: #1a332c;
+  --badge-text: #8ba098;
+  --button-hover-border: #3a5c52;
+  --button-danger-border: #4a2a2a;
+  --button-danger-bg: #1a0f0f;
+  --notice-border: #3d2e16;
+  --notice-text: #e8b45e;
+  --notice-bg: #1a1508;
+  --overlay-backdrop: rgba(0, 0, 0, 0.6);
+  --sidebar-backdrop-color: rgba(0, 0, 0, 0.55);
+  --modal-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
   --danger-soft: #3d1a1a;
   --success-soft: #1a332c;
   --warning-soft: #3d2e00;
+  --body-glow: rgba(0, 0, 0, 0.2);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.25);
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.3);
@@ -80,7 +178,7 @@ body {
   margin: 0;
   color: var(--ink);
   background:
-    radial-gradient(circle at 90% 0%, rgba(23, 107, 91, 0.07), transparent 30rem),
+    radial-gradient(circle at 90% 0%, var(--body-glow), transparent 30rem),
     var(--canvas);
   font-family:
     Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont,
