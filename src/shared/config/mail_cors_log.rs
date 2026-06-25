@@ -12,6 +12,8 @@ pub struct OllamaConfig {
     pub temperature: f64,
     #[serde(default = "default_ollama_top_p")]
     pub top_p: f64,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for OllamaConfig {
@@ -21,6 +23,7 @@ impl Default for OllamaConfig {
             model: default_ollama_model(),
             temperature: default_ollama_temperature(),
             top_p: default_ollama_top_p(),
+            tunnel: None,
         }
     }
 }

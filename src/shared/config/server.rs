@@ -34,6 +34,8 @@ pub struct DatabaseConfig {
     pub url: String,
     #[serde(default = "default_db_max_conn")]
     pub max_connections: u32,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for DatabaseConfig {
@@ -41,6 +43,7 @@ impl Default for DatabaseConfig {
         Self {
             url: default_db_url(),
             max_connections: default_db_max_conn(),
+            tunnel: None,
         }
     }
 }

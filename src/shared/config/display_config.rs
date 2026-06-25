@@ -109,6 +109,17 @@ impl fmt::Display for AppConfig {
             f,
             "tts      → provider={}, voice={}, encoding={}",
             self.tts.provider, self.tts.default_voice, self.tts.default_encoding
-        )
+        )?;
+
+        if !self.ssh_tunnels.is_empty() {
+            for (name, tunnel) in &self.ssh_tunnels {
+                writeln!(
+                    f,
+                    "ssh      → {}: {}@{}:{} → localhost:{}",
+                    name, tunnel.user, tunnel.host, tunnel.remote_port, tunnel.local_port
+                )?;
+            }
+        }
+        Ok(())
     }
 }

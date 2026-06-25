@@ -24,6 +24,7 @@ pub mod qdrant;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod server;
+pub mod ssh;
 pub mod tts;
 pub mod web_ingestion;
 
@@ -47,6 +48,7 @@ pub use self::qdrant::QdrantConfig;
 #[cfg(feature = "qq_bot")]
 pub use self::qq_bot::QqBotConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
+pub use self::ssh::SshTunnelConfig;
 pub use self::tts::TtsConfig;
 pub use self::web_ingestion::{DistillLlmConfig, WebIngestionConfig};
 
@@ -92,6 +94,8 @@ pub struct AppConfig {
     pub web_ingestion: WebIngestionConfig,
     #[serde(default)]
     pub tts: TtsConfig,
+    #[serde(default)]
+    pub ssh_tunnels: std::collections::HashMap<String, SshTunnelConfig>,
     #[cfg(feature = "qq_bot")]
     #[serde(default)]
     pub qq_bot: QqBotConfig,
@@ -119,6 +123,7 @@ impl Default for AppConfig {
             embedding: Default::default(),
             web_ingestion: Default::default(),
             tts: Default::default(),
+            ssh_tunnels: Default::default(),
             #[cfg(feature = "qq_bot")]
             qq_bot: Default::default(),
         }
