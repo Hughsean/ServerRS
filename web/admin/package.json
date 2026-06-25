@@ -12,10 +12,12 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
-    "@serverrs/sdk": "workspace:*",
     "@lucide/vue": "^1.18.0",
+    "@serverrs/sdk": "workspace:*",
+    "echarts": "^6.1.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.32",
+    "vue-echarts": "^8.0.1",
     "vue-router": "^5.0.4"
   },
   "devDependencies": {
