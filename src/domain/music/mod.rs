@@ -80,4 +80,8 @@ pub trait MusicRepository: Send + Sync {
     ) -> Result<(Vec<MusicTrack>, u64), AppError>;
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError>;
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError>;
+
+    // ── Statistics ──
+    async fn count_all(&self) -> Result<u64, AppError>;
+    async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError>;
 }

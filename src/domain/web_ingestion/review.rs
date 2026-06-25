@@ -98,4 +98,8 @@ pub trait KnowledgeReviewRepository: Send + Sync {
         &self,
         request: NewReviewPublishRequest,
     ) -> Result<ReviewPublishRequest, WebIngestionError>;
+
+    // ── Statistics ──
+    async fn count_all(&self) -> Result<u64, WebIngestionError>;
+    async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, WebIngestionError>;
 }

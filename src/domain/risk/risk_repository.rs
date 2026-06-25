@@ -73,4 +73,9 @@ pub trait RiskRepository: Send + Sync {
         offset: u64,
         risk_level: Option<&str>,
     ) -> Result<(Vec<u64>, u64), AppError>;
+
+    // ── Statistics ──
+    async fn count_all(&self) -> Result<u64, AppError>;
+    async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError>;
+    async fn count_by_risk_level(&self) -> Result<Vec<(String, u64)>, AppError>;
 }

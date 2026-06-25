@@ -14,4 +14,8 @@ pub trait UserRepository: Send + Sync {
     async fn update(&self, id: u64, update: UserUpdate) -> Result<User, AppError>;
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError>;
     async fn update_last_login(&self, id: u64) -> Result<(), AppError>;
+
+    // ── Statistics ──
+    async fn count_all(&self) -> Result<u64, AppError>;
+    async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError>;
 }
