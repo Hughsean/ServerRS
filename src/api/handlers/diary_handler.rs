@@ -3,6 +3,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::api::DiaryState;
 use crate::app::auth::auth_service::AuthenticatedUser;
@@ -15,9 +16,10 @@ pub struct DiaryListQuery {
     pub page_size: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDiaryRequest {
+    #[validate(length(min = 1, max = 10000))]
     pub content: String,
     #[serde(default)]
     pub title: Option<String>,
@@ -83,6 +85,8 @@ pub async fn create_diary(
     Extension(auth): Extension<AuthenticatedUser>,
     Json(payload): Json<CreateDiaryRequest>,
 ) -> Result<Json<DiaryDto>, AppError> {
+    // 校验请求参数
+    payload.validate().map_err(AppError::validation)?;
     let title = payload.title.unwrap_or_else(|| "无标题".to_string());
     let diary = state
         .diaries

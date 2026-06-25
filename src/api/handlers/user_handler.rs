@@ -30,11 +30,14 @@ pub struct UserDto {
     pub created_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchMeRequest {
+    #[validate(email)]
     pub email: Option<String>,
+    #[validate(length(max = 20))]
     pub phone: Option<String>,
+    #[validate(length(min = 1, max = 50))]
     pub nickname: Option<String>,
 }
 
@@ -50,9 +53,10 @@ pub struct UserProfileDto {
     pub learning_records: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct UpsertProfileRequest {
+    #[validate(length(min = 1, max = 50))]
     pub nickname: Option<String>,
     pub interests: Option<Vec<String>>,
     pub personality_traits: Option<Vec<String>>,
@@ -79,6 +83,8 @@ pub async fn patch_me(
     State(state): State<UserState>,
     Json(payload): Json<PatchMeRequest>,
 ) -> Result<Json<UserDto>, AppError> {
+    // 校验请求参数
+    payload.validate().map_err(AppError::validation)?;
     let user = state
         .user
         .update_user(
@@ -122,6 +128,8 @@ pub async fn put_profile(
     State(state): State<UserState>,
     Json(payload): Json<UpsertProfileRequest>,
 ) -> Result<Json<UserProfileDto>, AppError> {
+    // 校验请求参数
+    payload.validate().map_err(AppError::validation)?;
     let nickname = if let Some(nickname) = payload.nickname {
         state
             .user

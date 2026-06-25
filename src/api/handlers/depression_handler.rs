@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::api::DepressionState;
 use crate::app::auth::auth_service::AuthenticatedUser;
@@ -11,11 +12,12 @@ use crate::shared::error::AppError;
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAssessmentRequest {
     pub scale_id: u16,
     pub answers: serde_json::Value,
+    #[validate(length(max = 500))]
     pub notes: Option<String>,
 }
 
@@ -167,6 +169,8 @@ pub async fn create_assessment(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(payload): Json<CreateAssessmentRequest>,
 ) -> Result<Json<AssessmentDto>, AppError> {
+    // 校验请求参数
+    payload.validate().map_err(AppError::validation)?;
     let AssessmentDetail {
         assessment,
         severity_level,

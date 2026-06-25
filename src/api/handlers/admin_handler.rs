@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::api::AdminState;
 use crate::app::auth::auth_service::AuthenticatedUser;
@@ -51,9 +52,10 @@ pub struct RiskConvQuery {
     pub risk_level: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct AdminPatchUser {
     pub status: Option<i32>,
+    #[validate(length(min = 4, max = 20))]
     pub role: Option<String>,
 }
 
@@ -194,6 +196,8 @@ pub async fn patch_user(
     Path(id): Path<u64>,
     Json(body): Json<AdminPatchUser>,
 ) -> Result<Json<UserDto>, AppError> {
+    // 校验请求参数
+    body.validate().map_err(AppError::validation)?;
     let status = body
         .status
         .map(|s| {

@@ -2,6 +2,7 @@ use axum::{
     Json,
     extract::{Extension, Path, Query, State},
 };
+use validator::Validate;
 
 use crate::api::dto::chat_dto::*;
 use crate::api::state::AppState;
@@ -33,6 +34,8 @@ pub async fn chat_send_message(
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(body): Json<ChatMessageRequest>,
 ) -> Result<Json<ChatMessageResponse>, AppError> {
+    // 校验请求参数
+    body.validate().map_err(AppError::validation)?;
     let result = state
         .chat
         .chat_service

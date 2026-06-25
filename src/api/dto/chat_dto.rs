@@ -27,6 +27,7 @@ pub struct ChatConversationInfo {
 pub struct ChatMessageRequest {
     #[validate(length(min = 1))]
     pub text: String,
+    #[validate(length(max = 200))]
     pub emotion: Option<String>,
     #[serde(default)]
     pub location: Option<std::collections::HashMap<String, serde_json::Value>>,
