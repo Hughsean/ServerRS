@@ -48,7 +48,7 @@ pub use self::qdrant::QdrantConfig;
 #[cfg(feature = "qq_bot")]
 pub use self::qq_bot::QqBotConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
-pub use self::ssh::SshTunnelConfig;
+pub use self::ssh::{SshTunnelConfig, TunnelDirection};
 pub use self::tts::TtsConfig;
 pub use self::web_ingestion::{DistillLlmConfig, WebIngestionConfig};
 
