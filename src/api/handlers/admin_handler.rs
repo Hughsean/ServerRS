@@ -352,9 +352,8 @@ pub async fn process_risk_detection(
 ) -> Result<StatusCode, AppError> {
     // 手动"标记已处理"已不再适用：对话后风险审计由
     // PostConversationRiskAuditWorker 完成，不再由管理员操作。
-    // 保留此处理器仅为了保持路由挂载有效 until
-    // the router is updated to drop it.
-    Err(AppError::NotFound(
+    // 保留此处理器仅为了保持路由挂载有效，等待后续版本移除路由。
+    Err(AppError::Gone(
         "manual risk processing is not supported in the post-conversation audit model".into(),
     ))
 }

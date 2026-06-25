@@ -347,7 +347,7 @@ impl AuthService {
 
     // ── refresh ──────────────────────────────────────────────────────────────
 
-    pub async fn refresh(&self, refresh_token_str: &str) -> Result<AuthTokenPair, AppError> {
+    pub async fn refresh(&self, refresh_token_str: &str, device_id: Option<String>) -> Result<AuthTokenPair, AppError> {
         let claims = self.token_service.verify_refresh(refresh_token_str)?;
         let old_hash = sha256_hex(refresh_token_str);
 
@@ -380,7 +380,7 @@ impl AuthService {
                 user_id: claims.user_id,
                 username: claims.username,
                 old_token_id: claims.token_id,
-                device_id: None,
+                device_id,  // 透传客户端提供的 device_id
             }))
             .await;
 

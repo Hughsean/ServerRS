@@ -19,6 +19,8 @@ pub enum AppError {
     Internal(String),
     #[error("not implemented: {0}")]
     NotImplemented(String),
+    #[error("gone: {0}")]
+    Gone(String),
 }
 
 impl AppError {

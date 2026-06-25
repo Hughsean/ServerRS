@@ -22,6 +22,7 @@ impl IntoResponse for AppError {
             AppError::Infrastructure(_) => (StatusCode::BAD_GATEWAY, "INFRASTRUCTURE_ERROR"),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
             AppError::NotImplemented(_) => (StatusCode::NOT_IMPLEMENTED, "NOT_IMPLEMENTED"),
+            AppError::Gone(_) => (StatusCode::GONE, "GONE"),
         };
         (
             status,

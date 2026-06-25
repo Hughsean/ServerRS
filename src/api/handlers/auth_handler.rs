@@ -105,7 +105,7 @@ pub async fn refresh_token(
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
     payload.validate().map_err(AppError::validation)?;
-    let pair = state.auth.refresh(&payload.refresh_token).await?;
+    let pair = state.auth.refresh(&payload.refresh_token, payload.device_id).await?;
     Ok(Json(RefreshResponse {
         access_token: pair.access_token,
         refresh_token: pair.refresh_token,
