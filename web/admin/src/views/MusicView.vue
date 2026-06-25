@@ -5,6 +5,8 @@ import { onMounted, reactive, ref, shallowRef } from 'vue'
 
 import { api } from '@/lib/sdk'
 import { errorMessage } from '@/utils/format'
+import { useToast } from '@/utils/toast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const tracks = shallowRef<MusicTrack[]>([])
 const loading = ref(false)
@@ -19,6 +21,8 @@ const total = ref(0)
 const showCreate = ref(false)
 const editing = shallowRef<MusicTrack | null>(null)
 const audioFile = ref<File | null>(null)
+const confirmDelete = ref<MusicTrack | null>(null)
+const toast = useToast()
 
 const createForm = reactive({
   title: '',
@@ -136,14 +140,21 @@ async function saveEdit() {
   }
 }
 
-async function removeTrack(trackId: number, title: string) {
-  if (!window.confirm(`确定删除音乐“${title}”吗？`)) return
+async function confirmRemoveTrack(track: MusicTrack) {
+  confirmDelete.value = track
+}
+
+async function removeTrack() {
+  const track = confirmDelete.value
+  if (!track) return
   saving.value = true
   try {
-    await api.admin.deleteTrack(trackId)
+    await api.admin.deleteTrack(track.musicId)
+    confirmDelete.value = null
+    toast.success(`音乐“${track.title}”已删除`)
     await load()
   } catch (cause) {
-    error.value = errorMessage(cause)
+    toast.error(errorMessage(cause))
   } finally {
     saving.value = false
   }
@@ -236,7 +247,7 @@ onMounted(() => load())
                     {{ track.status === 1 ? '停用' : '启用' }}
                   </button>
                   <button class="button small" @click="startEdit(track.musicId)"><Pencil :size="13" />编辑</button>
-                  <button class="button small danger" :disabled="saving" @click="removeTrack(track.musicId, track.title)"><Trash2 :size="13" />删除</button>
+                  <button class="button small danger" :disabled="saving" @click="confirmRemoveTrack(track)"><Trash2 :size="13" />删除</button>
                 </div>
               </td>
             </tr>
@@ -292,6 +303,15 @@ onMounted(() => load())
         </div>
       </form>
     </div>
+    <ConfirmDialog
+      :open="confirmDelete != null"
+      title="删除音乐"
+      :message="confirmDelete ? `确定删除音乐“${confirmDelete.title}”吗？` : ''"
+      confirm-label="删除"
+      danger
+      @confirm="removeTrack"
+      @cancel="confirmDelete = null"
+    />
   </div>
 </template>
 

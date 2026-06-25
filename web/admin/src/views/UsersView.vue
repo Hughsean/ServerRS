@@ -5,6 +5,8 @@ import { computed, onMounted, ref } from 'vue'
 
 import { api } from '@/lib/sdk'
 import { errorMessage, formatDate, statusTone } from '@/utils/format'
+import { useToast } from '@/utils/toast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const users = ref<AdminUser[]>([])
 const loading = ref(false)
@@ -25,6 +27,9 @@ const filteredUsers = computed(() => {
   )
 })
 
+const toast = useToast()
+const confirmDelete = ref<AdminUser | null>(null)
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -44,8 +49,9 @@ async function updateStatus(user: AdminUser, value: string) {
   try {
     const updated = await api.admin.updateUser(user.id, { status: value === 'active' ? 1 : 0 })
     Object.assign(user, updated)
+    toast.success('用户状态已更新')
   } catch (cause) {
-    error.value = errorMessage(cause)
+    toast.error(errorMessage(cause))
   } finally {
     savingId.value = null
   }
@@ -58,21 +64,29 @@ async function updateRole(user: AdminUser, value: string) {
       role: value as 'USER' | 'ADMIN' | 'SUPER_ADMIN',
     })
     Object.assign(user, updated)
+    toast.success('用户角色已更新')
   } catch (cause) {
-    error.value = errorMessage(cause)
+    toast.error(errorMessage(cause))
   } finally {
     savingId.value = null
   }
 }
 
-async function removeUser(user: AdminUser) {
-  if (!window.confirm(`确定删除用户“${user.username}”吗？此操作不可恢复。`)) return
+async function confirmRemoveUser(user: AdminUser) {
+  confirmDelete.value = user
+}
+
+async function removeUser() {
+  const user = confirmDelete.value
+  if (!user) return
   savingId.value = user.id
   try {
     await api.admin.deleteUser(user.id)
+    confirmDelete.value = null
+    toast.success(`用户“${user.username}”已删除`)
     await load()
   } catch (cause) {
-    error.value = errorMessage(cause)
+    toast.error(errorMessage(cause))
   } finally {
     savingId.value = null
   }
@@ -152,13 +166,13 @@ onMounted(load)
               </td>
               <td>{{ formatDate(user.last_login_at) }}</td>
               <td>
-                <button
-                  class="button small danger"
-                  :disabled="savingId === user.id"
-                  @click="removeUser(user)"
-                >
-                  <Trash2 :size="14" />删除
-                </button>
+                  <button
+                    class="button small danger"
+                    :disabled="savingId === user.id"
+                    @click="confirmRemoveUser(user)"
+                  >
+                    <Trash2 :size="14" />删除
+                  </button>
               </td>
             </tr>
           </tbody>
@@ -178,6 +192,15 @@ onMounted(load)
         </button>
       </div>
     </section>
+    <ConfirmDialog
+      :open="confirmDelete != null"
+      title="删除用户"
+      :message="confirmDelete ? `确定删除用户“${confirmDelete.username}”吗？此操作不可恢复。` : ''"
+      confirm-label="删除"
+      danger
+      @confirm="removeUser"
+      @cancel="confirmDelete = null"
+    />
   </div>
 </template>
 

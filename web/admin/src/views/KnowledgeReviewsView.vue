@@ -5,6 +5,8 @@ import { onMounted, ref } from 'vue'
 
 import { api } from '@/lib/sdk'
 import { errorMessage, formatDate, statusTone } from '@/utils/format'
+import { useToast } from '@/utils/toast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const items = ref<KnowledgeReview[]>([])
 const loading = ref(false)
@@ -15,6 +17,8 @@ const sourceId = ref('')
 const page = ref(1)
 const pageSize = 20
 const total = ref(0)
+const confirmPublish = ref<KnowledgeReview | null>(null)
+const toast = useToast()
 
 async function load(reset = false) {
   if (reset) page.value = 1
@@ -36,14 +40,21 @@ async function load(reset = false) {
   }
 }
 
-async function requestPublish(publishRecordId: number, title: string) {
-  if (!window.confirm(`确认将“${title}”提交发布吗？`)) return
-  publishingId.value = publishRecordId
+async function requestPublish(item: KnowledgeReview) {
+  confirmPublish.value = item
+}
+
+async function doPublish() {
+  const item = confirmPublish.value
+  if (!item) return
+  publishingId.value = item.publish_record_id
   try {
-    await api.admin.publishKnowledgeReview(publishRecordId, '通过管理后台审核发布')
+    await api.admin.publishKnowledgeReview(item.publish_record_id, '通过管理后台审核发布')
+    confirmPublish.value = null
+    toast.success(`“${item.title || item.source_url}”已提交发布`)
     await load()
   } catch (cause) {
-    error.value = errorMessage(cause)
+    toast.error(errorMessage(cause))
   } finally {
     publishingId.value = null
   }
@@ -130,12 +141,7 @@ onMounted(() => load())
                     v-if="item.publish_status === 'staged'"
                     class="button small primary"
                     :disabled="publishingId === item.publish_record_id"
-                    @click="
-                      requestPublish(
-                        item.publish_record_id,
-                        item.title || item.source_url,
-                      )
-                    "
+                    @click="requestPublish(item)"
                   >
                     <Send :size="13" />发布
                   </button>
@@ -157,6 +163,14 @@ onMounted(() => load())
         </button>
       </div>
     </section>
+    <ConfirmDialog
+      :open="confirmPublish != null"
+      title="发布知识"
+      :message="confirmPublish ? `确认将“${confirmPublish.title || confirmPublish.source_url}”提交发布吗？` : ''"
+      confirm-label="发布"
+      @confirm="doPublish"
+      @cancel="confirmPublish = null"
+    />
   </div>
 </template>
 

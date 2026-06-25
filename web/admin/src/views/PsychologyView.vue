@@ -10,6 +10,8 @@ import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
 
 import { api } from '@/lib/sdk'
 import { errorMessage } from '@/utils/format'
+import { useToast } from '@/utils/toast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 type ContentTab = 'categories' | 'articles' | 'qna' | 'resources'
 
@@ -28,6 +30,8 @@ const publishedFilter = ref<'' | 'true' | 'false'>('')
 const categoryFilter = ref('')
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
+const confirmRemove = ref<{ id: number; label: string } | null>(null)
+const toast = useToast()
 
 const form = reactive({
   parentId: '',
@@ -276,15 +280,22 @@ async function save() {
   }
 }
 
-async function remove(id: number, label: string) {
-  if (!window.confirm(`确定删除“${label}”吗？此操作不可撤销。`)) return
+async function confirmRemoveItem(id: number, label: string) {
+  confirmRemove.value = { id, label }
+}
+
+async function remove() {
+  const target = confirmRemove.value
+  if (!target) return
   saving.value = true
   error.value = ''
   try {
-    if (activeTab.value === 'categories') await api.admin.deletePsychologyCategory(id)
-    else if (activeTab.value === 'articles') await api.admin.deletePsychologyArticle(id)
-    else if (activeTab.value === 'qna') await api.admin.deletePsychologyQna(id)
-    else await api.admin.deletePsychologyResource(id)
+    if (activeTab.value === 'categories') await api.admin.deletePsychologyCategory(target.id)
+    else if (activeTab.value === 'articles') await api.admin.deletePsychologyArticle(target.id)
+    else if (activeTab.value === 'qna') await api.admin.deletePsychologyQna(target.id)
+    else await api.admin.deletePsychologyResource(target.id)
+    confirmRemove.value = null
+    toast.success(`“${target.label}”已删除`)
     await load()
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -350,7 +361,7 @@ onMounted(() => load())
               <td><span class="badge">{{ item.isEnabled ? '启用' : '停用' }}</span></td>
               <td><div class="row-actions">
                 <button class="button small" @click="openCategory(item)"><Pencil :size="13" />编辑</button>
-                <button class="button small danger" @click="remove(item.categoryId, item.categoryName)"><Trash2 :size="13" />删除</button>
+                <button class="button small danger" @click="confirmRemoveItem(item.categoryId, item.categoryName)"><Trash2 :size="13" />删除</button>
               </div></td>
             </tr>
           </tbody>
@@ -366,7 +377,7 @@ onMounted(() => load())
               <td>{{ item.viewCount }} / {{ item.likeCount }}</td>
               <td><div class="row-actions">
                 <button class="button small" @click="openArticle(item)"><Pencil :size="13" />编辑</button>
-                <button class="button small danger" @click="remove(item.articleId, item.title)"><Trash2 :size="13" />删除</button>
+                <button class="button small danger" @click="confirmRemoveItem(item.articleId, item.title)"><Trash2 :size="13" />删除</button>
               </div></td>
             </tr>
           </tbody>
@@ -382,7 +393,7 @@ onMounted(() => load())
               <td>{{ item.isVerified ? '已验证' : '未验证' }}</td>
               <td><div class="row-actions">
                 <button class="button small" @click="openQna(item)"><Pencil :size="13" />编辑</button>
-                <button class="button small danger" @click="remove(item.qnaId, item.question)"><Trash2 :size="13" />删除</button>
+                <button class="button small danger" @click="confirmRemoveItem(item.qnaId, item.question)"><Trash2 :size="13" />删除</button>
               </div></td>
             </tr>
           </tbody>
@@ -398,7 +409,7 @@ onMounted(() => load())
               <td><span class="badge">{{ item.isPublished ? '已发布' : '停用' }}</span></td>
               <td><div class="row-actions">
                 <button class="button small" @click="openResource(item)"><Pencil :size="13" />编辑</button>
-                <button class="button small danger" @click="remove(item.resourceId, item.title)"><Trash2 :size="13" />删除</button>
+                <button class="button small danger" @click="confirmRemoveItem(item.resourceId, item.title)"><Trash2 :size="13" />删除</button>
               </div></td>
             </tr>
           </tbody>
@@ -459,6 +470,15 @@ onMounted(() => load())
         </div>
       </form>
     </div>
+    <ConfirmDialog
+      :open="confirmRemove != null"
+      title="删除内容"
+      :message="confirmRemove ? `确定删除“${confirmRemove.label}”吗？此操作不可撤销。` : ''"
+      confirm-label="删除"
+      danger
+      @confirm="remove"
+      @cancel="confirmRemove = null"
+    />
   </div>
 </template>
 
