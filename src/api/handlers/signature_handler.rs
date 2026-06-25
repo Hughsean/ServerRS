@@ -2,7 +2,8 @@ use axum::{Json, extract::State};
 use chrono::Utc;
 
 use crate::api::dto::signature_dto::{
-    SignatureCreateRequest, SignatureCreateResponse, SignatureVerifyRequest, SignatureVerifyResponse,
+    SignatureCreateRequest, SignatureCreateResponse, SignatureVerifyRequest,
+    SignatureVerifyResponse,
 };
 use crate::api::state::SignatureState;
 use crate::shared::error::AppError;
@@ -16,12 +17,15 @@ pub async fn create_signature(
 ) -> Result<Json<SignatureCreateResponse>, AppError> {
     let expires_in = payload.expires_in.unwrap_or(1800);
     if expires_in <= 0 || expires_in > 86400 {
-        return Err(AppError::Validation("expiresIn 必须在 1 到 86400 秒之间".into()));
+        return Err(AppError::Validation(
+            "expiresIn 必须在 1 到 86400 秒之间".into(),
+        ));
     }
 
-    let token = state
-        .token_service
-        .create_signature(&payload.app_id, &payload.app_key, expires_in)?;
+    let token =
+        state
+            .token_service
+            .create_signature(&payload.app_id, &payload.app_key, expires_in)?;
 
     let now = Utc::now();
     let expires_at = now + chrono::Duration::seconds(expires_in);

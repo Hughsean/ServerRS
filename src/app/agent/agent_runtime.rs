@@ -718,9 +718,7 @@ impl AgentRuntime {
         let cid = match conversation_id {
             Some(id) => id,
             None => {
-                return Err(AppError::Internal(
-                    "需要对话 ID 才能持久化消息".into(),
-                ));
+                return Err(AppError::Internal("需要对话 ID 才能持久化消息".into()));
             }
         };
 

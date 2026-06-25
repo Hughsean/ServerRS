@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set, Statement, Value};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, Set, Statement, Value,
+};
 
 use crate::domain::user::user::{
     NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserStatus, UserUpdate,

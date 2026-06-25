@@ -12,7 +12,12 @@ pub trait TokenService: Send + Sync {
 
     // ── 第三方签名（使用调用方提供的 appKey 做 HMAC-SHA256）──
     /// 使用 appKey 作为 HMAC 密钥签发 JWT，包含 appId/iat/exp 声明。
-    fn create_signature(&self, app_id: &str, app_key: &str, expires_in_seconds: i64) -> Result<String, AppError>;
+    fn create_signature(
+        &self,
+        app_id: &str,
+        app_key: &str,
+        expires_in_seconds: i64,
+    ) -> Result<String, AppError>;
 
     /// 使用 appKey 验证签名 JWT，返回解析出的声明。
     fn verify_signature(&self, token: &str, app_key: &str) -> Result<SignatureClaims, AppError>;

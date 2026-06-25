@@ -71,10 +71,7 @@ pub async fn get_me(
     Extension(auth_user): Extension<AuthenticatedUser>,
     State(state): State<UserState>,
 ) -> Result<Json<UserDto>, AppError> {
-    let user = state
-        .user
-        .get_user(auth_user.user_id)
-        .await?;
+    let user = state.user.get_user(auth_user.user_id).await?;
     Ok(Json(to_user_dto(user, &auth_user.role)))
 }
 

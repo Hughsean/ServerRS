@@ -4,7 +4,9 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::auth::token_service::{AccessTokenClaims, RefreshTokenClaims, SignatureClaims, TokenService};
+use crate::domain::auth::token_service::{
+    AccessTokenClaims, RefreshTokenClaims, SignatureClaims, TokenService,
+};
 use crate::shared::error::AppError;
 
 const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
@@ -171,7 +173,12 @@ impl TokenService for JwtTokenService {
 
     // ── 第三方签名 ──
 
-    fn create_signature(&self, app_id: &str, app_key: &str, expires_in_seconds: i64) -> Result<String, AppError> {
+    fn create_signature(
+        &self,
+        app_id: &str,
+        app_key: &str,
+        expires_in_seconds: i64,
+    ) -> Result<String, AppError> {
         let now = chrono::Utc::now().timestamp();
         let exp = now.saturating_add(expires_in_seconds);
 
@@ -210,4 +217,13 @@ impl TokenService for JwtTokenService {
             }),
         }
     }
+}
+
+#[test]
+fn t() {
+    println!(
+        "Utc: {}, Local: {}",
+        chrono::Utc::now().timestamp(),
+        chrono::Local::now().timestamp()
+    )
 }

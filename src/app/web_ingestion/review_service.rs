@@ -62,7 +62,10 @@ impl KnowledgeReviewService {
     }
 
     pub async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError> {
-        self.repository.count_trend(days).await.map_err(map_review_error)
+        self.repository
+            .count_trend(days)
+            .await
+            .map_err(map_review_error)
     }
 
     pub async fn request_publish(
@@ -212,6 +215,14 @@ mod tests {
                 event_status: "pending".into(),
                 already_requested: false,
             })
+        }
+
+        async fn count_all(&self) -> Result<u64, WebIngestionError> {
+            Ok(0)
+        }
+
+        async fn count_trend(&self, _days: u32) -> Result<Vec<(String, u64)>, WebIngestionError> {
+            Ok(vec![])
         }
     }
 

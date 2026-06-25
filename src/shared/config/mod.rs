@@ -497,16 +497,16 @@ impl AppConfig {
         // ── QQ Bot TTS output ──
         #[cfg(feature = "qq_bot")]
         {
-        if let Ok(val) = std::env::var("QQ_BOT_TTS_OUTPUT_DIR") {
-            if !val.is_empty() {
-                self.qq_bot.tts_output_dir = val;
+            if let Ok(val) = std::env::var("QQ_BOT_TTS_OUTPUT_DIR") {
+                if !val.is_empty() {
+                    self.qq_bot.tts_output_dir = val;
+                }
             }
-        }
-        if let Ok(val) = std::env::var("QQ_BOT_TTS_PUBLIC_URL_BASE") {
-            if !val.is_empty() {
-                self.qq_bot.tts_public_url_base = val;
+            if let Ok(val) = std::env::var("QQ_BOT_TTS_PUBLIC_URL_BASE") {
+                if !val.is_empty() {
+                    self.qq_bot.tts_public_url_base = val;
+                }
             }
-        }
         } // cfg(feature = "qq_bot")
     }
 }

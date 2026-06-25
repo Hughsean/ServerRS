@@ -126,6 +126,14 @@ impl MusicRepository for StubMusicRepo {
     async fn delete_by_id(&self, _: u64) -> Result<bool, AppError> {
         Ok(false)
     }
+
+    async fn count_all(&self) -> Result<u64, AppError> {
+        stub_err!()
+    }
+
+    async fn count_trend(&self, _days: u32) -> Result<Vec<(String, u64)>, AppError> {
+        stub_err!()
+    }
 }
 
 pub struct StubPsychologyRepo;

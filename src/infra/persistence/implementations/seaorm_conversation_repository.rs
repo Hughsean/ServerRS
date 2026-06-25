@@ -270,8 +270,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                 sender_user_id: Set(user_msg.sender_user_id),
                 message_type: Set(user_msg.message_type),
                 content: Set(
-                    serde_json::from_str(&user_msg.content)
-                        .unwrap_or(serde_json::Value::Null),
+                    serde_json::from_str(&user_msg.content).unwrap_or(serde_json::Value::Null)
                 ),
                 token_count: Set(user_msg.token_count.map(|v| v as u32)),
                 created_at: Set(now.naive_utc()),
@@ -286,8 +285,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                 sender_user_id: Set(assistant_msg.sender_user_id),
                 message_type: Set(assistant_msg.message_type),
                 content: Set(
-                    serde_json::from_str(&assistant_msg.content)
-                        .unwrap_or(serde_json::Value::Null),
+                    serde_json::from_str(&assistant_msg.content).unwrap_or(serde_json::Value::Null)
                 ),
                 token_count: Set(assistant_msg.token_count.map(|v| v as u32)),
                 created_at: Set(now.naive_utc()),

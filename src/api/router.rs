@@ -49,9 +49,7 @@ use super::handlers::psychology_handler::{
     list_qna, list_resources, toggle_favorite, toggle_like,
 };
 use super::handlers::signature_handler::{create_signature, verify_signature};
-use super::handlers::stats_handler::{
-    stats_music, stats_reviews, stats_risks, stats_users,
-};
+use super::handlers::stats_handler::{stats_music, stats_reviews, stats_risks, stats_users};
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 

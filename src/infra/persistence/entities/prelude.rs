@@ -24,27 +24,16 @@ pub use super::psychology_articles::Entity as PsychologyArticles;
 pub use super::psychology_categories::Entity as PsychologyCategories;
 pub use super::psychology_qna::Entity as PsychologyQna;
 pub use super::psychology_resources::Entity as PsychologyResources;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_agent_turns::Entity as QqAgentTurns;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_bot_accounts::Entity as QqBotAccounts;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_external_users::Entity as QqExternalUsers;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_group_members::Entity as QqGroupMembers;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_group_memories::Entity as QqGroupMemories;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_group_messages::Entity as QqGroupMessages;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_group_summaries::Entity as QqGroupSummaries;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_groups::Entity as QqGroups;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_message_outbox::Entity as QqMessageOutbox;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_relationships::Entity as QqRelationships;
-#[cfg(feature = "qq_bot")]
 pub use super::qq_user_profiles::Entity as QqUserProfiles;
 pub use super::refresh_tokens::Entity as RefreshTokens;
 pub use super::stored_objects::Entity as StoredObjects;

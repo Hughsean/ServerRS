@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::domain::tasks::task_event::TaskEvent;
@@ -60,10 +60,7 @@ impl RetryingTaskPublisher {
                     // 尝试重新发送
                     match this.inner.sender.send(event.clone()) {
                         Ok(()) => {
-                            info!(
-                                retry_count,
-                                "重试队列事件投递成功"
-                            );
+                            info!(retry_count, "重试队列事件投递成功");
                         }
                         Err(_) => {
                             let new_retry = retry_count + 1;

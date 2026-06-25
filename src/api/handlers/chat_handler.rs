@@ -221,11 +221,7 @@ pub async fn chat_persona_reset(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<PersonaResetResponse>, AppError> {
-    let result = state
-        .chat
-        .chat
-        .reset_persona(auth_user.user_id)
-        .await?;
+    let result = state.chat.chat.reset_persona(auth_user.user_id).await?;
     Ok(Json(PersonaResetResponse {
         reset: result.reset,
     }))
@@ -237,11 +233,7 @@ pub async fn chat_persona_rebuild(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<PersonaRebuildResponse>, AppError> {
-    let result = state
-        .chat
-        .chat
-        .rebuild_persona(auth_user.user_id)
-        .await?;
+    let result = state.chat.chat.rebuild_persona(auth_user.user_id).await?;
     Ok(Json(PersonaRebuildResponse {
         snapshot_id: result.snapshot_id,
     }))
@@ -253,11 +245,7 @@ pub async fn chat_transcript_clear(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<TranscriptClearResponse>, AppError> {
-    let result = state
-        .chat
-        .chat
-        .clear_transcript(auth_user.user_id)
-        .await?;
+    let result = state.chat.chat.clear_transcript(auth_user.user_id).await?;
     Ok(Json(TranscriptClearResponse {
         cleared_messages: result.cleared_messages,
         cleared_summaries: result.cleared_summaries,

@@ -1,8 +1,8 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 
-use crate::api::dto::stats_dto::{CountTrendResponse, RiskStatsResponse, StringCount};
 use crate::api::AdminState;
+use crate::api::dto::stats_dto::{CountTrendResponse, RiskStatsResponse, StringCount};
 use crate::shared::error::AppError;
 
 /// GET /api/v1/admin/stats/users

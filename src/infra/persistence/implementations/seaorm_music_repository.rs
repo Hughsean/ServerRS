@@ -215,10 +215,7 @@ impl MusicRepository for SeaOrmMusicRepository {
     }
 
     async fn count_all(&self) -> Result<u64, AppError> {
-        music::Entity::find()
-            .count(&self.db)
-            .await
-            .map_err(map_err)
+        music::Entity::find().count(&self.db).await.map_err(map_err)
     }
 
     async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, AppError> {
