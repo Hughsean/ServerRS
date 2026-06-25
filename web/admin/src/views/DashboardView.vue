@@ -8,7 +8,7 @@ import VChart from 'vue-echarts'
 import type { KnowledgeReview } from '@serverrs/sdk'
 import { BookOpenCheck, Music2, ShieldAlert, Users, ArrowUpRight } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
-import { api } from '@/lib/sdk'
+import { api, tokenStore } from '@/lib/sdk'
 import { formatDate, formatNumber, errorMessage } from '@/utils/format'
 
 // 按需注册 ECharts 组件
@@ -18,6 +18,17 @@ const loading = ref(true)
 const error = ref('')
 const totals = ref({ users: 0, risks: 0, reviews: 0, music: 0 })
 const recentReviews = ref<KnowledgeReview[]>([])
+
+/* ── 统计数据类型 ── */
+
+interface StringCount { label: string; count: number }
+interface CountTrendResponse { total: number; trend: StringCount[] }
+interface RiskStatsResponse { total: number; trend: StringCount[]; distribution: StringCount[] }
+
+const usersStats = ref<CountTrendResponse | null>(null)
+const risksStats = ref<RiskStatsResponse | null>(null)
+const reviewsStats = ref<CountTrendResponse | null>(null)
+const musicStats = ref<CountTrendResponse | null>(null)
 
 /* ── ECharts 配置 ── */
 
@@ -33,54 +44,75 @@ const sparklineOption = (data: number[]) => ({
   }],
 })
 
-const trendOption = {
+const trendOption = (data: number[], labels: string[]) => ({
   tooltip: { trigger: 'axis' as const },
   grid: { left: 40, right: 16, top: 24, bottom: 24 },
-  xAxis: { type: 'category' as const, data: ['06-19', '06-20', '06-21', '06-22', '06-23', '06-24', '06-25'], axisLabel: { fontSize: 11, color: '#63756f' } },
+  xAxis: { type: 'category' as const, data: labels, axisLabel: { fontSize: 11, color: '#63756f' } },
   yAxis: { type: 'value' as const, min: 0, splitLine: { lineStyle: { color: 'rgba(190,205,200,0.3)' } } },
   series: [{
-    type: 'line' as const, data: [3, 7, 5, 9, 4, 8, 6], smooth: true,
+    type: 'line' as const, data, smooth: true,
     lineStyle: { width: 2.5, color: '#156354' },
     areaStyle: { color: 'rgba(21, 99, 84, 0.06)' },
     showSymbol: true, symbol: 'circle', symbolSize: 6,
     itemStyle: { color: '#156354' },
   }],
+})
+
+const riskLevelColors: Record<string, string> = {
+  none: '#8ba098',
+  low: '#d8913a',
+  medium: '#e8b45e',
+  high: '#b94242',
+  critical: '#8b1a1a',
 }
 
-const pieOption = {
-  tooltip: { trigger: 'item' as const, formatter: '{b}: {c} ({d}%)' },
-  series: [{
-    type: 'pie' as const, radius: ['42%', '68%'],
-    data: [
-      { value: 20, name: 'none', itemStyle: { color: '#8ba098' } },
-      { value: 8, name: 'low', itemStyle: { color: '#d8913a' } },
-      { value: 12, name: 'medium', itemStyle: { color: '#e8b45e' } },
-      { value: 5, name: 'high', itemStyle: { color: '#b94242' } },
-      { value: 2, name: 'critical', itemStyle: { color: '#8b1a1a' } },
-    ],
-    label: { show: true, color: '#63756f', fontSize: 11, formatter: '{b}: {d}%' },
-    emphasis: { scale: false },
-    labelLine: { lineStyle: { color: 'rgba(190,205,200,0.5)' } },
-  }],
+function pieOption(distribution: StringCount[]) {
+  const data = distribution.map((item) => ({
+    value: item.count,
+    name: item.label,
+    itemStyle: { color: riskLevelColors[item.label] ?? '#63756f' },
+  }))
+  return {
+    tooltip: { trigger: 'item' as const, formatter: '{b}: {c} ({d}%)' },
+    series: [{
+      type: 'pie' as const, radius: ['42%', '68%'],
+      data: data.length ? data : [{ value: 0, name: 'none', itemStyle: { color: '#8ba098' } }],
+      label: { show: true, color: '#63756f', fontSize: 11, formatter: '{b}: {d}%' },
+      emphasis: { scale: false },
+      labelLine: { lineStyle: { color: 'rgba(190,205,200,0.5)' } },
+    }],
+  }
 }
 
-/* ── 数据 ── */
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
 
-const sparklineData = {
-  users: [1240, 1255, 1261, 1270, 1278, 1282, 1284],
-  risks: [52, 50, 53, 49, 48, 47, 47],
-  reviews: [284, 291, 299, 303, 308, 310, 312],
-  music: [83, 84, 85, 86, 87, 88, 89],
+async function fetchStats<T>(path: string): Promise<T | null> {
+  try {
+    const token = tokenStore.get()
+    const res = await fetch(`${baseUrl}/api/v1/admin/stats/${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
 }
 
 async function load() {
   loading.value = true
   error.value = ''
-  const [users, risks, reviews, music] = await Promise.allSettled([
+
+  // 并行获取旧分页数据（总量 + 最近审核）和新统计数据（趋势 + 分布）
+  const [users, risks, reviews, music, us, rs, rvs, ms] = await Promise.allSettled([
     api.admin.users({ page: 1, pageSize: 1 }),
     api.admin.riskConversations({ page: 1, pageSize: 1 }),
     api.admin.knowledgeReviews({ page: 1, pageSize: 5 }),
     api.admin.tracks({ page: 1, pageSize: 1 }),
+    fetchStats<CountTrendResponse>('users'),
+    fetchStats<RiskStatsResponse>('risks'),
+    fetchStats<CountTrendResponse>('reviews'),
+    fetchStats<CountTrendResponse>('music'),
   ])
 
   if (users.status === 'fulfilled') totals.value.users = users.value.total
@@ -90,6 +122,12 @@ async function load() {
     recentReviews.value = reviews.value.items
   }
   if (music.status === 'fulfilled') totals.value.music = music.value.total
+
+  if (us.status === 'fulfilled') usersStats.value = us.value
+  if (rs.status === 'fulfilled') risksStats.value = rs.value
+  if (rvs.status === 'fulfilled') reviewsStats.value = rvs.value
+  if (ms.status === 'fulfilled') musicStats.value = ms.value
+
   const rejected = [users, risks, reviews, music].find((item) => item.status === 'rejected')
   if (rejected?.status === 'rejected') error.value = errorMessage(rejected.reason)
   loading.value = false
@@ -115,26 +153,26 @@ onMounted(load)
       <article class="card stat-card">
         <div class="stat-icon"><Users :size="19" /></div>
         <strong>{{ loading ? '—' : formatNumber(totals.users) }}</strong>
-        <span>系统用户总数 · 本周 +12</span>
-        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(sparklineData.users)" autoresize />
+        <span>系统用户总数</span>
+        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(usersStats?.trend.map(t => t.count) ?? [])" autoresize />
       </article>
       <article class="card stat-card">
         <div class="stat-icon"><ShieldAlert :size="19" /></div>
         <strong>{{ loading ? '—' : formatNumber(totals.risks) }}</strong>
-        <span>风险相关会话 · 本周 -3</span>
-        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(sparklineData.risks)" autoresize />
+        <span>风险相关会话</span>
+        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(risksStats?.trend.map(t => t.count) ?? [])" autoresize />
       </article>
       <article class="card stat-card">
         <div class="stat-icon"><BookOpenCheck :size="19" /></div>
         <strong>{{ loading ? '—' : formatNumber(totals.reviews) }}</strong>
-        <span>知识审核记录 · 本周 +28</span>
-        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(sparklineData.reviews)" autoresize />
+        <span>知识审核记录</span>
+        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(reviewsStats?.trend.map(t => t.count) ?? [])" autoresize />
       </article>
       <article class="card stat-card">
         <div class="stat-icon"><Music2 :size="19" /></div>
         <strong>{{ loading ? '—' : formatNumber(totals.music) }}</strong>
-        <span>音乐资源总数 · 本周 +2</span>
-        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(sparklineData.music)" autoresize />
+        <span>音乐资源总数</span>
+        <VChart v-if="!loading" class="sparkline" :option="sparklineOption(musicStats?.trend.map(t => t.count) ?? [])" autoresize />
       </article>
     </section>
 
@@ -143,13 +181,16 @@ onMounted(load)
       <article class="card">
         <div class="card-header"><h2>风险等级分布</h2></div>
         <div class="card-body chart-body">
-          <VChart v-if="!loading" class="chart" :option="pieOption" autoresize />
+          <VChart v-if="!loading" class="chart" :option="pieOption(risksStats?.distribution ?? [])" autoresize />
         </div>
       </article>
       <article class="card">
         <div class="card-header"><h2>近 7 天风险趋势</h2></div>
         <div class="card-body chart-body">
-          <VChart v-if="!loading" class="chart" :option="trendOption" autoresize />
+          <VChart v-if="!loading" class="chart" :option="trendOption(
+            risksStats?.trend.map(t => t.count) ?? [],
+            risksStats?.trend.map(t => t.label) ?? [],
+          )" autoresize />
         </div>
       </article>
     </section>
