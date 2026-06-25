@@ -80,7 +80,7 @@ async function load() {
     api.admin.users({ page: 1, pageSize: 1 }),
     api.admin.riskConversations({ page: 1, pageSize: 1 }),
     api.admin.knowledgeReviews({ page: 1, pageSize: 5 }),
-    api.music.tracks({ page: 1, pageSize: 1 }),
+    api.admin.tracks({ page: 1, pageSize: 1 }),
   ])
 
   if (users.status === 'fulfilled') totals.value.users = users.value.total

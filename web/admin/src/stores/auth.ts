@@ -2,7 +2,7 @@ import type { AuthUser } from '@serverrs/sdk'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { api, tokenStore } from '@/lib/sdk'
+import { api, authClient, tokenStore } from '@/lib/sdk'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<AuthUser | null>(null)
@@ -16,7 +16,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (initialized.value) return
     try {
       if (await tokenStore.getAccessToken()) {
-        const current = await api.auth.me()
+        const current = await authClient.auth.me()
         if (current.role === 'ADMIN' || current.role === 'SUPER_ADMIN') user.value = current
         else await tokenStore.clear()
       }
@@ -30,7 +30,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password: string) {
     loading.value = true
     try {
-      const result = await api.auth.login({ username, password })
+      const result = await authClient.auth.login({ username, password })
       if (result.user.role !== 'ADMIN' && result.user.role !== 'SUPER_ADMIN') {
         await tokenStore.clear()
         throw new Error('该账号没有管理后台访问权限')
@@ -44,7 +44,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout() {
     try {
-      await api.auth.logout('admin_console_logout')
+      await authClient.auth.logout('admin_console_logout')
     } finally {
       user.value = null
       initialized.value = true
