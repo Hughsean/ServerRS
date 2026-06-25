@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CreateMusicTrackRequest, MusicTrack } from '@serverrs/sdk'
-import { Music2, Pencil, Plus, Trash2, Upload, X } from '@lucide/vue'
+import { Music2, Pencil, Plus, Search, Trash2, Upload, X } from '@lucide/vue'
 import { onMounted, reactive, ref, shallowRef } from 'vue'
 
 import { api } from '@/lib/sdk'
@@ -203,14 +203,19 @@ onMounted(() => load())
         <p>管理音乐元数据与音频文件，供普通用户端检索和播放。</p>
       </div>
       <div class="toolbar">
-        <input v-model="search" class="input search-input" placeholder="标题或作者" @keyup.enter="load(true)" />
-        <input v-model="category" class="input category-input" placeholder="分类" @keyup.enter="load(true)" />
-        <select v-model="statusFilter" class="select" @change="load(true)">
-          <option value="">全部状态</option>
-          <option value="1">已启用</option>
-          <option value="0">已停用</option>
-        </select>
-        <button class="button" @click="load(true)">搜索</button>
+        <div class="filter-group">
+          <div class="search-box">
+            <Search :size="17" />
+            <input v-model="search" class="input search-input" placeholder="标题或作者" @keyup.enter="load(true)" />
+          </div>
+          <input v-model="category" class="input category-input" placeholder="分类" @keyup.enter="load(true)" />
+          <select v-model="statusFilter" class="select status-select" @change="load(true)">
+            <option value="">全部状态</option>
+            <option value="1">已启用</option>
+            <option value="0">已停用</option>
+          </select>
+          <button class="button" @click="load(true)">搜索</button>
+        </div>
         <button class="button primary" @click="showCreate = true"><Plus :size="16" />新增音乐</button>
       </div>
     </header>
@@ -320,10 +325,40 @@ onMounted(() => load())
   margin-bottom: 16px;
 }
 
+/* ── 筛选栏布局 ── */
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 12px;
+  z-index: 1;
+  color: var(--muted);
+}
+
+.search-box .input {
+  padding-left: 36px;
+}
+
 .category-input {
   width: 110px;
 }
 
+.status-select {
+  min-width: 110px;
+}
+
+/* ── 行内操作 ── */
 .row-actions {
   display: flex;
   gap: 7px;
@@ -345,9 +380,9 @@ onMounted(() => load())
 
 input[type="file"] {
   padding: 11px;
-  border: 1px dashed #aebeb8;
+  border: 1px dashed var(--input-border);
   border-radius: 10px;
-  background: #f8faf9;
+  background: var(--surface-soft);
 }
 
 @media (max-width: 620px) {
