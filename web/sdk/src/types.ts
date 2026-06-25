@@ -656,3 +656,21 @@ export interface SignatureVerifyResponse {
   issuedAt?: string
   expiresAt?: string
 }
+
+// ── Admin statistics ──
+
+export interface StringCount {
+  label: string
+  count: number
+}
+
+export interface CountTrendResponse {
+  total: number
+  trend: StringCount[]
+}
+
+export interface RiskStatsResponse {
+  total: number
+  trend: StringCount[]
+  distribution: StringCount[]
+}

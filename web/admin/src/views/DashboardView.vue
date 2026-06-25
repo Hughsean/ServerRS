@@ -5,10 +5,10 @@ import { LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
-import type { KnowledgeReview } from '@serverrs/sdk'
+import type { KnowledgeReview, CountTrendResponse, RiskStatsResponse } from '@serverrs/sdk'
 import { BookOpenCheck, Music2, ShieldAlert, Users, ArrowUpRight } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
-import { api, tokenStore } from '@/lib/sdk'
+import { api } from '@/lib/sdk'
 import { formatDate, formatNumber, errorMessage } from '@/utils/format'
 
 // 按需注册 ECharts 组件
@@ -18,12 +18,6 @@ const loading = ref(true)
 const error = ref('')
 const totals = ref({ users: 0, risks: 0, reviews: 0, music: 0 })
 const recentReviews = ref<KnowledgeReview[]>([])
-
-/* ── 统计数据类型 ── */
-
-interface StringCount { label: string; count: number }
-interface CountTrendResponse { total: number; trend: StringCount[] }
-interface RiskStatsResponse { total: number; trend: StringCount[]; distribution: StringCount[] }
 
 const usersStats = ref<CountTrendResponse | null>(null)
 const risksStats = ref<RiskStatsResponse | null>(null)
@@ -84,38 +78,18 @@ function pieOption(distribution: StringCount[]) {
   }
 }
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+const [users, risks, reviews, music, us, rs, rvs, ms] = await Promise.allSettled([
+  api.admin.users({ page: 1, pageSize: 1 }),
+  api.admin.riskConversations({ page: 1, pageSize: 1 }),
+  api.admin.knowledgeReviews({ page: 1, pageSize: 5 }),
+  api.admin.tracks({ page: 1, pageSize: 1 }),
+  api.admin.statsUsers(),
+  api.admin.statsRisks(),
+  api.admin.statsReviews(),
+  api.admin.statsMusic(),
+])
 
-async function fetchStats<T>(path: string): Promise<T | null> {
-  try {
-    const token = tokenStore.get()
-    const res = await fetch(`${baseUrl}/api/v1/admin/stats/${path}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-    if (!res.ok) return null
-    return res.json()
-  } catch {
-    return null
-  }
-}
-
-async function load() {
-  loading.value = true
-  error.value = ''
-
-  // 并行获取旧分页数据（总量 + 最近审核）和新统计数据（趋势 + 分布）
-  const [users, risks, reviews, music, us, rs, rvs, ms] = await Promise.allSettled([
-    api.admin.users({ page: 1, pageSize: 1 }),
-    api.admin.riskConversations({ page: 1, pageSize: 1 }),
-    api.admin.knowledgeReviews({ page: 1, pageSize: 5 }),
-    api.admin.tracks({ page: 1, pageSize: 1 }),
-    fetchStats<CountTrendResponse>('users'),
-    fetchStats<RiskStatsResponse>('risks'),
-    fetchStats<CountTrendResponse>('reviews'),
-    fetchStats<CountTrendResponse>('music'),
-  ])
-
-  if (users.status === 'fulfilled') totals.value.users = users.value.total
+if (users.status === 'fulfilled') totals.value.users = users.value.total
   if (risks.status === 'fulfilled') totals.value.risks = risks.value.total
   if (reviews.status === 'fulfilled') {
     totals.value.reviews = reviews.value.total

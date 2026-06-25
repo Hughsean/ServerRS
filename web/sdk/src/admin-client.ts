@@ -14,6 +14,7 @@ import type {
   ArticleWriteRequest,
   Category,
   CategoryWriteRequest,
+  CountTrendResponse,
   CreateMusicTrackRequest,
   DeletedResponse,
   HealthResponse,
@@ -29,6 +30,7 @@ import type {
   QnaWriteRequest,
   ReviewPublishRequest,
   RiskAuditAdminDto,
+  RiskStatsResponse,
   UpdateMusicTrackRequest,
 } from './types.js'
 
@@ -219,5 +221,21 @@ export class AdminApi {
     return this.http.request('POST', `/api/v1/admin/web-ingestion/reviews/${id}/publish`, {
       body: { notes },
     })
+  }
+
+  statsUsers(): Promise<CountTrendResponse> {
+    return this.http.request('GET', '/api/v1/admin/stats/users')
+  }
+
+  statsMusic(): Promise<CountTrendResponse> {
+    return this.http.request('GET', '/api/v1/admin/stats/music')
+  }
+
+  statsReviews(): Promise<CountTrendResponse> {
+    return this.http.request('GET', '/api/v1/admin/stats/reviews')
+  }
+
+  statsRisks(): Promise<RiskStatsResponse> {
+    return this.http.request('GET', '/api/v1/admin/stats/risks')
   }
 }

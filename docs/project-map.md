@@ -224,7 +224,11 @@
  | POST | /api/v1/admin/music | 创建音乐 |
  | POST | /api/v1/admin/psychology/articles | 创建心理文章 |
  | GET | /api/v1/admin/web-ingestion/reviews | 知识审核列表 |
- | POST | /api/v1/admin/web-ingestion/reviews/{id}/publish | 审核通过发布 |
+ | GET | /api/v1/admin/web-ingestion/reviews/{id}/publish | 审核通过发布 |
+ | GET | /api/v1/admin/stats/users | 用户统计（总数 + 7 日趋势） |
+ | GET | /api/v1/admin/stats/risks | 风险统计（总数 + 趋势 + 风险等级分布） |
+ | GET | /api/v1/admin/stats/music | 音乐统计（总数 + 7 日趋势） |
+ | GET | /api/v1/admin/stats/reviews | 审核统计（总数 + 7 日趋势） |
  
  ---
  
@@ -961,11 +965,19 @@
  │   ├── MusicView.vue          音乐管理
  │   └── NotFoundView.vue       404
  ├── layouts/
- │   └── AdminLayout.vue    后台布局（侧边栏 + 顶栏）
- ├── components/           公共组件
- ├── lib/                  工具函数
- ├── utils/                工具函数（format.ts）
- └── assets/               CSS 等
+ │   └── AdminLayout.vue    后台布局（侧边栏 + 顶栏 + 暗色模式切换）
+ ├── components/
+ │   ├── ThemeToggle.vue     暗色模式切换按钮
+ │   ├── ToastProvider.vue   浮动通知提示系统
+ │   └── ConfirmDialog.vue   确认弹窗（替代 window.confirm）
+ ├── lib/
+ │   └── sdk.ts             SDK 封装（调用后端 API）
+ ├── utils/
+ │   ├── format.ts           格式化工具
+ │   └── toast.ts           Toast 状态管理
+ └── assets/
+     ├── base.css            CSS 变量体系 + 暗色模式变量
+     └── main.css            全局样式
  ```
  
  ### 9.2 TypeScript SDK（`web/sdk/`）
@@ -1069,5 +1081,5 @@
  
  ---
  
- *项目地图生成时间：2026-06-16*  
+ *项目地图生成时间：2026-06-26*  
  *基于 commit 时点的全量代码分析*
