@@ -9,3 +9,5 @@ pub mod tasks;
 pub mod tts;
 pub mod vector_store;
 pub mod web_ingestion;
+pub mod ssh_tunnel;
+
