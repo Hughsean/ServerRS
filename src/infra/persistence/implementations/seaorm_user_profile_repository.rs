@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    sea_query::OnConflict,
+};
 
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfileUpdate};
 use crate::domain::user::user_profile_repository::UserProfileRepository;
@@ -120,6 +123,54 @@ impl UserProfileRepository for SeaOrmUserProfileRepository {
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(updated))
+    }
+
+    /// 原子化创建或更新用户画像。
+    /// 使用 INSERT ... ON DUPLICATE KEY UPDATE 消除 TOCTOU 竞态。
+    async fn upsert(&self, user_id: u64, profile: NewUserProfile) -> Result<UserProfile, AppError> {
+        let now = chrono::Utc::now().naive_utc();
+        let model = user_profiles::ActiveModel {
+            user_id: Set(profile.user_id),
+            interests: Set(to_json_array(&profile.interests)),
+            personality_traits: Set(to_json_array(&profile.personality_traits)),
+            interaction_preferences: Set(to_json_array(&profile.interaction_preferences)),
+            emotional_tendency: Set(to_json_array(&profile.emotional_tendency)),
+            learning_records: Set(to_json_array(&profile.learning_records)),
+            personalization_enabled: Set(0),
+            personalization_reset_at: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        };
+
+        // 使用 SeaORM 的 insert_many + on_conflict 实现原子化 upsert，
+        // 确保在并发场景下不会产生 Duplicate Entry 错误。
+        user_profiles::Entity::insert_many([model])
+            .on_conflict(
+                OnConflict::columns([user_profiles::Column::UserId])
+                    .update_columns([
+                        user_profiles::Column::Interests,
+                        user_profiles::Column::PersonalityTraits,
+                        user_profiles::Column::InteractionPreferences,
+                        user_profiles::Column::EmotionalTendency,
+                        user_profiles::Column::LearningRecords,
+                        user_profiles::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        // 执行后重新查询以返回完整领域对象
+        let result = user_profiles::Entity::find()
+            .filter(user_profiles::Column::UserId.eq(user_id))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| AppError::Internal("upsert 后未找到用户画像".into()))?;
+
+        Ok(model_to_domain(result))
     }
 
     async fn delete_by_user_id(&self, user_id: u64) -> Result<bool, AppError> {

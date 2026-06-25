@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::domain::user::user::{User, UserStatus, UserUpdate};
-use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfileUpdate};
+use crate::domain::user::user_profile::{NewUserProfile, UserProfile};
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::user::user_repository::UserRepository;
 use crate::shared::error::AppError;
@@ -110,30 +110,15 @@ impl UserService {
         emotional_tendency: Option<Vec<String>>,
         learning_records: Option<Vec<String>>,
     ) -> Result<UserProfile, AppError> {
-        let existing = self.profile_repo.find_by_user_id(user_id).await?;
-
-        match existing {
-            Some(_) => {
-                let update = UserProfileUpdate {
-                    interests: Some(interests),
-                    personality_traits: Some(personality_traits),
-                    interaction_preferences: Some(interaction_preferences),
-                    emotional_tendency: Some(emotional_tendency),
-                    learning_records: Some(learning_records),
-                };
-                self.profile_repo.update(user_id, update).await
-            }
-            None => {
-                let new_profile = NewUserProfile {
-                    user_id,
-                    interests,
-                    personality_traits,
-                    interaction_preferences,
-                    emotional_tendency,
-                    learning_records,
-                };
-                self.profile_repo.save(new_profile).await
-            }
-        }
+        let new_profile = NewUserProfile {
+            user_id,
+            interests,
+            personality_traits,
+            interaction_preferences,
+            emotional_tendency,
+            learning_records,
+        };
+        // 使用原子化 upsert 替代 find-then-save/update，消除 TOCTOU 竞态
+        self.profile_repo.upsert(user_id, new_profile).await
     }
 }
