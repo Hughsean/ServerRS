@@ -1,23 +1,65 @@
 :root {
-  color-scheme: light;
-  --ink: #17211f;
-  --muted: #687572;
-  --line: #dde4e1;
-  --surface: #ffffff;
-  --surface-soft: #f3f6f4;
-  --canvas: #edf2ef;
-  --brand: #176b5b;
-  --brand-dark: #0e4d42;
+  /* ── 品牌色 ── */
+  --brand: #156354;
+  --brand-hover: #1a7c68;
   --brand-soft: #dff0eb;
+
+  /* ── 强调色 ── */
   --accent: #d8913a;
+  --accent-soft: #fdf0dc;
+
+  /* ── 中性色 ── */
+  --ink: #17211f;
+  --muted: #63756f;
+  --line: rgba(190, 205, 200, 0.7);
+  --surface: #ffffff;
+  --surface-soft: #f3f7f4;
+  --canvas: #e5ece8;
+
+  /* ── 语义色 ── */
   --danger: #b94242;
   --danger-soft: #fbe8e7;
-  --warning: #96611d;
-  --warning-soft: #fff0d8;
   --success: #23745f;
   --success-soft: #e1f3ed;
-  --shadow: 0 18px 45px rgba(32, 56, 50, 0.08);
-  --radius: 16px;
+  --warning: #96611d;
+  --warning-soft: #fff0d8;
+
+  /* ── 阴影层级 ── */
+  --shadow-sm: 0 2px 8px rgba(32, 56, 50, 0.06);
+  --shadow-md: 0 8px 24px rgba(32, 56, 50, 0.08);
+  --shadow-lg: 0 24px 60px rgba(32, 56, 50, 0.12);
+
+  /* ── 圆角 ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* ── 动画 ── */
+  --ease: 180ms ease;
+
+  color-scheme: light;
+}
+
+/* 暗色模式 */
+html.dark {
+  --brand: #2f8a76;
+  --brand-hover: #3aa082;
+  --brand-soft: #1a3d35;
+  --ink: #dfeae4;
+  --muted: #8ba098;
+  --line: rgba(255, 255, 255, 0.07);
+  --surface: #162923;
+  --surface-soft: #1c332c;
+  --canvas: #0f1e1a;
+  --accent: #e8b45e;
+  --accent-soft: #3d2e16;
+  --danger-soft: #3d1a1a;
+  --success-soft: #1a332c;
+  --warning-soft: #3d2e00;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 *,

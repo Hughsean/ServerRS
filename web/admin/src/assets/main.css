@@ -244,7 +244,7 @@
 
 .card {
   border: 1px solid rgba(210, 221, 217, 0.9);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
