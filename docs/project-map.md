@@ -969,14 +969,24 @@
  ```
  
  ### 9.2 TypeScript SDK（`web/sdk/`）
- 
+
  给前端用的 API 调用封装：
  ```
  web/sdk/src/
- ├── index.ts       SDK 入口
- ├── client.ts      API 客户端（自动管理 Token）
- ├── http.ts        HTTP 请求封装（fetch）
- └── types.ts       所有 API 的数据类型定义
+ ├── index.ts            SDK 入口（UserClient / AdminClient / 兼容层）
+ ├── client.ts           向后兼容的合体版（ServerRsClient，已废弃）
+ ├── user-client.ts      UserClient（普通用户 API：auth/chat/diaries/psychology/...）
+ ├── admin-client.ts     AdminClient（管理员 API：admin/* 仅管理操作）
+ ├── http.ts             HTTP 请求封装（fetch）
+ ├── types.ts            所有 API 的数据类型定义
+ └── compat/             旧版 SDK 兼容层（DiariesApi/CommunityApi/AdminApi 等）
+     ├── index.ts
+     ├── diaries.ts
+     ├── community.ts
+     ├── psychology.ts
+     ├── music.ts
+     ├── depression.ts
+     └── admin.ts
  ```
  
  ---
