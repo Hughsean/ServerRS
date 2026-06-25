@@ -548,27 +548,17 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
 /// 启动 SSH 隧道管理器。
 ///
-/// 收集被数据库和 Ollama 引用的隧道配置，建立所有隧道。
-/// 如果配置中没有隧道引用，则返回 `None`。
+/// 启动所有已配置的隧道。如果 `[ssh_tunnels]` 为空则返回 `None`。
 fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
-    let used_tunnels: Vec<(String, shared::config::SshTunnelConfig)> = {
-        let mut names = std::collections::BTreeSet::new();
-        if let Some(ref name) = config.database.tunnel {
-            names.insert(name.as_str());
-        }
-        if let Some(ref name) = config.ollama.tunnel {
-            names.insert(name.as_str());
-        }
-        names
-            .into_iter()
-            .filter_map(|name| {
-                config
-                    .ssh_tunnels
-                    .get(name)
-                    .map(|cfg| (name.to_string(), cfg.clone()))
-            })
-            .collect()
-    };
+    if config.ssh_tunnels.is_empty() {
+        return Ok(None);
+    }
+
+    let used_tunnels: Vec<(String, shared::config::SshTunnelConfig)> = config
+        .ssh_tunnels
+        .iter()
+        .map(|(name, cfg)| (name.clone(), cfg.clone()))
+        .collect();
 
     if used_tunnels.is_empty() {
         return Ok(None);
