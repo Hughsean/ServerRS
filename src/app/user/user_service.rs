@@ -25,6 +25,14 @@ impl UserService {
 
     // ── User CRUD ──
 
+    /// 根据 ID 查询用户（当前用户自身）。
+    pub async fn get_user(&self, user_id: u64) -> Result<User, AppError> {
+        self.user_repo
+            .find_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound("user not found".into()))
+    }
+
     pub async fn list_users(&self) -> Result<Vec<User>, AppError> {
         self.user_repo.find_all().await
     }

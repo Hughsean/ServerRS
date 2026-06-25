@@ -73,7 +73,7 @@ pub async fn get_me(
 ) -> Result<Json<UserDto>, AppError> {
     let user = state
         .user
-        .update_user(auth_user.user_id, auth_user.user_id, None, None, None, None)
+        .get_user(auth_user.user_id)
         .await?;
     Ok(Json(to_user_dto(user, &auth_user.role)))
 }
