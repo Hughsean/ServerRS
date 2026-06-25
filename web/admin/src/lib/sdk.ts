@@ -1,8 +1,8 @@
-import { createLocalStorageTokenStore, createServerRsClient } from '@serverrs/sdk'
+import { createLocalStorageTokenStore, createAdminClient } from '@serverrs/sdk'
 
 export const tokenStore = createLocalStorageTokenStore(undefined, 'serverrs-admin')
 
-export const api = createServerRsClient({
+export const api = createAdminClient({
   baseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
   tokenStore,
   timeoutMs: 30_000,
