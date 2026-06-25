@@ -19,6 +19,7 @@ use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::risk::risk_repository::RiskRepository;
 
 #[derive(Clone, FromRef)]
 pub struct AppState {
@@ -92,6 +93,8 @@ pub struct AdminState {
     pub user: Arc<UserService>,
     pub query: Arc<SessionService>,
     pub knowledge_review: Arc<KnowledgeReviewService>,
+    pub music: Arc<MusicService>,
+    pub risk: Arc<dyn RiskRepository>,
 }
 
 #[derive(Clone)]

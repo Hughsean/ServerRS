@@ -510,6 +510,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         chat: chat_service,
         chat_conv_repo: Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         token_service: Arc::clone(&auth_graph.token_service),
+        risk_repo: Arc::clone(&risk_repo),
     };
 
     let state = bootstrap::state::build_state(&services);

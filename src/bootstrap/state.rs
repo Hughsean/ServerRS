@@ -21,6 +21,7 @@ use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::domain::auth::token_service::TokenService;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::risk::risk_repository::RiskRepository;
 
 #[derive(Clone)]
 pub struct ServiceGraph {
@@ -41,6 +42,7 @@ pub struct ServiceGraph {
     pub chat: Arc<ChatService>,
     pub chat_conv_repo: Arc<dyn ConversationRepository>,
     pub token_service: Arc<dyn TokenService>,
+    pub risk_repo: Arc<dyn RiskRepository>,
 }
 
 pub fn build_state(services: &ServiceGraph) -> AppState {
@@ -77,6 +79,8 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
             user: Arc::clone(&services.user),
             query: Arc::clone(&services.query),
             knowledge_review: Arc::clone(&services.knowledge_review),
+            music: Arc::clone(&services.music),
+            risk: Arc::clone(&services.risk_repo),
         },
         internal: InternalState {
             retrieval: Arc::clone(&services.retrieval),
