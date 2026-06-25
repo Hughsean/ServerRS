@@ -48,6 +48,7 @@ use super::handlers::psychology_handler::{
     get_category_tree, get_qna, get_resource, list_articles, list_categories, list_favorites,
     list_qna, list_resources, toggle_favorite, toggle_like,
 };
+use super::handlers::signature_handler::{create_signature, verify_signature};
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
@@ -265,6 +266,9 @@ pub fn build_router_with_origins(
             "/api/v1/community/posts/{post_id}/comments",
             get(list_comments),
         )
+        // Signature — public (使用调用方提供的 appKey 做 HMAC 签名)
+        .route("/api/v1/signature/create", post(create_signature))
+        .route("/api/v1/signature/verify", post(verify_signature))
         // Merge protected and admin sub-routers
         .merge(protected)
         .merge(admin);

@@ -4,7 +4,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::auth::token_service::{AccessTokenClaims, RefreshTokenClaims, TokenService};
+use crate::domain::auth::token_service::{AccessTokenClaims, RefreshTokenClaims, SignatureClaims, TokenService};
 use crate::shared::error::AppError;
 
 const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
@@ -30,6 +30,14 @@ struct JwtClaims {
     jti: Option<String>,
     iat: u64,
     exp: u64,
+}
+
+/// 第三方签名 JWT 的声明结构（使用调用方提供的 appKey 作为 HMAC 密钥）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SignatureJwtClaims {
+    app_id: String,
+    iat: i64,
+    exp: i64,
 }
 
 impl JwtTokenService {
@@ -159,5 +167,47 @@ impl TokenService for JwtTokenService {
             token_id,
             expires_at: claims.exp,
         })
+    }
+
+    // ── 第三方签名 ──
+
+    fn create_signature(&self, app_id: &str, app_key: &str, expires_in_seconds: i64) -> Result<String, AppError> {
+        let now = chrono::Utc::now().timestamp();
+        let exp = now.saturating_add(expires_in_seconds);
+
+        let claims = SignatureJwtClaims {
+            app_id: app_id.to_string(),
+            iat: now,
+            exp,
+        };
+
+        // 使用调用方提供的 appKey 作为 HMAC 密钥
+        let encoding_key = EncodingKey::from_secret(app_key.as_bytes());
+        encode(&Header::new(Algorithm::HS256), &claims, &encoding_key)
+            .map_err(|err| AppError::internal(format!("failed to create signature: {err}")))
+    }
+
+    fn verify_signature(&self, token: &str, app_key: &str) -> Result<SignatureClaims, AppError> {
+        let decoding_key = DecodingKey::from_secret(app_key.as_bytes());
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = true;
+
+        match decode::<SignatureJwtClaims>(token, &decoding_key, &validation) {
+            Ok(data) => {
+                let now = chrono::Utc::now().timestamp();
+                Ok(SignatureClaims {
+                    valid: data.claims.exp > now,
+                    app_id: Some(data.claims.app_id),
+                    issued_at: Some(data.claims.iat),
+                    expires_at: Some(data.claims.exp),
+                })
+            }
+            Err(_) => Ok(SignatureClaims {
+                valid: false,
+                app_id: None,
+                issued_at: None,
+                expires_at: None,
+            }),
+        }
     }
 }

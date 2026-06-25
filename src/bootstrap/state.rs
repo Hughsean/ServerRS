@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::api::{
     AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
-    InternalState, MusicState, ObjectState, PsychologyState, UserState,
+    InternalState, MusicState, ObjectState, PsychologyState, SignatureState, UserState,
 };
 use crate::app::agent::agent_runtime::AgentRuntime;
 use crate::app::auth::auth_service::AuthService;
@@ -19,6 +19,7 @@ use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
+use crate::domain::auth::token_service::TokenService;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 
 #[derive(Clone)]
@@ -39,6 +40,7 @@ pub struct ServiceGraph {
     pub knowledge_review: Arc<KnowledgeReviewService>,
     pub chat: Arc<ChatService>,
     pub chat_conv_repo: Arc<dyn ConversationRepository>,
+    pub token_service: Arc<dyn TokenService>,
 }
 
 pub fn build_state(services: &ServiceGraph) -> AppState {
@@ -81,6 +83,9 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
             ingestion: Arc::clone(&services.ingestion),
             memory: Arc::clone(&services.memory),
             agent_runtime: Arc::clone(&services.agent_runtime),
+        },
+        signature: SignatureState {
+            token_service: Arc::clone(&services.token_service),
         },
     }
 }

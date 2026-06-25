@@ -630,3 +630,29 @@ export interface ReviewPublishRequest {
   event_status: string
   already_requested: boolean
 }
+
+// ── Signature ──────────────────────────────────────────────────────────────
+
+export interface SignatureCreateRequest {
+  appId: string
+  appKey: string
+  expiresIn?: number
+}
+
+export interface SignatureCreateResponse {
+  token: string
+  issuedAt: string
+  expiresAt: string
+}
+
+export interface SignatureVerifyRequest {
+  token: string
+  appKey: string
+}
+
+export interface SignatureVerifyResponse {
+  valid: boolean
+  appId?: string
+  issuedAt?: string
+  expiresAt?: string
+}

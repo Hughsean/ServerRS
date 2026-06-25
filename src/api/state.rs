@@ -17,6 +17,7 @@ use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
+use crate::domain::auth::token_service::TokenService;
 use crate::domain::conversation::conversation_repository::ConversationRepository;
 
 #[derive(Clone, FromRef)]
@@ -32,11 +33,17 @@ pub struct AppState {
     pub community: CommunityState,
     pub admin: AdminState,
     pub internal: InternalState,
+    pub signature: SignatureState,
 }
 
 #[derive(Clone)]
 pub struct AuthState {
     pub auth: Arc<AuthService>,
+}
+
+#[derive(Clone)]
+pub struct SignatureState {
+    pub token_service: Arc<dyn TokenService>,
 }
 
 #[derive(Clone)]

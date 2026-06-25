@@ -16,6 +16,7 @@ use crate::shared::config::{AuthConfig as AppAuthConfig, JwtConfig};
 pub struct AuthGraph {
     pub auth_service: Arc<AuthService>,
     pub refresh_token_store: Arc<dyn RefreshTokenStore>,
+    pub token_service: Arc<dyn TokenService>,
 }
 
 pub fn build_auth(
@@ -40,7 +41,7 @@ pub fn build_auth(
     let auth_service: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(user_repo),
         password_service as Arc<dyn PasswordService>,
-        jwt as Arc<dyn TokenService>,
+        jwt.clone() as Arc<dyn TokenService>,
         Arc::clone(&refresh_token_store),
         Arc::clone(task_publisher),
         AuthConfig {
@@ -53,5 +54,6 @@ pub fn build_auth(
     AuthGraph {
         auth_service,
         refresh_token_store,
+        token_service: jwt.clone() as Arc<dyn TokenService>,
     }
 }

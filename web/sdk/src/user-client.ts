@@ -45,6 +45,10 @@ import type {
   Qna,
   RefreshResponse,
   RegisterRequest,
+  SignatureCreateRequest,
+  SignatureCreateResponse,
+  SignatureVerifyRequest,
+  SignatureVerifyResponse,
   StoredObject,
   TranscriptClearResponse,
   UpdateCommunityPostRequest,
@@ -83,6 +87,7 @@ export class UserClient {
   readonly community: CommunityApi
   readonly music: MusicApi
   readonly objects: ObjectApi
+  readonly signature: SignatureApi
 
   constructor(config: ServerRsClientConfig) {
     this.http = new HttpClient(config)
@@ -95,6 +100,7 @@ export class UserClient {
     this.community = new CommunityApi(this.http)
     this.music = new MusicApi(this.http)
     this.objects = new ObjectApi(this.http)
+    this.signature = new SignatureApi(this.http)
   }
 
   health(): Promise<HealthResponse> {
@@ -472,4 +478,26 @@ async function saveLogin(store: TokenStore | undefined, response: LoginResponse)
     accessToken: response.accessToken,
     refreshToken: response.refreshToken,
   })
+}
+
+// ── Signature ──
+
+export class SignatureApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** POST /api/v1/signature/create — 使用 appKey 签发 JWT 签名 */
+  create(payload: SignatureCreateRequest): Promise<SignatureCreateResponse> {
+    return this.http.request('POST', '/api/v1/signature/create', {
+      auth: false,
+      body: payload,
+    })
+  }
+
+  /** POST /api/v1/signature/verify — 验证 JWT 签名 */
+  verify(payload: SignatureVerifyRequest): Promise<SignatureVerifyResponse> {
+    return this.http.request('POST', '/api/v1/signature/verify', {
+      auth: false,
+      body: payload,
+    })
+  }
 }
