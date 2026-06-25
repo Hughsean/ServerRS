@@ -99,7 +99,7 @@ where
         content: Set(memory.content),
         source_confidence: Set(source_confidence),
         confidence: Set(memory.confidence.clamp(0.0, 1.0)),
-        salience: Set(0.5),
+        salience: sea_orm::ActiveValue::NotSet,
         source_conversation_id: Set(memory.source_conversation_id),
         source_message_id: Set(memory.source_message_id),
         reinforced_at: Set(None),
@@ -224,7 +224,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         active.confidence = Set(model.confidence.max(confidence.clamp(0.0, 1.0)));
         active.reinforced_at = Set(Some(Utc::now().naive_utc()));
         active.reinforce_count = Set(model.reinforce_count.saturating_add(1));
-        active.merge_decision = Set(Some("new_evidence".into()));
         active.updated_at = Set(Utc::now().naive_utc());
         let updated = active
             .update(&txn)
@@ -274,7 +273,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         active.status = Set(-1);
         active.contradicted_at = Set(Some(Utc::now().naive_utc()));
         active.superseded_by = Set(Some(saved.memory_id));
-        active.merge_decision = Set(Some("contradiction".into()));
         active.updated_at = Set(Utc::now().naive_utc());
         active.update(&txn).await.map_err(|e| {
             AppError::internal(format!(
