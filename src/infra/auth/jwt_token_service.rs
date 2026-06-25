@@ -179,6 +179,11 @@ impl TokenService for JwtTokenService {
         app_key: &str,
         expires_in_seconds: i64,
     ) -> Result<String, AppError> {
+        if expires_in_seconds <= 0 || expires_in_seconds > 86400 {
+            return Err(AppError::Validation(
+                "expires_in_seconds must be between 1 and 86400".into(),
+            ));
+        }
         let now = chrono::Utc::now().timestamp();
         let exp = now.saturating_add(expires_in_seconds);
 

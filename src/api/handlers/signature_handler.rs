@@ -16,11 +16,6 @@ pub async fn create_signature(
     Json(payload): Json<SignatureCreateRequest>,
 ) -> Result<Json<SignatureCreateResponse>, AppError> {
     let expires_in = payload.expires_in.unwrap_or(1800);
-    if expires_in <= 0 || expires_in > 86400 {
-        return Err(AppError::Validation(
-            "expiresIn 必须在 1 到 86400 秒之间".into(),
-        ));
-    }
 
     let token =
         state
