@@ -295,7 +295,16 @@ impl AuthService {
             self.issue_pair(user.id, &user.username, user.role.as_str())?;
 
         let token_hash = sha256_hex(&refresh_token);
-        self.refresh_token_store.store(user.id, token_hash).await?;
+        if let Err(e) = self.refresh_token_store.store(user.id, token_hash).await {
+            // 补偿：store 失败时回滚刚创建的用户，避免孤立用户
+            warn!(
+                user_id = user.id,
+                error = %e,
+                "refresh token 存储失败，正在回滚已创建的用户"
+            );
+            let _ = self.user_repo.delete_by_id(user.id).await;
+            return Err(e);
+        }
 
         let _ = self
             .task_publisher
