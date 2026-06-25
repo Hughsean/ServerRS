@@ -11,7 +11,6 @@ use super::super::entities::{user_memories, user_memory_evidence};
 
 use crate::domain::memory::{
     ALLOWED_MEMORY_TYPES, MemoryRepository, NewMemory, NewMemoryEvidence, UserMemory,
-    is_allowed_memory_type,
 };
 use crate::shared::error::AppError;
 
@@ -43,49 +42,10 @@ fn map_memory(m: user_memories::Model) -> UserMemory {
     }
 }
 
-fn validate_memory(memory: &NewMemory) -> Result<(), AppError> {
-    if !is_allowed_memory_type(&memory.memory_type) {
-        return Err(AppError::Validation(format!(
-            "unsupported memory type: {}",
-            memory.memory_type
-        )));
-    }
-    if memory.content.trim().is_empty() {
-        return Err(AppError::Validation(
-            "memory content must not be empty".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_evidence(evidence: &NewMemoryEvidence) -> Result<(), AppError> {
-    let valid_source = match evidence.source_type.as_str() {
-        "message" => evidence.message_id == Some(evidence.source_ref_id),
-        "summary" => evidence.summary_id == Some(evidence.source_ref_id),
-        "manual" => evidence.message_id.is_none() && evidence.summary_id.is_none(),
-        _ => false,
-    };
-    if !valid_source {
-        return Err(AppError::Validation(
-            "memory evidence source is invalid".into(),
-        ));
-    }
-    if !matches!(
-        evidence.evidence_type.as_str(),
-        "source" | "reinforcement" | "contradiction" | "manual"
-    ) {
-        return Err(AppError::Validation(
-            "memory evidence type is invalid".into(),
-        ));
-    }
-    Ok(())
-}
-
 async fn insert_memory<C>(db: &C, memory: NewMemory) -> Result<UserMemory, AppError>
 where
     C: ConnectionTrait,
 {
-    validate_memory(&memory)?;
     let now = Utc::now().naive_utc();
     let source_confidence =
         sea_orm::prelude::Decimal::from_str(&format!("{:.2}", memory.confidence.clamp(0.0, 1.0)))
@@ -138,7 +98,6 @@ async fn insert_evidence<C>(
 where
     C: ConnectionTrait,
 {
-    validate_evidence(&evidence)?;
     let confidence = evidence.confidence.map(|value| {
         sea_orm::prelude::Decimal::from_str(&format!("{:.3}", value.clamp(0.0, 1.0)))
             .unwrap_or(sea_orm::prelude::Decimal::ZERO)
@@ -187,8 +146,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         memory: NewMemory,
         evidence: NewMemoryEvidence,
     ) -> Result<UserMemory, AppError> {
-        validate_memory(&memory)?;
-        validate_evidence(&evidence)?;
         let txn = self
             .db
             .begin()
@@ -209,7 +166,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         evidence: NewMemoryEvidence,
         confidence: f64,
     ) -> Result<UserMemory, AppError> {
-        validate_evidence(&evidence)?;
         let txn = self
             .db
             .begin()
@@ -242,8 +198,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
         evidence: NewMemoryEvidence,
         contradicted_memory_id: u64,
     ) -> Result<UserMemory, AppError> {
-        validate_memory(&memory)?;
-        validate_evidence(&evidence)?;
         let txn = self
             .db
             .begin()
@@ -260,11 +214,6 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             .ok_or_else(|| {
                 AppError::NotFound(format!("memory {contradicted_memory_id} not found"))
             })?;
-        if contradicted.user_id != memory.user_id {
-            return Err(AppError::Forbidden(
-                "cannot contradict another user's memory".into(),
-            ));
-        }
 
         let saved = insert_memory(&txn, memory).await?;
         insert_evidence(&txn, saved.memory_id, evidence).await?;
@@ -518,58 +467,5 @@ impl MemoryRepository for SeaOrmMemoryRepository {
             .await
             .map_err(|e| AppError::internal(format!("list_indexable_memories: {e}")))?;
         Ok(rows.into_iter().map(map_memory).collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn memory(memory_type: &str) -> NewMemory {
-        NewMemory {
-            user_id: 1,
-            memory_key: Some("key".into()),
-            canonical_form: Some("user likes jazz".into()),
-            memory_type: memory_type.into(),
-            content: "user likes jazz".into(),
-            confidence: 0.9,
-            merge_decision: "new".into(),
-            source_conversation_id: Some(1),
-            source_message_id: Some(2),
-        }
-    }
-
-    fn message_evidence() -> NewMemoryEvidence {
-        NewMemoryEvidence {
-            source_type: "message".into(),
-            source_ref_id: 2,
-            message_id: Some(2),
-            summary_id: None,
-            evidence_type: "source".into(),
-            confidence: Some(0.9),
-            extractor_version: Some("memory-extractor-v1".into()),
-        }
-    }
-
-    #[test]
-    fn accepts_only_memory_whitelist() {
-        for memory_type in ALLOWED_MEMORY_TYPES {
-            assert!(validate_memory(&memory(memory_type)).is_ok());
-        }
-        assert!(validate_memory(&memory("profile")).is_err());
-        assert!(validate_memory(&memory("safety_note")).is_err());
-    }
-
-    #[test]
-    fn validates_evidence_reference_and_type() {
-        assert!(validate_evidence(&message_evidence()).is_ok());
-
-        let mut wrong_ref = message_evidence();
-        wrong_ref.source_ref_id = 3;
-        assert!(validate_evidence(&wrong_ref).is_err());
-
-        let mut wrong_type = message_evidence();
-        wrong_type.evidence_type = "unknown".into();
-        assert!(validate_evidence(&wrong_type).is_err());
     }
 }

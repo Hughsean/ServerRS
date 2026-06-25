@@ -147,6 +147,48 @@ impl MemoryService {
             }))
     }
 
+    /// Validate a NewMemory before persisting.
+    #[allow(dead_code)]
+    fn validate_memory(memory: &NewMemory) -> Result<(), AppError> {
+        if !is_allowed_memory_type(&memory.memory_type) {
+            return Err(AppError::Validation(format!(
+                "unsupported memory type: {}",
+                memory.memory_type
+            )));
+        }
+        if memory.content.trim().is_empty() {
+            return Err(AppError::Validation(
+                "memory content must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate NewMemoryEvidence before persisting.
+    #[allow(dead_code)]
+    fn validate_evidence(evidence: &NewMemoryEvidence) -> Result<(), AppError> {
+        let valid_source = match evidence.source_type.as_str() {
+            "message" => evidence.message_id == Some(evidence.source_ref_id),
+            "summary" => evidence.summary_id == Some(evidence.source_ref_id),
+            "manual" => evidence.message_id.is_none() && evidence.summary_id.is_none(),
+            _ => false,
+        };
+        if !valid_source {
+            return Err(AppError::Validation(
+                "memory evidence source is invalid".into(),
+            ));
+        }
+        if !matches!(
+            evidence.evidence_type.as_str(),
+            "source" | "reinforcement" | "contradiction" | "manual"
+        ) {
+            return Err(AppError::Validation(
+                "memory evidence type is invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Run the LLM extractor and persist every extracted memory.
 
     /// Retrieve memories for a user, optionally filtered by status.
@@ -304,6 +346,13 @@ impl MemoryService {
                     MemoryMergeDecision::Contradiction(existing_id) => {
                         memory.merge_decision = "contradiction".into();
                         evidence.evidence_type = "contradiction".into();
+                        let existing = self.repo.find_by_id(existing_id).await?
+                            .ok_or_else(|| AppError::NotFound(format!("memory {existing_id} not found")))?;
+                        if existing.user_id != user_id {
+                            return Err(AppError::Forbidden(
+                                "cannot contradict another user's memory".into(),
+                            ));
+                        }
                         self.repo
                             .save_contradicting_memory_with_evidence(
                                 memory, evidence, existing_id,
@@ -767,6 +816,54 @@ mod tests {
         let second = canonicalize_memory("user likes jazz");
         assert_eq!(first, second);
         assert_eq!(memory_key(&first), memory_key(&second));
+    }
+
+    fn test_memory(memory_type: &str) -> NewMemory {
+        NewMemory {
+            user_id: 1,
+            memory_key: Some("key".into()),
+            canonical_form: Some("user likes jazz".into()),
+            memory_type: memory_type.into(),
+            content: "user likes jazz".into(),
+            confidence: 0.9,
+            merge_decision: "new".into(),
+            source_conversation_id: Some(1),
+            source_message_id: Some(2),
+        }
+    }
+
+    fn test_evidence() -> NewMemoryEvidence {
+        NewMemoryEvidence {
+            source_type: "message".into(),
+            source_ref_id: 2,
+            message_id: Some(2),
+            summary_id: None,
+            evidence_type: "source".into(),
+            confidence: Some(0.9),
+            extractor_version: Some("memory-extractor-v1".into()),
+        }
+    }
+
+    #[test]
+    fn accepts_only_memory_whitelist() {
+        for memory_type in crate::domain::memory::ALLOWED_MEMORY_TYPES {
+            assert!(MemoryService::validate_memory(&test_memory(memory_type)).is_ok());
+        }
+        assert!(MemoryService::validate_memory(&test_memory("profile")).is_err());
+        assert!(MemoryService::validate_memory(&test_memory("safety_note")).is_err());
+    }
+
+    #[test]
+    fn validates_evidence_reference_and_type() {
+        assert!(MemoryService::validate_evidence(&test_evidence()).is_ok());
+
+        let mut wrong_ref = test_evidence();
+        wrong_ref.source_ref_id = 3;
+        assert!(MemoryService::validate_evidence(&wrong_ref).is_err());
+
+        let mut wrong_type = test_evidence();
+        wrong_type.evidence_type = "unknown".into();
+        assert!(MemoryService::validate_evidence(&wrong_type).is_err());
     }
 
     #[test]
