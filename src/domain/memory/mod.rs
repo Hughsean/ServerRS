@@ -91,7 +91,7 @@ pub struct ConversationSummary {
     pub message_start_id: u64,
     pub message_end_id: u64,
     pub supersedes_id: Option<u64>,
-    pub token_count: Option<u32>,
+    pub word_count: Option<u32>,
     pub status: i8,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -106,7 +106,7 @@ pub struct NewSummary {
     pub content: String,
     pub message_start_id: u64,
     pub message_end_id: u64,
-    pub token_count: Option<u32>,
+    pub word_count: Option<u32>,
 }
 
 /// Repository trait for persisting and querying user memories.

@@ -34,7 +34,7 @@ fn map_summary(m: conversation_summaries::Model) -> ConversationSummary {
         message_start_id: m.message_start_id,
         message_end_id: m.message_end_id,
         supersedes_id: m.supersedes_id,
-        token_count: m.token_count,
+        word_count: m.token_count,
         status: m.status,
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
@@ -147,7 +147,7 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
             content: Set(summary.content),
             message_start_id: Set(summary.message_start_id),
             message_end_id: Set(summary.message_end_id),
-            token_count: Set(summary.token_count),
+            token_count: Set(summary.word_count),
             status: Set(1),
             supersedes_id: Set(supersedes_id),
             created_at: Set(now),
@@ -263,7 +263,7 @@ mod tests {
             content: "continuity".into(),
             message_start_id: start,
             message_end_id: end,
-            token_count: None,
+            word_count: None,
         }
     }
 

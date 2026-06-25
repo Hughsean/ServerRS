@@ -33,6 +33,19 @@ pub fn latest_user_query(messages: &[ChatMessage]) -> String {
         .to_string()
 }
 
+/// Build a memory recall query from the last N user messages.
+/// Using multiple messages provides richer context than the last message alone.
+fn build_recall_query(messages: &[ChatMessage]) -> String {
+    messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == "user")
+        .take(3)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl AgentContextBuilder {
     pub fn new(
         memory_service: Arc<MemoryService>,
@@ -78,7 +91,7 @@ impl AgentContextBuilder {
             None
         };
 
-        let recall_query = latest_user_query(&recent_messages);
+        let recall_query = build_recall_query(&recent_messages);
 
         let memories = if !memory_enabled || max_memory_items == 0 {
             Vec::new()
@@ -183,5 +196,55 @@ mod tests {
     fn latest_user_query_empty_on_empty_slice() {
         let messages: Vec<ChatMessage> = vec![];
         assert_eq!(latest_user_query(&messages), "");
+    }
+
+    #[test]
+    fn build_recall_query_uses_multiple_user_messages() {
+        let msgs = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "first question".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "first answer".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "second question".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+        let query = build_recall_query(&msgs);
+        assert!(query.contains("first question"));
+        assert!(query.contains("second question"));
+    }
+
+    #[test]
+    fn build_recall_query_empty_on_no_user_messages() {
+        let msgs = vec![ChatMessage {
+            role: "assistant".into(),
+            content: "only assistant".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
+        let query = build_recall_query(&msgs);
+        assert_eq!(query, "");
+    }
+
+    #[test]
+    fn build_recall_query_empty_on_empty_slice() {
+        let msgs: Vec<ChatMessage> = vec![];
+        let query = build_recall_query(&msgs);
+        assert_eq!(query, "");
     }
 }

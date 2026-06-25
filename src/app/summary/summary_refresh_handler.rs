@@ -180,7 +180,7 @@ impl SummaryRefreshHandler {
                 return;
             }
         }
-        let token_count = Some(summary.split_whitespace().count().min(u32::MAX as usize) as u32);
+        let word_count = Some(summary.split_whitespace().count().min(u32::MAX as usize) as u32);
         if let Err(error) = self
             .summary_service
             .save_summary(NewSummary {
@@ -193,7 +193,7 @@ impl SummaryRefreshHandler {
                     .map(|summary| summary.message_start_id)
                     .unwrap_or(first_message.id),
                 message_end_id: last_message.id,
-                token_count,
+                word_count,
             })
             .await
         {
