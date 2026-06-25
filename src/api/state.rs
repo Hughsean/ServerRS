@@ -46,7 +46,7 @@ pub struct UserState {
 
 #[derive(Clone)]
 pub struct ChatState {
-    pub chat_service: Arc<ChatService>,
+    pub chat: Arc<ChatService>,
     pub conv_repo: Arc<dyn ConversationRepository>,
 }
 

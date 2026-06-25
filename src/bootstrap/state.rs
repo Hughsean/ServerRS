@@ -50,7 +50,7 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
             user: Arc::clone(&services.user),
         },
         chat: ChatState {
-            chat_service: Arc::clone(&services.chat),
+            chat: Arc::clone(&services.chat),
             conv_repo: Arc::clone(&services.chat_conv_repo),
         },
         object: ObjectState {

@@ -14,7 +14,7 @@ pub async fn chat_open(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ChatOpenResponse>, AppError> {
-    let conv = state.chat.chat_service.open(auth_user.user_id).await?;
+    let conv = state.chat.chat.open(auth_user.user_id).await?;
     Ok(Json(ChatOpenResponse {
         conversation: ChatConversationInfo {
             id: conv.conversation.id,
@@ -38,7 +38,7 @@ pub async fn chat_send_message(
     body.validate().map_err(AppError::validation)?;
     let result = state
         .chat
-        .chat_service
+        .chat
         .send_message(auth_user.user_id, body.text, body.emotion, body.location)
         .await?;
     Ok(Json(ChatMessageResponse {
@@ -175,7 +175,7 @@ pub async fn chat_persona(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ChatPersonaResponse>, AppError> {
-    let persona = state.chat.chat_service.persona(auth_user.user_id).await?;
+    let persona = state.chat.chat.persona(auth_user.user_id).await?;
     Ok(Json(ChatPersonaResponse {
         has_active_persona: persona.has_active_persona,
         generated_at: persona.generated_at.map(|value| value.to_rfc3339()),
@@ -206,7 +206,7 @@ pub async fn chat_disable_memory(
     // and syncs vector index deletion.
     state
         .chat
-        .chat_service
+        .chat
         .disable_memory(auth_user.user_id, memory_id)
         .await?;
     Ok(Json(DisableMemoryResponse {
@@ -223,7 +223,7 @@ pub async fn chat_persona_reset(
 ) -> Result<Json<PersonaResetResponse>, AppError> {
     let result = state
         .chat
-        .chat_service
+        .chat
         .reset_persona(auth_user.user_id)
         .await?;
     Ok(Json(PersonaResetResponse {
@@ -239,7 +239,7 @@ pub async fn chat_persona_rebuild(
 ) -> Result<Json<PersonaRebuildResponse>, AppError> {
     let result = state
         .chat
-        .chat_service
+        .chat
         .rebuild_persona(auth_user.user_id)
         .await?;
     Ok(Json(PersonaRebuildResponse {
@@ -255,7 +255,7 @@ pub async fn chat_transcript_clear(
 ) -> Result<Json<TranscriptClearResponse>, AppError> {
     let result = state
         .chat
-        .chat_service
+        .chat
         .clear_transcript(auth_user.user_id)
         .await?;
     Ok(Json(TranscriptClearResponse {
@@ -273,7 +273,7 @@ pub async fn chat_forget(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ForgetResponse>, AppError> {
-    let result = state.chat.chat_service.forget(auth_user.user_id).await?;
+    let result = state.chat.chat.forget(auth_user.user_id).await?;
     Ok(Json(ForgetResponse {
         messages_cleared: result.messages_cleared,
         summaries_cleared: result.summaries_cleared,
