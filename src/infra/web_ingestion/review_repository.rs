@@ -12,8 +12,8 @@ use crate::infra::persistence::entities::{
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::HashMap;
 pub struct SeaOrmKnowledgeReviewRepository {
@@ -273,7 +273,59 @@ impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
             already_requested: false,
         })
     }
+
+    async fn count_all(&self) -> Result<u64, WebIngestionError> {
+        knowledge_publish_records::Entity::find()
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
+    }
+
+    async fn count_trend(&self, days: u32) -> Result<Vec<(String, u64)>, WebIngestionError> {
+        let since = chrono::Utc::now() - chrono::Duration::days(days as i64 - 1);
+        let start = since.format("%Y-%m-%d").to_string();
+        let stmt = sea_orm::Statement::from_sql_and_values(
+            self.db.get_database_backend(),
+            r#"
+            SELECT DATE(created_at) AS day, COUNT(*) AS cnt
+            FROM knowledge_publish_records
+            WHERE created_at >= CAST(? AS DATETIME)
+            GROUP BY DATE(created_at)
+            ORDER BY day
+            "#,
+            vec![sea_orm::Value::String(Some(start))],
+        );
+        let rows = self.db.query_all_raw(stmt).await.map_err(map_db_err)?;
+        let mut daily: Vec<(String, u64)> = rows
+            .into_iter()
+            .filter_map(|row| {
+                let day: String = row.try_get("", "day").ok()?;
+                let cnt: i64 = row.try_get("", "cnt").ok()?;
+                Some((day, cnt as u64))
+            })
+            .collect();
+        Ok(fill_trend_daily(days, &mut daily))
+    }
 }
+
+fn fill_trend_daily(days: u32, daily: &mut [(String, u64)]) -> Vec<(String, u64)> {
+    daily.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut result = Vec::with_capacity(days as usize);
+    let today = chrono::Utc::now().date_naive();
+    for i in (0..days).rev() {
+        let date = today - chrono::Duration::days(i as i64);
+        let label = date.format("%m-%d").to_string();
+        let full = date.format("%Y-%m-%d").to_string();
+        let count = daily
+            .iter()
+            .find(|(d, _)| *d == full)
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        result.push((label, count));
+    }
+    result
+}
+
 fn map_db_err(error: sea_orm::DbErr) -> WebIngestionError {
     WebIngestionError::Internal(error.to_string())
 }
