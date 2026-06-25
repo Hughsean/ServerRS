@@ -548,15 +548,31 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
 /// 启动 SSH 隧道管理器。
 ///
-/// 启动所有已配置的隧道。如果 `[ssh_tunnels]` 为空则返回 `None`。
+/// - `-R`（远程转发）隧道无条件启动，用于暴露端口到公网。
+/// - `-L`（本地转发）隧道仅在被 database / ollama 引用时启动。
+/// 如果 `[ssh_tunnels]` 为空则返回 `None`。
 fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
     if config.ssh_tunnels.is_empty() {
         return Ok(None);
     }
 
+    // 收集被 database / ollama 引用的 -L 隧道名称
+    let mut referenced = std::collections::BTreeSet::new();
+    if let Some(ref name) = config.database.tunnel {
+        referenced.insert(name.as_str());
+    }
+    if let Some(ref name) = config.ollama.tunnel {
+        referenced.insert(name.as_str());
+    }
+
     let used_tunnels: Vec<(String, shared::config::SshTunnelConfig)> = config
         .ssh_tunnels
         .iter()
+        .filter(|(name, cfg)| {
+            // -R 无条件启动，-L 仅在被引用时启动
+            matches!(cfg.direction, shared::config::TunnelDirection::Remote)
+                || referenced.contains(name.as_str())
+        })
         .map(|(name, cfg)| (name.clone(), cfg.clone()))
         .collect();
 
