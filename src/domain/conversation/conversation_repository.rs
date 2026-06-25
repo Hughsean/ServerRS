@@ -60,4 +60,14 @@ pub trait ConversationRepository: Send + Sync {
         conversation_id: u64,
         message_ids: &[u64],
     ) -> Result<Vec<ConversationMessage>, AppError>;
+
+    /// 原子化保存一轮对话的用户消息+助手消息+更新计数。
+    /// 使用事务包裹三步操作，任一失败则全表回滚。
+    async fn save_turn_atomic(
+        &self,
+        conversation_id: u64,
+        user_id: u64,
+        user_msg: NewConversationMessage,
+        assistant_msg: NewConversationMessage,
+    ) -> Result<(ConversationMessage, ConversationMessage), AppError>;
 }

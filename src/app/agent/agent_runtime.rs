@@ -706,7 +706,7 @@ impl AgentRuntime {
         Err(AppError::Internal(format!("Unknown tool: {name}")))
     }
 
-    /// Persist the user message and assistant reply to the conversation store.
+    /// 持久化用户消息和 AI 回复到数据库（使用事务保证原子性）。
     async fn persist_messages(
         &self,
         user_id: u64,
@@ -719,7 +719,7 @@ impl AgentRuntime {
             Some(id) => id,
             None => {
                 return Err(AppError::Internal(
-                    "conversation id is required to persist messages".into(),
+                    "需要对话 ID 才能持久化消息".into(),
                 ));
             }
         };
@@ -729,36 +729,36 @@ impl AgentRuntime {
             "emotion": emotion,
         });
 
-        let user_msg = self
-            .conversation_repo
-            .save_message(NewConversationMessage {
-                conversation_id: cid,
-                sender_role: "user".into(),
-                sender_user_id: Some(user_id),
-                message_type: "text".into(),
-                content: user_content.to_string(),
-                token_count: None,
-            })
-            .await?;
-
         let asst_content = serde_json::json!({ "text": assistant_reply });
-        let asst_msg = self
-            .conversation_repo
-            .save_message(NewConversationMessage {
-                conversation_id: cid,
-                sender_role: "assistant".into(),
-                sender_user_id: None,
-                message_type: "text".into(),
-                content: asst_content.to_string(),
-                token_count: None,
-            })
-            .await?;
 
-        self.conversation_repo.touch_and_incr(cid, 2).await?;
+        // 使用事务原子化保存两条消息并更新计数
+        let (user_saved, asst_saved) = self
+            .conversation_repo
+            .save_turn_atomic(
+                cid,
+                user_id,
+                NewConversationMessage {
+                    conversation_id: cid,
+                    sender_role: "user".into(),
+                    sender_user_id: Some(user_id),
+                    message_type: "text".into(),
+                    content: user_content.to_string(),
+                    token_count: None,
+                },
+                NewConversationMessage {
+                    conversation_id: cid,
+                    sender_role: "assistant".into(),
+                    sender_user_id: None,
+                    message_type: "text".into(),
+                    content: asst_content.to_string(),
+                    token_count: None,
+                },
+            )
+            .await?;
 
         Ok(PersistedTurn {
-            user_message_id: user_msg.id,
-            assistant_message_id: asst_msg.id,
+            user_message_id: user_saved.id,
+            assistant_message_id: asst_saved.id,
         })
     }
 

@@ -248,4 +248,73 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .map_err(map_err)
             .map(|messages| messages.into_iter().map(map_msg).collect())
     }
+
+    /// 原子化保存一轮对话的用户消息+助手消息+更新计数。
+    /// 使用事务包裹三步操作，任一失败则全表回滚。
+    async fn save_turn_atomic(
+        &self,
+        conversation_id: u64,
+        _user_id: u64,
+        user_msg: NewConversationMessage,
+        assistant_msg: NewConversationMessage,
+    ) -> Result<(ConversationMessage, ConversationMessage), AppError> {
+        let txn = self.db.begin().await.map_err(map_err)?;
+
+        let result = async {
+            let now = chrono::Utc::now();
+
+            // 1. 保存用户消息
+            let user_am = conversation_messages::ActiveModel {
+                conversation_id: Set(conversation_id),
+                sender_role: Set(user_msg.sender_role),
+                sender_user_id: Set(user_msg.sender_user_id),
+                message_type: Set(user_msg.message_type),
+                content: Set(
+                    serde_json::from_str(&user_msg.content)
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+                token_count: Set(user_msg.token_count.map(|v| v as u32)),
+                created_at: Set(now.naive_utc()),
+                ..Default::default()
+            };
+            let user_saved = user_am.insert(&txn).await.map_err(map_err)?;
+
+            // 2. 保存助手消息
+            let asst_am = conversation_messages::ActiveModel {
+                conversation_id: Set(conversation_id),
+                sender_role: Set(assistant_msg.sender_role),
+                sender_user_id: Set(assistant_msg.sender_user_id),
+                message_type: Set(assistant_msg.message_type),
+                content: Set(
+                    serde_json::from_str(&assistant_msg.content)
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+                token_count: Set(assistant_msg.token_count.map(|v| v as u32)),
+                created_at: Set(now.naive_utc()),
+                ..Default::default()
+            };
+            let asst_saved = asst_am.insert(&txn).await.map_err(map_err)?;
+
+            // 3. 更新对话计数和最后消息时间
+            let update_sql = format!(
+                "UPDATE conversations SET message_count = message_count + 2, \
+                 last_message_at = UTC_TIMESTAMP(6), \
+                 updated_at = UTC_TIMESTAMP(6) \
+                 WHERE id = {conversation_id}"
+            );
+            txn.execute_raw(Statement::from_string(DbBackend::MySql, update_sql))
+                .await
+                .map_err(map_err)?;
+
+            Ok((map_msg(user_saved), map_msg(asst_saved)))
+        }
+        .await;
+
+        match &result {
+            Ok(_) => txn.commit().await.map_err(map_err)?,
+            Err(_) => txn.rollback().await.map_err(map_err)?,
+        }
+
+        result
+    }
 }
