@@ -32,7 +32,7 @@ use infra::llm::ollama_provider::OllamaProvider;
 use infra::persistence::seaorm_db::init_db;
 use infra::storage::local_storage::LocalObjectStorage;
 use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
-use infra::tasks::in_memory_task_flow::new_task_channel;
+use infra::tasks::in_memory_task_flow::{RetryingTaskPublisher, new_task_channel};
 use infra::tasks::logging_handler::LoggingHandler;
 use infra::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 use server_rs::{api, app, bootstrap, domain, infra, shared};
@@ -91,6 +91,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     ));
 
     let (tp, tw) = new_task_channel(256);
+    // 启动内存重试队列的后台协程，用于处理发送失败的事件
+    let _retry_handle = RetryingTaskPublisher::spawn_retry_worker(tp.clone());
     let task_worker = tw
         .with_handler(Arc::new(LoggingHandler))
         .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
