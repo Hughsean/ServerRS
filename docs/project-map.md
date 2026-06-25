@@ -156,7 +156,6 @@
  ├── router.rs           ★ 路由总表（哪个 URL 对应哪个函数）
  ├── state.rs            状态结构（把所有 Service 打包成一个 AppState）
  ├── error.rs            错误处理
- ├── response.rs         通用响应格式（⚠ 已弃用，实际通过 error.rs 的 IntoResponse 处理）
  ├── dto/                DTO（请求/响应数据结构）
  │   ├── mod.rs
  │   ├── auth_dto.rs     登录/注册的请求/响应格式
@@ -523,10 +522,31 @@
  │   │   ├── agent_events.rs           Agent 事件表
  │   │   ├── post_conversation_risk_audits.rs 风险审计表
  │   │   ├── vector_index_jobs.rs      向量索引任务表
- │   │   ├── vector_index_records.rs   向量索引记录表
- │   │   └── prelude.rs                实体导出的快捷引用
- │   └── implementations/              ★ 接口的具体 SQL 实现
- │
+	 │   │   ├── vector_index_records.rs   向量索引记录表
+	 │   │   └── prelude.rs                实体导出的快捷引用
+	 │   └── implementations/              ★ 接口的具体 SQL 实现（20 个 SeaORM 实现）
+	 │       ├── mod.rs
+	 │       ├── seaorm_user_repository.rs              用户仓库
+	 │       ├── seaorm_user_profile_repository.rs      用户画像仓库
+	 │       ├── seaorm_user_context_version_repository.rs 上下文版本仓库
+	 │       ├── seaorm_user_context_control_repository.rs 上下文控制仓库
+	 │       ├── seaorm_conversation_repository.rs      会话仓库
+	 │       ├── seaorm_conversation_summary_repository.rs 摘要仓库
+	 │       ├── seaorm_memory_repository.rs            记忆仓库
+	 │       ├── seaorm_rag_repository.rs               RAG 仓库
+	 │       ├── seaorm_risk_repository.rs              风险仓库
+	 │       ├── seaorm_refresh_token_store.rs          刷新令牌仓库
+	 │       ├── seaorm_music_repository.rs             音乐仓库
+	 │       ├── seaorm_diary_repository.rs             日记仓库
+	 │       ├── seaorm_depression_repository.rs        抑郁评估仓库
+	 │       ├── seaorm_psychology_repository.rs        心理知识仓库
+	 │       ├── seaorm_community_repository.rs         社区仓库
+	 │       ├── seaorm_like_repository.rs              点赞仓库
+	 │       ├── seaorm_stored_object_repository.rs     对象存储仓库
+	 │       ├── seaorm_agent_repository.rs             Agent 事件仓库
+	 │       ├── seaorm_vector_index_repository.rs      向量索引仓库
+	 │       └── stub_repositories.rs                   测试用桩实现
+	 │
  ├── llm/                           AI 模型实现
  │   ├── mod.rs
  │   ├── ollama_client.rs           调用 Ollama API
