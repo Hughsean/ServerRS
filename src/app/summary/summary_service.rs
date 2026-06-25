@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::app::rag::vector_index_service::VectorIndexService;
-use crate::domain::memory::{ConversationSummary, NewSummary};
+use crate::domain::memory::{
+    ConversationSummary, NewSummary, is_allowed_summary_type,
+};
 use crate::domain::summary::SummaryRepository;
 use crate::shared::error::AppError;
 
@@ -27,6 +29,24 @@ impl SummaryService {
     /// Persist a summary and index it for vector search.
     /// Indexing failure does not roll back the MySQL save.
     pub async fn save_summary(&self, summary: NewSummary) -> Result<ConversationSummary, AppError> {
+        // Validate
+        if !is_allowed_summary_type(&summary.summary_type) {
+            return Err(AppError::Validation(format!(
+                "unsupported summary type: {}",
+                summary.summary_type
+            )));
+        }
+        if summary.content.trim().is_empty() {
+            return Err(AppError::Validation(
+                "summary content must not be empty".into(),
+            ));
+        }
+        if summary.message_start_id > summary.message_end_id {
+            return Err(AppError::Validation(
+                "summary message range is invalid".into(),
+            ));
+        }
+
         let saved = self.summary_repo.save_summary(summary).await?;
 
         if let Some(ref vi) = self.vector_index {

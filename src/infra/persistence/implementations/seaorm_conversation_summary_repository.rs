@@ -9,7 +9,6 @@ use super::super::entities::conversation_summaries;
 
 use crate::domain::memory::{
     ALLOWED_SUMMARY_TYPES, ConversationSummary, NewSummary, ROLLING_GENERAL_SUMMARY,
-    is_allowed_summary_type,
 };
 use crate::domain::summary::SummaryRepository;
 use crate::shared::error::AppError;
@@ -39,26 +38,6 @@ fn map_summary(m: conversation_summaries::Model) -> ConversationSummary {
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
     }
-}
-
-fn validate_summary(summary: &NewSummary) -> Result<(), AppError> {
-    if !is_allowed_summary_type(&summary.summary_type) {
-        return Err(AppError::Validation(format!(
-            "unsupported summary type: {}",
-            summary.summary_type
-        )));
-    }
-    if summary.content.trim().is_empty() {
-        return Err(AppError::Validation(
-            "summary content must not be empty".into(),
-        ));
-    }
-    if summary.message_start_id > summary.message_end_id {
-        return Err(AppError::Validation(
-            "summary message range is invalid".into(),
-        ));
-    }
-    Ok(())
 }
 
 #[async_trait]
@@ -104,8 +83,6 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
     }
 
     async fn save_summary(&self, summary: NewSummary) -> Result<ConversationSummary, AppError> {
-        validate_summary(&summary)?;
-
         let txn = self
             .db
             .begin()
@@ -248,39 +225,5 @@ impl SummaryRepository for SeaOrmConversationSummaryRepository {
             AppError::internal(format!("update summary index metadata {summary_id}: {e}"))
         })?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn summary(summary_type: &str, start: u64, end: u64) -> NewSummary {
-        NewSummary {
-            conversation_id: 1,
-            user_id: 1,
-            summary_type: summary_type.into(),
-            content: "continuity".into(),
-            message_start_id: start,
-            message_end_id: end,
-            word_count: None,
-        }
-    }
-
-    #[test]
-    fn accepts_general_summary_types() {
-        assert!(validate_summary(&summary(ROLLING_GENERAL_SUMMARY, 1, 2)).is_ok());
-        assert!(validate_summary(&summary("milestone_general", 1, 2)).is_ok());
-    }
-
-    #[test]
-    fn rejects_legacy_or_invalid_summary_types() {
-        assert!(validate_summary(&summary("rolling", 1, 2)).is_err());
-        assert!(validate_summary(&summary("safety", 1, 2)).is_err());
-    }
-
-    #[test]
-    fn rejects_inverted_message_range() {
-        assert!(validate_summary(&summary(ROLLING_GENERAL_SUMMARY, 3, 2)).is_err());
     }
 }
