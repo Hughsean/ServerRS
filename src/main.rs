@@ -21,7 +21,7 @@ use app::storage::object_service::ObjectService;
 use app::user::user_service::UserService;
 use domain::auth::refresh_token_store::RefreshTokenStore;
 use domain::conversation::conversation_repository::ConversationRepository;
-use domain::llm::{EmbeddingProvider, LlmProvider};
+use domain::llm::LlmProvider;
 use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
@@ -83,81 +83,9 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         tokio::spawn(periodic_revocation(store))
     });
 
-    // ── 专用 Embedding Provider（与 Chat LLM 分离）──
-    let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
-        infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
-            config.embedding.base_url.clone(),
-            config.embedding.model.clone(),
-            config.embedding.dimension,
-            config.embedding.batch_size,
-            config.embedding.timeout_secs,
-        ),
-    );
-
-    // ── Qdrant 向量存储（可选，通过配置启用）──
-    use domain::vector_store::VectorStore;
-    let vector_store: Option<Arc<dyn VectorStore>> = if config.qdrant.enabled {
-        #[cfg(feature = "qdrant")]
-        {
-            let qdrant = infra::vector_store::qdrant_vector_store::QdrantVectorStore::new(
-                &config.qdrant.url,
-                config.qdrant.api_key.as_deref(),
-            )
-            .await
-            .map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Qdrant init failed: {e}"),
-                )
-            })?;
-            Some(Arc::new(qdrant) as Arc<dyn VectorStore>)
-        }
-        #[cfg(not(feature = "qdrant"))]
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "qdrant.enabled=true but binary built without --features qdrant",
-            ));
-        }
-    } else {
-        None
-    };
-
-    use app::rag::vector_index_service::{VectorIndexConfig, VectorIndexService};
-    use domain::vector_index::VectorIndexRepository;
-
-    let vector_index_repo: Arc<dyn VectorIndexRepository> = Arc::new(
-        infra::db::imp::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(
-            infra.db.clone(),
-        ),
-    );
-
-    let vector_index: Option<Arc<VectorIndexService>> = vector_store.as_ref().map(|vs| {
-        Arc::new(VectorIndexService::new(
-            Arc::clone(&rag_repo),
-            Arc::clone(&memory_repo),
-            Arc::clone(&summary_repo),
-            Arc::clone(&vector_index_repo),
-            Arc::clone(vs),
-            Arc::clone(&embedding_provider),
-            VectorIndexConfig {
-                rag_collection: config.qdrant.rag_collection.clone(),
-                memory_collection: config.qdrant.memory_collection.clone(),
-                summary_collection: config.qdrant.summary_collection.clone(),
-                ..Default::default()
-            },
-        ))
-    });
-
-    // ── 确保向量集合已存在（仅在 Qdrant 启用时）──
-    if let Some(ref vi) = vector_index {
-        vi.ensure_collections().await.map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("ensure_collections failed: {e}"),
-            )
-        })?;
-    }
+    // ── 向量/RAG 装配（Embedding → Qdrant → VectorIndex）──
+    let vector = bootstrap::vector::VectorContext::new(&config, &infra, &repos).await?;
+    vector.ensure_collections().await?;
 
     // ── 风险检测器 + 检测服务 ──
     let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
@@ -185,12 +113,12 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     // ── RAG 与记忆服务（提前构建 — AgentContextBuilder 需要它们）──
     let mut retrieval_svc =
-        RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&embedding_provider)))
+        RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&vector.embedding_provider)))
             .with_hybrid_weights(
                 config.rag.hybrid_vector_weight,
                 config.rag.hybrid_keyword_weight,
             );
-    if let Some(ref vs) = vector_store {
+    if let Some(ref vs) = vector.vector_store {
         retrieval_svc =
             retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
     }
@@ -207,10 +135,10 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let mut ingestion_svc = IngestionService::new(
         Arc::clone(&rag_repo),
         chunking,
-        Some(Arc::clone(&embedding_provider)),
+        Some(Arc::clone(&vector.embedding_provider)),
     )
     .with_chunking_config(config.rag.chunk_size, config.rag.chunk_overlap);
-    if let Some(ref vi) = vector_index {
+    if let Some(ref vi) = vector.vector_index {
         ingestion_svc = ingestion_svc.with_vector_index(Arc::clone(vi));
     }
     let ingestion: Arc<IngestionService> = Arc::new(ingestion_svc);
@@ -220,14 +148,14 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor)
         .with_personalization_profile_repo(Arc::clone(&profile_repo))
         .with_context_version_repo(Arc::clone(&context_version_repo));
-    if let Some(ref vs) = vector_store {
+    if let Some(ref vs) = vector.vector_store {
         memory_svc = memory_svc.with_vector_search(
             Arc::clone(vs),
-            Arc::clone(&embedding_provider),
+            Arc::clone(&vector.embedding_provider),
             config.qdrant.memory_collection.clone(),
         );
     }
-    if let Some(ref vi) = vector_index {
+    if let Some(ref vi) = vector.vector_index {
         memory_svc = memory_svc.with_vector_index(Arc::clone(vi));
     }
     let memory_svc: Arc<MemoryService> = Arc::new(memory_svc);
@@ -236,7 +164,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     use app::summary::summary_service::SummaryService;
     let summary_service: Arc<SummaryService> = Arc::new(SummaryService::new(
         Arc::clone(&summary_repo),
-        vector_index.clone(),
+        vector.vector_index.clone(),
     ));
     use app::summary::summary_refresh_handler::SummaryRefreshHandler;
     let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
@@ -305,7 +233,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&agent_runtime),
         Arc::clone(&memory_svc),
         Arc::clone(&context_control_repo),
-        vector_index.clone(),
+        vector.vector_index.clone(),
     ));
 
     // ── 使用真实 SeaORM 仓库的领域服务 ──
@@ -421,8 +349,8 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let knowledge_review = bootstrap::web_ingestion::init_web_ingestion(
         &config,
         &infra.db,
-        &vector_store,
-        &embedding_provider,
+        &vector.vector_store,
+        &vector.embedding_provider,
         &rag_repo,
         &mut tasks.background,
     )
