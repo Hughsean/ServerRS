@@ -37,6 +37,7 @@ struct JwtClaims {
 /// 第三方签名 JWT 的声明结构（使用调用方提供的 appKey 作为 HMAC 密钥）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignatureJwtClaims {
+    #[serde(rename = "appId")]
     app_id: String,
     iat: i64,
     exp: i64,
