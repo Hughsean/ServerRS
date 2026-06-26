@@ -25,13 +25,8 @@ use domain::llm::{EmbeddingProvider, LlmProvider};
 use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
-use domain::tasks::task_publisher::TaskPublisher;
 use infra::detector::rule_based_detector::RuleBasedRiskDetector;
 use infra::storage::local_storage::LocalObjectStorage;
-use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
-use infra::tasks::in_memory_task_flow::{RetryingTaskPublisher, new_task_channel};
-use infra::tasks::logging_handler::LoggingHandler;
-use infra::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 use server_rs::{api, app, bootstrap, domain, infra, shared};
 
 use shared::config::AppConfig;
@@ -78,49 +73,12 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let summary_repo = Arc::clone(&repos.summary_repo);
 
     // ── 任务系统 ──
-    let mut background = bootstrap::tasks::BackgroundTasks::new();
-
-    let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));
-    let rate_limit_handler = Arc::new(RateLimitHandler::new(
-        RateLimitConfig::default(),
-        Arc::clone(&user_repo),
-    ));
-
-    let (tp, tw) = new_task_channel(256);
-    // 启动内存重试队列的后台协程，用于处理发送失败的事件
-    let _retry_handle = RetryingTaskPublisher::spawn_retry_worker(tp.clone());
-    let task_worker = tw
-        .with_handler(Arc::new(LoggingHandler))
-        .with_handler(Arc::clone(&alert_handler) as Arc<dyn TaskHandler>)
-        .with_handler(Arc::clone(&rate_limit_handler) as Arc<dyn TaskHandler>);
-    let task_publisher: Arc<dyn TaskPublisher> = Arc::new(tp);
-
-    // 有状态处理器的定期清理
-    background.spawn({
-        let h = Arc::clone(&alert_handler);
-        tokio::spawn(async move {
-            let mut i = tokio::time::interval(tokio::time::Duration::from_secs(300));
-            loop {
-                i.tick().await;
-                h.cleanup().await;
-            }
-        })
-    });
-    background.spawn({
-        let h = Arc::clone(&rate_limit_handler);
-        tokio::spawn(async move {
-            let mut i = tokio::time::interval(tokio::time::Duration::from_secs(120));
-            loop {
-                i.tick().await;
-                h.cleanup().await;
-            }
-        })
-    });
+    let mut tasks = bootstrap::tasks::TaskContext::new(Arc::clone(&user_repo));
 
     // ── 认证基础设施 ──
     let auth_graph =
-        bootstrap::auth::build_auth(&infra.db, &config.jwt, &config.auth, &user_repo, &task_publisher);
-    background.spawn({
+        bootstrap::auth::build_auth(&infra.db, &config.jwt, &config.auth, &user_repo, &tasks.task_publisher);
+    tasks.background.spawn({
         let store = Arc::clone(&auth_graph.refresh_token_store);
         tokio::spawn(periodic_revocation(store))
     });
@@ -206,7 +164,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     let risk_detection_service = Arc::new(RiskDetectionService::new(
         Arc::clone(&risk_repo),
-        Arc::clone(&task_publisher),
+        Arc::clone(&tasks.task_publisher),
         Arc::clone(&risk_detector),
     ));
     let risk_audit_worker: Arc<dyn TaskHandler> = Arc::new(PostConversationRiskAuditWorker::new(
@@ -288,12 +246,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::clone(&summary_service),
         Arc::clone(&context_version_repo),
     ));
-    background.spawn(tokio::spawn(
-        task_worker
-            .with_handler(risk_audit_worker)
-            .with_handler(summary_refresh_handler)
-            .run(),
-    ));
+    tasks.start_service_handlers(risk_audit_worker, summary_refresh_handler);
 
     // ── 代理运行时 ──
     let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
@@ -347,7 +300,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     // ── ChatService（业务入口点）──
     // 必须在 agent_runtime 之后构建，因为它依赖于 agent_runtime。
     let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
-        Arc::clone(&task_publisher),
+        Arc::clone(&tasks.task_publisher),
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&agent_runtime),
         Arc::clone(&memory_svc),
@@ -436,7 +389,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
             &config,
             Arc::clone(&infra.ollama_provider),
             qq_bot_tts_provider,
-            &mut background,
+            &mut tasks.background,
             qq_bot_bot_account_repo,
             qq_bot_group_repo,
             qq_bot_group_member_repo,
@@ -471,7 +424,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         &vector_store,
         &embedding_provider,
         &rag_repo,
-        &mut background,
+        &mut tasks.background,
     )
     .await
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -517,7 +470,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let r = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
-    background.abort_all();
+    tasks.background.abort_all();
 
     // 关闭 SSH 隧道
     if let Some(manager) = infra._ssh_manager {
