@@ -1,26 +1,54 @@
 use server_rs::{bootstrap, shared::config::AppConfig};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
     let config = AppConfig::load();
-    init_tracing(&config.logging.level);
+    let _guard = init_tracing(&config.logging.level);
     if let Err(err) = bootstrap::runtime::run(config).await {
         tracing::error!(error = %err, "服务器运行出错");
     }
 }
 
-fn init_tracing(_configured_level: &str) {
-    let timer = tracing_subscriber::fmt::time::OffsetTime::new(
+pub fn init_tracing(configured_level: &str) -> WorkerGuard {
+    let timer = fmt::time::OffsetTime::new(
         time::UtcOffset::from_hms(8, 0, 0).expect("valid UTC+8 offset"),
-        time::macros::format_description!("[month]-[day] [hour]:[minute]:[second]"),
+        time::macros::format_description!("[day] [hour]:[minute]:[second]"),
     );
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    // logs/app.log.YYYY-MM-DD
+    let file_appender = tracing_appender::rolling::daily("logs", "app.log");
+
+    // 非阻塞文件写入
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(configured_level))
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stdout_layer = fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_target(true)
+        .with_timer(timer.clone())
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .compact();
+
+    let file_layer = fmt::layer()
+        .with_writer(file_writer)
         .with_target(true)
         .with_timer(timer)
         .with_line_number(true)
         .with_thread_ids(true)
-        .compact()
+        .with_ansi(false)
+        .compact();
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(file_layer)
         .init();
+
+    guard
 }

@@ -47,6 +47,7 @@ time = { version = "0.3.51", features = ["formatting", "macros"] }
 # Logging
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "time"] }
+tracing-appender = "0.2"
 
 [features]
 default = []
