@@ -21,15 +21,12 @@ use app::storage::object_service::ObjectService;
 use app::user::user_service::UserService;
 use domain::auth::refresh_token_store::RefreshTokenStore;
 use domain::conversation::conversation_repository::ConversationRepository;
-use domain::llm::{EmbeddingProvider, LlmClient, LlmProvider};
+use domain::llm::{EmbeddingProvider, LlmProvider};
 use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
-use infra::db::seaorm_db::init_db;
 use infra::detector::rule_based_detector::RuleBasedRiskDetector;
-use infra::llm::ollama_client::OllamaClient;
-use infra::llm::ollama_provider::OllamaProvider;
 use infra::storage::local_storage::LocalObjectStorage;
 use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
 use infra::tasks::in_memory_task_flow::{RetryingTaskPublisher, new_task_channel};
@@ -53,16 +50,12 @@ async fn main() {
 }
 
 async fn run(config: AppConfig) -> Result<(), std::io::Error> {
-    // ── SSH 隧道 ──
-    let _ssh_manager = start_ssh_tunnels(&config)?;
-
-    let db = init_db(&config.database.url, config.database.max_connections)
-        .await
-        .expect("db init");
+    // ── 基础设施（SSH 隧道、DB、LLM）──
+    let infra = bootstrap::infra::InfraContext::new(&config).await?;
 
     // ── 仓库 ──
     let repos = bootstrap::repos::build_repos(
-        &db,
+        &infra.db,
         &config.qdrant.memory_collection,
         &config.qdrant.summary_collection,
     );
@@ -126,26 +119,12 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     // ── 认证基础设施 ──
     let auth_graph =
-        bootstrap::auth::build_auth(&db, &config.jwt, &config.auth, &user_repo, &task_publisher);
+        bootstrap::auth::build_auth(&infra.db, &config.jwt, &config.auth, &user_repo, &task_publisher);
     background.spawn({
         let store = Arc::clone(&auth_graph.refresh_token_store);
         tokio::spawn(periodic_revocation(store))
     });
 
-    // ── LLM（基础设施层 → 领域层接口）──
-    // 旧版 LlmClient（DiaryService 用于标题生成）
-    let ollama_client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(
-        config.ollama.base_url.clone(),
-        config.ollama.model.clone(),
-        config.ollama.temperature,
-        config.ollama.top_p,
-    ));
-    // ── Chat LLM Provider（Agent 使用 config.llm.*）──
-    let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::with_timeout(
-        config.llm.base_url.clone(),
-        config.llm.chat_model.clone(),
-        config.llm.timeout_secs,
-    ));
     // ── 专用 Embedding Provider（与 Chat LLM 分离）──
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
         infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider::with_options(
@@ -191,7 +170,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
     let vector_index_repo: Arc<dyn VectorIndexRepository> = Arc::new(
         infra::db::imp::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(
-            db.clone(),
+            infra.db.clone(),
         ),
     );
 
@@ -279,7 +258,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let ingestion: Arc<IngestionService> = Arc::new(ingestion_svc);
 
     let memory_extractor: Arc<MemoryExtractor> =
-        Arc::new(MemoryExtractor::new(Arc::clone(&ollama_provider)));
+        Arc::new(MemoryExtractor::new(Arc::clone(&infra.ollama_provider)));
     let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor)
         .with_personalization_profile_repo(Arc::clone(&profile_repo))
         .with_context_version_repo(Arc::clone(&context_version_repo));
@@ -304,7 +283,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     use app::summary::summary_refresh_handler::SummaryRefreshHandler;
     let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
         config.agent.enabled && config.agent.summary_enabled && config.agent.summary_async,
-        Arc::clone(&ollama_provider) as Arc<dyn LlmProvider>,
+        Arc::clone(&infra.ollama_provider) as Arc<dyn LlmProvider>,
         Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
         Arc::clone(&summary_service),
         Arc::clone(&context_version_repo),
@@ -354,7 +333,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     };
 
     let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
-        Arc::clone(&ollama_provider),
+        Arc::clone(&infra.ollama_provider),
         Arc::clone(&memory_svc),
         Arc::clone(&agent_event_repo),
         Arc::clone(&conv_repo),
@@ -383,7 +362,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         Arc::new(DepressionService::new(Arc::clone(&depression_repo)));
     let diaries: Arc<DiaryService> = Arc::new(DiaryService::new(
         Arc::clone(&diary_repo),
-        Some(Arc::clone(&ollama_client)),
+        Some(Arc::clone(&infra.ollama_client)),
     ));
     let local_storage: Arc<dyn ObjectStorage> = Arc::new(LocalObjectStorage::new(
         std::path::PathBuf::from(&config.storage.base_path),
@@ -416,27 +395,27 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
         use crate::infra::qq_bot::repositories::seaorm_relationship_repository::SeaOrmRelationshipRepository;
 
-        let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(db.clone()))
+        let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
-        let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(db.clone()))
+        let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
-        let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(db.clone()))
+        let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
-        let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(db.clone()))
+        let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
-        let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(db.clone()))
+        let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
-        let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(db.clone()))
+        let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
-        let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(db.clone()))
+        let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepository>;
-        let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(db.clone()))
+        let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
-        let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(db.clone()))
+        let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
-        let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(db.clone()))
+        let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
-        let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(db.clone()))
+        let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(infra.db.clone()))
             as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
 
         // QQ 机器人语音消息的 TTS Provider
@@ -455,7 +434,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
 
         let _qq_bot_deps = init_qq_bot(
             &config,
-            Arc::clone(&ollama_provider),
+            Arc::clone(&infra.ollama_provider),
             qq_bot_tts_provider,
             &mut background,
             qq_bot_bot_account_repo,
@@ -488,7 +467,7 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     // 此时提交发布请求将返回冲突。
     let knowledge_review = bootstrap::web_ingestion::init_web_ingestion(
         &config,
-        &db,
+        &infra.db,
         &vector_store,
         &embedding_provider,
         &rag_repo,
@@ -541,63 +520,13 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     background.abort_all();
 
     // 关闭 SSH 隧道
-    if let Some(manager) = _ssh_manager {
+    if let Some(manager) = infra._ssh_manager {
         manager.shutdown().await;
     }
 
     r
 }
 
-/// 启动 SSH 隧道管理器。
-///
-/// - `-R`（远程转发）隧道无条件启动，用于暴露端口到公网。
-/// - `-L`（本地转发）隧道仅在被 database / ollama 引用时启动。
-/// 如果 `[ssh_tunnels]` 为空则返回 `None`。
-fn start_ssh_tunnels(
-    config: &AppConfig,
-) -> Result<Option<infra::ssh_tunnel::SshTunnelManager>, std::io::Error> {
-    if config.ssh_tunnels.is_empty() {
-        return Ok(None);
-    }
-
-    // 收集被 database / ollama 引用的 -L 隧道名称
-    let mut referenced = std::collections::BTreeSet::new();
-    if let Some(ref name) = config.database.tunnel {
-        referenced.insert(name.as_str());
-    }
-    if let Some(ref name) = config.ollama.tunnel {
-        referenced.insert(name.as_str());
-    }
-
-    let used_tunnels: Vec<(String, shared::config::SshTunnelConfig)> = config
-        .ssh_tunnels
-        .iter()
-        .filter(|(name, cfg)| {
-            // -R 无条件启动，-L 仅在被引用时启动
-            matches!(cfg.direction, shared::config::TunnelDirection::Remote)
-                || referenced.contains(name.as_str())
-        })
-        .map(|(name, cfg)| (name.clone(), cfg.clone()))
-        .collect();
-
-    if used_tunnels.is_empty() {
-        return Ok(None);
-    }
-
-    info!(
-        "正在启动 SSH 隧道: {}",
-        used_tunnels
-            .iter()
-            .map(|(n, _)| n.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    let manager = infra::ssh_tunnel::SshTunnelManager::start(&used_tunnels)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-    Ok(Some(manager))
-}
 
 async fn periodic_revocation(repo: Arc<dyn RefreshTokenStore>) {
     let mut t = tokio::time::interval(tokio::time::Duration::from_secs(60));

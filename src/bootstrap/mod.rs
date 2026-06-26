@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod infra;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod repos;
