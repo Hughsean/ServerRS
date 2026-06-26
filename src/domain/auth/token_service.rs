@@ -1,7 +1,7 @@
 use crate::shared::error::AppError;
 
 /// 统一令牌接口 — 签发和验证访问令牌与刷新令牌。
-pub trait TokenService: Send + Sync {
+pub trait TokenServiceT: Send + Sync {
     // ── Access token ──
     fn issue_access(&self, user_id: u64, username: &str, role: &str) -> Result<String, AppError>;
     fn verify_access(&self, token: &str) -> Result<AccessTokenClaims, AppError>;

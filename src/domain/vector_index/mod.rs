@@ -69,7 +69,7 @@ pub struct NewVectorIndexJob {
 
 /// 向量索引元数据和任务队列的仓库。
 #[async_trait]
-pub trait VectorIndexRepository: Send + Sync {
+pub trait VectorIndexRepoT: Send + Sync {
     async fn upsert_record(
         &self,
         record: NewVectorIndexRecord,

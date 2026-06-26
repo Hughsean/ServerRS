@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::risk::post_conversation_risk_audit::PostConversationRiskAudit;
-use crate::domain::risk::risk_repository::RiskRepository;
+use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::error::AppError;
 
 /// Unified session-domain operations: conversations + post-conversation risk audits.
@@ -12,14 +12,14 @@ use crate::shared::error::AppError;
 /// Risk data here comes from `post_conversation_risk_audits` — it never enters
 /// the conversation generation path (PromptBuilder/Persona/Memory/Summary).
 pub struct SessionService {
-    conv_repo: Arc<dyn ConversationRepository>,
-    risk_repo: Arc<dyn RiskRepository>,
+    conv_repo: Arc<dyn ConversationRepoT>,
+    risk_repo: Arc<dyn RiskRepoT>,
 }
 
 impl SessionService {
     pub fn new(
-        conv_repo: Arc<dyn ConversationRepository>,
-        risk_repo: Arc<dyn RiskRepository>,
+        conv_repo: Arc<dyn ConversationRepoT>,
+        risk_repo: Arc<dyn RiskRepoT>,
     ) -> Self {
         Self {
             conv_repo,

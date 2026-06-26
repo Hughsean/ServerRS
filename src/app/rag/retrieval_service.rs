@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepository};
-use crate::domain::vector_store::{VectorCondition, VectorFilter, VectorStore};
+use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepoT};
+use crate::domain::vector_store::{VectorCondition, VectorFilter, VectorStoreT};
 use crate::shared::error::AppError;
 
 use super::vector_index_service::payload_chunk_id;
@@ -44,9 +44,9 @@ fn can_read_document(document: &KnowledgeDocument, user_id: u64) -> bool {
 ///     Legacy RAG documents have no web manifest and keep status=1, so they are
 ///     never affected by the web active filter.
 pub struct RetrievalService {
-    repo: Arc<dyn RAGRepository>,
+    repo: Arc<dyn RAGRepoT>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
-    vector_store: Option<Arc<dyn VectorStore>>,
+    vector_store: Option<Arc<dyn VectorStoreT>>,
     rag_collection: String,
     hybrid_vector_weight: f64,
     hybrid_keyword_weight: f64,
@@ -58,7 +58,7 @@ pub struct RetrievalService {
 
 impl RetrievalService {
     pub fn new(
-        repo: Arc<dyn RAGRepository>,
+        repo: Arc<dyn RAGRepoT>,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Self {
         Self {
@@ -72,7 +72,7 @@ impl RetrievalService {
         }
     }
 
-    pub fn with_vector_store(mut self, vs: Arc<dyn VectorStore>, collection: String) -> Self {
+    pub fn with_vector_store(mut self, vs: Arc<dyn VectorStoreT>, collection: String) -> Self {
         self.vector_store = Some(vs);
         self.rag_collection = collection;
         self
@@ -141,7 +141,7 @@ impl RetrievalService {
 
     async fn qdrant_retrieve(
         &self,
-        vs: &Arc<dyn VectorStore>,
+        vs: &Arc<dyn VectorStoreT>,
         ep: &Arc<dyn EmbeddingProvider>,
         query: &str,
         user_id: u64,

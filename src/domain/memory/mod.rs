@@ -111,7 +111,7 @@ pub struct NewSummary {
 
 /// Repository trait for persisting and querying user memories.
 #[async_trait]
-pub trait MemoryRepository: Send + Sync {
+pub trait MemoryRepoT: Send + Sync {
     /// Persist a memory and its source evidence in one database transaction.
     async fn save_memory_with_evidence(
         &self,

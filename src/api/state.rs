@@ -17,9 +17,9 @@ use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
-use crate::domain::auth::token_service::TokenService;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
-use crate::domain::risk::risk_repository::RiskRepository;
+use crate::domain::auth::token_service::TokenServiceT;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::risk::risk_repository::RiskRepoT;
 
 #[derive(Clone, FromRef)]
 pub struct AppState {
@@ -44,7 +44,7 @@ pub struct AuthState {
 
 #[derive(Clone)]
 pub struct SignatureState {
-    pub token_service: Arc<dyn TokenService>,
+    pub token_service: Arc<dyn TokenServiceT>,
 }
 
 #[derive(Clone)]
@@ -55,7 +55,7 @@ pub struct UserState {
 #[derive(Clone)]
 pub struct ChatState {
     pub chat: Arc<ChatService>,
-    pub conv_repo: Arc<dyn ConversationRepository>,
+    pub conv_repo: Arc<dyn ConversationRepoT>,
 }
 
 #[derive(Clone)]
@@ -94,7 +94,7 @@ pub struct AdminState {
     pub query: Arc<SessionService>,
     pub knowledge_review: Arc<KnowledgeReviewService>,
     pub music: Arc<MusicService>,
-    pub risk: Arc<dyn RiskRepository>,
+    pub risk: Arc<dyn RiskRepoT>,
 }
 
 #[derive(Clone)]

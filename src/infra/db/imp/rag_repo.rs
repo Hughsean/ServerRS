@@ -10,15 +10,15 @@ use super::super::entities::{knowledge_chunks, knowledge_documents, knowledge_em
 
 use crate::domain::rag::{
     KnowledgeChunk, KnowledgeDocument, KnowledgeEmbedding, NewChunk, NewDocument, NewEmbedding,
-    RAGRepository,
+    RAGRepoT,
 };
 use crate::shared::error::AppError;
 
-pub struct SeaOrmRAGRepository {
+pub struct RAGRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmRAGRepository {
+impl RAGRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -69,7 +69,7 @@ fn map_embedding(m: knowledge_embeddings::Model) -> KnowledgeEmbedding {
 }
 
 #[async_trait]
-impl RAGRepository for SeaOrmRAGRepository {
+impl RAGRepoT for RAGRepo {
     async fn save_document(&self, doc: NewDocument) -> Result<KnowledgeDocument, AppError> {
         let now = Utc::now().naive_utc();
         let active = knowledge_documents::ActiveModel {

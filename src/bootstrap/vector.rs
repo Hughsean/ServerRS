@@ -4,16 +4,16 @@ use crate::app::rag::vector_index_service::{VectorIndexConfig, VectorIndexServic
 use crate::bootstrap::infra::InfraContext;
 use crate::bootstrap::repos::RepoGraph;
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::vector_index::VectorIndexRepository;
-use crate::domain::vector_store::VectorStore;
-use crate::infra::db::imp::seaorm_vector_index_repository::SeaOrmVectorIndexRepository;
+use crate::domain::vector_index::VectorIndexRepoT;
+use crate::domain::vector_store::VectorStoreT;
+use crate::infra::db::imp::vector_index_repo::VectorIndexRepo;
 use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::shared::config::AppConfig;
 
 /// Embedding Provider、Qdrant 向量存储、VectorIndex。
 pub struct VectorContext {
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
-    pub vector_store: Option<Arc<dyn VectorStore>>,
+    pub vector_store: Option<Arc<dyn VectorStoreT>>,
     pub vector_index: Option<Arc<VectorIndexService>>,
 }
 
@@ -34,7 +34,7 @@ impl VectorContext {
             ));
 
         // ── Qdrant 向量存储（可选，通过配置启用）──
-        let vector_store: Option<Arc<dyn VectorStore>> = if config.qdrant.enabled {
+        let vector_store: Option<Arc<dyn VectorStoreT>> = if config.qdrant.enabled {
             #[cfg(feature = "qdrant")]
             {
                 let qdrant =
@@ -49,7 +49,7 @@ impl VectorContext {
                             format!("Qdrant init failed: {e}"),
                         )
                     })?;
-                Some(Arc::new(qdrant) as Arc<dyn VectorStore>)
+                Some(Arc::new(qdrant) as Arc<dyn VectorStoreT>)
             }
             #[cfg(not(feature = "qdrant"))]
             {
@@ -63,8 +63,8 @@ impl VectorContext {
         };
 
         // ── VectorIndex ──
-        let vector_index_repo: Arc<dyn VectorIndexRepository> =
-            Arc::new(SeaOrmVectorIndexRepository::new(infra.db.clone()));
+        let vector_index_repo: Arc<dyn VectorIndexRepoT> =
+            Arc::new(VectorIndexRepo::new(infra.db.clone()));
 
         let vector_index: Option<Arc<VectorIndexService>> = vector_store.as_ref().map(|vs| {
             Arc::new(VectorIndexService::new(

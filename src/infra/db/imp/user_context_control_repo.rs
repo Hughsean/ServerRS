@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::domain::memory::ALLOWED_MEMORY_TYPES;
 use crate::domain::user::user_context_control::{
     ForgetResult, PersonaRebuildResult, PersonaResetResult, PersonaSnapshotSummary, PersonaView,
-    TranscriptClearResult, UserContextControlRepository,
+    TranscriptClearResult, UserContextControlRepoT,
 };
 use crate::shared::error::AppError;
 
@@ -19,13 +19,13 @@ use super::super::entities::{
     user_memories, user_persona_snapshots, user_profiles,
 };
 
-pub struct SeaOrmUserContextControlRepository {
+pub struct UserContextControlRepo {
     db: DatabaseConnection,
     memory_collection: String,
     summary_collection: String,
 }
 
-impl SeaOrmUserContextControlRepository {
+impl UserContextControlRepo {
     pub fn new(
         db: DatabaseConnection,
         memory_collection: String,
@@ -266,7 +266,7 @@ fn snapshot_summary(snapshot: &Value) -> PersonaSnapshotSummary {
 }
 
 #[async_trait]
-impl UserContextControlRepository for SeaOrmUserContextControlRepository {
+impl UserContextControlRepoT for UserContextControlRepo {
     async fn persona_view(&self, user_id: u64) -> Result<PersonaView, AppError> {
         let profile = user_profiles::Entity::find()
             .filter(user_profiles::Column::UserId.eq(user_id))

@@ -4,7 +4,7 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 
-use crate::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
 use crate::shared::error::AppError;
 
 use super::super::entities::music;
@@ -35,11 +35,11 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
 
-pub struct SeaOrmMusicRepository {
+pub struct MusicRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmMusicRepository {
+impl MusicRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -51,7 +51,7 @@ impl SeaOrmMusicRepository {
 // (select_as = "text") path.
 
 #[async_trait]
-impl MusicRepository for SeaOrmMusicRepository {
+impl MusicRepoT for MusicRepo {
     async fn save(&self, track: NewMusicTrack) -> Result<MusicTrack, AppError> {
         let now = chrono::Utc::now();
         let stmt = Statement::from_sql_and_values(

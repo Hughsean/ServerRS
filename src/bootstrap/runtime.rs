@@ -10,7 +10,7 @@ use crate::bootstrap::repos::build_repos;
 use crate::bootstrap::state::{ServiceGraph, build_state};
 use crate::bootstrap::tasks::TaskContext;
 use crate::bootstrap::vector::VectorContext;
-use crate::domain::auth::refresh_token_store::RefreshTokenStore;
+use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::shared::config::AppConfig;
 
 /// 顶层启动编排。按 6 阶段顺序执行：
@@ -86,7 +86,7 @@ async fn serve(
 }
 
 /// 定期清理过期的 JWT refresh token。
-async fn periodic_revocation(repo: Arc<dyn RefreshTokenStore>) {
+async fn periodic_revocation(repo: Arc<dyn RefreshTokenStoreT>) {
     let mut t = tokio::time::interval(tokio::time::Duration::from_secs(60));
     loop {
         t.tick().await;

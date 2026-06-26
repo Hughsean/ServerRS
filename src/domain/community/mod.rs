@@ -215,7 +215,7 @@ impl NewPostMedia {
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-pub trait CommunityRepository: Send + Sync {
+pub trait CommunityRepoT: Send + Sync {
     // -- Posts ---------------------------------------------------------------
 
     async fn list_posts(&self, limit: u64, offset: u64) -> Result<Vec<Post>, AppError>;

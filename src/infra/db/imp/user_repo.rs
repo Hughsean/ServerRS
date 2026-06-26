@@ -7,16 +7,16 @@ use sea_orm::{
 use crate::domain::user::user::{
     NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserStatus, UserUpdate,
 };
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::users;
 
-pub struct SeaOrmUserRepository {
+pub struct UserRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmUserRepository {
+impl UserRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -65,7 +65,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 // ── Repository implementation ──
 
 #[async_trait]
-impl UserRepository for SeaOrmUserRepository {
+impl UserRepoT for UserRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<User>, AppError> {
         users::Entity::find_by_id(id)
             .one(&self.db)

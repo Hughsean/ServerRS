@@ -7,7 +7,7 @@ use sea_orm::{
 use crate::domain::psychology::{
     KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite, NewPsychologyArticle,
     NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource, PsychologyArticle,
-    PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
+    PsychologyCategory, PsychologyQna, PsychologyRepoT, PsychologyResource,
 };
 use crate::shared::error::AppError;
 
@@ -16,11 +16,11 @@ use super::super::entities::{
     psychology_resources, user_knowledge_favorites,
 };
 
-pub struct SeaOrmPsychologyRepository {
+pub struct PsychologyRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmPsychologyRepository {
+impl PsychologyRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -201,7 +201,7 @@ where
 }
 
 #[async_trait]
-impl PsychologyRepository for SeaOrmPsychologyRepository {
+impl PsychologyRepoT for PsychologyRepo {
     // ── Categories ──
 
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError> {

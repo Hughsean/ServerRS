@@ -10,7 +10,7 @@ pub use types::*;
 /// This trait lives in the domain layer — no Qdrant-specific types leak through.
 /// Implementations map Qdrant / mock internals to these domain types.
 #[async_trait]
-pub trait VectorStore: Send + Sync {
+pub trait VectorStoreT: Send + Sync {
     /// 确保指定名称的集合存在，具有给定的维度和距离度量。
     /// If the collection already exists with matching parameters, this is a no-op.
     /// If it exists with different parameters, return an error.

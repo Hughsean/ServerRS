@@ -8,7 +8,7 @@ use crate::shared::error::AppError;
 /// 位于领域层，以便基础设施实现可以依赖
 /// on it without coupling to the application layer.
 #[async_trait]
-pub trait SummaryRepository: Send + Sync {
+pub trait SummaryRepoT: Send + Sync {
     /// Load the most recent active summary for a conversation.
     async fn find_latest_by_conversation(
         &self,

@@ -20,7 +20,7 @@ pub struct NewContentLike {
 }
 
 #[async_trait]
-pub trait ContentLikeRepository: Send + Sync {
+pub trait ContentLikeRepoT: Send + Sync {
     /// 切换给定用户和内容的点赞状态。
     /// Returns `true` if the content is now liked, `false` if it has been unliked.
     async fn toggle(

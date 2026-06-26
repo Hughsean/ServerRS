@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use crate::domain::community::{
-    ArticleStatus, Comment, CommunityRepository, NewComment, NewPost, Post, PostUpdate,
+    ArticleStatus, Comment, CommunityRepoT, NewComment, NewPost, Post, PostUpdate,
 };
 use crate::shared::error::AppError;
 
 pub struct CommunityService {
-    repo: Arc<dyn CommunityRepository>,
+    repo: Arc<dyn CommunityRepoT>,
 }
 
 impl CommunityService {
-    pub fn new(repo: Arc<dyn CommunityRepository>) -> Self {
+    pub fn new(repo: Arc<dyn CommunityRepoT>) -> Self {
         Self { repo }
     }
 

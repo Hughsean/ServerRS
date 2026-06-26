@@ -8,11 +8,11 @@ use std::sync::Arc;
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{NewOutboxEvent, OutboxRepository};
+use crate::domain::web_ingestion::repository::{NewOutboxEvent, OutboxRepoT};
 
 /// Emit an `IngestionRejected` terminal event for a run.
 pub async fn emit_rejected(
-    outbox_repo: &Arc<dyn OutboxRepository>,
+    outbox_repo: &Arc<dyn OutboxRepoT>,
     run_id: u64,
     version_key: &str,
     reason: &str,
@@ -39,7 +39,7 @@ pub async fn emit_rejected(
 
 /// Emit an `IngestionSkipped` terminal event (content unchanged etc.).
 pub async fn emit_skipped(
-    outbox_repo: &Arc<dyn OutboxRepository>,
+    outbox_repo: &Arc<dyn OutboxRepoT>,
     source_url_id: u64,
     url_hash: &str,
     reason: &str,
@@ -66,7 +66,7 @@ pub async fn emit_skipped(
 
 /// Emit a generic next-stage event with a small payload.
 pub async fn emit_next(
-    outbox_repo: &Arc<dyn OutboxRepository>,
+    outbox_repo: &Arc<dyn OutboxRepoT>,
     event_type: &str,
     run_id: u64,
     version_key: &str,

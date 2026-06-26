@@ -4,7 +4,7 @@ use sea_orm::{
     QueryOrder, Set,
 };
 
-use crate::domain::diary::{DiaryRepository, NewUserDiary, UserDiary, UserDiaryUpdate};
+use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
 use crate::shared::error::AppError;
 
 use super::super::entities::user_diaries;
@@ -25,18 +25,18 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
 
-pub struct SeaOrmDiaryRepository {
+pub struct DiaryRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmDiaryRepository {
+impl DiaryRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl DiaryRepository for SeaOrmDiaryRepository {
+impl DiaryRepoT for DiaryRepo {
     async fn save(&self, diary: NewUserDiary) -> Result<UserDiary, AppError> {
         let now = chrono::Utc::now();
         let am = user_diaries::ActiveModel {

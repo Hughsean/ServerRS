@@ -13,8 +13,8 @@ use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::app::web_ingestion::{dispatcher, scheduler};
 use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::rag::RAGRepository;
-use crate::domain::vector_store::VectorStore;
+use crate::domain::rag::RAGRepoT;
+use crate::domain::vector_store::VectorStoreT;
 use crate::infra::web_ingestion::distiller::OpenAiKnowledgeDistiller;
 use crate::infra::web_ingestion::fetcher::WebFetcher;
 use crate::infra::web_ingestion::repositories::*;
@@ -25,9 +25,9 @@ use crate::shared::error::AppError;
 pub async fn init_web_ingestion(
     config: &AppConfig,
     db: &DatabaseConnection,
-    vector_store: &Option<Arc<dyn VectorStore>>,
+    vector_store: &Option<Arc<dyn VectorStoreT>>,
     embedding_provider: &Arc<dyn EmbeddingProvider>,
-    rag_repo: &Arc<dyn RAGRepository>,
+    rag_repo: &Arc<dyn RAGRepoT>,
     background: &mut BackgroundTasks,
 ) -> Result<Arc<KnowledgeReviewService>, AppError> {
     let wc = &config.web_ingestion;

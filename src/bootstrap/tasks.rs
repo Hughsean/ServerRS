@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::tasks::task_publisher::TaskPublisher;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::infra::tasks::alert_handler::{AlertConfig, AlertHandler};
 use crate::infra::tasks::in_memory_task_flow::{
     RetryingTaskPublisher, TaskWorker, new_task_channel,
@@ -51,7 +51,7 @@ pub struct TaskContext {
 
 impl TaskContext {
     /// 构造任务系统前半段：告警、限流、通道、Publisher。
-    pub fn new(user_repo: Arc<dyn UserRepository>) -> Self {
+    pub fn new(user_repo: Arc<dyn UserRepoT>) -> Self {
         let mut background = BackgroundTasks::new();
 
         let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));

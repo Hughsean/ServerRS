@@ -16,10 +16,10 @@ use crate::app::agent::tools::memory_search_tool::MemorySearchTool;
 use crate::app::agent::tools::music_recommend_tool::MusicRecommendTool;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
-use crate::domain::community::CommunityRepository;
-use crate::domain::depression::DepressionRepository;
-use crate::domain::diary::DiaryRepository;
-use crate::domain::music::MusicRepository;
+use crate::domain::community::CommunityRepoT;
+use crate::domain::depression::DepressionRepoT;
+use crate::domain::diary::DiaryRepoT;
+use crate::domain::music::MusicRepoT;
 use crate::shared::config::PluginsConfig;
 use crate::shared::error::AppError;
 
@@ -29,10 +29,10 @@ use crate::shared::error::AppError;
 pub struct AgentToolDeps {
     pub retrieval: Arc<RetrievalService>,
     pub memory: Arc<MemoryService>,
-    pub diary_repo: Arc<dyn DiaryRepository>,
-    pub depression_repo: Arc<dyn DepressionRepository>,
-    pub music_repo: Arc<dyn MusicRepository>,
-    pub community_repo: Arc<dyn CommunityRepository>,
+    pub diary_repo: Arc<dyn DiaryRepoT>,
+    pub depression_repo: Arc<dyn DepressionRepoT>,
+    pub music_repo: Arc<dyn MusicRepoT>,
+    pub community_repo: Arc<dyn CommunityRepoT>,
     pub plugins: PluginsConfig,
 }
 

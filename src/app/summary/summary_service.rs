@@ -4,18 +4,18 @@ use tracing::warn;
 
 use crate::app::rag::vector_index_service::VectorIndexService;
 use crate::domain::memory::{ConversationSummary, NewSummary, is_allowed_summary_type};
-use crate::domain::summary::SummaryRepository;
+use crate::domain::summary::SummaryRepoT;
 use crate::shared::error::AppError;
 
 /// Coordinates summary persistence and vector indexing.
 pub struct SummaryService {
-    summary_repo: Arc<dyn SummaryRepository>,
+    summary_repo: Arc<dyn SummaryRepoT>,
     vector_index: Option<Arc<VectorIndexService>>,
 }
 
 impl SummaryService {
     pub fn new(
-        summary_repo: Arc<dyn SummaryRepository>,
+        summary_repo: Arc<dyn SummaryRepoT>,
         vector_index: Option<Arc<VectorIndexService>>,
     ) -> Self {
         Self {

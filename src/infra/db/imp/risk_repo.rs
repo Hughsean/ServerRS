@@ -8,16 +8,16 @@ use sea_orm::{
 use crate::domain::risk::post_conversation_risk_audit::{
     NewPostConversationRiskAudit, PostConversationRiskAudit, PostRiskAuditResult,
 };
-use crate::domain::risk::risk_repository::RiskRepository;
+use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::post_conversation_risk_audits;
 
-pub struct SeaOrmRiskRepository {
+pub struct RiskRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmRiskRepository {
+impl RiskRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -66,7 +66,7 @@ fn map_audit(m: post_conversation_risk_audits::Model) -> PostConversationRiskAud
 }
 
 #[async_trait]
-impl RiskRepository for SeaOrmRiskRepository {
+impl RiskRepoT for RiskRepo {
     async fn create_pending(
         &self,
         new_audit: NewPostConversationRiskAudit,

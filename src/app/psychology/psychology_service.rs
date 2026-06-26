@@ -3,16 +3,16 @@ use std::sync::Arc;
 use crate::domain::psychology::{
     KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite, NewPsychologyArticle,
     NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource, PsychologyArticle,
-    PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
+    PsychologyCategory, PsychologyQna, PsychologyRepoT, PsychologyResource,
 };
 use crate::shared::error::AppError;
 
 pub struct PsychologyService {
-    repo: Arc<dyn PsychologyRepository>,
+    repo: Arc<dyn PsychologyRepoT>,
 }
 
 impl PsychologyService {
-    pub fn new(repo: Arc<dyn PsychologyRepository>) -> Self {
+    pub fn new(repo: Arc<dyn PsychologyRepoT>) -> Self {
         Self { repo }
     }
 

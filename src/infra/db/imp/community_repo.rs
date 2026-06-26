@@ -5,7 +5,7 @@ use sea_orm::{
 };
 
 use crate::domain::community::{
-    ArticleStatus, Comment, CommunityRepository, NewComment, NewPost, NewPostMedia, Post,
+    ArticleStatus, Comment, CommunityRepoT, NewComment, NewPost, NewPostMedia, Post,
     PostMedia, PostUpdate,
 };
 use crate::shared::error::AppError;
@@ -67,18 +67,18 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
 // Repository struct
 // ---------------------------------------------------------------------------
 
-pub struct SeaOrmCommunityRepository {
+pub struct CommunityRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmCommunityRepository {
+impl CommunityRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl CommunityRepository for SeaOrmCommunityRepository {
+impl CommunityRepoT for CommunityRepo {
     // -- Posts ---------------------------------------------------------------
 
     async fn list_posts(&self, limit: u64, offset: u64) -> Result<Vec<Post>, AppError> {

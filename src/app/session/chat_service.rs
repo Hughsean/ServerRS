@@ -10,12 +10,12 @@ use crate::app::agent::agent_runtime::{AgentResponse, AgentRuntime};
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::vector_index_service::VectorIndexService;
 use crate::domain::conversation::conversation::Conversation;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::tasks::task_event::{ConversationLifecycleTask, TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user_context_control::{
     ForgetResult, PersonaRebuildResult, PersonaResetResult, PersonaView, TranscriptClearResult,
-    UserContextControlRepository,
+    UserContextControlRepoT,
 };
 use crate::shared::error::AppError;
 
@@ -35,10 +35,10 @@ type UserMutexMap = DashMap<u64, Arc<Mutex<()>>>;
 /// 7. After response closed: emit TurnClosedEvent for post-processing
 pub struct ChatService {
     task_publisher: Arc<dyn TaskPublisher>,
-    conv_repo: Arc<dyn ConversationRepository>,
+    conv_repo: Arc<dyn ConversationRepoT>,
     agent_runtime: Arc<AgentRuntime>,
     memory_service: Arc<MemoryService>,
-    context_control_repo: Arc<dyn UserContextControlRepository>,
+    context_control_repo: Arc<dyn UserContextControlRepoT>,
     vector_index: Option<Arc<VectorIndexService>>,
     user_locks: UserMutexMap,
 }
@@ -60,10 +60,10 @@ pub struct ChatTurnResponse {
 impl ChatService {
     pub fn new(
         task_publisher: Arc<dyn TaskPublisher>,
-        conv_repo: Arc<dyn ConversationRepository>,
+        conv_repo: Arc<dyn ConversationRepoT>,
         agent_runtime: Arc<AgentRuntime>,
         memory_service: Arc<MemoryService>,
-        context_control_repo: Arc<dyn UserContextControlRepository>,
+        context_control_repo: Arc<dyn UserContextControlRepoT>,
         vector_index: Option<Arc<VectorIndexService>>,
     ) -> Self {
         Self {

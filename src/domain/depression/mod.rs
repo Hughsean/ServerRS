@@ -45,7 +45,7 @@ pub struct NewDepressionAssessment {
 }
 
 #[async_trait]
-pub trait DepressionRepository: Send + Sync {
+pub trait DepressionRepoT: Send + Sync {
     async fn find_scale_by_id(&self, id: u16) -> Result<Option<DepressionScale>, AppError>;
     async fn list_scales(&self) -> Result<Vec<DepressionScale>, AppError>;
     async fn save_assessment(

@@ -4,30 +4,30 @@ use sea_orm::DatabaseConnection;
 
 use crate::app::auth::auth_service::{AuthConfig, AuthService};
 use crate::domain::auth::password_service::PasswordService;
-use crate::domain::auth::refresh_token_store::RefreshTokenStore;
-use crate::domain::auth::token_service::TokenService;
+use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
+use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::tasks::task_publisher::TaskPublisher;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::infra::auth::bcrypt_password_hasher::BcryptPasswordHasher;
 use crate::infra::auth::jwt_token_service::JwtTokenService;
-use crate::infra::db::imp::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
+use crate::infra::db::imp::refresh_token_store::RefreshTokenStoreImpl;
 use crate::shared::config::{AuthConfig as AppAuthConfig, JwtConfig};
 
 pub struct AuthGraph {
     pub auth_service: Arc<AuthService>,
-    pub refresh_token_store: Arc<dyn RefreshTokenStore>,
-    pub token_service: Arc<dyn TokenService>,
+    pub refresh_token_store: Arc<dyn RefreshTokenStoreT>,
+    pub token_service: Arc<dyn TokenServiceT>,
 }
 
 pub fn build_auth(
     db: &DatabaseConnection,
     jwt_config: &JwtConfig,
     auth_config: &AppAuthConfig,
-    user_repo: &Arc<dyn UserRepository>,
+    user_repo: &Arc<dyn UserRepoT>,
     task_publisher: &Arc<dyn TaskPublisher>,
 ) -> AuthGraph {
     let password_service: Arc<dyn PasswordService> = Arc::new(BcryptPasswordHasher::default());
-    let revoke_repo: Arc<SeaOrmRefreshTokenStore> = Arc::new(SeaOrmRefreshTokenStore::new(
+    let revoke_repo: Arc<RefreshTokenStoreImpl> = Arc::new(RefreshTokenStoreImpl::new(
         db.clone(),
         jwt_config.refresh_ttl_secs,
     ));
@@ -37,11 +37,11 @@ pub fn build_auth(
         jwt_config.refresh_ttl_secs,
     ));
 
-    let refresh_token_store: Arc<dyn RefreshTokenStore> = revoke_repo;
+    let refresh_token_store: Arc<dyn RefreshTokenStoreT> = revoke_repo;
     let auth_service: Arc<AuthService> = Arc::new(AuthService::new(
         Arc::clone(user_repo),
         password_service as Arc<dyn PasswordService>,
-        jwt.clone() as Arc<dyn TokenService>,
+        jwt.clone() as Arc<dyn TokenServiceT>,
         Arc::clone(&refresh_token_store),
         Arc::clone(task_publisher),
         AuthConfig {
@@ -54,6 +54,6 @@ pub fn build_auth(
     AuthGraph {
         auth_service,
         refresh_token_store,
-        token_service: jwt.clone() as Arc<dyn TokenService>,
+        token_service: jwt.clone() as Arc<dyn TokenServiceT>,
     }
 }

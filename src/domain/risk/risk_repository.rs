@@ -11,7 +11,7 @@ use crate::shared::error::AppError;
 /// decoupled from the conversation generation path: ChatService, AgentRuntime,
 /// PromptBuilder, Persona, Memory and Summary never read from here.
 #[async_trait]
-pub trait RiskRepository: Send + Sync {
+pub trait RiskRepoT: Send + Sync {
     /// Create a pending audit row and return it.
     async fn create_pending(
         &self,

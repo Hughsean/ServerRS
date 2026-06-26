@@ -4,7 +4,7 @@ use super::user::{NewUser, User, UserUpdate};
 use crate::shared::error::AppError;
 
 #[async_trait]
-pub trait UserRepository: Send + Sync {
+pub trait UserRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<User>, AppError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, AppError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError>;

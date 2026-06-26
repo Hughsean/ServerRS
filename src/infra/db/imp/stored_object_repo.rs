@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::domain::storage::{StorageBackend, StoredObject, StoredObjectRepository};
+use crate::domain::storage::{StorageBackend, StoredObject, StoredObjectRepoT};
 use crate::shared::error::AppError;
 
 use super::super::entities::stored_objects;
 
-pub struct SeaOrmStoredObjectRepository {
+pub struct StoredObjectRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmStoredObjectRepository {
+impl StoredObjectRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -54,7 +54,7 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl StoredObjectRepository for SeaOrmStoredObjectRepository {
+impl StoredObjectRepoT for StoredObjectRepo {
     async fn save(&self, object: StoredObject) -> Result<StoredObject, AppError> {
         let am = stored_objects::ActiveModel {
             bucket: Set(object.bucket),

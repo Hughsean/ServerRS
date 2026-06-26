@@ -2,14 +2,14 @@
 //! Retained only for test contexts that don't have a database connection.
 
 use crate::domain::depression::{
-    DepressionAssessment, DepressionRepository, DepressionScale, NewDepressionAssessment,
+    DepressionAssessment, DepressionRepoT, DepressionScale, NewDepressionAssessment,
 };
-use crate::domain::diary::{DiaryRepository, NewUserDiary, UserDiary, UserDiaryUpdate};
-use crate::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
+use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
 use crate::domain::psychology::{
     KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite, NewPsychologyArticle,
     NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource, PsychologyArticle,
-    PsychologyCategory, PsychologyQna, PsychologyRepository, PsychologyResource,
+    PsychologyCategory, PsychologyQna, PsychologyRepoT, PsychologyResource,
 };
 use crate::shared::error::AppError;
 use async_trait::async_trait;
@@ -24,7 +24,7 @@ macro_rules! stub_err {
 
 pub struct StubDepressionRepo;
 #[async_trait]
-impl DepressionRepository for StubDepressionRepo {
+impl DepressionRepoT for StubDepressionRepo {
     async fn find_scale_by_id(&self, _: u16) -> Result<Option<DepressionScale>, AppError> {
         Ok(None)
     }
@@ -66,7 +66,7 @@ impl DepressionRepository for StubDepressionRepo {
 
 pub struct StubDiaryRepo;
 #[async_trait]
-impl DiaryRepository for StubDiaryRepo {
+impl DiaryRepoT for StubDiaryRepo {
     async fn save(&self, _: NewUserDiary) -> Result<UserDiary, AppError> {
         stub_err!()
     }
@@ -94,7 +94,7 @@ impl DiaryRepository for StubDiaryRepo {
 
 pub struct StubMusicRepo;
 #[async_trait]
-impl MusicRepository for StubMusicRepo {
+impl MusicRepoT for StubMusicRepo {
     async fn save(&self, _: NewMusicTrack) -> Result<MusicTrack, AppError> {
         stub_err!()
     }
@@ -138,7 +138,7 @@ impl MusicRepository for StubMusicRepo {
 
 pub struct StubPsychologyRepo;
 #[async_trait]
-impl PsychologyRepository for StubPsychologyRepo {
+impl PsychologyRepoT for StubPsychologyRepo {
     async fn find_category_by_id(&self, _: u64) -> Result<Option<PsychologyCategory>, AppError> {
         Ok(None)
     }

@@ -4,7 +4,7 @@ use sea_orm::{
     Set,
 };
 
-use crate::domain::like::{ContentLike, ContentLikeRepository};
+use crate::domain::like::{ContentLike, ContentLikeRepoT};
 use crate::shared::error::AppError;
 
 use super::super::entities::content_likes;
@@ -24,18 +24,18 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
 
-pub struct SeaOrmLikeRepository {
+pub struct LikeRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmLikeRepository {
+impl LikeRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl ContentLikeRepository for SeaOrmLikeRepository {
+impl ContentLikeRepoT for LikeRepo {
     async fn toggle(
         &self,
         user_id: u64,

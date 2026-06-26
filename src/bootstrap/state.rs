@@ -32,11 +32,11 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::bootstrap::tasks::TaskContext;
 use crate::bootstrap::vector::VectorContext;
 use crate::bootstrap::web_ingestion;
-use crate::domain::auth::token_service::TokenService;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::auth::token_service::TokenServiceT;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::llm::LlmProvider;
 use crate::domain::risk::risk_detector::RiskDetector;
-use crate::domain::risk::risk_repository::RiskRepository;
+use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::domain::storage::ObjectStorage;
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::infra::detector::rule_based_detector::RuleBasedRiskDetector;
@@ -60,9 +60,9 @@ pub struct ServiceGraph {
     pub agent_runtime: Arc<AgentRuntime>,
     pub knowledge_review: Arc<KnowledgeReviewService>,
     pub chat: Arc<ChatService>,
-    pub chat_conv_repo: Arc<dyn ConversationRepository>,
-    pub token_service: Arc<dyn TokenService>,
-    pub risk_repo: Arc<dyn RiskRepository>,
+    pub chat_conv_repo: Arc<dyn ConversationRepoT>,
+    pub token_service: Arc<dyn TokenServiceT>,
+    pub risk_repo: Arc<dyn RiskRepoT>,
 }
 
 impl ServiceGraph {
@@ -182,7 +182,7 @@ impl ServiceGraph {
         let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
             config.agent.enabled && config.agent.summary_enabled && config.agent.summary_async,
             Arc::clone(&infra.ollama_provider) as Arc<dyn LlmProvider>,
-            Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+            Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
             Arc::clone(&summary_service),
             Arc::clone(&context_version_repo),
         ));
@@ -242,7 +242,7 @@ impl ServiceGraph {
         // ── ChatService ──
         let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
             Arc::clone(&tasks.task_publisher),
-            Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+            Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
             Arc::clone(&agent_runtime),
             Arc::clone(&memory_svc),
             Arc::clone(&context_control_repo),
@@ -351,7 +351,7 @@ impl ServiceGraph {
                 qq_bot_outbox_repo,
                 Some(Arc::clone(&user_repo)
                     as Arc<
-                        dyn crate::domain::user::user_repository::UserRepository,
+                        dyn crate::domain::user::user_repository::UserRepoT,
                     >),
                 Some(Arc::clone(&qq_bot_external_user_repo)),
                 Some(Arc::clone(&qq_bot_user_profile_repo)),
@@ -392,7 +392,7 @@ impl ServiceGraph {
             agent_runtime,
             knowledge_review,
             chat: chat_service,
-            chat_conv_repo: Arc::clone(&conv_repo) as Arc<dyn ConversationRepository>,
+            chat_conv_repo: Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
             token_service: Arc::clone(&auth_graph.token_service),
             risk_repo: Arc::clone(&risk_repo),
         })

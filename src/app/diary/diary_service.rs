@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use crate::domain::diary::{DiaryRepository, NewUserDiary, UserDiary, UserDiaryUpdate};
+use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
 use crate::domain::llm::{ChatMessage, LlmClient};
 use crate::shared::error::AppError;
 
 pub struct DiaryService {
-    pub repo: Arc<dyn DiaryRepository>,
+    pub repo: Arc<dyn DiaryRepoT>,
     pub llm: Option<Arc<dyn LlmClient>>,
 }
 
 impl DiaryService {
-    pub fn new(repo: Arc<dyn DiaryRepository>, llm: Option<Arc<dyn LlmClient>>) -> Self {
+    pub fn new(repo: Arc<dyn DiaryRepoT>, llm: Option<Arc<dyn LlmClient>>) -> Self {
         Self { repo, llm }
     }
 

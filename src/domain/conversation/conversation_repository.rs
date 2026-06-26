@@ -4,7 +4,7 @@ use crate::shared::error::AppError;
 use async_trait::async_trait;
 
 #[async_trait]
-pub trait ConversationRepository: Send + Sync {
+pub trait ConversationRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<Conversation>, AppError>;
     async fn find_by_user_id(&self, user_id: u64) -> Result<Vec<Conversation>, AppError>;
 

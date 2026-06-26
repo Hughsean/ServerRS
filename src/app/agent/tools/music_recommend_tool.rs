@@ -5,16 +5,16 @@ use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
-use crate::domain::music::MusicRepository;
+use crate::domain::music::MusicRepoT;
 use crate::shared::error::AppError;
 
 /// Searches and recommends music tracks based on user mood or preferences.
 pub struct MusicRecommendTool {
-    music_repo: Arc<dyn MusicRepository>,
+    music_repo: Arc<dyn MusicRepoT>,
 }
 
 impl MusicRecommendTool {
-    pub fn new(music_repo: Arc<dyn MusicRepository>) -> Self {
+    pub fn new(music_repo: Arc<dyn MusicRepoT>) -> Self {
         Self { music_repo }
     }
 }

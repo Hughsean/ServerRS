@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::domain::depression::{
-    DepressionAssessment, DepressionRepository, DepressionScale, NewDepressionAssessment,
+    DepressionAssessment, DepressionRepoT, DepressionScale, NewDepressionAssessment,
 };
 use crate::shared::error::AppError;
 
 pub struct DepressionService {
-    pub repo: Arc<dyn DepressionRepository>,
+    pub repo: Arc<dyn DepressionRepoT>,
 }
 
 impl DepressionService {
-    pub fn new(repo: Arc<dyn DepressionRepository>) -> Self {
+    pub fn new(repo: Arc<dyn DepressionRepoT>) -> Self {
         Self { repo }
     }
 

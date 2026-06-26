@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::domain::vector_store::{
-    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorSearchHit, VectorStore,
+    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorSearchHit, VectorStoreT,
 };
 use crate::shared::error::AppError;
 
@@ -96,7 +96,7 @@ fn matches_all_conditions(point: &StoredPoint, filter: &VectorFilter) -> bool {
 }
 
 #[async_trait]
-impl VectorStore for MockVectorStore {
+impl VectorStoreT for MockVectorStore {
     async fn ensure_collection(
         &self,
         collection: &str,

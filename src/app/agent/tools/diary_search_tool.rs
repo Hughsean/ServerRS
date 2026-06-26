@@ -5,15 +5,15 @@ use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
-use crate::domain::diary::DiaryRepository;
+use crate::domain::diary::DiaryRepoT;
 use crate::shared::error::AppError;
 
 pub struct DiarySearchTool {
-    diary_repo: Arc<dyn DiaryRepository>,
+    diary_repo: Arc<dyn DiaryRepoT>,
 }
 
 impl DiarySearchTool {
-    pub fn new(diary_repo: Arc<dyn DiaryRepository>) -> Self {
+    pub fn new(diary_repo: Arc<dyn DiaryRepoT>) -> Self {
         Self { diary_repo }
     }
 }

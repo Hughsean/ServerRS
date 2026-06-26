@@ -5,7 +5,7 @@ use sea_orm::{
 };
 
 use crate::domain::depression::{
-    DepressionAssessment, DepressionRepository, DepressionScale, NewDepressionAssessment,
+    DepressionAssessment, DepressionRepoT, DepressionScale, NewDepressionAssessment,
 };
 use crate::shared::error::AppError;
 
@@ -43,18 +43,18 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
     AppError::Internal(e.to_string())
 }
 
-pub struct SeaOrmDepressionRepository {
+pub struct DepressionRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmDepressionRepository {
+impl DepressionRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl DepressionRepository for SeaOrmDepressionRepository {
+impl DepressionRepoT for DepressionRepo {
     async fn find_scale_by_id(&self, id: u16) -> Result<Option<DepressionScale>, AppError> {
         depression_scales::Entity::find_by_id(id)
             .one(&self.db)

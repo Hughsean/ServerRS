@@ -60,7 +60,7 @@ pub struct MusicTrackUpdate {
 }
 
 #[async_trait]
-pub trait MusicRepository: Send + Sync {
+pub trait MusicRepoT: Send + Sync {
     async fn save(&self, track: NewMusicTrack) -> Result<MusicTrack, AppError>;
     async fn find_by_id(&self, id: u64) -> Result<Option<MusicTrack>, AppError>;
     async fn find_all(

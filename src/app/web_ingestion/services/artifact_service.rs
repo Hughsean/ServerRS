@@ -10,11 +10,11 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::IngestionRunRepository;
+use crate::domain::web_ingestion::repository::IngestionRunRepoT;
 
 /// Persist the raw fetched body for a run.
 pub async fn save_fetched_body(
-    run_repo: &Arc<dyn IngestionRunRepository>,
+    run_repo: &Arc<dyn IngestionRunRepoT>,
     run_id: u64,
     body: &str,
 ) -> Result<(), WebIngestionError> {
@@ -25,7 +25,7 @@ pub async fn save_fetched_body(
 
 /// Persist the cleaned text for a run.
 pub async fn save_clean_text(
-    run_repo: &Arc<dyn IngestionRunRepository>,
+    run_repo: &Arc<dyn IngestionRunRepoT>,
     run_id: u64,
     clean_text: &str,
 ) -> Result<(), WebIngestionError> {
@@ -36,7 +36,7 @@ pub async fn save_clean_text(
 
 /// Persist the distilled JSON for a run.
 pub async fn save_distilled(
-    run_repo: &Arc<dyn IngestionRunRepository>,
+    run_repo: &Arc<dyn IngestionRunRepoT>,
     run_id: u64,
     distilled: JsonValue,
 ) -> Result<(), WebIngestionError> {

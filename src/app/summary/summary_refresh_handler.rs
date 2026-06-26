@@ -5,12 +5,12 @@ use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewSummary, ROLLING_GENERAL_SUMMARY};
 use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_handler::TaskHandler;
-use crate::domain::user::user_context_version::UserContextVersionRepository;
+use crate::domain::user::user_context_version::UserContextVersionRepoT;
 
 use super::summary_service::SummaryService;
 
@@ -19,9 +19,9 @@ const MIN_NEW_MESSAGES: usize = 6;
 pub struct SummaryRefreshHandler {
     enabled: bool,
     llm: Arc<dyn LlmProvider>,
-    conversation_repo: Arc<dyn ConversationRepository>,
+    conversation_repo: Arc<dyn ConversationRepoT>,
     summary_service: Arc<SummaryService>,
-    context_version_repo: Arc<dyn UserContextVersionRepository>,
+    context_version_repo: Arc<dyn UserContextVersionRepoT>,
     user_locks: DashMap<u64, Arc<Mutex<()>>>,
 }
 
@@ -29,9 +29,9 @@ impl SummaryRefreshHandler {
     pub fn new(
         enabled: bool,
         llm: Arc<dyn LlmProvider>,
-        conversation_repo: Arc<dyn ConversationRepository>,
+        conversation_repo: Arc<dyn ConversationRepoT>,
         summary_service: Arc<SummaryService>,
-        context_version_repo: Arc<dyn UserContextVersionRepository>,
+        context_version_repo: Arc<dyn UserContextVersionRepoT>,
     ) -> Self {
         Self {
             enabled,

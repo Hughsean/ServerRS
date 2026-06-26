@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
-use crate::domain::auth::refresh_token_store::RefreshTokenStore;
+use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::shared::error::AppError;
 
 #[derive(Default)]
@@ -50,7 +50,7 @@ impl RefreshTokenRevocationRepository for InMemoryRefreshTokenRevocationReposito
 
 // 为新 AuthService 提供的 RefreshTokenStore 适配器
 #[async_trait]
-impl RefreshTokenStore for InMemoryRefreshTokenRevocationRepository {
+impl RefreshTokenStoreT for InMemoryRefreshTokenRevocationRepository {
     async fn store(&self, _user_id: u64, token_hash: String) -> Result<(), AppError> {
         // 内存模式：无需持久化；Token 在被撤销前始终有效
         let _ = token_hash;

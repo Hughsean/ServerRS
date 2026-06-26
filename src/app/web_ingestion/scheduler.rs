@@ -10,14 +10,14 @@ use chrono::Utc;
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
 use crate::domain::web_ingestion::repository::{
-    NewOutboxEvent, NewWebCrawlJob, OutboxRepository, WebCrawlJobRepository, WebSourceRepository,
+    NewOutboxEvent, NewWebCrawlJob, OutboxRepoT, WebCrawlJobRepoT, WebSourceRepoT,
 };
 use crate::shared::error::AppError;
 
 pub async fn run_tick(
-    source_repo: &Arc<dyn WebSourceRepository>,
-    crawl_job_repo: &Arc<dyn WebCrawlJobRepository>,
-    outbox_repo: &Arc<dyn OutboxRepository>,
+    source_repo: &Arc<dyn WebSourceRepoT>,
+    crawl_job_repo: &Arc<dyn WebCrawlJobRepoT>,
+    outbox_repo: &Arc<dyn OutboxRepoT>,
     pipeline_version: &str,
 ) -> Result<(), AppError> {
     let sources = source_repo

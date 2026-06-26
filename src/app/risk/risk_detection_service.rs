@@ -8,21 +8,21 @@ use crate::domain::risk::post_conversation_risk_audit::{
     NewPostConversationRiskAudit, PostRiskAuditResult,
 };
 use crate::domain::risk::risk_detector::RiskDetector;
-use crate::domain::risk::risk_repository::RiskRepository;
+use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::domain::tasks::task_event::{RiskDetectedTask, TaskEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::shared::error::AppError;
 
 /// Runs risk detection only for already-persisted, closed conversation turns.
 pub struct RiskDetectionService {
-    risk_repo: Arc<dyn RiskRepository>,
+    risk_repo: Arc<dyn RiskRepoT>,
     task_publisher: Arc<dyn TaskPublisher>,
     detector: Arc<dyn RiskDetector>,
 }
 
 impl RiskDetectionService {
     pub fn new(
-        risk_repo: Arc<dyn RiskRepository>,
+        risk_repo: Arc<dyn RiskRepoT>,
         task_publisher: Arc<dyn TaskPublisher>,
         detector: Arc<dyn RiskDetector>,
     ) -> Self {

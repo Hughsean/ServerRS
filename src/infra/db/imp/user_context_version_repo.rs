@@ -6,17 +6,17 @@ use sea_orm::{
 };
 
 use crate::domain::user::user_context_version::{
-    ContextVersionReason, UserContextVersion, UserContextVersionRepository,
+    ContextVersionReason, UserContextVersion, UserContextVersionRepoT,
 };
 use crate::shared::error::AppError;
 
 use super::super::entities::user_context_versions;
 
-pub struct SeaOrmUserContextVersionRepository {
+pub struct UserContextVersionRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmUserContextVersionRepository {
+impl UserContextVersionRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -31,7 +31,7 @@ fn map_model(model: user_context_versions::Model) -> UserContextVersion {
 }
 
 #[async_trait]
-impl UserContextVersionRepository for SeaOrmUserContextVersionRepository {
+impl UserContextVersionRepoT for UserContextVersionRepo {
     async fn get_or_create(&self, user_id: u64) -> Result<UserContextVersion, AppError> {
         if let Some(model) = user_context_versions::Entity::find_by_id(user_id)
             .one(&self.db)

@@ -5,16 +5,16 @@ use sea_orm::{
 };
 
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfileUpdate};
-use crate::domain::user::user_profile_repository::UserProfileRepository;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::user_profiles;
 
-pub struct SeaOrmUserProfileRepository {
+pub struct UserProfileRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmUserProfileRepository {
+impl UserProfileRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -62,7 +62,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 // ── Repository implementation ──
 
 #[async_trait]
-impl UserProfileRepository for SeaOrmUserProfileRepository {
+impl UserProfileRepoT for UserProfileRepo {
     async fn find_by_user_id(&self, user_id: u64) -> Result<Option<UserProfile>, AppError> {
         user_profiles::Entity::find()
             .filter(user_profiles::Column::UserId.eq(user_id))

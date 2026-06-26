@@ -2,56 +2,56 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::domain::agent::AgentEventRepository;
-use crate::domain::community::CommunityRepository;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
-use crate::domain::depression::DepressionRepository;
-use crate::domain::diary::DiaryRepository;
-use crate::domain::memory::MemoryRepository;
-use crate::domain::music::MusicRepository;
-use crate::domain::psychology::PsychologyRepository;
-use crate::domain::rag::RAGRepository;
-use crate::domain::risk::risk_repository::RiskRepository;
-use crate::domain::storage::StoredObjectRepository;
-use crate::domain::summary::SummaryRepository;
-use crate::domain::user::user_context_control::UserContextControlRepository;
-use crate::domain::user::user_context_version::UserContextVersionRepository;
-use crate::domain::user::user_profile_repository::UserProfileRepository;
-use crate::domain::user::user_repository::UserRepository;
-use crate::infra::db::imp::seaorm_agent_repository::SeaOrmAgentEventRepository;
-use crate::infra::db::imp::seaorm_community_repository::SeaOrmCommunityRepository;
-use crate::infra::db::imp::seaorm_conversation_repository::SeaOrmConversationRepository;
-use crate::infra::db::imp::seaorm_conversation_summary_repository::SeaOrmConversationSummaryRepository;
-use crate::infra::db::imp::seaorm_depression_repository::SeaOrmDepressionRepository;
-use crate::infra::db::imp::seaorm_diary_repository::SeaOrmDiaryRepository;
-use crate::infra::db::imp::seaorm_memory_repository::SeaOrmMemoryRepository;
-use crate::infra::db::imp::seaorm_music_repository::SeaOrmMusicRepository;
-use crate::infra::db::imp::seaorm_psychology_repository::SeaOrmPsychologyRepository;
-use crate::infra::db::imp::seaorm_rag_repository::SeaOrmRAGRepository;
-use crate::infra::db::imp::seaorm_risk_repository::SeaOrmRiskRepository;
-use crate::infra::db::imp::seaorm_stored_object_repository::SeaOrmStoredObjectRepository;
-use crate::infra::db::imp::seaorm_user_context_control_repository::SeaOrmUserContextControlRepository;
-use crate::infra::db::imp::seaorm_user_context_version_repository::SeaOrmUserContextVersionRepository;
-use crate::infra::db::imp::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
-use crate::infra::db::imp::seaorm_user_repository::SeaOrmUserRepository;
+use crate::domain::agent::AgentEventRepoT;
+use crate::domain::community::CommunityRepoT;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::depression::DepressionRepoT;
+use crate::domain::diary::DiaryRepoT;
+use crate::domain::memory::MemoryRepoT;
+use crate::domain::music::MusicRepoT;
+use crate::domain::psychology::PsychologyRepoT;
+use crate::domain::rag::RAGRepoT;
+use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::storage::StoredObjectRepoT;
+use crate::domain::summary::SummaryRepoT;
+use crate::domain::user::user_context_control::UserContextControlRepoT;
+use crate::domain::user::user_context_version::UserContextVersionRepoT;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_repository::UserRepoT;
+use crate::infra::db::imp::agent_repo::AgentEventRepo;
+use crate::infra::db::imp::community_repo::CommunityRepo;
+use crate::infra::db::imp::conversation_repo::ConversationRepo;
+use crate::infra::db::imp::conversation_summary_repo::ConversationSummaryRepo;
+use crate::infra::db::imp::depression_repo::DepressionRepo;
+use crate::infra::db::imp::diary_repo::DiaryRepo;
+use crate::infra::db::imp::memory_repo::MemoryRepo;
+use crate::infra::db::imp::music_repo::MusicRepo;
+use crate::infra::db::imp::psychology_repo::PsychologyRepo;
+use crate::infra::db::imp::rag_repo::RAGRepo;
+use crate::infra::db::imp::risk_repo::RiskRepo;
+use crate::infra::db::imp::stored_object_repo::StoredObjectRepo;
+use crate::infra::db::imp::user_context_control_repo::UserContextControlRepo;
+use crate::infra::db::imp::user_context_version_repo::UserContextVersionRepo;
+use crate::infra::db::imp::user_profile_repo::UserProfileRepo;
+use crate::infra::db::imp::user_repo::UserRepo;
 
 pub struct RepoGraph {
-    pub user_repo: Arc<dyn UserRepository>,
-    pub profile_repo: Arc<dyn UserProfileRepository>,
-    pub context_version_repo: Arc<dyn UserContextVersionRepository>,
-    pub context_control_repo: Arc<dyn UserContextControlRepository>,
-    pub conv_repo: Arc<dyn ConversationRepository>,
-    pub risk_repo: Arc<dyn RiskRepository>,
-    pub psychology_repo: Arc<dyn PsychologyRepository>,
-    pub depression_repo: Arc<dyn DepressionRepository>,
-    pub diary_repo: Arc<dyn DiaryRepository>,
-    pub music_repo: Arc<dyn MusicRepository>,
-    pub community_repo: Arc<dyn CommunityRepository>,
-    pub agent_event_repo: Arc<dyn AgentEventRepository>,
-    pub stored_object_repo: Arc<dyn StoredObjectRepository>,
-    pub rag_repo: Arc<dyn RAGRepository>,
-    pub memory_repo: Arc<dyn MemoryRepository>,
-    pub summary_repo: Arc<dyn SummaryRepository>,
+    pub user_repo: Arc<dyn UserRepoT>,
+    pub profile_repo: Arc<dyn UserProfileRepoT>,
+    pub context_version_repo: Arc<dyn UserContextVersionRepoT>,
+    pub context_control_repo: Arc<dyn UserContextControlRepoT>,
+    pub conv_repo: Arc<dyn ConversationRepoT>,
+    pub risk_repo: Arc<dyn RiskRepoT>,
+    pub psychology_repo: Arc<dyn PsychologyRepoT>,
+    pub depression_repo: Arc<dyn DepressionRepoT>,
+    pub diary_repo: Arc<dyn DiaryRepoT>,
+    pub music_repo: Arc<dyn MusicRepoT>,
+    pub community_repo: Arc<dyn CommunityRepoT>,
+    pub agent_event_repo: Arc<dyn AgentEventRepoT>,
+    pub stored_object_repo: Arc<dyn StoredObjectRepoT>,
+    pub rag_repo: Arc<dyn RAGRepoT>,
+    pub memory_repo: Arc<dyn MemoryRepoT>,
+    pub summary_repo: Arc<dyn SummaryRepoT>,
 }
 
 pub fn build_repos(
@@ -60,25 +60,25 @@ pub fn build_repos(
     summary_collection: &str,
 ) -> RepoGraph {
     RepoGraph {
-        user_repo: Arc::new(SeaOrmUserRepository::new(db.clone())),
-        profile_repo: Arc::new(SeaOrmUserProfileRepository::new(db.clone())),
-        context_version_repo: Arc::new(SeaOrmUserContextVersionRepository::new(db.clone())),
-        context_control_repo: Arc::new(SeaOrmUserContextControlRepository::new(
+        user_repo: Arc::new(UserRepo::new(db.clone())),
+        profile_repo: Arc::new(UserProfileRepo::new(db.clone())),
+        context_version_repo: Arc::new(UserContextVersionRepo::new(db.clone())),
+        context_control_repo: Arc::new(UserContextControlRepo::new(
             db.clone(),
             memory_collection.to_string(),
             summary_collection.to_string(),
         )),
-        conv_repo: Arc::new(SeaOrmConversationRepository::new(db.clone())),
-        risk_repo: Arc::new(SeaOrmRiskRepository::new(db.clone())),
-        psychology_repo: Arc::new(SeaOrmPsychologyRepository::new(db.clone())),
-        depression_repo: Arc::new(SeaOrmDepressionRepository::new(db.clone())),
-        diary_repo: Arc::new(SeaOrmDiaryRepository::new(db.clone())),
-        music_repo: Arc::new(SeaOrmMusicRepository::new(db.clone())),
-        community_repo: Arc::new(SeaOrmCommunityRepository::new(db.clone())),
-        agent_event_repo: Arc::new(SeaOrmAgentEventRepository::new(db.clone())),
-        stored_object_repo: Arc::new(SeaOrmStoredObjectRepository::new(db.clone())),
-        rag_repo: Arc::new(SeaOrmRAGRepository::new(db.clone())),
-        memory_repo: Arc::new(SeaOrmMemoryRepository::new(db.clone())),
-        summary_repo: Arc::new(SeaOrmConversationSummaryRepository::new(db.clone())),
+        conv_repo: Arc::new(ConversationRepo::new(db.clone())),
+        risk_repo: Arc::new(RiskRepo::new(db.clone())),
+        psychology_repo: Arc::new(PsychologyRepo::new(db.clone())),
+        depression_repo: Arc::new(DepressionRepo::new(db.clone())),
+        diary_repo: Arc::new(DiaryRepo::new(db.clone())),
+        music_repo: Arc::new(MusicRepo::new(db.clone())),
+        community_repo: Arc::new(CommunityRepo::new(db.clone())),
+        agent_event_repo: Arc::new(AgentEventRepo::new(db.clone())),
+        stored_object_repo: Arc::new(StoredObjectRepo::new(db.clone())),
+        rag_repo: Arc::new(RAGRepo::new(db.clone())),
+        memory_repo: Arc::new(MemoryRepo::new(db.clone())),
+        summary_repo: Arc::new(ConversationSummaryRepo::new(db.clone())),
     }
 }

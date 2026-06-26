@@ -21,7 +21,7 @@ pub enum ContextVersionReason {
 }
 
 #[async_trait]
-pub trait UserContextVersionRepository: Send + Sync {
+pub trait UserContextVersionRepoT: Send + Sync {
     async fn get_or_create(&self, user_id: u64) -> Result<UserContextVersion, AppError>;
     async fn bump(&self, user_id: u64, reason: ContextVersionReason) -> Result<u64, AppError>;
 }

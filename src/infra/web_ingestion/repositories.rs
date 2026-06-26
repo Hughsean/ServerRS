@@ -40,7 +40,7 @@ impl SeaOrmWebSourceRepository {
 }
 
 #[async_trait]
-impl WebSourceRepository for SeaOrmWebSourceRepository {
+impl WebSourceRepoT for SeaOrmWebSourceRepository {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSource>, WebIngestionError> {
         let row = web_sources::Entity::find_by_id(id)
             .one(&self.db)
@@ -127,7 +127,7 @@ impl SeaOrmWebSourceUrlRepository {
 }
 
 #[async_trait]
-impl WebSourceUrlRepository for SeaOrmWebSourceUrlRepository {
+impl WebSourceUrlRepoT for SeaOrmWebSourceUrlRepository {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSourceUrl>, WebIngestionError> {
         let row = web_source_urls::Entity::find_by_id(id)
             .one(&self.db)
@@ -271,7 +271,7 @@ impl SeaOrmWebCrawlJobRepository {
 }
 
 #[async_trait]
-impl WebCrawlJobRepository for SeaOrmWebCrawlJobRepository {
+impl WebCrawlJobRepoT for SeaOrmWebCrawlJobRepository {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebCrawlJob>, WebIngestionError> {
         let row = web_crawl_jobs::Entity::find_by_id(id)
             .one(&self.db)
@@ -370,7 +370,7 @@ impl SeaOrmWebPageRepository {
 }
 
 #[async_trait]
-impl WebPageRepository for SeaOrmWebPageRepository {
+impl WebPageRepoT for SeaOrmWebPageRepository {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebPage>, WebIngestionError> {
         let row = web_pages::Entity::find_by_id(id)
             .one(&self.db)
@@ -488,7 +488,7 @@ impl SeaOrmIngestionRunRepository {
 }
 
 #[async_trait]
-impl IngestionRunRepository for SeaOrmIngestionRunRepository {
+impl IngestionRunRepoT for SeaOrmIngestionRunRepository {
     async fn find_by_id(
         &self,
         id: u64,
@@ -758,7 +758,7 @@ impl SeaOrmPublishRecordRepository {
 }
 
 #[async_trait]
-impl PublishRecordRepository for SeaOrmPublishRecordRepository {
+impl PublishRecordRepoT for SeaOrmPublishRecordRepository {
     async fn find_by_id(
         &self,
         id: u64,
@@ -1134,7 +1134,7 @@ impl SeaOrmChunkManifestRepository {
 }
 
 #[async_trait]
-impl ChunkManifestRepository for SeaOrmChunkManifestRepository {
+impl ChunkManifestRepoT for SeaOrmChunkManifestRepository {
     async fn find_by_version_and_hash(
         &self,
         version_key: &str,
@@ -1245,7 +1245,7 @@ impl SeaOrmVectorManifestRepository {
 }
 
 #[async_trait]
-impl VectorManifestRepository for SeaOrmVectorManifestRepository {
+impl VectorManifestRepoT for SeaOrmVectorManifestRepository {
     async fn find_by_collection_and_point(
         &self,
         collection: &str,
@@ -1362,7 +1362,7 @@ impl SeaOrmOutboxRepository {
 }
 
 #[async_trait]
-impl OutboxRepository for SeaOrmOutboxRepository {
+impl OutboxRepoT for SeaOrmOutboxRepository {
     async fn insert_event(&self, event: NewOutboxEvent) -> Result<DomainEvent, WebIngestionError> {
         // Idempotent: INSERT … ON DUPLICATE KEY UPDATE (no-op) using parameterized query.
         let payload_str = serde_json::to_string(&event.payload).unwrap_or_default();
@@ -1514,7 +1514,7 @@ impl SeaOrmAuditLogRepository {
 }
 
 #[async_trait]
-impl AuditLogRepository for SeaOrmAuditLogRepository {
+impl AuditLogRepoT for SeaOrmAuditLogRepository {
     async fn insert(&self, log: NewAuditLog) -> Result<AuditLog, WebIngestionError> {
         let active = web_ingestion_audit_logs::ActiveModel {
             source_id: Set(log.source_id),

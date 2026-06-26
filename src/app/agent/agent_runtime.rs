@@ -7,14 +7,14 @@ use tracing::{debug, info, warn};
 use super::agent_context::AgentContextBuilder;
 use super::prompt_builder::PromptBuilder;
 use crate::app::memory::memory_service::MemoryService;
-use crate::domain::agent::{AgentContext, AgentEventRepository, NewAgentEvent};
+use crate::domain::agent::{AgentContext, AgentEventRepoT, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig, ToolDefinition as LlmToolDef,
 };
-use crate::domain::user::user_context_version::UserContextVersionRepository;
-use crate::domain::user::user_profile_repository::UserProfileRepository;
+use crate::domain::user::user_context_version::UserContextVersionRepoT;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::shared::error::AppError;
 
 // ── AgentRuntimeSettings ─────────────────────────────────────────────────
@@ -195,10 +195,10 @@ pub fn is_tool_call_argument_error(msg: &str) -> bool {
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     memory_service: Arc<MemoryService>,
-    event_repo: Arc<dyn AgentEventRepository>,
-    conversation_repo: Arc<dyn ConversationRepository>,
-    user_profile_repo: Arc<dyn UserProfileRepository>,
-    context_version_repo: Arc<dyn UserContextVersionRepository>,
+    event_repo: Arc<dyn AgentEventRepoT>,
+    conversation_repo: Arc<dyn ConversationRepoT>,
+    user_profile_repo: Arc<dyn UserProfileRepoT>,
+    context_version_repo: Arc<dyn UserContextVersionRepoT>,
     context_builder: Arc<AgentContextBuilder>,
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn AgentTool>>,
@@ -214,10 +214,10 @@ impl AgentRuntime {
     pub fn new(
         llm: Arc<dyn LlmProvider>,
         memory_service: Arc<MemoryService>,
-        event_repo: Arc<dyn AgentEventRepository>,
-        conversation_repo: Arc<dyn ConversationRepository>,
-        user_profile_repo: Arc<dyn UserProfileRepository>,
-        context_version_repo: Arc<dyn UserContextVersionRepository>,
+        event_repo: Arc<dyn AgentEventRepoT>,
+        conversation_repo: Arc<dyn ConversationRepoT>,
+        user_profile_repo: Arc<dyn UserProfileRepoT>,
+        context_version_repo: Arc<dyn UserContextVersionRepoT>,
         context_builder: Arc<AgentContextBuilder>,
         tools: Vec<Arc<dyn AgentTool>>,
         settings: AgentRuntimeSettings,

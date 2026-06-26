@@ -5,16 +5,16 @@ use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
-use crate::domain::community::CommunityRepository;
+use crate::domain::community::CommunityRepoT;
 use crate::shared::error::AppError;
 
 /// Searches community posts for relevant peer experiences and support.
 pub struct CommunitySearchTool {
-    community_repo: Arc<dyn CommunityRepository>,
+    community_repo: Arc<dyn CommunityRepoT>,
 }
 
 impl CommunitySearchTool {
-    pub fn new(community_repo: Arc<dyn CommunityRepository>) -> Self {
+    pub fn new(community_repo: Arc<dyn CommunityRepoT>) -> Self {
         Self { community_repo }
     }
 }

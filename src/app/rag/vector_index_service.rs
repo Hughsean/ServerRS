@@ -4,12 +4,12 @@ use serde_json::json;
 use tracing::{debug, warn};
 
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::memory::{ConversationSummary, MemoryRepository, UserMemory};
-use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepository};
-use crate::domain::summary::SummaryRepository;
-use crate::domain::vector_index::{NewVectorIndexJob, NewVectorIndexRecord, VectorIndexRepository};
+use crate::domain::memory::{ConversationSummary, MemoryRepoT, UserMemory};
+use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepoT};
+use crate::domain::summary::SummaryRepoT;
+use crate::domain::vector_index::{NewVectorIndexJob, NewVectorIndexRecord, VectorIndexRepoT};
 use crate::domain::vector_store::{
-    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorStore,
+    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorStoreT,
 };
 use crate::shared::error::AppError;
 
@@ -49,12 +49,12 @@ impl Default for VectorIndexConfig {
 /// This service does NOT depend on Qdrant SDK types — only the `VectorStore`
 /// trait.  It does NOT make authorization decisions.
 pub struct VectorIndexService {
-    rag_repo: Arc<dyn RAGRepository>,
-    memory_repo: Arc<dyn MemoryRepository>,
+    rag_repo: Arc<dyn RAGRepoT>,
+    memory_repo: Arc<dyn MemoryRepoT>,
     #[allow(dead_code)]
-    summary_repo: Arc<dyn SummaryRepository>,
-    vector_index_repo: Arc<dyn VectorIndexRepository>,
-    vector_store: Arc<dyn VectorStore>,
+    summary_repo: Arc<dyn SummaryRepoT>,
+    vector_index_repo: Arc<dyn VectorIndexRepoT>,
+    vector_store: Arc<dyn VectorStoreT>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
     config: VectorIndexConfig,
 }
@@ -62,11 +62,11 @@ pub struct VectorIndexService {
 impl VectorIndexService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        rag_repo: Arc<dyn RAGRepository>,
-        memory_repo: Arc<dyn MemoryRepository>,
-        summary_repo: Arc<dyn SummaryRepository>,
-        vector_index_repo: Arc<dyn VectorIndexRepository>,
-        vector_store: Arc<dyn VectorStore>,
+        rag_repo: Arc<dyn RAGRepoT>,
+        memory_repo: Arc<dyn MemoryRepoT>,
+        summary_repo: Arc<dyn SummaryRepoT>,
+        vector_index_repo: Arc<dyn VectorIndexRepoT>,
+        vector_store: Arc<dyn VectorStoreT>,
         embedding_provider: Arc<dyn EmbeddingProvider>,
         config: VectorIndexConfig,
     ) -> Self {
@@ -554,7 +554,7 @@ mod tests {
 
     struct MockRagRepo;
     #[async_trait::async_trait]
-    impl RAGRepository for MockRagRepo {
+    impl RAGRepoT for MockRagRepo {
         async fn save_document(
             &self,
             _d: crate::domain::rag::NewDocument,
@@ -663,7 +663,7 @@ mod tests {
 
     struct MockMemRepo;
     #[async_trait::async_trait]
-    impl MemoryRepository for MockMemRepo {
+    impl MemoryRepoT for MockMemRepo {
         async fn save_memory_with_evidence(
             &self,
             _: crate::domain::memory::NewMemory,
@@ -753,7 +753,7 @@ mod tests {
 
     struct MockSumRepo;
     #[async_trait::async_trait]
-    impl crate::domain::summary::SummaryRepository for MockSumRepo {
+    impl crate::domain::summary::SummaryRepoT for MockSumRepo {
         async fn find_latest_by_conversation(
             &self,
             _: u64,
@@ -801,7 +801,7 @@ mod tests {
 
     struct MockIndexRepo;
     #[async_trait::async_trait]
-    impl VectorIndexRepository for MockIndexRepo {
+    impl VectorIndexRepoT for MockIndexRepo {
         async fn upsert_record(
             &self,
             r: NewVectorIndexRecord,

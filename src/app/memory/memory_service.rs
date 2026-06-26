@@ -6,11 +6,11 @@ use tracing::{debug, warn};
 
 use crate::domain::llm::{ChatMessage, EmbeddingProvider};
 use crate::domain::memory::{
-    MemoryRepository, NewMemory, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
+    MemoryRepoT, NewMemory, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
 };
-use crate::domain::user::user_context_version::UserContextVersionRepository;
-use crate::domain::user::user_profile_repository::UserProfileRepository;
-use crate::domain::vector_store::{VectorFilter, VectorStore};
+use crate::domain::user::user_context_version::UserContextVersionRepoT;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::vector_store::{VectorFilter, VectorStoreT};
 use crate::shared::error::AppError;
 
 use super::memory_extractor::{MemoryExtractor, MemoryMergeDecision};
@@ -22,13 +22,13 @@ use super::memory_extractor::{MemoryExtractor, MemoryMergeDecision};
 /// `search` prefer Qdrant vector search with `user_id` payload filtering.
 /// Results are always verified against MySQL.
 pub struct MemoryService {
-    repo: Arc<dyn MemoryRepository>,
+    repo: Arc<dyn MemoryRepoT>,
     extractor: Arc<MemoryExtractor>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
-    vector_store: Option<Arc<dyn VectorStore>>,
+    vector_store: Option<Arc<dyn VectorStoreT>>,
     vector_index: Option<Arc<crate::app::rag::vector_index_service::VectorIndexService>>,
-    profile_repo: Option<Arc<dyn UserProfileRepository>>,
-    context_version_repo: Option<Arc<dyn UserContextVersionRepository>>,
+    profile_repo: Option<Arc<dyn UserProfileRepoT>>,
+    context_version_repo: Option<Arc<dyn UserContextVersionRepoT>>,
     memory_collection: String,
 }
 
@@ -64,7 +64,7 @@ fn memory_key(canonical_form: &str) -> String {
 }
 
 impl MemoryService {
-    pub fn new(repo: Arc<dyn MemoryRepository>, extractor: Arc<MemoryExtractor>) -> Self {
+    pub fn new(repo: Arc<dyn MemoryRepoT>, extractor: Arc<MemoryExtractor>) -> Self {
         Self {
             repo,
             extractor,
@@ -80,7 +80,7 @@ impl MemoryService {
     /// Attach vector search capability.
     pub fn with_vector_search(
         mut self,
-        vs: Arc<dyn VectorStore>,
+        vs: Arc<dyn VectorStoreT>,
         ep: Arc<dyn EmbeddingProvider>,
         collection: String,
     ) -> Self {
@@ -100,7 +100,7 @@ impl MemoryService {
 
     pub fn with_personalization_profile_repo(
         mut self,
-        profile_repo: Arc<dyn UserProfileRepository>,
+        profile_repo: Arc<dyn UserProfileRepoT>,
     ) -> Self {
         self.profile_repo = Some(profile_repo);
         self
@@ -108,7 +108,7 @@ impl MemoryService {
 
     pub fn with_context_version_repo(
         mut self,
-        context_version_repo: Arc<dyn UserContextVersionRepository>,
+        context_version_repo: Arc<dyn UserContextVersionRepoT>,
     ) -> Self {
         self.context_version_repo = Some(context_version_repo);
         self
@@ -122,7 +122,11 @@ impl MemoryService {
         let (Some(repo), Some(expected)) = (&self.context_version_repo, expected_version) else {
             return Ok(true);
         };
-        Ok(repo.get_or_create(user_id).await?.version == expected)
+        let current = repo.get_or_create(user_id).await?;
+        if current.version != expected {
+            debug!(user_id, expected, current = current.version, "上下文版本不匹配");
+        }
+        Ok(current.version == expected)
     }
 
     async fn personalization_policy(
@@ -248,15 +252,19 @@ impl MemoryService {
         expected_version: Option<u64>,
     ) -> Result<Vec<UserMemory>, AppError> {
         if !self.context_is_current(user_id, expected_version).await? {
+            debug!(user_id, ?expected_version, "记忆提取跳过: 上下文版本已过期");
             return Ok(Vec::new());
         }
         let policy = self.personalization_policy(user_id).await?;
         if !policy.enabled {
+            debug!(user_id, "记忆提取跳过: 个性化已禁用");
             return Ok(Vec::new());
         }
         let memories = self.extractor.extract(user_id, messages).await;
+        let extracted = memories.len();
 
         if memories.is_empty() || !self.context_is_current(user_id, expected_version).await? {
+            debug!(user_id, extracted, "记忆提取跳过: 提取为空或版本过期");
             return Ok(Vec::new());
         }
 
@@ -411,12 +419,14 @@ impl MemoryService {
             }
         }
 
+        debug!(user_id, saved = saved.len(), "记忆提取并保存完成");
+
         Ok(saved)
     }
 
     async fn index_single_memory(
         &self,
-        vs: &Arc<dyn VectorStore>,
+        vs: &Arc<dyn VectorStoreT>,
         ep: &Arc<dyn EmbeddingProvider>,
         mem: &UserMemory,
     ) -> Result<(), AppError> {
@@ -506,7 +516,7 @@ impl MemoryService {
 
     async fn qdrant_recall(
         &self,
-        vs: &Arc<dyn VectorStore>,
+        vs: &Arc<dyn VectorStoreT>,
         ep: &Arc<dyn EmbeddingProvider>,
         user_id: u64,
         query: &str,
@@ -655,7 +665,7 @@ mod tests {
 
     struct MockRepo;
     #[async_trait]
-    impl MemoryRepository for MockRepo {
+    impl MemoryRepoT for MockRepo {
         async fn save_memory_with_evidence(
             &self,
             memory: NewMemory,

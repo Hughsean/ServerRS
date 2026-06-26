@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use crate::domain::storage::{
-    ObjectBytes, ObjectStorage, PutObjectInput, StoredObject, StoredObjectRepository,
+    ObjectBytes, ObjectStorage, PutObjectInput, StoredObject, StoredObjectRepoT,
 };
 use crate::shared::config::StorageConfig;
 use crate::shared::error::AppError;
 
 pub struct ObjectService {
     storage: Arc<dyn ObjectStorage>,
-    repo: Arc<dyn StoredObjectRepository>,
+    repo: Arc<dyn StoredObjectRepoT>,
     config: StorageConfig,
 }
 
 impl ObjectService {
     pub fn new(
         storage: Arc<dyn ObjectStorage>,
-        repo: Arc<dyn StoredObjectRepository>,
+        repo: Arc<dyn StoredObjectRepoT>,
         config: StorageConfig,
     ) -> Self {
         Self {

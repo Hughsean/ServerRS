@@ -2,17 +2,17 @@ use std::sync::Arc;
 
 use base64::Engine;
 
-use crate::domain::music::{MusicRepository, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
 use crate::shared::error::AppError;
 
 /// Music service — no longer uses ObjectStorage/object_id.
 /// The current `music` table stores file_data / file_size / mime_type / cover_image directly.
 pub struct MusicService {
-    pub repo: Arc<dyn MusicRepository>,
+    pub repo: Arc<dyn MusicRepoT>,
 }
 
 impl MusicService {
-    pub fn new(repo: Arc<dyn MusicRepository>) -> Self {
+    pub fn new(repo: Arc<dyn MusicRepoT>) -> Self {
         Self { repo }
     }
 

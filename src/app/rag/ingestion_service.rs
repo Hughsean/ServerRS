@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::rag::{NewChunk, NewDocument, NewEmbedding, RAGRepository};
+use crate::domain::rag::{NewChunk, NewDocument, NewEmbedding, RAGRepoT};
 use crate::shared::error::AppError;
 
 use super::chunking::ChunkingService;
@@ -11,7 +11,7 @@ use super::chunking::ChunkingService;
 use super::vector_index_service::VectorIndexService;
 
 pub struct IngestionService {
-    repo: Arc<dyn RAGRepository>,
+    repo: Arc<dyn RAGRepoT>,
     chunking: ChunkingService,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
     vector_index: Option<Arc<VectorIndexService>>,
@@ -21,7 +21,7 @@ pub struct IngestionService {
 
 impl IngestionService {
     pub fn new(
-        repo: Arc<dyn RAGRepository>,
+        repo: Arc<dyn RAGRepoT>,
         chunking: ChunkingService,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Self {

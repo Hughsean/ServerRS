@@ -146,7 +146,7 @@ pub struct NewContentLike {
 }
 
 #[async_trait]
-pub trait PsychologyRepository: Send + Sync {
+pub trait PsychologyRepoT: Send + Sync {
     // Categories
     async fn find_category_by_id(&self, id: u64) -> Result<Option<PsychologyCategory>, AppError>;
     async fn list_categories(&self) -> Result<Vec<PsychologyCategory>, AppError>;

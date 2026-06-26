@@ -10,19 +10,19 @@
 
 use std::sync::Arc;
 
-use crate::domain::rag::RAGRepository;
-use crate::domain::vector_store::{VectorDistance, VectorPoint, VectorStore};
+use crate::domain::rag::RAGRepoT;
+use crate::domain::vector_store::{VectorDistance, VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{KnowledgeVectorManifest, VectorManifestRepository};
+use crate::domain::web_ingestion::repository::{KnowledgeVectorManifest, VectorManifestRepoT};
 
 /// Re-upsert all Qdrant points of a publish record with `active=<active>` in
 /// their payload. Requires the embeddings still exist in the DB (they do —
 /// embeddings are never deleted on supersede, only deactivated).
 #[allow(clippy::too_many_arguments)]
 pub async fn sync_active(
-    vector_store: &Option<Arc<dyn VectorStore>>,
-    vector_manifest_repo: &Arc<dyn VectorManifestRepository>,
-    rag_repo: &Arc<dyn RAGRepository>,
+    vector_store: &Option<Arc<dyn VectorStoreT>>,
+    vector_manifest_repo: &Arc<dyn VectorManifestRepoT>,
+    rag_repo: &Arc<dyn RAGRepoT>,
     publish_record_id: u64,
     dimension: usize,
     active: bool,
@@ -65,7 +65,7 @@ pub async fn sync_active(
 }
 
 async fn load_vector(
-    rag_repo: &Arc<dyn RAGRepository>,
+    rag_repo: &Arc<dyn RAGRepoT>,
     m: &KnowledgeVectorManifest,
     dimension: usize,
 ) -> Result<Vec<f32>, WebIngestionError> {

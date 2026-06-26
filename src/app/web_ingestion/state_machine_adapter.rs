@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::IngestionRunRepository;
+use crate::domain::web_ingestion::repository::IngestionRunRepoT;
 
 /// Outcome of an attempted transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ impl TransitionOutcome {
 /// moved from the expected state to the new state. An illegal transition
 /// (per `can_transition_run`) surfaces as `Err(InvalidTransition)` from the repo.
 pub async fn transition(
-    run_repo: &Arc<dyn IngestionRunRepository>,
+    run_repo: &Arc<dyn IngestionRunRepoT>,
     run_id: u64,
     expected_status: &str,
     expected_stage: &str,

@@ -10,15 +10,15 @@ use super::super::entities::{vector_index_jobs, vector_index_records};
 
 use crate::domain::vector_index::{
     NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord,
-    VectorIndexRepository,
+    VectorIndexRepoT,
 };
 use crate::shared::error::AppError;
 
-pub struct SeaOrmVectorIndexRepository {
+pub struct VectorIndexRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmVectorIndexRepository {
+impl VectorIndexRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -66,7 +66,7 @@ fn map_job(m: vector_index_jobs::Model) -> VectorIndexJob {
 // ── Repository implementation ──────────────────────────────────────
 
 #[async_trait]
-impl VectorIndexRepository for SeaOrmVectorIndexRepository {
+impl VectorIndexRepoT for VectorIndexRepo {
     async fn upsert_record(
         &self,
         record: NewVectorIndexRecord,

@@ -6,10 +6,10 @@ use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
 use crate::app::summary::summary_service::SummaryService;
 use crate::domain::agent::{AgentContext, ToolDefinition};
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::llm::ChatMessage;
 use crate::domain::user::user_profile::UserProfile;
-use crate::domain::user::user_profile_repository::UserProfileRepository;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
 
 /// Builder that assembles an `AgentContext` for a single turn.
 pub struct AgentContextBuilder {
@@ -17,8 +17,8 @@ pub struct AgentContextBuilder {
     retrieval_service: Arc<RetrievalService>,
     summary_service: Arc<SummaryService>,
     #[allow(dead_code)]
-    conversation_repo: Arc<dyn ConversationRepository>,
-    user_profile_repo: Arc<dyn UserProfileRepository>,
+    conversation_repo: Arc<dyn ConversationRepoT>,
+    user_profile_repo: Arc<dyn UserProfileRepoT>,
 }
 
 /// Returns the content of the most recent user message from the slice,
@@ -51,8 +51,8 @@ impl AgentContextBuilder {
         memory_service: Arc<MemoryService>,
         retrieval_service: Arc<RetrievalService>,
         summary_service: Arc<SummaryService>,
-        conversation_repo: Arc<dyn ConversationRepository>,
-        user_profile_repo: Arc<dyn UserProfileRepository>,
+        conversation_repo: Arc<dyn ConversationRepoT>,
+        user_profile_repo: Arc<dyn UserProfileRepoT>,
     ) -> Self {
         Self {
             memory_service,

@@ -5,16 +5,16 @@ use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
-use crate::domain::depression::DepressionRepository;
+use crate::domain::depression::DepressionRepoT;
 use crate::shared::error::AppError;
 
 /// Looks up depression assessment scales for reference.
 pub struct DepressionScaleTool {
-    depression_repo: Arc<dyn DepressionRepository>,
+    depression_repo: Arc<dyn DepressionRepoT>,
 }
 
 impl DepressionScaleTool {
-    pub fn new(depression_repo: Arc<dyn DepressionRepository>) -> Self {
+    pub fn new(depression_repo: Arc<dyn DepressionRepoT>) -> Self {
         Self { depression_repo }
     }
 }

@@ -5,20 +5,20 @@ use serde_json::json;
 use tracing::{debug, warn};
 
 use crate::domain::conversation::conversation_message::ConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_handler::TaskHandler;
 
 use super::risk_detection_service::RiskDetectionService;
 
 pub struct PostConversationRiskAuditWorker {
-    conversation_repo: Arc<dyn ConversationRepository>,
+    conversation_repo: Arc<dyn ConversationRepoT>,
     risk_detection_service: Arc<RiskDetectionService>,
 }
 
 impl PostConversationRiskAuditWorker {
     pub fn new(
-        conversation_repo: Arc<dyn ConversationRepository>,
+        conversation_repo: Arc<dyn ConversationRepoT>,
         risk_detection_service: Arc<RiskDetectionService>,
     ) -> Self {
         Self {

@@ -40,7 +40,7 @@ pub struct NewWebSource {
 }
 
 #[async_trait]
-pub trait WebSourceRepository: Send + Sync {
+pub trait WebSourceRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSource>, WebIngestionError>;
     async fn list_enabled(&self) -> Result<Vec<WebSource>, WebIngestionError>;
     async fn insert(&self, source: NewWebSource) -> Result<WebSource, WebIngestionError>;
@@ -75,7 +75,7 @@ pub struct NewWebSourceUrl {
 }
 
 #[async_trait]
-pub trait WebSourceUrlRepository: Send + Sync {
+pub trait WebSourceUrlRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSourceUrl>, WebIngestionError>;
     async fn find_by_source_and_hash(
         &self,
@@ -120,7 +120,7 @@ pub struct NewWebCrawlJob {
 }
 
 #[async_trait]
-pub trait WebCrawlJobRepository: Send + Sync {
+pub trait WebCrawlJobRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebCrawlJob>, WebIngestionError>;
     async fn insert(&self, job: NewWebCrawlJob) -> Result<WebCrawlJob, WebIngestionError>;
     async fn update_status(
@@ -161,7 +161,7 @@ pub struct NewWebPage {
 }
 
 #[async_trait]
-pub trait WebPageRepository: Send + Sync {
+pub trait WebPageRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebPage>, WebIngestionError>;
     async fn find_by_source_and_hash(
         &self,
@@ -231,7 +231,7 @@ pub struct NewIngestionRun {
 }
 
 #[async_trait]
-pub trait IngestionRunRepository: Send + Sync {
+pub trait IngestionRunRepoT: Send + Sync {
     async fn find_by_id(&self, id: u64)
     -> Result<Option<KnowledgeIngestionRun>, WebIngestionError>;
     async fn find_by_run_key(
@@ -326,7 +326,7 @@ pub struct NewPublishRecord {
 }
 
 #[async_trait]
-pub trait PublishRecordRepository: Send + Sync {
+pub trait PublishRecordRepoT: Send + Sync {
     async fn find_by_id(
         &self,
         id: u64,
@@ -435,7 +435,7 @@ pub struct NewChunkManifest {
 }
 
 #[async_trait]
-pub trait ChunkManifestRepository: Send + Sync {
+pub trait ChunkManifestRepoT: Send + Sync {
     async fn find_by_version_and_hash(
         &self,
         version_key: &str,
@@ -495,7 +495,7 @@ pub struct NewVectorManifest {
 }
 
 #[async_trait]
-pub trait VectorManifestRepository: Send + Sync {
+pub trait VectorManifestRepoT: Send + Sync {
     async fn find_by_collection_and_point(
         &self,
         collection: &str,
@@ -554,7 +554,7 @@ pub struct NewOutboxEvent {
 }
 
 #[async_trait]
-pub trait OutboxRepository: Send + Sync {
+pub trait OutboxRepoT: Send + Sync {
     /// Insert an event, relying on UNIQUE(event_key) for idempotency.
     async fn insert_event(&self, event: NewOutboxEvent) -> Result<DomainEvent, WebIngestionError>;
     /// Atomically claim a batch of pending/failed/timed-out events.
@@ -614,7 +614,7 @@ pub struct NewAuditLog {
 }
 
 #[async_trait]
-pub trait AuditLogRepository: Send + Sync {
+pub trait AuditLogRepoT: Send + Sync {
     async fn insert(&self, log: NewAuditLog) -> Result<AuditLog, WebIngestionError>;
     async fn list_by_run(&self, run_id: u64) -> Result<Vec<AuditLog>, WebIngestionError>;
     async fn list_by_publish_record(

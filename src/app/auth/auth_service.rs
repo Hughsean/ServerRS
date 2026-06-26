@@ -7,14 +7,14 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::domain::auth::password_service::PasswordService;
-use crate::domain::auth::refresh_token_store::RefreshTokenStore;
-use crate::domain::auth::token_service::TokenService;
+use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
+use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::tasks::task_event::{
     LoginAuditTask, RefreshTokenRevokedTask, RefreshTokenRotatedTask, TaskEvent, UserRegisteredTask,
 };
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user::{NewUser, UserRole, UserStatus};
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::shared::error::AppError;
 
 // ── Supporting types ─────────────────────────────────────────────────────────
@@ -119,10 +119,10 @@ pub struct LoginInput {
 // ── AuthService ──────────────────────────────────────────────────────────────
 
 pub struct AuthService {
-    user_repo: Arc<dyn UserRepository>,
+    user_repo: Arc<dyn UserRepoT>,
     password_service: Arc<dyn PasswordService>,
-    token_service: Arc<dyn TokenService>,
-    refresh_token_store: Arc<dyn RefreshTokenStore>,
+    token_service: Arc<dyn TokenServiceT>,
+    refresh_token_store: Arc<dyn RefreshTokenStoreT>,
     task_publisher: Arc<dyn TaskPublisher>,
     login_attempts: Arc<DashMap<String, LoginAttemptRecord>>,
     config: AuthConfig,
@@ -137,10 +137,10 @@ fn sha256_hex(s: &str) -> String {
 
 impl AuthService {
     pub fn new(
-        user_repo: Arc<dyn UserRepository>,
+        user_repo: Arc<dyn UserRepoT>,
         password_service: Arc<dyn PasswordService>,
-        token_service: Arc<dyn TokenService>,
-        refresh_token_store: Arc<dyn RefreshTokenStore>,
+        token_service: Arc<dyn TokenServiceT>,
+        refresh_token_store: Arc<dyn RefreshTokenStoreT>,
         task_publisher: Arc<dyn TaskPublisher>,
         config: AuthConfig,
     ) -> Self {

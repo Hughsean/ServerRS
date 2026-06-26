@@ -86,7 +86,7 @@ pub struct NewEmbedding {
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-pub trait RAGRepository: Send + Sync {
+pub trait RAGRepoT: Send + Sync {
     /// Persist a new document and return it with the assigned id.
     async fn save_document(&self, doc: NewDocument) -> Result<KnowledgeDocument, AppError>;
 

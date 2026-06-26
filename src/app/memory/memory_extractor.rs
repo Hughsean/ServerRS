@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
+use tracing::debug;
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewMemory, UserMemory, is_allowed_memory_type};
@@ -43,17 +44,17 @@ fn default_confidence() -> f64 {
 }
 
 const EXTRACTION_PROMPT: &str = "\
-You are a memory-extraction assistant. Analyze the conversation and extract \
-only durable user-stated preferences, facts, emotional patterns, or goals \
-about the user. Return a JSON array of objects with these fields:
-  - memory_type: one of \"preference\", \"fact\", \"emotional_pattern\", \"goal\"
-  - content: a concise statement of the memory (e.g. \"user mentioned they enjoy hiking\")
-  - confidence: a number between 0.0 and 1.0 indicating how certain you are
+你是一个记忆提取助手。分析对话内容，提取用户明确表达的、对长期陪伴有价值的 \
+偏好、事实、情绪模式或目标。返回 JSON 数组，每个对象包含：
+
+  - memory_type: 类型，只能是 \"preference\"（偏好）、\"fact\"（事实）、\
+\"emotional_pattern\"（情绪模式）、\"goal\"（目标）之一
+  - content: 记忆内容，用中文简洁陈述（例如 \"用户喜欢徒步旅行\"）
+  - confidence: 置信度，0.0~1.0 之间的数字
 
 只提取用户明确表达、对长期陪伴有用的信息。不要提取助手建议。不要保存一次性闲聊、网页内容、工具输出或不确定推测。不得保存风险标签、危机信号、安全判断、自伤风险分析、临床诊断、人格障碍标签、身份证号、手机号、住址、密码、银行卡、API Key 等内容。
 
-Return ONLY a valid JSON array with no additional text or markdown. \
-If nothing noteworthy is found, return an empty array [].";
+仅返回合法的 JSON 数组，不要额外文字或 markdown。如果没有值得提取的信息，返回空数组 []。";
 
 impl MemoryExtractor {
     pub fn new(llm: Arc<dyn LlmProvider>) -> Self {
@@ -87,29 +88,47 @@ impl MemoryExtractor {
 
         let response = match self.llm.chat(request).await {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                debug!(user_id, error = %e, "记忆提取 LLM 调用失败");
+                return Vec::new();
+            }
         };
 
         let trimmed = response.content.trim();
+        debug!(user_id, response_len = trimmed.len(), raw = %trimmed.chars().take(300).collect::<String>(), "记忆提取 LLM 原始回复");
+
+        // 跳过 LLM reasoning/think 标签、emoji 等非 JSON 前缀，找到第一个 [ 或 {
+        let json_start = trimmed
+            .find('[')
+            .or_else(|| trimmed.find('{'))
+            .unwrap_or(0);
+        let json_body = &trimmed[json_start..].trim();
+
         // Strip markdown fences if present
-        let json_str = trimmed
+        let json_str = json_body
             .strip_prefix("```json")
-            .or_else(|| trimmed.strip_prefix("```"))
+            .or_else(|| json_body.strip_prefix("```"))
             .and_then(|s| s.strip_suffix("```"))
-            .unwrap_or(trimmed)
+            .unwrap_or(json_body)
             .trim();
 
         let items: Vec<LlmMemoryItem> = match serde_json::from_str(json_str) {
             Ok(v) => v,
-            Err(_) => {
+            Err(e) => {
+                debug!(user_id, json = %json_str.chars().take(300).collect::<String>(), error = %e, "记忆提取 JSON 数组解析失败，尝试单对象");
                 // Try parsing as a single object wrapped in an array
                 let single: LlmMemoryItem = match serde_json::from_str(json_str) {
                     Ok(v) => v,
-                    Err(_) => return Vec::new(),
+                    Err(e2) => {
+                        debug!(user_id, error2 = %e2, "记忆提取单对象解析也失败");
+                        return Vec::new();
+                    }
                 };
                 vec![single]
             }
         };
+        let parsed_count = items.len();
+        debug!(user_id, parsed_count, "记忆提取 JSON 解析成功");
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result: Vec<NewMemory> = Vec::new();
@@ -159,6 +178,7 @@ impl MemoryExtractor {
             });
         }
 
+        debug!(user_id, result = result.len(), "记忆提取完成");
         result
     }
 

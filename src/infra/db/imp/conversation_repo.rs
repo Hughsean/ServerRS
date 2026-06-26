@@ -8,16 +8,16 @@ use crate::domain::conversation::conversation::{Conversation, NewConversation};
 use crate::domain::conversation::conversation_message::{
     ConversationMessage, NewConversationMessage,
 };
-use crate::domain::conversation::conversation_repository::ConversationRepository;
+use crate::domain::conversation::conversation_repository::ConversationRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::{conversation_messages, conversations};
 
-pub struct SeaOrmConversationRepository {
+pub struct ConversationRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmConversationRepository {
+impl ConversationRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -53,7 +53,7 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl ConversationRepository for SeaOrmConversationRepository {
+impl ConversationRepoT for ConversationRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<Conversation>, AppError> {
         conversations::Entity::find_by_id(id)
             .one(&self.db)

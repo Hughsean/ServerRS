@@ -61,7 +61,7 @@ pub trait ObjectStorage: Send + Sync {
 }
 
 #[async_trait]
-pub trait StoredObjectRepository: Send + Sync {
+pub trait StoredObjectRepoT: Send + Sync {
     async fn save(&self, object: StoredObject) -> Result<StoredObject, AppError>;
     async fn find_by_id(&self, id: u64) -> Result<Option<StoredObject>, AppError>;
     async fn delete_by_id(&self, id: u64) -> Result<(), AppError>;

@@ -10,14 +10,14 @@ use super::super::entities::conversation_summaries;
 use crate::domain::memory::{
     ALLOWED_SUMMARY_TYPES, ConversationSummary, NewSummary, ROLLING_GENERAL_SUMMARY,
 };
-use crate::domain::summary::SummaryRepository;
+use crate::domain::summary::SummaryRepoT;
 use crate::shared::error::AppError;
 
-pub struct SeaOrmConversationSummaryRepository {
+pub struct ConversationSummaryRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmConversationSummaryRepository {
+impl ConversationSummaryRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -41,7 +41,7 @@ fn map_summary(m: conversation_summaries::Model) -> ConversationSummary {
 }
 
 #[async_trait]
-impl SummaryRepository for SeaOrmConversationSummaryRepository {
+impl SummaryRepoT for ConversationSummaryRepo {
     async fn find_latest_by_conversation(
         &self,
         conversation_id: u64,

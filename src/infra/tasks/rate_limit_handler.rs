@@ -9,7 +9,7 @@ use tracing::warn;
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::user::user::UserStatus;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 
 /// 速率限制/暴力破解防护处理的配置。
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl Default for RateLimitConfig {
 /// Uses in-memory state. On lock, updates the user's status via `UserRepository`.
 pub struct RateLimitHandler {
     config: RateLimitConfig,
-    user_repo: Arc<dyn UserRepository>,
+    user_repo: Arc<dyn UserRepoT>,
     /// username → list of failure timestamps
     failures: RwLock<HashMap<String, Vec<Instant>>>,
     /// username → locked_until Instant
@@ -45,7 +45,7 @@ pub struct RateLimitHandler {
 }
 
 impl RateLimitHandler {
-    pub fn new(config: RateLimitConfig, user_repo: Arc<dyn UserRepository>) -> Self {
+    pub fn new(config: RateLimitConfig, user_repo: Arc<dyn UserRepoT>) -> Self {
         Self {
             config,
             user_repo,

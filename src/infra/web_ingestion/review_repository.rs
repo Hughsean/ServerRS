@@ -2,7 +2,7 @@ use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::event_types::{aggregate, event as ev};
 use crate::domain::web_ingestion::review::{
     KnowledgeReviewAuditEntry, KnowledgeReviewDetail, KnowledgeReviewFilter, KnowledgeReviewItem,
-    KnowledgeReviewPage, KnowledgeReviewRepository, NewReviewPublishRequest, ReviewPublishRequest,
+    KnowledgeReviewPage, KnowledgeReviewRepoT, NewReviewPublishRequest, ReviewPublishRequest,
 };
 use crate::domain::web_ingestion::status::{publish_status, run_stage, run_status};
 use crate::infra::db::entities::{
@@ -125,7 +125,7 @@ impl SeaOrmKnowledgeReviewRepository {
     }
 }
 #[async_trait]
-impl KnowledgeReviewRepository for SeaOrmKnowledgeReviewRepository {
+impl KnowledgeReviewRepoT for SeaOrmKnowledgeReviewRepository {
     async fn list(
         &self,
         filter: KnowledgeReviewFilter,

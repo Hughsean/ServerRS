@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use crate::domain::llm::EmbeddingProvider;
-use crate::domain::rag::RAGRepository;
-use crate::domain::vector_store::VectorStore;
+use crate::domain::rag::RAGRepoT;
+use crate::domain::vector_store::VectorStoreT;
 use crate::domain::web_ingestion::distiller::KnowledgeDistiller;
 use crate::domain::web_ingestion::fetcher::WebContentFetcher;
 use crate::domain::web_ingestion::repository::*;
@@ -17,24 +17,24 @@ use crate::shared::config::{EmbeddingConfig, WebIngestionConfig};
 /// All dependencies a handler may need. Cheap to clone (everything is `Arc`).
 #[derive(Clone)]
 pub struct PipelineContext {
-    pub source_repo: Arc<dyn WebSourceRepository>,
-    pub source_url_repo: Arc<dyn WebSourceUrlRepository>,
-    pub crawl_job_repo: Arc<dyn WebCrawlJobRepository>,
-    pub page_repo: Arc<dyn WebPageRepository>,
-    pub run_repo: Arc<dyn IngestionRunRepository>,
-    pub publish_repo: Arc<dyn PublishRecordRepository>,
-    pub chunk_manifest_repo: Arc<dyn ChunkManifestRepository>,
-    pub vector_manifest_repo: Arc<dyn VectorManifestRepository>,
-    pub outbox_repo: Arc<dyn OutboxRepository>,
-    pub audit_repo: Arc<dyn AuditLogRepository>,
+    pub source_repo: Arc<dyn WebSourceRepoT>,
+    pub source_url_repo: Arc<dyn WebSourceUrlRepoT>,
+    pub crawl_job_repo: Arc<dyn WebCrawlJobRepoT>,
+    pub page_repo: Arc<dyn WebPageRepoT>,
+    pub run_repo: Arc<dyn IngestionRunRepoT>,
+    pub publish_repo: Arc<dyn PublishRecordRepoT>,
+    pub chunk_manifest_repo: Arc<dyn ChunkManifestRepoT>,
+    pub vector_manifest_repo: Arc<dyn VectorManifestRepoT>,
+    pub outbox_repo: Arc<dyn OutboxRepoT>,
+    pub audit_repo: Arc<dyn AuditLogRepoT>,
     /// RAG knowledge store (knowledge_documents / knowledge_chunks / embeddings).
-    pub rag_repo: Arc<dyn RAGRepository>,
+    pub rag_repo: Arc<dyn RAGRepoT>,
     pub fetcher: Arc<dyn WebContentFetcher>,
     pub distiller: Arc<dyn KnowledgeDistiller>,
     /// Embedding provider — MUST be separate from the distill chat LLM.
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
     /// Optional Qdrant-backed vector store. None → Qdrant disabled.
-    pub vector_store: Option<Arc<dyn VectorStore>>,
+    pub vector_store: Option<Arc<dyn VectorStoreT>>,
     pub config: WebIngestionConfig,
     /// Real embedding config — source of truth for embedding model / dimension
     /// used in run_key/version_key (§5.6). NEVER use the distill model here.

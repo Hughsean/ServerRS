@@ -109,7 +109,7 @@ pub enum AgentPolicy {
 
 /// 持久化代理事件的端口。
 #[async_trait]
-pub trait AgentEventRepository: Send + Sync {
+pub trait AgentEventRepoT: Send + Sync {
     /// 持久化新代理事件并返回完整填充的记录。
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent;
 }

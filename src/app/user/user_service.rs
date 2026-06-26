@@ -2,20 +2,20 @@ use std::sync::Arc;
 
 use crate::domain::user::user::{User, UserRole, UserStatus, UserUpdate};
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile};
-use crate::domain::user::user_profile_repository::UserProfileRepository;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::shared::error::AppError;
 
 /// Unified user + profile operations.  Replaces 5 separate use-case files.
 pub struct UserService {
-    user_repo: Arc<dyn UserRepository>,
-    profile_repo: Arc<dyn UserProfileRepository>,
+    user_repo: Arc<dyn UserRepoT>,
+    profile_repo: Arc<dyn UserProfileRepoT>,
 }
 
 impl UserService {
     pub fn new(
-        user_repo: Arc<dyn UserRepository>,
-        profile_repo: Arc<dyn UserProfileRepository>,
+        user_repo: Arc<dyn UserRepoT>,
+        profile_repo: Arc<dyn UserProfileRepoT>,
     ) -> Self {
         Self {
             user_repo,

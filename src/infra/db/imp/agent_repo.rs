@@ -6,13 +6,13 @@ use sea_orm::{
 };
 
 use super::super::entities::agent_events;
-use crate::domain::agent::{AgentEvent, AgentEventRepository, NewAgentEvent};
+use crate::domain::agent::{AgentEvent, AgentEventRepoT, NewAgentEvent};
 
-pub struct SeaOrmAgentEventRepository {
+pub struct AgentEventRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmAgentEventRepository {
+impl AgentEventRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -33,7 +33,7 @@ fn from_model(model: agent_events::Model) -> AgentEvent {
 }
 
 #[async_trait]
-impl AgentEventRepository for SeaOrmAgentEventRepository {
+impl AgentEventRepoT for AgentEventRepo {
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent {
         let now = Utc::now().naive_utc();
 
@@ -58,7 +58,7 @@ impl AgentEventRepository for SeaOrmAgentEventRepository {
     }
 }
 
-impl SeaOrmAgentEventRepository {
+impl AgentEventRepo {
     /// Retrieve all agent events for a given user, ordered by created_at descending.
     pub async fn find_by_user_id(&self, user_id: u64) -> Vec<AgentEvent> {
         let rows = agent_events::Entity::find()

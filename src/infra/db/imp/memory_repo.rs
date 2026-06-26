@@ -10,15 +10,15 @@ use tracing::warn;
 use super::super::entities::{user_memories, user_memory_evidence};
 
 use crate::domain::memory::{
-    ALLOWED_MEMORY_TYPES, MemoryRepository, NewMemory, NewMemoryEvidence, UserMemory,
+    ALLOWED_MEMORY_TYPES, MemoryRepoT, NewMemory, NewMemoryEvidence, UserMemory,
 };
 use crate::shared::error::AppError;
 
-pub struct SeaOrmMemoryRepository {
+pub struct MemoryRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmMemoryRepository {
+impl MemoryRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -140,7 +140,7 @@ where
 }
 
 #[async_trait]
-impl MemoryRepository for SeaOrmMemoryRepository {
+impl MemoryRepoT for MemoryRepo {
     async fn save_memory_with_evidence(
         &self,
         memory: NewMemory,

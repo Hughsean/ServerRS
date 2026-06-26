@@ -32,7 +32,7 @@ pub struct UserDiaryUpdate {
 }
 
 #[async_trait]
-pub trait DiaryRepository: Send + Sync {
+pub trait DiaryRepoT: Send + Sync {
     async fn save(&self, diary: NewUserDiary) -> Result<UserDiary, AppError>;
     async fn find_by_id(&self, id: u64) -> Result<Option<UserDiary>, AppError>;
     async fn find_by_user_id(

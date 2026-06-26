@@ -2,17 +2,17 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::domain::auth::refresh_token_store::RefreshTokenStore;
+use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::shared::error::AppError;
 
 use super::super::entities::refresh_tokens;
 
-pub struct SeaOrmRefreshTokenStore {
+pub struct RefreshTokenStoreImpl {
     db: DatabaseConnection,
     refresh_ttl_secs: u64,
 }
 
-impl SeaOrmRefreshTokenStore {
+impl RefreshTokenStoreImpl {
     pub fn new(db: DatabaseConnection, refresh_ttl_secs: u64) -> Self {
         Self {
             db,
@@ -37,7 +37,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl RefreshTokenStore for SeaOrmRefreshTokenStore {
+impl RefreshTokenStoreT for RefreshTokenStoreImpl {
     async fn store(&self, user_id: u64, token_hash: String) -> Result<(), AppError> {
         let token_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().naive_utc();

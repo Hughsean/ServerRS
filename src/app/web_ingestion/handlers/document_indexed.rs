@@ -13,7 +13,7 @@ use crate::app::web_ingestion::hash;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::services::terminal_events;
 use crate::app::web_ingestion::state_machine_adapter as sm;
-use crate::domain::vector_store::{VectorPoint, VectorStore};
+use crate::domain::vector_store::{VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::{
     DomainEvent, KnowledgeChunkManifest, NewAuditLog, NewVectorManifest,
@@ -203,7 +203,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 #[allow(clippy::too_many_arguments)]
 async fn upsert_points(
     ctx: &PipelineContext,
-    vs: &Arc<dyn VectorStore>,
+    vs: &Arc<dyn VectorStoreT>,
     collection: &str,
     dimension: usize,
     run_id: u64,

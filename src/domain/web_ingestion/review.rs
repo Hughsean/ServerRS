@@ -78,7 +78,7 @@ pub struct ReviewPublishRequest {
 }
 
 #[async_trait]
-pub trait KnowledgeReviewRepository: Send + Sync {
+pub trait KnowledgeReviewRepoT: Send + Sync {
     async fn list(
         &self,
         filter: KnowledgeReviewFilter,

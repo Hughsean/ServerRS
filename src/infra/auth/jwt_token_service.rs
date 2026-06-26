@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::auth::token_service::{
-    AccessTokenClaims, RefreshTokenClaims, SignatureClaims, TokenService,
+    AccessTokenClaims, RefreshTokenClaims, SignatureClaims, TokenServiceT,
 };
 use crate::shared::error::AppError;
 
@@ -99,7 +99,7 @@ impl JwtTokenService {
     }
 }
 
-impl TokenService for JwtTokenService {
+impl TokenServiceT for JwtTokenService {
     fn issue_access(&self, user_id: u64, username: &str, role: &str) -> Result<String, AppError> {
         let now = Self::now_seconds()?;
         let claims = JwtClaims {
