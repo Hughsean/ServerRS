@@ -19,7 +19,7 @@ use crate::shared::error::AppError;
 
 // ── AgentRuntimeSettings ─────────────────────────────────────────────────
 
-/// Runtime configuration for the agent, derived from `AppConfig`.
+/// AgentRuntime配置，派生自 `AppConfig`。
 #[derive(Debug, Clone)]
 pub struct AgentRuntimeSettings {
     pub agent_enabled: bool,
@@ -37,9 +37,9 @@ pub struct AgentRuntimeSettings {
 }
 
 impl AgentRuntimeSettings {
-    /// Returns `Some(ReasoningConfig { enabled: false })` when reasoning is disabled,
-    /// and `None` when reasoning is enabled (Ollama default). Sending `None` means
-    /// the serialised JSON simply omits the `reasoning` field.
+    /// 当推理被禁用时返回 `Some(ReasoningConfig { enabled: false })`，
+    /// 当推理启用时返回 `None`（Ollama 默认行为）。发送 `None` 表示
+    /// 序列化后的 JSON 会直接省略 `reasoning` 字段。
     pub fn reasoning_config(&self) -> Option<ReasoningConfig> {
         if self.enable_reasoning {
             None
@@ -72,46 +72,46 @@ impl Default for AgentRuntimeSettings {
 // AgentTool trait
 // ---------------------------------------------------------------------------
 
-/// A callable tool that the agent runtime can invoke.
+/// AgentRuntime可调用的工具。
 ///
-/// This is intentionally kept separate from `LlmTool` so the agent layer can
-/// define tools that have access to the full `AgentContext` (user profile,
-/// memories, RAG chunks, etc.) rather than the narrower `ToolExecutionContext`.
+/// 这里有意与 `LlmTool` 保持分离，使Agent可以
+/// 定义能够访问完整 `AgentContext`（用户画像、
+/// 记忆、RAG 片段等）的工具，而不是只能访问较窄的 `ToolExecutionContext`。
 #[async_trait::async_trait]
 pub trait AgentTool: Send + Sync {
-    /// Unique tool name (must match the name in `ToolDefinition`).
+    /// 唯一的工具名称（必须与 `ToolDefinition` 中的名称匹配）。
     fn name(&self) -> &str;
 
-    /// Human-readable description.
+    /// 面向用户可读的描述。
     fn description(&self) -> &str;
 
-    /// JSON Schema describing the accepted arguments.
+    /// 描述可接受参数的 JSON Schema。
     fn parameters(&self) -> Value;
 
-    /// Execute the tool.
+    /// 执行工具。
     ///
-    /// `context` provides the full agent context for this turn so the tool
-    /// can make decisions based on the user's profile, memories, etc.
+    /// `context` 提供本轮的完整 Agent 上下文，因此工具
+    /// 可以基于用户画像、记忆等做出决策。
     async fn execute(&self, context: &AgentContext, args: Value) -> Result<String, AppError>;
 }
 
 // ---------------------------------------------------------------------------
-// AgentResponse
+// Agent响应
 // ---------------------------------------------------------------------------
 
-/// Structured result produced by the agent runtime after processing one turn.
+/// AgentRuntime处理一轮对话后生成的结构化结果。
 #[derive(Debug, Clone)]
 pub struct AgentResponse {
-    /// The final textual reply sent back to the user.
+    /// 返回给用户的最终文本回复。
     pub reply: String,
-    /// Trace of every tool that was invoked during this turn.
+    /// 本轮调用过的每个工具的追踪记录。
     pub tool_calls: Vec<ToolTrace>,
-    /// IDs of persisted messages, available after persist_messages succeeds.
+    /// 已持久化消息的 ID，在 persist_messages 成功后可用。
     pub user_message_id: Option<u64>,
     pub assistant_message_id: Option<u64>,
 }
 
-/// Record of a single tool invocation within a turn.
+/// 一次会话轮次中单个工具调用的记录。
 #[derive(Debug, Clone)]
 pub struct ToolTrace {
     pub tool_name: String,
@@ -125,19 +125,19 @@ struct PersistedTurn {
 }
 
 // ---------------------------------------------------------------------------
-// Tool call arguments helpers
+// 工具调用参数辅助函数
 // ---------------------------------------------------------------------------
 
-/// Normalise tool-call arguments so that tools always receive a JSON Object.
+/// 规范化工具调用参数，使工具始终收到 JSON Object。
 ///
-/// OpenAI-compatible APIs (including Ollama) often embed the arguments as a
-/// JSON-encoded string inside `function.arguments` instead of a native object.
-/// This function handles:
+/// OpenAI 兼容 API（包括 Ollama）通常会把参数作为
+/// JSON 编码字符串嵌入 `function.arguments`，而不是使用原生对象。
+/// 此函数处理以下情况：
 ///
-/// - `Value::String`  → parse the inner JSON
-/// - `Value::Null`    → return `{}`
-/// - `Value::Object`  → pass through unchanged
-/// - other            → pass through unchanged (with a warn)
+/// - `Value::String`  → 解析内部 JSON
+/// - `Value::Null`    → 返回 `{}`
+/// - `Value::Object`  → 原样传递
+/// - other            → 原样传递（并记录 warn）
 pub fn normalize_tool_arguments(raw: &Value) -> Value {
     match raw {
         Value::String(s) => {
@@ -170,8 +170,8 @@ pub fn normalize_tool_arguments(raw: &Value) -> Value {
     }
 }
 
-/// Check whether an LLM error message indicates a tool-call-arguments
-/// compatibility problem.
+/// 检查 LLM 错误消息是否表示工具调用参数的
+/// 兼容性问题。
 pub fn is_tool_call_argument_error(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     lower.contains("invalid tool call arguments")
@@ -183,15 +183,15 @@ pub fn is_tool_call_argument_error(msg: &str) -> bool {
 // AgentRuntime
 // ---------------------------------------------------------------------------
 
-/// High-level agent runtime that orchestrates a single message-response turn.
+/// Top AgentRuntime，负责编排单轮消息-回复流程。
 ///
-/// Flow:
-/// 1. Build `AgentContext` (summary, memories, RAG chunks, profile).
-/// 2. Run the LLM with tool definitions.
-/// 3. Extract tool calls from the LLM response and execute them.
-/// 4. Feed tool results back to the LLM for a final response.
-/// 5. Persist messages.
-/// 6. Spawn async memory extraction.
+/// 流程：
+/// 1. 构建 `AgentContext`（摘要、记忆、RAG 片段、用户画像）。
+/// 2. 使用工具定义运行 LLM。
+/// 3. 从 LLM 响应中提取工具调用并执行它们。
+/// 4. 将工具结果回传给 LLM，以生成最终响应。
+/// 5. 持久化消息。
+/// 6. 启动异步记忆提取。
 pub struct AgentRuntime {
     llm: Arc<dyn LlmProvider>,
     memory_service: Arc<MemoryService>,
@@ -204,8 +204,8 @@ pub struct AgentRuntime {
     tools: Vec<Arc<dyn AgentTool>>,
     settings: AgentRuntimeSettings,
 
-    /// When the last memory extraction failed (Instant::now() at failure time).
-    /// Used to throttle extraction after repeated failures.
+    /// 上一次记忆提取失败的时间（失败时的 Instant::now()）。
+    /// 用于在重复失败后对提取操作进行限流。
     last_extraction_failure: Arc<Mutex<Option<Instant>>>,
 }
 
@@ -237,7 +237,7 @@ impl AgentRuntime {
         }
     }
 
-    /// Process a single user message and return the agent's response.
+    /// 处理单条用户消息并返回 Agent 的响应。
     pub async fn respond(
         &self,
         user_id: u64,
@@ -252,7 +252,7 @@ impl AgentRuntime {
             .get_or_create(user_id)
             .await?
             .version;
-        // ── Step 3: Build agent context ──────────────────────────
+        // ── 步骤 3：构建 Agent 上下文 ──────────────────────────
         let profile = self
             .user_profile_repo
             .find_by_user_id(user_id)
@@ -305,7 +305,7 @@ impl AgentRuntime {
             )
             .await;
 
-        // ── Step 4: LLM chat with tools ──────────────────────────
+        // ── 步骤 4：使用工具进行 LLM 聊天 ──────────────────────────
         let registered_tools_available = !self.tools.is_empty();
         let tools_available = self.settings.agent_enabled
             && registered_tools_available
@@ -427,13 +427,13 @@ impl AgentRuntime {
                 }
             };
 
-            // ── No tool calls returned: use content ─────────────
+            // ── 未返回工具调用：使用内容 ─────────────
             if response.tool_calls.is_empty() {
                 final_content = normalize_final_content(response.content);
                 break;
             }
 
-            // ── Tool calls returned but not allowed: ignore them ─
+            // ── 返回了工具调用但当前不允许：忽略它们 ─
             if !tools_allowed {
                 warn!(
                     ?conversation_id,
@@ -452,7 +452,7 @@ impl AgentRuntime {
                 break;
             }
 
-            // ── Execute tool calls ───────────────────────────────
+            // ── 执行工具调用 ───────────────────────────────
             info!(
                 tool_call_count = response.tool_calls.len(),
                 "LLM returned tool calls"
@@ -541,8 +541,8 @@ impl AgentRuntime {
             messages_with_tool_results.extend(tool_results);
             depth += 1;
 
-            // After executing tools, if depth is exhausted, do one final
-            // round without tools to produce a natural-language summary.
+            // 执行工具后，如果深度已耗尽，则再进行一次
+            // 不带工具的最终轮次，以生成自然语言摘要。
             if !tools_allowed_for_round(
                 self.settings.agent_enabled,
                 registered_tools_available,
@@ -556,7 +556,7 @@ impl AgentRuntime {
             }
         }
 
-        // ── Step 7: Persist messages ─────────────────────────────
+        // ── 步骤 7：持久化消息 ─────────────────────────────
         let persisted = self
             .persist_messages(
                 user_id,
@@ -566,9 +566,9 @@ impl AgentRuntime {
                 &emotion,
             )
             .await?;
-        // Risk persist deferred to TurnClosedEvent
+        // 风险持久化延后到 TurnClosedEvent
 
-        // ── Step 8: Async memory extraction ──────────────────────
+        // ── 步骤 8：异步记忆提取 ──────────────────────
         if self.settings.agent_enabled
             && self.settings.memory_enabled
             && self.settings.memory_extraction_async
@@ -591,7 +591,7 @@ impl AgentRuntime {
         })
     }
 
-    // ── Private helpers ──────────────────────────────────────────
+    // ── 私有辅助函数 ──────────────────────────────────────────
 
     fn prepare_recent_messages(
         &self,
@@ -609,7 +609,7 @@ impl AgentRuntime {
         if let Some(last_user_message) = messages.iter_mut().rev().find(|m| m.role == "user") {
             if last_user_message.content.trim() == user_message.trim() {
                 last_user_message.content = content;
-                // Apply max_context_messages limit (keep system messages, truncate the rest)
+                // 应用 max_context_messages 限制（保留 system 消息，截断其余消息）
                 return self.apply_context_limit(messages);
             }
         }
@@ -624,7 +624,7 @@ impl AgentRuntime {
         self.apply_context_limit(messages)
     }
 
-    /// Keep system messages and retain only the most recent N non-system messages.
+    /// 保留 system 消息，并仅保留最近 N 条非 system 消息。
     fn apply_context_limit(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         let limit = self.settings.max_context_messages;
         if limit == 0 || messages.is_empty() {
@@ -649,8 +649,8 @@ impl AgentRuntime {
         result
     }
 
-    /// Perform one final LLM call without tools, returning the reply text.
-    /// Used as a fallback when tools are exhausted or unavailable.
+    /// 执行一次不带工具的最终 LLM 调用，并返回回复文本。
+    /// 当工具已耗尽或不可用时作为回退使用。
     async fn final_chat_without_tools(
         &self,
         mut messages: Vec<ChatMessage>,
@@ -688,7 +688,7 @@ impl AgentRuntime {
         }
     }
 
-    /// Execute a single tool by name, returning its output.
+    /// 按名称执行单个工具，并返回其输出。
     async fn execute_tool(
         &self,
         context: &AgentContext,
@@ -766,7 +766,7 @@ impl AgentRuntime {
         })
     }
 
-    /// Fire-and-forget task: extract memories via MemoryService with retry + throttle.
+    /// 即发即忘任务：通过 MemoryService 提取记忆，带重试和限流。
     fn spawn_memory_extraction(
         &self,
         user_id: u64,
@@ -776,7 +776,7 @@ impl AgentRuntime {
         assistant_reply: &str,
         task_epoch: u64,
     ) {
-        // Throttle: if the last extraction failed <30s ago, skip this turn
+        // 限流：如果上一次提取失败距今不到 30 秒，则跳过本轮
         {
             if let Ok(guard) = self.last_extraction_failure.lock() {
                 if let Some(last_fail) = *guard {
@@ -820,7 +820,7 @@ impl AgentRuntime {
 
             let Some(cid) = conversation_id else { return };
 
-            // Attempt extraction with a single retry on failure
+            // 尝试提取，失败时重试一次
             let attempt = || async {
                 memory_service
                     .extract_and_save_at_version(
@@ -842,7 +842,7 @@ impl AgentRuntime {
                         error = %e,
                         "memory extraction failed (will retry once)"
                     );
-                    // Single retry with a small backoff
+                    // 使用较短退避进行单次重试
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     attempt().await
                 }
@@ -869,7 +869,7 @@ impl AgentRuntime {
     }
 }
 
-/// Truncate a string for event recording, keeping at most `max_chars` characters.
+/// 截断用于事件记录的字符串，最多保留 `max_chars` 个字符。
 fn truncate_for_event(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
@@ -879,11 +879,11 @@ fn truncate_for_event(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Check whether tools are allowed for the current round.
-/// Tools are only allowed when:
-/// - The agent is enabled
-/// - Tools are registered
-/// - The depth has not yet reached max_tool_depth
+/// 检查当前轮次是否允许使用工具。
+/// 仅在以下条件满足时才允许使用工具：
+/// - Agent 已启用
+/// - 已注册工具
+/// - 深度尚未达到 max_tool_depth
 fn tools_allowed_for_round(
     agent_enabled: bool,
     have_tools: bool,
@@ -893,7 +893,7 @@ fn tools_allowed_for_round(
     agent_enabled && have_tools && depth < max_tool_depth
 }
 
-/// Remove serialized tool calls that some models echo before the final answer.
+/// 移除某些模型在最终答案前回显的序列化工具调用。
 fn strip_leading_tool_call_artifacts(content: &str) -> &str {
     const CLOSING_TAG: &str = "</tool_call>";
     const OPENING_MARKERS: [&str; 3] = ["<tool_call>", "<|tool_call|>", "_icall_"];
@@ -920,7 +920,7 @@ fn strip_leading_tool_call_artifacts(content: &str) -> &str {
     remaining
 }
 
-/// Ensure final content is clean and never empty. Return a Chinese fallback if needed.
+/// 确保最终内容干净且非空；必要时返回中文回退文本。
 fn normalize_final_content(content: String) -> String {
     let content = strip_leading_tool_call_artifacts(&content);
     if content.is_empty() {
@@ -932,7 +932,7 @@ fn normalize_final_content(content: String) -> String {
 }
 
 impl AgentRuntime {
-    /// Persist an agent event for observability / auditing.
+    /// 持久化Agent Event，用于可观测性 / 审计。
     async fn log_event(
         &self,
         user_id: u64,
@@ -954,7 +954,7 @@ impl AgentRuntime {
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+// ── 测试 ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1032,19 +1032,19 @@ mod tests {
 
     #[test]
     fn tools_allowed_depth_zero_max_zero() {
-        // max_tool_depth=0 means no tools, even at depth 0
+        // max_tool_depth=0 表示不允许使用工具，即使 depth 为 0
         assert!(!tools_allowed_for_round(true, true, 0, 0));
     }
 
     #[test]
     fn tools_allowed_depth_zero_max_one() {
-        // depth 0 < max 1 → allowed
+        // depth 0 < max 1 → 允许
         assert!(tools_allowed_for_round(true, true, 0, 1));
     }
 
     #[test]
     fn tools_allowed_depth_equals_max() {
-        // depth 1 not < max 1 → NOT allowed
+        // depth 1 不小于 max 1 → 不允许
         assert!(!tools_allowed_for_round(true, true, 1, 1));
     }
 
@@ -1095,22 +1095,22 @@ mod tests {
         assert_eq!(normalize_final_content(content.into()), content);
     }
 
-    // ── Runtime behavior tests (via integration test helpers) ─────────
-    // These tests verify that the main AgentRuntime loop correctly handles
-    // max_tool_depth=0 and max_tool_depth=1 scenarios. Because constructing
-    // a full AgentRuntime requires many mock dependencies (which are fragile
-    // to trait signature drift), these tests live in the integration test
-    // suite: tests/common/mod.rs → agent_depth_behavior_tests.
+    // ── 运行时行为测试（通过集成测试辅助模块） ─────────
+    // 这些测试验证主 AgentRuntime 循环能够正确处理
+    // max_tool_depth=0 和 max_tool_depth=1 场景。由于构造
+    // 完整的 AgentRuntime 需要许多 mock 依赖（这些依赖容易
+    // 因 trait 签名漂移而变脆弱），这些测试放在集成测试
+    // 套件中：tests/common/mod.rs → agent_depth_behavior_tests。
 
-    /// Verify: max_tool_depth=0 → tools_allowed_for_round returns false,
-    /// and build_system_message with tools_available=false does not claim
-    /// tool capability.
+    /// 验证：max_tool_depth=0 → tools_allowed_for_round 返回 false，
+    /// 且 build_system_message 在 tools_available=false 时不会声明
+    /// 工具能力。
     #[test]
     fn max_tool_depth_zero_blocks_tools_entirely() {
-        // tools_allowed_for_round returns false at depth 0 when max=0
+        // tools_allowed_for_round 在 max=0 且 depth=0 时返回 false
         assert!(!tools_allowed_for_round(true, true, 0, 0));
 
-        // With max_tool_depth=0, tools_available computes to false
+        // 当 max_tool_depth=0 时，tools_available 计算结果为 false
         let agent_enabled = true;
         let have_tools = true;
         let max_tool_depth = 0;
@@ -1121,28 +1121,28 @@ mod tests {
         );
     }
 
-    /// Verify: max_tool_depth=1 → one round of tools allowed, then exhausted.
+    /// 验证：max_tool_depth=1 → 允许一轮工具调用，然后停止。
     #[test]
     fn max_tool_depth_one_allows_one_round_then_stops() {
-        // tools_allowed_for_round: depth 0 < max 1 → true
+        // tools_allowed_for_round：depth 0 < max 1 → true
         assert!(tools_allowed_for_round(true, true, 0, 1));
-        // After one round: depth 1 not < max 1 → false
+        // 一轮之后：depth 1 不小于 max 1 → false
         assert!(!tools_allowed_for_round(true, true, 1, 1));
 
-        // tools_available computes to true when max_tool_depth=1
+        // 当 max_tool_depth=1 时，tools_available 计算结果为 true
         let tools_available = true && true && 1 > 0;
         assert!(tools_available);
     }
 
-    /// Verify: system prompt does not claim tool capability when unavailable.
+    /// 验证：工具不可用时，系统提示词不会声明工具能力。
     #[test]
     fn system_prompt_without_tools_no_tool_claims() {
-        // Construct a minimal AgentRuntime just for testing build_system_message
-        // We test the property statically: the tools_available flag controls
-        // the prompt content. The actual build_system_message method is
-        // exercised in integration tests.
+        // 构造一个最小 AgentRuntime，仅用于测试 build_system_message
+        // 我们以静态方式测试该属性：tools_available 标志控制
+        // 提示词内容。实际的 build_system_message 方法会在
+        // 集成测试中覆盖。
         let agent_enabled = true;
-        let have_tools = false; // no registered tools
+        let have_tools = false; // 没有已注册工具
         let tools_available = agent_enabled && have_tools;
         assert!(!tools_available);
     }
