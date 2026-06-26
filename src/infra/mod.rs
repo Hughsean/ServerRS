@@ -1,7 +1,7 @@
 pub mod auth;
+pub mod db;
 pub mod detector;
 pub mod llm;
-pub mod persistence;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod ssh_tunnel;

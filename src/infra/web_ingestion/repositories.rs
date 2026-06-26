@@ -12,7 +12,7 @@ use serde_json::Value as JsonValue;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repository::*;
 use crate::domain::web_ingestion::status::publish_status;
-use crate::infra::persistence::entities::*;
+use crate::infra::db::entities::*;
 
 fn map_db_err(e: sea_orm::DbErr) -> WebIngestionError {
     WebIngestionError::Internal(e.to_string())

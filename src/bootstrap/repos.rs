@@ -18,22 +18,22 @@ use crate::domain::user::user_context_control::UserContextControlRepository;
 use crate::domain::user::user_context_version::UserContextVersionRepository;
 use crate::domain::user::user_profile_repository::UserProfileRepository;
 use crate::domain::user::user_repository::UserRepository;
-use crate::infra::persistence::implementations::seaorm_agent_repository::SeaOrmAgentEventRepository;
-use crate::infra::persistence::implementations::seaorm_community_repository::SeaOrmCommunityRepository;
-use crate::infra::persistence::implementations::seaorm_conversation_repository::SeaOrmConversationRepository;
-use crate::infra::persistence::implementations::seaorm_conversation_summary_repository::SeaOrmConversationSummaryRepository;
-use crate::infra::persistence::implementations::seaorm_depression_repository::SeaOrmDepressionRepository;
-use crate::infra::persistence::implementations::seaorm_diary_repository::SeaOrmDiaryRepository;
-use crate::infra::persistence::implementations::seaorm_memory_repository::SeaOrmMemoryRepository;
-use crate::infra::persistence::implementations::seaorm_music_repository::SeaOrmMusicRepository;
-use crate::infra::persistence::implementations::seaorm_psychology_repository::SeaOrmPsychologyRepository;
-use crate::infra::persistence::implementations::seaorm_rag_repository::SeaOrmRAGRepository;
-use crate::infra::persistence::implementations::seaorm_risk_repository::SeaOrmRiskRepository;
-use crate::infra::persistence::implementations::seaorm_stored_object_repository::SeaOrmStoredObjectRepository;
-use crate::infra::persistence::implementations::seaorm_user_context_control_repository::SeaOrmUserContextControlRepository;
-use crate::infra::persistence::implementations::seaorm_user_context_version_repository::SeaOrmUserContextVersionRepository;
-use crate::infra::persistence::implementations::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
-use crate::infra::persistence::implementations::seaorm_user_repository::SeaOrmUserRepository;
+use crate::infra::db::imp::seaorm_agent_repository::SeaOrmAgentEventRepository;
+use crate::infra::db::imp::seaorm_community_repository::SeaOrmCommunityRepository;
+use crate::infra::db::imp::seaorm_conversation_repository::SeaOrmConversationRepository;
+use crate::infra::db::imp::seaorm_conversation_summary_repository::SeaOrmConversationSummaryRepository;
+use crate::infra::db::imp::seaorm_depression_repository::SeaOrmDepressionRepository;
+use crate::infra::db::imp::seaorm_diary_repository::SeaOrmDiaryRepository;
+use crate::infra::db::imp::seaorm_memory_repository::SeaOrmMemoryRepository;
+use crate::infra::db::imp::seaorm_music_repository::SeaOrmMusicRepository;
+use crate::infra::db::imp::seaorm_psychology_repository::SeaOrmPsychologyRepository;
+use crate::infra::db::imp::seaorm_rag_repository::SeaOrmRAGRepository;
+use crate::infra::db::imp::seaorm_risk_repository::SeaOrmRiskRepository;
+use crate::infra::db::imp::seaorm_stored_object_repository::SeaOrmStoredObjectRepository;
+use crate::infra::db::imp::seaorm_user_context_control_repository::SeaOrmUserContextControlRepository;
+use crate::infra::db::imp::seaorm_user_context_version_repository::SeaOrmUserContextVersionRepository;
+use crate::infra::db::imp::seaorm_user_profile_repository::SeaOrmUserProfileRepository;
+use crate::infra::db::imp::seaorm_user_repository::SeaOrmUserRepository;
 
 pub struct RepoGraph {
     pub user_repo: Arc<dyn UserRepository>,

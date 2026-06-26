@@ -10,7 +10,7 @@ use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user_repository::UserRepository;
 use crate::infra::auth::bcrypt_password_hasher::BcryptPasswordHasher;
 use crate::infra::auth::jwt_token_service::JwtTokenService;
-use crate::infra::persistence::implementations::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
+use crate::infra::db::imp::seaorm_refresh_token_store::SeaOrmRefreshTokenStore;
 use crate::shared::config::{AuthConfig as AppAuthConfig, JwtConfig};
 
 pub struct AuthGraph {

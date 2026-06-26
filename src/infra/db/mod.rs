@@ -1,3 +1,3 @@
 pub mod entities;
-pub mod implementations;
+pub mod imp;
 pub mod seaorm_db;

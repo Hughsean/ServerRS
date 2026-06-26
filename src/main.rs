@@ -26,10 +26,10 @@ use domain::risk::risk_detector::RiskDetector;
 use domain::storage::ObjectStorage;
 use domain::tasks::task_handler::TaskHandler;
 use domain::tasks::task_publisher::TaskPublisher;
+use infra::db::seaorm_db::init_db;
 use infra::detector::rule_based_detector::RuleBasedRiskDetector;
 use infra::llm::ollama_client::OllamaClient;
 use infra::llm::ollama_provider::OllamaProvider;
-use infra::persistence::seaorm_db::init_db;
 use infra::storage::local_storage::LocalObjectStorage;
 use infra::tasks::alert_handler::{AlertConfig, AlertHandler};
 use infra::tasks::in_memory_task_flow::{RetryingTaskPublisher, new_task_channel};
@@ -190,7 +190,9 @@ async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     use domain::vector_index::VectorIndexRepository;
 
     let vector_index_repo: Arc<dyn VectorIndexRepository> = Arc::new(
-        infra::persistence::implementations::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(db.clone()),
+        infra::db::imp::seaorm_vector_index_repository::SeaOrmVectorIndexRepository::new(
+            db.clone(),
+        ),
     );
 
     let vector_index: Option<Arc<VectorIndexService>> = vector_store.as_ref().map(|vs| {
