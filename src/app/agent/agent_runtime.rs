@@ -793,6 +793,12 @@ impl AgentRuntime {
             }
         }
 
+        debug!(
+            user_id,
+            ?conversation_id,
+            "启动异步记忆提取"
+        );
+
         let memory_service = Arc::clone(&self.memory_service);
         let user_text = user_message.to_string();
         let asst_text = assistant_reply.to_string();
@@ -847,7 +853,10 @@ impl AgentRuntime {
             };
 
             match result {
-                Ok(_) => {}
+                Ok(memories) => {
+                    let count = memories.len();
+                    debug!(user_id, ?conversation_id, count, "异步记忆提取完成");
+                }
                 Err(e) => {
                     warn!(
                         user_id,
