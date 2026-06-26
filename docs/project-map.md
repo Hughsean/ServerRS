@@ -1,4 +1,4 @@
-﻿ # ServerRS 项目地图 — 从入门到精通
+ # ServerRS 项目地图 — 从入门到精通
  
  > 作者：项目代码自动分析  
  > 目标：让一个完全不懂这个项目的人，看完这个文件就能知道  
@@ -8,14 +8,8 @@
  
  ## 一、这个项目到底是干啥的？
  
- **一句话版**：这是一个 AI 聊天机器人后端服务器。用户注册后，可以跟 AI 聊天，  
- AI 会记住用户说过的话、了解用户的性格和情绪、给用户推荐音乐、帮用户做抑郁评估、  
- 写日记、逛社区发帖子。管理员可以在后台管理用户、查看聊天中的风险内容、  
- 管理知识库文章和音乐曲库。
- 
- **正经版**：ServerRS（代号 Digital Companion）是一个用 **Rust** 语言写的  
- **Web 后端服务**，使用 Axum 框架提供 HTTP API，MySQL 存数据，  
- Ollama 启动本地大模型（Qwen2.5）做 AI 对话，Qdrant 做向量搜索。
+ **一句话版**：这是一个 AI 聊天机器人后端服务器。用户注册后，可以跟 AI 聊天，AI 会记住用户说过的话、了解用户的性格和情绪、给用户推荐音乐、帮用户做抑郁评估、写日记、逛社区发帖子。管理员可以在后台管理用户、查看聊天中的风险内容、管理知识库文章和音乐曲库。 
+ **正经版**：ServerRS（代号 Digital Companion）是一个用 **Rust** 语言写的 **Web 后端服务**，使用 Axum 框架提供 HTTP API，MySQL 存数据，Ollama 启动本地大模型（Qwen2.5）做 AI 对话，Qdrant 做向量搜索。
  
  ---
  
@@ -103,32 +97,37 @@
  ```rust
  #[tokio::main]
  async fn main() {
-     // 1. 加载配置
      let config = AppConfig::load();
-     // 2. 连接数据库
-     let db = init_db(...).await;
-     // 3. 构建数据仓库（Repository）
-     let repos = bootstrap::repos::build_repos(...);
-     // 4. 构建认证体系
-     let auth_graph = bootstrap::auth::build_auth(...);
-     // 5. 连接 LLM（Ollama）
-     let ollama_provider = OllamaProvider::new(...);
-     let embedding_provider = OllamaEmbeddingProvider::new(...);
-     // 6. 初始化各种 Service（业务服务）
-     let chat_service = ChatService::new(...);
-     let psychology = PsychologyService::new(...);
-     // ... 十几个 Service
-     // 7. 组装路由，启动服务器
-     let app = api::router::build_router(state);
-     axum::serve(listener, app).await;
+     init_tracing(&config.logging.level);
+     if let Err(err) = bootstrap::runtime::run(config).await {
+         tracing::error!(error = %err, "服务器运行出错");
+     }
+ }
+
+ fn init_tracing(_configured_level: &str) {
+     let timer = tracing_subscriber::fmt::time::OffsetTime::new(
+         time::UtcOffset::from_hms(8, 0, 0).expect("valid UTC+8 offset"),
+         time::macros::format_description!("[month]-[day] [hour]:[minute]:[second]"),
+     );
+     tracing_subscriber::fmt()
+         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+         .with_target(true)
+         .with_timer(timer)
+         .with_line_number(true)
+         .with_thread_ids(true)
+         .compact()
+         .init();
  }
  ```
- 
- 通俗理解：`main.rs` 就像开餐馆的**总厨**，负责：
- - 买菜进货（连接数据库、连 LLM）
- - 分配人手（创建各种 Service 和 Repository）
- - 设置菜单（注册路由）
- - 开门营业（启动 HTTP 服务器）
+
+ 通俗理解：`main.rs` 从 600+ 行精简到 33 行，现在只做三件事，就像**餐厅老板**：
+ - 检查预算（加载配置）
+ - 交代主厨（调用 `bootstrap::runtime::run`）
+ - 事后复盘（记录顶层错误）
+
+ 真正的"做菜"流程——连接数据库、构建服务、启动 HTTP 服务器——全部交给 `bootstrap::runtime` 的 **6 阶段流水线**：  
+ `Infra → Repos → Tasks → Vector → Services → HTTP`  
+ 每个阶段封装在独立的 bootstrap 模块中（详见 4.7 节）。
  
  ---
  
@@ -636,12 +635,15 @@
  
  ```
  src/bootstrap/
- ├── mod.rs
- ├── repos.rs       ★ 创建所有 Repository（数据仓库）
- ├── auth.rs        创建认证服务
- ├── qq_bot.rs      创建 QQ 机器人服务
- ├── state.rs       把所有 Service 打包成 AppState
- ├── tasks.rs       启动后台任务
+ ├── mod.rs          模块入口（声明所有子模块）
+ ├── repos.rs        ★ 创建所有 Repository（数据仓库）
+ ├── auth.rs         创建认证服务
+ ├── infra.rs        ★ 基础设施装配（SSH 隧道、数据库连接、LLM/Embedding Provider）
+ ├── tasks.rs        ★ 任务系统装配（任务发布器、Worker、限流/告警处理器）
+ ├── vector.rs       ★ 向量/RAG 装配（Embedding Provider、Qdrant 向量库、向量索引服务）
+ ├── state.rs        ★ 业务服务装配，把所有 Service 打包成 ServiceGraph
+ ├── runtime.rs      ★ 顶层编排（6 阶段顺序启动：Infra → Repos → Tasks → Vector → Services → HTTP）
+ ├── qq_bot.rs       创建 QQ 机器人服务（feature gate 控制）
  └── web_ingestion.rs  初始化知识摄入模块
  ```
  
@@ -877,47 +879,50 @@
  ---
  
  ## 七、文件依赖关系图（谁依赖谁）
- 
+
  ```
- main.rs
-   ├── bootstrap/     ← 装配所有组件
-   │   ├── repos.rs   → 依赖 infra/persistence/ 和 domain/*/ 接口
-   │   ├── auth.rs    → 依赖 domain/auth/ 和 infra/auth/
-   │   ├── state.rs   → 把所有 Service 打包
-   │   └── tasks.rs   → 启动后台任务（风险审计、摘要刷新等）
-   │
-   ├── api/           ← HTTP 层
-   │   ├── router.rs  → 引用 handlers/* 注册路由
-   │   ├── handlers/* → 调用 app/*_service 执行业务
-   │   └── middleware/ → 检查 JWT 身份
-   │
-   ├── app/           ← 业务逻辑层
-   │   ├── */*_service.rs  → 调用 domain/* 中的接口
-   │   └── agent/     → 调用 app/memory/, app/rag/, app/summary/, tools/
-   │
-   ├── domain/        ← 定义接口和数据结构（纯 Rust 结构体 + trait）
-   │   └── */         → 被 app/ 和 infra/ 双方引用
-   │
-	   └── infra/         ← 实现 domain 接口
-	       ├── persistence/ → 操作 MySQL（SeaORM）
-	       ├── llm/         → 调 Ollama API
-	       ├── tts/         → 调火山引擎语音 API
-	       ├── qq_bot/      → NapCat QQ 协议适配
-	       ├── vector_store/ → 操作 Qdrant
-	       └── detector/    → 风险检测规则
- 
+ main.rs (33 行)
+   └── bootstrap::runtime::run()    ← 6 阶段顺序启动
+        │
+        ├── ① bootstrap::infra      SSH 隧道、数据库连接、LLM/Embedding Provider
+        ├── ② bootstrap::repos      → 依赖 infra/persistence/ 和 domain/*/ 接口
+        ├── ③ bootstrap::tasks      任务系统装配（发布器、Worker、限流/告警）
+        ├── ④ bootstrap::vector     Embedding Provider、Qdrant 向量库、向量索引服务
+        ├── ⑤ bootstrap::state      构造所有 Service（Chat/Memory/RAG/Agent/...）
+        └── ⑥ API / HTTP Serve      Axum 路由、中间件、优雅关闭
+               │
+               ├── api/           ← HTTP 层
+               │   ├── router.rs  → 引用 handlers/* 注册路由
+               │   ├── handlers/* → 调用 app/*_service 执行业务
+               │   └── middleware/ → 检查 JWT 身份
+               │
+               ├── app/           ← 业务逻辑层
+               │   ├── */*_service.rs  → 调用 domain/* 中的接口
+               │   └── agent/     → 调用 app/memory/, app/rag/, app/summary/, tools/
+               │
+               ├── domain/        ← 定义接口和数据结构（纯 Rust 结构体 + trait）
+               │   └── */         → 被 app/ 和 infra/ 双方引用
+               │
+               └── infra/         ← 实现 domain 接口
+                   ├── persistence/ → 操作 MySQL（SeaORM）
+                   ├── llm/         → 调 Ollama API
+                   ├── tts/         → 调火山引擎语音 API
+                   ├── qq_bot/      → NapCat QQ 协议适配
+                   ├── vector_store/ → 操作 Qdrant（QdrantVectorStore）
+                   └── detector/    → 风险检测规则
+
  依赖方向（从右到左）：
    main.rs → bootstrap → api/app → domain ← infra
                       ↑                    ↑
                       └──  glue code ──────┘
  ```
- 
+
  **关键原则**：
  - `domain/` **不依赖** `app/` 或 `infra/`（纯接口层）
  - `infra/` **依赖** `domain/`（实现接口）
  - `app/` **依赖** `domain/`（调用接口）
  - `api/` **依赖** `app/`（调用服务）
- - `main.rs` **依赖** `bootstrap/`（组装一切）
+ - `main.rs` **依赖** `bootstrap::runtime`（顶层编排）
  
  ---
  
