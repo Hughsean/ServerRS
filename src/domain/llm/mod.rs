@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Core types ─────────────────────────────────────────────────────────────────
 
-/// 聊天消息 — 旧版 LlmClient 和新版 LlmProvider 均使用。
+/// 聊天消息。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
@@ -18,39 +18,11 @@ pub struct ChatMessage {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChatResponse {
-    pub choices: Vec<Choice>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Choice {
-    pub message: ChoiceMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChoiceMessage {
-    pub content: Option<String>,
-    pub tool_calls: Option<serde_json::Value>,
-}
-
-// ── Legacy LLM client trait (used by DiaryService for title generation) ──────
-
-#[async_trait]
-pub trait LlmClient: Send + Sync {
-    async fn chat(&self, messages: &[ChatMessage]) -> String;
-    async fn chat_raw(
-        &self,
-        messages: &[ChatMessage],
-        tools: Option<&[serde_json::Value]>,
-    ) -> Result<ChatResponse, String>;
-}
-
 pub trait PromptProvider: Send + Sync {
     fn get_prompt(&self, date_time: &str) -> String;
 }
 
-// ── New LlmProvider / EmbeddingProvider (Agent upgrade) ────────────────────────
+// ── LlmProvider / EmbeddingProvider ────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {

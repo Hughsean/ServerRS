@@ -2,36 +2,27 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::domain::llm::{LlmClient, LlmProvider};
+use crate::domain::llm::LlmProvider;
 use crate::infra::db::seaorm_db::init_db;
-use crate::infra::llm::ollama_client::OllamaClient;
 use crate::infra::llm::ollama_provider::OllamaProvider;
 use crate::infra::ssh_tunnel::SshTunnelManager;
 use crate::shared::config::AppConfig;
 
-/// SSH 隧道、数据库连接、LLM 客户端/Provider。
+/// SSH 隧道、数据库连接、LLM Provider。
 pub struct InfraContext {
     pub _ssh_manager: Option<SshTunnelManager>,
     pub db: DatabaseConnection,
-    pub ollama_client: Arc<dyn LlmClient>,
     pub ollama_provider: Arc<dyn LlmProvider>,
 }
 
 impl InfraContext {
-    /// 建立 SSH 隧道 → 数据库连接 → LLM Client + Provider。
+    /// 建立 SSH 隧道 → 数据库连接 → LLM Provider。
     pub async fn new(config: &AppConfig) -> Result<Self, std::io::Error> {
         let _ssh_manager = start_ssh_tunnels(config)?;
 
         let db = init_db(&config.database.url, config.database.max_connections)
             .await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-        let ollama_client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(
-            config.ollama.base_url.clone(),
-            config.ollama.model.clone(),
-            config.ollama.temperature,
-            config.ollama.top_p,
-        ));
 
         let ollama_provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::with_timeout(
             config.llm.base_url.clone(),
@@ -42,7 +33,6 @@ impl InfraContext {
         Ok(Self {
             _ssh_manager,
             db,
-            ollama_client,
             ollama_provider,
         })
     }

@@ -3,15 +3,14 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::domain::llm::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, EmbeddingProvider, LlmError,
-    LlmProvider, TokenUsage, ToolCall,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmError, LlmProvider, TokenUsage,
+    ToolCall,
 };
 
 /// 基于 Ollama（或任意兼容 OpenAI 的端点）的 Provider。
 ///
 /// For chat it sends requests to `POST {base_url}/chat/completions`
-/// (OpenAI-compatible).  For embedding it sends to
-/// `POST {base_url}/embeddings`（同样兼容 OpenAI）。
+/// (OpenAI-compatible).
 ///
 /// If you need the legacy Ollama-native `/api/chat` or `/api/embeddings`
 /// endpoints, you can override `base_url` to omit the `/v1` prefix and
@@ -107,24 +106,6 @@ struct Usage {
     total_tokens: u32,
 }
 
-// ── Request / response shapes for OpenAI-compatible embeddings ──────
-
-#[derive(Serialize)]
-struct EmbedRequest {
-    model: String,
-    input: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct EmbedResponse {
-    data: Vec<EmbedData>,
-}
-
-#[derive(Deserialize)]
-struct EmbedData {
-    embedding: Vec<f32>,
-}
-
 // ── Constants ───────────────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -134,9 +115,8 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 impl OllamaProvider {
     /// 创建一个新的 `OllamaProvider`。
     ///
-    /// 使用与现有 `OllamaClient` 相同的 `base_url` 模式，以便
-    /// 在迁移期间两者可以共存：
-    ///   `http://127.0.0.1:11434/v1`
+    /// 使用 OpenAI-compatible `base_url`，例如：
+    /// `http://127.0.0.1:11434/v1`
     pub fn new(base_url: String, model: String, temperature: f64, top_p: f64) -> Self {
         let _ = (temperature, top_p);
         Self::with_timeout(base_url, model, DEFAULT_TIMEOUT_SECS)
@@ -157,11 +137,6 @@ impl OllamaProvider {
     /// 聊天补全 URL（兼容 OpenAI）。
     fn chat_url(&self) -> String {
         format!("{}/chat/completions", self.base_url)
-    }
-
-    /// 嵌入 URL（兼容 OpenAI）。
-    fn embed_url(&self) -> String {
-        format!("{}/embeddings", self.base_url)
     }
 
     /// 通用辅助方法：POST JSON，分类错误，反序列化。
@@ -343,34 +318,5 @@ impl LlmProvider for OllamaProvider {
             finish_reason: choice.finish_reason.unwrap_or_else(|| "stop".into()),
             usage,
         })
-    }
-}
-
-#[async_trait]
-impl EmbeddingProvider for OllamaProvider {
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let url = self.embed_url();
-        let body = EmbedRequest {
-            model: self.model.clone(),
-            input: texts.to_vec(),
-        };
-
-        debug!("OllamaProvider.embed -> {url} ({} 个文本)", texts.len());
-
-        let response: EmbedResponse = self.post_json(&url, &body).await?;
-
-        if response.data.len() != texts.len() {
-            return Err(LlmError::EmbeddingError(format!(
-                "expected {} embeddings but got {}",
-                texts.len(),
-                response.data.len()
-            )));
-        }
-
-        Ok(response.data.into_iter().map(|d| d.embedding).collect())
     }
 }

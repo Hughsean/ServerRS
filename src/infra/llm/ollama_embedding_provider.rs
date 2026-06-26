@@ -14,7 +14,8 @@ pub struct OllamaEmbeddingProvider {
     base_url: String,
     model: String,
     client: reqwest::Client,
-    /// Expected embedding dimension (validated on first call).
+    /// Requested and expected embedding dimension.
+    /// Set to 0 to omit the request field and skip response dimension validation.
     expected_dimension: usize,
     max_batch_size: usize,
     timeout_secs: u64,
@@ -24,6 +25,8 @@ pub struct OllamaEmbeddingProvider {
 struct EmbedRequest {
     model: String,
     input: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +73,7 @@ impl OllamaEmbeddingProvider {
         let body = EmbedRequest {
             model: self.model.clone(),
             input: texts.to_vec(),
+            dimensions: (self.expected_dimension != 0).then_some(self.expected_dimension),
         };
 
         let response = self
@@ -152,5 +156,34 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
         }
 
         Ok(embeddings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_request_includes_dimensions_when_configured() {
+        let request = EmbedRequest {
+            model: "qwen3-embedding:4b".into(),
+            input: vec!["hello".into()],
+            dimensions: Some(128),
+        };
+
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["dimensions"], 128);
+    }
+
+    #[test]
+    fn embed_request_omits_dimensions_when_disabled() {
+        let request = EmbedRequest {
+            model: "qwen3-embedding:4b".into(),
+            input: vec!["hello".into()],
+            dimensions: None,
+        };
+
+        let value = serde_json::to_value(request).unwrap();
+        assert!(value.get("dimensions").is_none());
     }
 }

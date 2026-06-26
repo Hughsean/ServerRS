@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
-use crate::domain::llm::{ChatMessage, LlmClient};
+use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::shared::error::AppError;
 
 pub struct DiaryService {
     pub repo: Arc<dyn DiaryRepoT>,
-    pub llm: Option<Arc<dyn LlmClient>>,
+    pub llm: Option<Arc<dyn LlmProvider>>,
 }
 
 impl DiaryService {
-    pub fn new(repo: Arc<dyn DiaryRepoT>, llm: Option<Arc<dyn LlmClient>>) -> Self {
+    pub fn new(repo: Arc<dyn DiaryRepoT>, llm: Option<Arc<dyn LlmProvider>>) -> Self {
         Self { repo, llm }
     }
 
@@ -133,7 +133,21 @@ impl DiaryService {
                 tool_call_id: None,
                 name: None,
             }];
-            let response = llm.chat(&messages).await;
+            let request = ChatCompletionRequest {
+                messages,
+                temperature: 0.1,
+                top_p: 0.9,
+                max_tokens: Some(256),
+                tools: None,
+                reasoning: None,
+            };
+            let response = match llm.chat(request).await {
+                Ok(response) => response.content,
+                Err(e) => {
+                    tracing::warn!("mood analysis LLM failed for diary {diary_id}: {e}");
+                    return;
+                }
+            };
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
                 if let Some(mood_description) = parsed
                     .get("mood_description")

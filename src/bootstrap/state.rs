@@ -256,7 +256,7 @@ impl ServiceGraph {
             Arc::new(DepressionService::new(Arc::clone(&depression_repo)));
         let diaries: Arc<DiaryService> = Arc::new(DiaryService::new(
             Arc::clone(&diary_repo),
-            Some(Arc::clone(&infra.ollama_client)),
+            Some(Arc::clone(&infra.ollama_provider)),
         ));
         let local_storage: Arc<dyn ObjectStorage> = Arc::new(LocalObjectStorage::new(
             std::path::PathBuf::from(&config.storage.base_path),
