@@ -57,10 +57,7 @@ pub struct RetrievalService {
 }
 
 impl RetrievalService {
-    pub fn new(
-        repo: Arc<dyn RAGRepoT>,
-        embedding: Option<Arc<dyn EmbeddingProvider>>,
-    ) -> Self {
+    pub fn new(repo: Arc<dyn RAGRepoT>, embedding: Option<Arc<dyn EmbeddingProvider>>) -> Self {
         Self {
             repo,
             embedding,

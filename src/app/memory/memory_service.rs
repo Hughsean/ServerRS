@@ -124,7 +124,12 @@ impl MemoryService {
         };
         let current = repo.get_or_create(user_id).await?;
         if current.version != expected {
-            debug!(user_id, expected, current = current.version, "上下文版本不匹配");
+            debug!(
+                user_id,
+                expected,
+                current = current.version,
+                "上下文版本不匹配"
+            );
         }
         Ok(current.version == expected)
     }

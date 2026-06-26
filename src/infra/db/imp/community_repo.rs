@@ -5,8 +5,8 @@ use sea_orm::{
 };
 
 use crate::domain::community::{
-    ArticleStatus, Comment, CommunityRepoT, NewComment, NewPost, NewPostMedia, Post,
-    PostMedia, PostUpdate,
+    ArticleStatus, Comment, CommunityRepoT, NewComment, NewPost, NewPostMedia, Post, PostMedia,
+    PostUpdate,
 };
 use crate::shared::error::AppError;
 

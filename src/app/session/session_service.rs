@@ -17,10 +17,7 @@ pub struct SessionService {
 }
 
 impl SessionService {
-    pub fn new(
-        conv_repo: Arc<dyn ConversationRepoT>,
-        risk_repo: Arc<dyn RiskRepoT>,
-    ) -> Self {
+    pub fn new(conv_repo: Arc<dyn ConversationRepoT>, risk_repo: Arc<dyn RiskRepoT>) -> Self {
         Self {
             conv_repo,
             risk_repo,

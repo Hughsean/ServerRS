@@ -9,8 +9,7 @@ use tracing::debug;
 use super::super::entities::{vector_index_jobs, vector_index_records};
 
 use crate::domain::vector_index::{
-    NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord,
-    VectorIndexRepoT,
+    NewVectorIndexJob, NewVectorIndexRecord, VectorIndexJob, VectorIndexRecord, VectorIndexRepoT,
 };
 use crate::shared::error::AppError;
 

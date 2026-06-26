@@ -350,9 +350,7 @@ impl ServiceGraph {
                 qq_bot_agent_turn_repo,
                 qq_bot_outbox_repo,
                 Some(Arc::clone(&user_repo)
-                    as Arc<
-                        dyn crate::domain::user::user_repository::UserRepoT,
-                    >),
+                    as Arc<dyn crate::domain::user::user_repository::UserRepoT>),
                 Some(Arc::clone(&qq_bot_external_user_repo)),
                 Some(Arc::clone(&qq_bot_user_profile_repo)),
                 Some(Arc::clone(&qq_bot_relationship_repo)),

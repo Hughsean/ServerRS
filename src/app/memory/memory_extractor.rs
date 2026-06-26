@@ -98,10 +98,7 @@ impl MemoryExtractor {
         debug!(user_id, response_len = trimmed.len(), raw = %trimmed.chars().take(300).collect::<String>(), "记忆提取 LLM 原始回复");
 
         // 跳过 LLM reasoning/think 标签、emoji 等非 JSON 前缀，找到第一个 [ 或 {
-        let json_start = trimmed
-            .find('[')
-            .or_else(|| trimmed.find('{'))
-            .unwrap_or(0);
+        let json_start = trimmed.find('[').or_else(|| trimmed.find('{')).unwrap_or(0);
         let json_body = &trimmed[json_start..].trim();
 
         // Strip markdown fences if present

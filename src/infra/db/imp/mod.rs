@@ -12,10 +12,10 @@ pub mod rag_repo;
 pub mod refresh_token_store;
 pub mod risk_repo;
 pub mod stored_object_repo;
+#[cfg(test)]
+pub mod stub_repo;
 pub mod user_context_control_repo;
 pub mod user_context_version_repo;
 pub mod user_profile_repo;
 pub mod user_repo;
 pub mod vector_index_repo;
-#[cfg(test)]
-pub mod stub_repo;

@@ -13,10 +13,7 @@ pub struct UserService {
 }
 
 impl UserService {
-    pub fn new(
-        user_repo: Arc<dyn UserRepoT>,
-        profile_repo: Arc<dyn UserProfileRepoT>,
-    ) -> Self {
+    pub fn new(user_repo: Arc<dyn UserRepoT>, profile_repo: Arc<dyn UserProfileRepoT>) -> Self {
         Self {
             user_repo,
             profile_repo,
