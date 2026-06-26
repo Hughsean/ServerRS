@@ -1,5 +1,4 @@
-use server_rs::{bootstrap, shared};
-use shared::config::AppConfig;
+use server_rs::{bootstrap, shared::config::AppConfig};
 
 #[tokio::main]
 async fn main() {
@@ -10,22 +9,16 @@ async fn main() {
     }
 }
 
-fn init_tracing(configured_level: &str) {
-    let env_filter = std::env::var("RUST_LOG").unwrap_or_default();
-    let combined = if env_filter.is_empty() {
-        format!("{configured_level},sqlx=warn")
-    } else if env_filter.contains("sqlx") {
-        // 用户明确设置了 sqlx 级别 — 尊重它。
-        env_filter
-    } else {
-        // 追加 sqlx=warn 以默认抑制 sqlx 查询日志。
-        format!("{},sqlx=warn", env_filter)
-    };
-    let f = tracing_subscriber::EnvFilter::new(&combined);
+fn init_tracing(_configured_level: &str) {
+    let timer = tracing_subscriber::fmt::time::OffsetTime::new(
+        time::UtcOffset::from_hms(8, 0, 0).expect("valid UTC+8 offset"),
+        time::macros::format_description!("[month]-[day] [hour]:[minute]:[second]"),
+    );
+
     tracing_subscriber::fmt()
-        .with_env_filter(f)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(true)
-        // .with_file(true)
+        .with_timer(timer)
         .with_line_number(true)
         .with_thread_ids(true)
         .compact()

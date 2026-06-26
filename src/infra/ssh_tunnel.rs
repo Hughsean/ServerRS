@@ -64,6 +64,7 @@ impl SshTunnel {
                 "PasswordAuthentication=no", // 优先 ssh-agent
                 "-o",
                 "StrictHostKeyChecking=accept-new", // 自动接受新主机密钥
+                "ExitOnForwardFailure=yes",         // 转发失败时退出
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

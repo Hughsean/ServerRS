@@ -163,11 +163,10 @@ pub fn build_default_agent_tools(
     validate_tool_names(&tools)?;
 
     info!(
-        tools = %tools
+        tools = ?tools
             .iter()
             .map(|tool| tool.name().to_string())
-            .collect::<Vec<_>>()
-            .join(","),
+            .collect::<Vec<_>>(),
         "agent tools registered"
     );
 
