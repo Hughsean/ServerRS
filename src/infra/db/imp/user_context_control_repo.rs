@@ -265,6 +265,165 @@ fn snapshot_summary(snapshot: &Value) -> PersonaSnapshotSummary {
     }
 }
 
+struct PersonaAggregate {
+    snapshot_data: Value,
+    source_memory_ids: Vec<u64>,
+    input_hash: String,
+}
+
+async fn active_persona<C>(
+    db: &C,
+    user_id: u64,
+) -> Result<Option<user_persona_snapshots::Model>, AppError>
+where
+    C: ConnectionTrait,
+{
+    user_persona_snapshots::Entity::find()
+        .filter(user_persona_snapshots::Column::UserId.eq(user_id))
+        .filter(user_persona_snapshots::Column::Status.eq("active"))
+        .order_by_desc(user_persona_snapshots::Column::CreatedAt)
+        .one(db)
+        .await
+        .map_err(|error| map_err("load active persona", error))
+}
+
+async fn build_persona_aggregate<C>(db: &C, user_id: u64) -> Result<PersonaAggregate, AppError>
+where
+    C: ConnectionTrait,
+{
+    let profile = user_profiles::Entity::find()
+        .filter(user_profiles::Column::UserId.eq(user_id))
+        .one(db)
+        .await
+        .map_err(|error| map_err("load profile for persona aggregate", error))?;
+
+    let mut query = user_memories::Entity::find()
+        .filter(user_memories::Column::UserId.eq(user_id))
+        .filter(user_memories::Column::Status.eq(1))
+        .filter(user_memories::Column::MemoryType.is_in(ALLOWED_MEMORY_TYPES));
+    if let Some(reset_at) = profile
+        .as_ref()
+        .and_then(|value| value.personalization_reset_at)
+    {
+        query = query.filter(user_memories::Column::CreatedAt.gt(reset_at));
+    }
+    let memories = query
+        .order_by_asc(user_memories::Column::MemoryId)
+        .all(db)
+        .await
+        .map_err(|error| map_err("load memories for persona aggregate", error))?;
+
+    let mut communication_preferences = Vec::new();
+    let mut stable_facts = Vec::new();
+    let mut recurring_topics = Vec::new();
+    let mut goals = Vec::new();
+    for memory in &memories {
+        match memory.memory_type.as_str() {
+            "preference" => communication_preferences.push(memory.content.clone()),
+            "fact" => stable_facts.push(memory.content.clone()),
+            "emotional_pattern" => recurring_topics.push(memory.content.clone()),
+            "goal" => goals.push(memory.content.clone()),
+            _ => {}
+        }
+    }
+
+    let snapshot_data = json!({
+        "communication_preferences": communication_preferences,
+        "support_preferences": [],
+        "style_observations": {
+            "tone": "neutral",
+            "directness": "medium",
+            "structure": "step_by_step",
+            "question_frequency": "low"
+        },
+        "stable_facts": stable_facts,
+        "recurring_topics": recurring_topics,
+        "goals": goals,
+        "sensitive_context": []
+    });
+    let input_hash = Sha256::digest(snapshot_data.to_string().as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    Ok(PersonaAggregate {
+        snapshot_data,
+        source_memory_ids: memories
+            .iter()
+            .map(|memory| memory.memory_id)
+            .collect::<Vec<_>>(),
+        input_hash,
+    })
+}
+
+async fn rebuild_persona_snapshot<C>(
+    db: &C,
+    user_id: u64,
+    create_when_empty: bool,
+    reuse_current: bool,
+    enable_personalization: bool,
+    bump_version_after: bool,
+) -> Result<Option<PersonaRebuildResult>, AppError>
+where
+    C: ConnectionTrait,
+{
+    let aggregate = build_persona_aggregate(db, user_id).await?;
+    let current = active_persona(db, user_id).await?;
+
+    if aggregate.source_memory_ids.is_empty() && !create_when_empty {
+        if current.is_some() {
+            expire_active_persona(db, user_id).await?;
+        }
+        return Ok(None);
+    }
+
+    if reuse_current {
+        if let Some(current) = &current {
+            if current.input_hash == aggregate.input_hash {
+                return Ok(Some(PersonaRebuildResult {
+                    snapshot_id: current.snapshot_id,
+                }));
+            }
+        }
+    }
+
+    let supersedes_id = current.as_ref().map(|value| value.snapshot_id);
+    expire_active_persona(db, user_id).await?;
+    let active = user_persona_snapshots::ActiveModel {
+        user_id: Set(user_id),
+        status: Set("active".into()),
+        snapshot_data: Set(aggregate.snapshot_data),
+        source_memory_ids: Set(json!(aggregate.source_memory_ids)),
+        source_summary_ids: Set(Some(json!([]))),
+        source_recent_message_ids: Set(Some(json!([]))),
+        input_hash: Set(aggregate.input_hash),
+        model_name: Set("deterministic-memory-aggregate".into()),
+        prompt_version: Set("persona-rebuild-v1".into()),
+        schema_version: Set("1.0".into()),
+        generation_ms: Set(0),
+        supersedes_id: Set(supersedes_id),
+        error_message: Set(None),
+        created_at: Set(Utc::now().naive_utc()),
+        expires_at: Set(None),
+        ..Default::default()
+    };
+    let saved = active
+        .insert(db)
+        .await
+        .map_err(|error| map_err("save rebuilt persona", error))?;
+
+    if enable_personalization {
+        set_personalization(db, user_id, true, false).await?;
+    }
+    if bump_version_after {
+        bump_context_version(db, user_id).await?;
+    }
+
+    Ok(Some(PersonaRebuildResult {
+        snapshot_id: saved.snapshot_id,
+    }))
+}
+
 #[async_trait]
 impl UserContextControlRepoT for UserContextControlRepo {
     async fn persona_view(&self, user_id: u64) -> Result<PersonaView, AppError> {
@@ -273,13 +432,7 @@ impl UserContextControlRepoT for UserContextControlRepo {
             .one(&self.db)
             .await
             .map_err(|error| map_err("load personalization profile", error))?;
-        let snapshot = user_persona_snapshots::Entity::find()
-            .filter(user_persona_snapshots::Column::UserId.eq(user_id))
-            .filter(user_persona_snapshots::Column::Status.eq("active"))
-            .order_by_desc(user_persona_snapshots::Column::CreatedAt)
-            .one(&self.db)
-            .await
-            .map_err(|error| map_err("load active persona", error))?;
+        let snapshot = active_persona(&self.db, user_id).await?;
 
         Ok(PersonaView {
             has_active_persona: snapshot.is_some(),
@@ -292,6 +445,37 @@ impl UserContextControlRepoT for UserContextControlRepo {
                 .map(|value| value.personalization_enabled != 0)
                 .unwrap_or(true),
         })
+    }
+
+    async fn refresh_persona_if_stale(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<PersonaRebuildResult>, AppError> {
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|error| map_err("begin persona refresh", error))?;
+        let profile = user_profiles::Entity::find()
+            .filter(user_profiles::Column::UserId.eq(user_id))
+            .one(&txn)
+            .await
+            .map_err(|error| map_err("load profile for persona refresh", error))?;
+        if profile
+            .as_ref()
+            .is_some_and(|value| value.personalization_enabled == 0)
+        {
+            txn.commit()
+                .await
+                .map_err(|error| map_err("commit skipped persona refresh", error))?;
+            return Ok(None);
+        }
+
+        let result = rebuild_persona_snapshot(&txn, user_id, false, true, false, false).await?;
+        txn.commit()
+            .await
+            .map_err(|error| map_err("commit persona refresh", error))?;
+        Ok(result)
     }
 
     async fn reset_persona(&self, user_id: u64) -> Result<PersonaResetResult, AppError> {
@@ -315,103 +499,14 @@ impl UserContextControlRepoT for UserContextControlRepo {
             .begin()
             .await
             .map_err(|error| map_err("begin persona rebuild", error))?;
-        let profile = user_profiles::Entity::find()
-            .filter(user_profiles::Column::UserId.eq(user_id))
-            .one(&txn)
-            .await
-            .map_err(|error| map_err("load profile for persona rebuild", error))?;
-        let mut query = user_memories::Entity::find()
-            .filter(user_memories::Column::UserId.eq(user_id))
-            .filter(user_memories::Column::Status.eq(1))
-            .filter(user_memories::Column::MemoryType.is_in(ALLOWED_MEMORY_TYPES));
-        if let Some(reset_at) = profile
-            .as_ref()
-            .and_then(|value| value.personalization_reset_at)
-        {
-            query = query.filter(user_memories::Column::CreatedAt.gt(reset_at));
-        }
-        let memories = query
-            .order_by_asc(user_memories::Column::MemoryId)
-            .all(&txn)
-            .await
-            .map_err(|error| map_err("load memories for persona rebuild", error))?;
-
-        let mut communication_preferences = Vec::new();
-        let mut stable_facts = Vec::new();
-        let mut recurring_topics = Vec::new();
-        let mut goals = Vec::new();
-        for memory in &memories {
-            match memory.memory_type.as_str() {
-                "preference" => communication_preferences.push(memory.content.clone()),
-                "fact" => stable_facts.push(memory.content.clone()),
-                "emotional_pattern" => recurring_topics.push(memory.content.clone()),
-                "goal" => goals.push(memory.content.clone()),
-                _ => {}
-            }
-        }
-        let snapshot_data = json!({
-            "communication_preferences": communication_preferences,
-            "support_preferences": [],
-            "style_observations": {
-                "tone": "neutral",
-                "directness": "medium",
-                "structure": "step_by_step",
-                "question_frequency": "low"
-            },
-            "stable_facts": stable_facts,
-            "recurring_topics": recurring_topics,
-            "goals": goals,
-            "sensitive_context": []
-        });
-        let input_hash = Sha256::digest(snapshot_data.to_string().as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-
-        let supersedes_id = user_persona_snapshots::Entity::find()
-            .filter(user_persona_snapshots::Column::UserId.eq(user_id))
-            .filter(user_persona_snapshots::Column::Status.eq("active"))
-            .one(&txn)
-            .await
-            .map_err(|error| map_err("load previous persona", error))?
-            .map(|value| value.snapshot_id);
-        expire_active_persona(&txn, user_id).await?;
-        let active = user_persona_snapshots::ActiveModel {
-            user_id: Set(user_id),
-            status: Set("active".into()),
-            snapshot_data: Set(snapshot_data),
-            source_memory_ids: Set(json!(
-                memories
-                    .iter()
-                    .map(|memory| memory.memory_id)
-                    .collect::<Vec<_>>()
-            )),
-            source_summary_ids: Set(Some(json!([]))),
-            source_recent_message_ids: Set(Some(json!([]))),
-            input_hash: Set(input_hash),
-            model_name: Set("deterministic-memory-aggregate".into()),
-            prompt_version: Set("persona-rebuild-v1".into()),
-            schema_version: Set("1.0".into()),
-            generation_ms: Set(0),
-            supersedes_id: Set(supersedes_id),
-            error_message: Set(None),
-            created_at: Set(Utc::now().naive_utc()),
-            expires_at: Set(None),
-            ..Default::default()
-        };
-        let saved = active
-            .insert(&txn)
-            .await
-            .map_err(|error| map_err("save rebuilt persona", error))?;
-        set_personalization(&txn, user_id, true, false).await?;
-        bump_context_version(&txn, user_id).await?;
+        let result = rebuild_persona_snapshot(&txn, user_id, true, false, true, true)
+            .await?
+            .ok_or_else(|| AppError::internal("persona rebuild did not produce a snapshot"))?;
         txn.commit()
             .await
             .map_err(|error| map_err("commit persona rebuild", error))?;
 
-        Ok(PersonaRebuildResult {
-            snapshot_id: saved.snapshot_id,
-        })
+        Ok(result)
     }
 
     async fn clear_transcript(&self, user_id: u64) -> Result<TranscriptClearResult, AppError> {

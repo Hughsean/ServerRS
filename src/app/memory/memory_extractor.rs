@@ -568,11 +568,7 @@ mod tests {
                 // Assert system prompt is the first message
                 assert!(!request.messages.is_empty());
                 assert_eq!(request.messages[0].role, "system");
-                assert!(
-                    request.messages[0]
-                        .content
-                        .contains("memory-extraction assistant")
-                );
+                assert!(request.messages[0].content.contains("记忆提取助手"));
                 Ok(ChatCompletionResponse {
                     content: "[]".to_string(),
                     tool_calls: vec![],

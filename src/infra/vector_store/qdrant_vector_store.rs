@@ -10,7 +10,7 @@ use qdrant_client::{Payload, Qdrant};
 use tracing::{debug, warn};
 
 use crate::domain::vector_store::{
-    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorSearchHit, VectorStore,
+    VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorSearchHit, VectorStoreT,
 };
 use crate::shared::error::AppError;
 
@@ -172,7 +172,7 @@ impl QdrantVectorStore {
 }
 
 #[async_trait]
-impl VectorStore for QdrantVectorStore {
+impl VectorStoreT for QdrantVectorStore {
     async fn ensure_collection(
         &self,
         collection: &str,

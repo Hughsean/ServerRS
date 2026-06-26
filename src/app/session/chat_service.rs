@@ -180,6 +180,11 @@ impl ChatService {
     }
 
     pub async fn persona(&self, user_id: u64) -> Result<PersonaView, AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+        self.context_control_repo
+            .refresh_persona_if_stale(user_id)
+            .await?;
         self.context_control_repo.persona_view(user_id).await
     }
 

@@ -55,6 +55,10 @@ pub struct ForgetResult {
 #[async_trait]
 pub trait UserContextControlRepoT: Send + Sync {
     async fn persona_view(&self, user_id: u64) -> Result<PersonaView, AppError>;
+    async fn refresh_persona_if_stale(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<PersonaRebuildResult>, AppError>;
     async fn reset_persona(&self, user_id: u64) -> Result<PersonaResetResult, AppError>;
     async fn rebuild_persona(&self, user_id: u64) -> Result<PersonaRebuildResult, AppError>;
     async fn clear_transcript(&self, user_id: u64) -> Result<TranscriptClearResult, AppError>;
