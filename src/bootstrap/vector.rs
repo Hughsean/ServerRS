@@ -6,8 +6,8 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_index::VectorIndexRepository;
 use crate::domain::vector_store::VectorStore;
-use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::infra::db::imp::seaorm_vector_index_repository::SeaOrmVectorIndexRepository;
+use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::shared::config::AppConfig;
 
 /// Embedding Provider、Qdrant 向量存储、VectorIndex。
@@ -24,15 +24,14 @@ impl VectorContext {
         infra: &InfraContext,
         repos: &RepoGraph,
     ) -> Result<Self, std::io::Error> {
-        let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(
-            OllamaEmbeddingProvider::with_options(
+        let embedding_provider: Arc<dyn EmbeddingProvider> =
+            Arc::new(OllamaEmbeddingProvider::with_options(
                 config.embedding.base_url.clone(),
                 config.embedding.model.clone(),
                 config.embedding.dimension,
                 config.embedding.batch_size,
                 config.embedding.timeout_secs,
-            ),
-        );
+            ));
 
         // ── Qdrant 向量存储（可选，通过配置启用）──
         let vector_store: Option<Arc<dyn VectorStore>> = if config.qdrant.enabled {
@@ -64,9 +63,8 @@ impl VectorContext {
         };
 
         // ── VectorIndex ──
-        let vector_index_repo: Arc<dyn VectorIndexRepository> = Arc::new(
-            SeaOrmVectorIndexRepository::new(infra.db.clone()),
-        );
+        let vector_index_repo: Arc<dyn VectorIndexRepository> =
+            Arc::new(SeaOrmVectorIndexRepository::new(infra.db.clone()));
 
         let vector_index: Option<Arc<VectorIndexService>> = vector_store.as_ref().map(|vs| {
             Arc::new(VectorIndexService::new(
@@ -95,9 +93,9 @@ impl VectorContext {
     /// 确保 Qdrant 集合已存在（在构造后调用）。
     pub async fn ensure_collections(&self) -> Result<(), std::io::Error> {
         if let Some(ref vi) = self.vector_index {
-            vi.ensure_collections().await.map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })?;
+            vi.ensure_collections()
+                .await
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         }
         Ok(())
     }

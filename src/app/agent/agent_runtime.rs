@@ -793,11 +793,7 @@ impl AgentRuntime {
             }
         }
 
-        debug!(
-            user_id,
-            ?conversation_id,
-            "启动异步记忆提取"
-        );
+        debug!(user_id, ?conversation_id, "启动异步记忆提取");
 
         let memory_service = Arc::clone(&self.memory_service);
         let user_text = user_message.to_string();

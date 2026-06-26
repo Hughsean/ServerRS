@@ -3,9 +3,9 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::domain::llm::{LlmClient, LlmProvider};
+use crate::infra::db::seaorm_db::init_db;
 use crate::infra::llm::ollama_client::OllamaClient;
 use crate::infra::llm::ollama_provider::OllamaProvider;
-use crate::infra::db::seaorm_db::init_db;
 use crate::infra::ssh_tunnel::SshTunnelManager;
 use crate::shared::config::AppConfig;
 
@@ -73,8 +73,7 @@ fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<SshTunnelManager>, std
         .ssh_tunnels
         .iter()
         .filter(|(name, cfg)| {
-            matches!(cfg.direction, TunnelDirection::Remote)
-                || referenced.contains(name.as_str())
+            matches!(cfg.direction, TunnelDirection::Remote) || referenced.contains(name.as_str())
         })
         .map(|(name, cfg)| (name.clone(), cfg.clone()))
         .collect();

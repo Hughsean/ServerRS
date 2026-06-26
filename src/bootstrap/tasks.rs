@@ -4,7 +4,9 @@ use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user_repository::UserRepository;
 use crate::infra::tasks::alert_handler::{AlertConfig, AlertHandler};
-use crate::infra::tasks::in_memory_task_flow::{RetryingTaskPublisher, TaskWorker, new_task_channel};
+use crate::infra::tasks::in_memory_task_flow::{
+    RetryingTaskPublisher, TaskWorker, new_task_channel,
+};
 use crate::infra::tasks::logging_handler::LoggingHandler;
 use crate::infra::tasks::rate_limit_handler::{RateLimitConfig, RateLimitHandler};
 
@@ -53,10 +55,8 @@ impl TaskContext {
         let mut background = BackgroundTasks::new();
 
         let alert_handler = Arc::new(AlertHandler::new(AlertConfig::default()));
-        let rate_limit_handler = Arc::new(RateLimitHandler::new(
-            RateLimitConfig::default(),
-            user_repo,
-        ));
+        let rate_limit_handler =
+            Arc::new(RateLimitHandler::new(RateLimitConfig::default(), user_repo));
 
         let (tp, tw) = new_task_channel(256);
         let _retry_handle = RetryingTaskPublisher::spawn_retry_worker(tp.clone());

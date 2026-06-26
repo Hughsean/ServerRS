@@ -8,7 +8,6 @@ use crate::app::agent::agent_context::AgentContextBuilder;
 use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings};
 use crate::app::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
 use crate::app::auth::auth_service::AuthService;
-use crate::app::session::chat_service::ChatService;
 use crate::app::community::community_service::CommunityService;
 use crate::app::depression::depression_service::DepressionService;
 use crate::app::diary::diary_service::DiaryService;
@@ -21,6 +20,7 @@ use crate::app::rag::ingestion_service::IngestionService;
 use crate::app::rag::retrieval_service::RetrievalService;
 use crate::app::risk::post_conversation_risk_audit_worker::PostConversationRiskAuditWorker;
 use crate::app::risk::risk_detection_service::RiskDetectionService;
+use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
 use crate::app::summary::summary_refresh_handler::SummaryRefreshHandler;
@@ -109,12 +109,11 @@ impl ServiceGraph {
             Arc::clone(&tasks.task_publisher),
             Arc::clone(&risk_detector),
         ));
-        let risk_audit_worker: Arc<dyn TaskHandler> = Arc::new(
-            PostConversationRiskAuditWorker::new(
+        let risk_audit_worker: Arc<dyn TaskHandler> =
+            Arc::new(PostConversationRiskAuditWorker::new(
                 Arc::clone(&conv_repo),
                 Arc::clone(&risk_detection_service),
-            ),
-        );
+            ));
 
         // ── 服务 ──
         let auth = Arc::clone(&auth_graph.auth_service);
@@ -128,15 +127,17 @@ impl ServiceGraph {
         ));
 
         // ── RAG 与记忆服务 ──
-        let mut retrieval_svc =
-            RetrievalService::new(Arc::clone(&rag_repo), Some(Arc::clone(&vector.embedding_provider)))
-                .with_hybrid_weights(
-                    config.rag.hybrid_vector_weight,
-                    config.rag.hybrid_keyword_weight,
-                );
+        let mut retrieval_svc = RetrievalService::new(
+            Arc::clone(&rag_repo),
+            Some(Arc::clone(&vector.embedding_provider)),
+        )
+        .with_hybrid_weights(
+            config.rag.hybrid_vector_weight,
+            config.rag.hybrid_keyword_weight,
+        );
         if let Some(ref vs) = vector.vector_store {
-            retrieval_svc =
-                retrieval_svc.with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
+            retrieval_svc = retrieval_svc
+                .with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
         }
         if config.web_ingestion.enabled {
             retrieval_svc =
@@ -283,32 +284,44 @@ impl ServiceGraph {
             use crate::infra::qq_bot::repositories::seaorm_group_repository::SeaOrmGroupRepository;
             use crate::infra::qq_bot::repositories::seaorm_group_summary_repository::SeaOrmGroupSummaryRepository;
             use crate::infra::qq_bot::repositories::seaorm_outbox_repository::SeaOrmOutboxRepository;
-            use crate::infra::qq_bot::repositories::seaorm_user_profile_repository::SeaOrmQqUserProfileRepository;
             use crate::infra::qq_bot::repositories::seaorm_relationship_repository::SeaOrmRelationshipRepository;
+            use crate::infra::qq_bot::repositories::seaorm_user_profile_repository::SeaOrmQqUserProfileRepository;
             use crate::infra::tts::volcengine_provider::VolcengineTtsProvider;
 
-            let qq_bot_bot_account_repo = Arc::new(SeaOrmBotAccountRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
+            let qq_bot_bot_account_repo =
+                Arc::new(SeaOrmBotAccountRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::BotAccountRepository>;
             let qq_bot_group_repo = Arc::new(SeaOrmGroupRepository::new(infra.db.clone()))
                 as Arc<dyn crate::domain::qq_bot::repository::GroupRepository>;
-            let qq_bot_group_member_repo = Arc::new(SeaOrmGroupMemberRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
-            let qq_bot_group_message_repo = Arc::new(SeaOrmGroupMessageRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
-            let qq_bot_group_summary_repo = Arc::new(SeaOrmGroupSummaryRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
-            let qq_bot_group_memory_repo = Arc::new(SeaOrmGroupMemoryRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
+            let qq_bot_group_member_repo =
+                Arc::new(SeaOrmGroupMemberRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepository>;
+            let qq_bot_group_message_repo =
+                Arc::new(SeaOrmGroupMessageRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepository>;
+            let qq_bot_group_summary_repo =
+                Arc::new(SeaOrmGroupSummaryRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepository>;
+            let qq_bot_group_memory_repo =
+                Arc::new(SeaOrmGroupMemoryRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepository>;
             let qq_bot_agent_turn_repo = Arc::new(SeaOrmAgentTurnRepository::new(infra.db.clone()))
                 as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepository>;
             let qq_bot_outbox_repo = Arc::new(SeaOrmOutboxRepository::new(infra.db.clone()))
                 as Arc<dyn crate::domain::qq_bot::repository::OutboxRepository>;
-            let qq_bot_external_user_repo = Arc::new(SeaOrmExternalUserRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
-            let qq_bot_user_profile_repo = Arc::new(SeaOrmQqUserProfileRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository>;
-            let qq_bot_relationship_repo = Arc::new(SeaOrmRelationshipRepository::new(infra.db.clone()))
-                as Arc<dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository>;
+            let qq_bot_external_user_repo =
+                Arc::new(SeaOrmExternalUserRepository::new(infra.db.clone()))
+                    as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepository>;
+            let qq_bot_user_profile_repo =
+                Arc::new(SeaOrmQqUserProfileRepository::new(infra.db.clone()))
+                    as Arc<
+                        dyn crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository,
+                    >;
+            let qq_bot_relationship_repo =
+                Arc::new(SeaOrmRelationshipRepository::new(infra.db.clone()))
+                    as Arc<
+                        dyn crate::domain::qq_bot::relationship_repository::RelationshipRepository,
+                    >;
 
             let qq_bot_tts_provider: Option<Arc<dyn TtsProvider>> = if config.qq_bot.enabled
                 && config.qq_bot.self_qq_id != 0
@@ -337,7 +350,9 @@ impl ServiceGraph {
                 qq_bot_agent_turn_repo,
                 qq_bot_outbox_repo,
                 Some(Arc::clone(&user_repo)
-                    as Arc<dyn crate::domain::user::user_repository::UserRepository>),
+                    as Arc<
+                        dyn crate::domain::user::user_repository::UserRepository,
+                    >),
                 Some(Arc::clone(&qq_bot_external_user_repo)),
                 Some(Arc::clone(&qq_bot_user_profile_repo)),
                 Some(Arc::clone(&qq_bot_relationship_repo)),

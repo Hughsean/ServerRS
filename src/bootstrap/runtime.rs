@@ -19,11 +19,21 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     // 阶段 1: 基础设施
     let infra = InfraContext::new(&config).await?;
     // 阶段 2: 仓库
-    let repos = build_repos(&infra.db, &config.qdrant.memory_collection, &config.qdrant.summary_collection);
+    let repos = build_repos(
+        &infra.db,
+        &config.qdrant.memory_collection,
+        &config.qdrant.summary_collection,
+    );
     // 阶段 3: 任务系统
     let mut tasks = TaskContext::new(Arc::clone(&repos.user_repo));
     // 认证（在向量之前，因为任务清理需要它）
-    let auth_graph = build_auth(&infra.db, &config.jwt, &config.auth, &repos.user_repo, &tasks.task_publisher);
+    let auth_graph = build_auth(
+        &infra.db,
+        &config.jwt,
+        &config.auth,
+        &repos.user_repo,
+        &tasks.task_publisher,
+    );
     tasks.background.spawn({
         let store = Arc::clone(&auth_graph.refresh_token_store);
         tokio::spawn(periodic_revocation(store))
