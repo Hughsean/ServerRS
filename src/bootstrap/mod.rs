@@ -3,6 +3,7 @@ pub mod infra;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod repos;
+pub mod runtime;
 pub mod state;
 pub mod tasks;
 pub mod vector;
