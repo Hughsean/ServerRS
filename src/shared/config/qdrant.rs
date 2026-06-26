@@ -16,6 +16,8 @@ pub struct QdrantConfig {
     pub memory_collection: String,
     #[serde(default = "default_qdrant_summary_collection")]
     pub summary_collection: String,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for QdrantConfig {
@@ -27,6 +29,7 @@ impl Default for QdrantConfig {
             rag_collection: default_qdrant_rag_collection(),
             memory_collection: default_qdrant_memory_collection(),
             summary_collection: default_qdrant_summary_collection(),
+            tunnel: None,
         }
     }
 }

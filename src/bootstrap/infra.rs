@@ -68,6 +68,9 @@ fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<SshTunnelManager>, std
     if let Some(ref name) = config.ollama.tunnel {
         referenced.insert(name.as_str());
     }
+    if let Some(ref name) = config.qdrant.tunnel {
+        referenced.insert(name.as_str());
+    }
 
     let used_tunnels: Vec<(String, crate::shared::config::SshTunnelConfig)> = config
         .ssh_tunnels
