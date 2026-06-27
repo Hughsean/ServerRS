@@ -1,5 +1,77 @@
-# ServerRS Configuration — mirrors Java's application.yml
-# All fields have defaults; this file is optional.
+[ssh_tunnels.mysql]
+host = "HP"
+local_port = 3306
+remote_port = 3306
+
+[database]
+url = "replaced by .env"
+max_connections = 10
+tunnel = "mysql"
+################################
+[ssh_tunnels.ollama]
+host = "807-P"
+local_port = 11111
+remote_port = 11434
+
+[ollama]
+base_url = "http://127.0.0.1:11111/v1"
+model = "qwen3:14b"
+temperature = 0.5
+top_p = 0.9
+tunnel = "ollama"
+
+[embedding]
+provider = "Ollama-local"
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3-embedding:4b"
+dimension = 2560
+batch_size = 32
+timeout_secs = 120
+qdrant_collection = "rag_default"
+
+[llm]
+provider = "Ollama"
+base_url = "http://127.0.0.1:11434/v1"
+chat_model = "qwen3:14b"
+temperature = 0.7
+top_p = 0.9
+timeout_secs = 120
+max_tool_depth = 10
+
+[web_ingestion.distill_llm]
+provider = "Ollama"
+base_url = "http://127.0.0.1:11434/v1"
+chat_model = "qwen3:14b"
+# Inject via WEB_INGESTION_DISTILL_LLM_API_KEY (or DEEPSEEK_API_KEY) env var.
+# Never commit a real key here.
+temperature = 0.1
+top_p = 0.9
+timeout_secs = 180
+################################
+[ssh_tunnels.qdrant]
+host = "HP"
+local_port = 6334
+remote_port = 6334
+
+# ── Qdrant VectorStore ────────────────────────────────────────────────────────
+# Qdrant is an optional vector index for RAG / Memory / Summary search.
+# When disabled (default), vector search falls back to MySQL keyword search.
+[qdrant]
+enabled = true
+url = "http://127.0.0.1:6334"
+# api_key = ""
+rag_collection = "rag_chunks"
+memory_collection = "user_memories"
+summary_collection = "conversation_summaries"
+tunnel = "qdrant"
+################################
+
+[ssh_tunnels.public]
+direction = "remote"
+host = "Tencent"
+local_port = 8080
+remote_port = 8080
+bind_address = "0.0.0.0"
 
 [server]
 host = "0.0.0.0"
@@ -7,35 +79,16 @@ port = 8080
 
 [cors]
 allowed_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]
+################################
 
-[database]
-# MySQL connection (aligns with Java's datasource.url)
-url = "mysql://user:password@127.0.0.1:3306/digital_companion"
-max_connections = 10
 
 [jwt]
 # Must match Java's jwt.secret for token compatibility
-secret = "CHANGE_ME_USE_A_LONG_RANDOM_SECRET"
+secret = ""
 # Access/refresh token expiration in seconds
 access_ttl_secs = 86400
 refresh_ttl_secs = 604800
 
-# ── LLM / Ollama (used in Phase 3) ──
-[ollama]
-base_url = "http://127.0.0.1:11434/v1"
-model = "qwen2.5:14b"
-temperature = 0.5
-top_p = 0.9
-
-# ── LLM configuration ──
-[llm]
-provider = "openai"
-base_url = "http://127.0.0.1:11434/v1"
-chat_model = "qwen2.5:14b"
-temperature = 0.7
-top_p = 0.9
-timeout_secs = 120
-max_tool_depth = 10
 
 # ── Agent configuration ──
 [agent]
@@ -81,106 +134,73 @@ timeout_secs = 10
 
 [plugins.fetch_web_content]
 enabled = true
-proxy_url = ""
+proxy_url = "http://127.0.0.1:7890"
 
 [plugins.baidu_baike]
 enabled = true
-proxy_url = ""
+proxy_url = "http://127.0.0.1:7890"
 
-# ── Qdrant VectorStore ────────────────────────────────────────────────────────
-# Qdrant is an optional vector index for RAG / Memory / Summary search.
-# When disabled (default), vector search falls back to MySQL keyword search.
-[qdrant]
-enabled = true
-url = "http://127.0.0.1:6334"
-# api_key = ""
-rag_collection = "rag_chunks"
-memory_collection = "user_memories"
-summary_collection = "conversation_summaries"
 
-# ── SSH Tunnels ──────────────────────────────────────────────────────────────
-# 数据库和 Ollama 可通过 SSH 隧道访问。每个隧道定义一个跳板机连接，
-# 服务通过 tunnel 字段引用对应的隧道名称。启动时自动建立 ssh -L 或 ssh -R
-# 子进程，连接断开时服务器退出。优先使用 ssh-agent 认证。
-#
-# 若 ~/.ssh/config 中已定义 Host，可以只写 host 别名，省略 user：
-#
-# Host HP
-#     HostName frp-bag.com
-#     Port 45236
-#     User x
-#     IdentityFile ~/.ssh/id_new
-#
-# [ssh_tunnels.main]
-# host = "HP"        # 使用 ~/.ssh/config 中定义的 Host 别名
-# local_port = 3307
-# remote_port = 3306
-#
-# [database]
-# url = "mysql://user:pass@127.0.0.1:3307/db"
-# tunnel = "main"
-#
-# 也可以显式指定 user（适用于 sshd 直接连接）：
-#
-# [ssh_tunnels.another]
-# host = "192.168.1.100"
-# user = "root"
-# local_port = 3308
-# remote_port = 3306
-#
-# ── 远程转发（ssh -R）示例 ─────────────────────────────────────────────────
-# 将本机 8080 端口暴露到公网跳板机，外部通过 公网IP:8080 访问。
-# 需要远程 sshd 开启 GatewayPorts 才能绑定 0.0.0.0。
-#
-# [ssh_tunnels.public]
-# direction = "remote"
-# host = "HP"
-# local_port = 8080
-# remote_port = 8080
-# bind_address = "0.0.0.0"
 
 # ── Web Ingestion Configuration ────────────────────────────────────────────
 # ALL DISABLED BY DEFAULT. Enable only after all P0 fixes are complete.
 
 [web_ingestion]
-enabled = false
-scheduler_enabled = false
-dispatcher_enabled = false
-staging_required = true
-auto_publish_min_score = 0.85
+enabled = true
+scheduler_enabled = true
+dispatcher_enabled = true
+
+# 初期构建知识库可以打开；如果混入高风险来源，改成 true + 手动发布
+staging_required = false
+auto_publish = true
+auto_publish_min_score = 0.78
+
 pipeline_version = "20260612"
-fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:you@example.com)"
-fetch_proxy_url = ""
-min_request_interval_ms = 2000
-request_jitter_ms = 1000
-max_urls_per_source_per_job = 20
+fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:xxx@xxx.com)"
+fetch_proxy_url = "http://127.0.0.1:7890"
+
+# 对同一 host 的抓取节流。Wikipedia 建议别太激进
+min_request_interval_ms = 1200
+request_jitter_ms = 500
+
+# 每个 source 每轮最多入队 URL 数
+max_urls_per_source_per_job = 100
 url_enqueue_dedupe_secs = 86400
-scheduler_interval_secs = 900
-dispatcher_interval_secs = 5
-outbox_batch_size = 20
-outbox_lock_ttl_secs = 300
+
+# 单例下调度器可以勤快一点，避免 15 分钟一轮太慢
+scheduler_interval_secs = 60
+
+# dispatcher 仍是单循环顺序处理，调太小只是更快捡新任务
+dispatcher_interval_secs = 1
+outbox_batch_size = 30
+outbox_lock_ttl_secs = 600
+
 retry_base_delay_secs = 30
 retry_max_delay_secs = 1800
 
-[web_ingestion.distill_llm]
-provider = "deepseek"
-base_url = "https://api.deepseek.com"
-chat_model = "deepseek-v4-flash"
-# Inject via WEB_INGESTION_DISTILL_LLM_API_KEY (or DEEPSEEK_API_KEY) env var.
-# Never commit a real key here.
+
+
+[qq_bot]
+enabled = true
+self_qq_id = 983473516     # 你的机器人QQ号
+http_base_url = "http://127.0.0.1:3000"
+ws_url = "ws://127.0.0.1:6700"
+tts_output_dir = "./data/tts/"
+tts_public_url_base = "http://127.0.0.1:8080/tts/"
+
+# ── TTS (Text-to-Speech) ───────────────────────────────────────────
+# 火山引擎豆包语音 v3 配置
+# 生产环境建议用环境变量注入：TTS_API_KEY、TTS_RESOURCE_ID
+[tts]
+provider = "volcengine"
+base_url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 api_key = ""
-temperature = 0.1
-top_p = 0.9
-timeout_secs = 120
+resource_id = ""
+model = "seed-tts-2.0-standard"
+default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
+default_encoding = "wav"
+timeout_secs = 30
+sample_rate = 24000
 
-# ── Embedding Provider (separate from distill LLM) ────────────────────────
 
-[embedding]
-provider = "ollama"
-base_url = "http://127.0.0.1:11434/v1"
-model = "nomic-embed-text"
-# api_key = ""
-dimension = 768
-batch_size = 32
-timeout_secs = 120
-qdrant_collection = "rag_default"
+

@@ -14,6 +14,7 @@ use crate::domain::qq_bot::repository::{
 use crate::domain::qq_bot::user_profile::UserProfile;
 use crate::domain::user::user::NewUser;
 use crate::domain::user::user_repository::UserRepository;
+use crate::shared::llm_json::parse_llm_json;
 
 /// 画像构建服务配置
 #[derive(Debug, Clone)]
@@ -442,8 +443,7 @@ memory_type 可选：group_preference / group_fact / group_rule / recurring_topi
             .await
             .map_err(|e| QqBotError::Internal(format!("LLM group profile failed: {e}")))?;
 
-        let cleaned = Self::clean_json(&response.content);
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+        if let Ok(parsed) = parse_llm_json::<serde_json::Value>(&response.content) {
             let items = parsed.as_array().cloned().unwrap_or_default();
             for item in &items {
                 if item.get("skip").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -486,17 +486,7 @@ memory_type 可选：group_preference / group_fact / group_rule / recurring_topi
         Ok(())
     }
 
-    fn clean_json(raw: &str) -> String {
-        raw.trim()
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim()
-            .to_string()
-    }
-
     fn parse_json_response(content: &str) -> Result<serde_json::Value, String> {
-        let cleaned = Self::clean_json(content);
-        serde_json::from_str(&cleaned).map_err(|e| format!("JSON parse error: {e}"))
+        parse_llm_json(content).map_err(|e| format!("JSON parse error: {e}"))
     }
 }

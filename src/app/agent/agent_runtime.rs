@@ -16,6 +16,7 @@ use crate::domain::llm::{
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::shared::error::AppError;
+use crate::shared::llm_json::parse_llm_json;
 
 // ── AgentRuntimeSettings ─────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ pub fn normalize_tool_arguments(raw: &Value) -> Value {
             if trimmed.is_empty() {
                 return serde_json::json!({});
             }
-            serde_json::from_str::<Value>(trimmed).unwrap_or_else(|err| {
+            parse_llm_json::<Value>(trimmed).unwrap_or_else(|err| {
                 warn!(
                     error = %err,
                     raw_arguments = %trimmed,

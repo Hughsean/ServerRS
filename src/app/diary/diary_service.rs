@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::shared::error::AppError;
+use crate::shared::llm_json::parse_llm_json;
 
 pub struct DiaryService {
     pub repo: Arc<dyn DiaryRepoT>,
@@ -148,7 +149,7 @@ impl DiaryService {
                     return;
                 }
             };
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+            if let Ok(parsed) = parse_llm_json::<serde_json::Value>(&response) {
                 if let Some(mood_description) = parsed
                     .get("mood_description")
                     .and_then(|value| value.as_str())

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde_json;
 use tracing::{info, warn};
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
@@ -9,6 +8,7 @@ use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::reply::{BotReply, ReplySegment, TimingHint};
+use crate::shared::llm_json::parse_llm_json;
 
 /// Generates structured multi-segment replies using LLM.
 ///
@@ -118,27 +118,8 @@ impl ReplyGenerator {
     /// Tries to extract JSON from the response (handles markdown code fences).
     /// Falls back to wrapping the entire response as a single text segment.
     fn parse_reply(&self, text: &str) -> Result<BotReply, QqBotError> {
-        // Try to find JSON in the response (may be wrapped in ```json ... ```)
-        let json_str = if let Some(start) = text.find("```json") {
-            let inner = &text[start + 7..];
-            if let Some(end) = inner.find("```") {
-                inner[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else if let Some(start) = text.find('{') {
-            let inner = &text[start..];
-            if let Some(end) = inner.rfind('}') {
-                &inner[..=end]
-            } else {
-                text.trim()
-            }
-        } else {
-            text.trim()
-        };
-
         // Attempt structured parse
-        if let Ok(reply) = serde_json::from_str::<BotReply>(json_str) {
+        if let Ok(reply) = parse_llm_json::<BotReply>(text) {
             // Clamp segments count and char length
             let segments: Vec<ReplySegment> = reply
                 .segments

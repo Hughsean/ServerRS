@@ -6,6 +6,7 @@ use tracing::debug;
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewMemory, UserMemory, is_allowed_memory_type};
+use crate::shared::llm_json::{clean_llm_json_response, parse_llm_json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryMergeDecision {
@@ -97,24 +98,14 @@ impl MemoryExtractor {
         let trimmed = response.content.trim();
         debug!(user_id, response_len = trimmed.len(), raw = %trimmed.chars().take(300).collect::<String>(), "记忆提取 LLM 原始回复");
 
-        // 跳过 LLM reasoning/think 标签、emoji 等非 JSON 前缀，找到第一个 [ 或 {
-        let json_start = trimmed.find('[').or_else(|| trimmed.find('{')).unwrap_or(0);
-        let json_body = &trimmed[json_start..].trim();
+        let json_str = clean_llm_json_response(trimmed);
 
-        // Strip markdown fences if present
-        let json_str = json_body
-            .strip_prefix("```json")
-            .or_else(|| json_body.strip_prefix("```"))
-            .and_then(|s| s.strip_suffix("```"))
-            .unwrap_or(json_body)
-            .trim();
-
-        let items: Vec<LlmMemoryItem> = match serde_json::from_str(json_str) {
+        let items: Vec<LlmMemoryItem> = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(e) => {
                 debug!(user_id, json = %json_str.chars().take(300).collect::<String>(), error = %e, "记忆提取 JSON 数组解析失败，尝试单对象");
                 // Try parsing as a single object wrapped in an array
-                let single: LlmMemoryItem = match serde_json::from_str(json_str) {
+                let single: LlmMemoryItem = match serde_json::from_str(&json_str) {
                     Ok(v) => v,
                     Err(e2) => {
                         debug!(user_id, error2 = %e2, "记忆提取单对象解析也失败");
@@ -236,14 +227,8 @@ impl MemoryExtractor {
         let Ok(response) = self.llm.chat(request).await else {
             return MemoryMergeDecision::New;
         };
-        let trimmed = response.content.trim();
-        let json_str = trimmed
-            .strip_prefix("```json")
-            .or_else(|| trimmed.strip_prefix("```"))
-            .and_then(|value| value.strip_suffix("```"))
-            .unwrap_or(trimmed)
-            .trim();
-        let Ok(result) = serde_json::from_str::<LlmMergeDecision>(json_str) else {
+        let json_str = clean_llm_json_response(&response.content);
+        let Ok(result) = parse_llm_json::<LlmMergeDecision>(&json_str) else {
             return MemoryMergeDecision::New;
         };
         let candidate_id = result.candidate_memory_id.filter(|id| {
@@ -355,13 +340,7 @@ Rules:
             return proposed.iter().map(|_| MemoryMergeDecision::New).collect();
         };
 
-        let trimmed = response.content.trim();
-        let json_str = trimmed
-            .strip_prefix("```json")
-            .or_else(|| trimmed.strip_prefix("```"))
-            .and_then(|v| v.strip_suffix("```"))
-            .unwrap_or(trimmed)
-            .trim();
+        let json_str = clean_llm_json_response(&response.content);
 
         #[derive(Deserialize)]
         struct BatchDecision {
@@ -370,7 +349,7 @@ Rules:
             candidate_memory_id: Option<u64>,
         }
 
-        let decisions: Vec<BatchDecision> = match serde_json::from_str(json_str) {
+        let decisions: Vec<BatchDecision> = match parse_llm_json(&json_str) {
             Ok(d) => d,
             Err(_) => return proposed.iter().map(|_| MemoryMergeDecision::New).collect(),
         };
@@ -751,6 +730,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn merge_classifier_ignores_qwen_think_block() {
+        let mock = ConfigurableMockLlm {
+            content: r#"<think>{"decision":"new","candidate_memory_id":null}</think>
+            {"decision":"new_evidence","candidate_memory_id":7}"#
+                .into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+        let decision = extractor
+            .classify_merge(&proposed_memory(), &[candidate_memory()])
+            .await;
+        assert_eq!(decision, MemoryMergeDecision::NewEvidence(7));
+    }
+
+    #[tokio::test]
     async fn merge_classifier_rejects_unknown_candidate_id() {
         let mock = ConfigurableMockLlm {
             content: r#"{"decision":"contradiction","candidate_memory_id":99}"#.into(),
@@ -825,6 +818,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_merge_ignores_qwen_think_block_and_markdown_fence() {
+        let mock = ConfigurableMockLlm {
+            content: r#"<think>[{"index":0,"decision":"new","candidate_memory_id":null}]</think>
+            ```json
+            [{"index":0,"decision":"new_evidence","candidate_memory_id":7}]
+            ```"#
+                .into(),
+        };
+        let extractor = MemoryExtractor::new(Arc::new(mock));
+
+        let proposed = vec![proposed_memory()];
+        let candidates = vec![candidate_memory()];
+        let decisions = extractor.classify_merge_batch(&proposed, &candidates).await;
+
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0], MemoryMergeDecision::NewEvidence(7));
+    }
+
+    #[tokio::test]
     async fn batch_merge_rejects_unknown_candidate_id() {
         let mock = ConfigurableMockLlm {
             content: r#"[{"index":0,"decision":"contradiction","candidate_memory_id":99}]"#.into(),
@@ -837,5 +849,17 @@ mod tests {
 
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0], MemoryMergeDecision::New);
+    }
+
+    #[test]
+    fn clean_llm_json_response_extracts_first_complete_json_value() {
+        let cleaned = clean_llm_json_response(
+            r#"<think>{"draft":true}</think>
+            prefix
+            {"decision":"new","candidate_memory_id":null}
+            suffix"#,
+        );
+
+        assert_eq!(cleaned, r#"{"decision":"new","candidate_memory_id":null}"#);
     }
 }
