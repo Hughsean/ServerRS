@@ -65,6 +65,17 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     })?;
 
     let (_title, clean_text) = html_cleaner::clean(body);
+    let raw_chars = body.chars().count();
+    let clean_chars = clean_text.chars().count();
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        raw_chars,
+        clean_chars,
+        "PageFetched: html cleaned"
+    );
 
     // running/fetched → running/cleaning (only when entering at fetched).
     if run.stage == run_stage::FETCHED
@@ -128,6 +139,13 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         None,
     )
     .await?;
+
+    tracing::debug!(
+        run_id,
+        page_id = run.page_id,
+        clean_chars,
+        "PageFetched: clean text persisted; emitting PageCleaned"
+    );
 
     terminal_events::emit_next(&ctx.outbox_repo, ev::PAGE_CLEANED, run_id, &run.version_key).await
 }

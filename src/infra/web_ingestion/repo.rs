@@ -1483,27 +1483,27 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
 }
 
 fn outbox_event_priority_sql() -> &'static str {
-    // Continue already-fetched pages before discovering more URLs. Otherwise a
-    // large seed import can keep PageFetched/PageCleaned events behind thousands
-    // of UrlDiscovered events, leaving runs stuck at running/fetched.
+    // Prefer deeper pipeline stages before fetching/cleaning more pages. Without
+    // this, a large seed import can leave thousands of pages half-processed
+    // because older PageFetched events keep winning over newer PageCleaned ones.
     "CASE event_type \
-        WHEN 'PageFetched' THEN 0 \
-        WHEN 'PageCleaned' THEN 0 \
-        WHEN 'PageDistilled' THEN 0 \
-        WHEN 'QualityChecked' THEN 0 \
-        WHEN 'DocumentChunked' THEN 0 \
-        WHEN 'ChunksEmbedded' THEN 0 \
-        WHEN 'DocumentIndexed' THEN 0 \
-        WHEN 'KnowledgeStaged' THEN 0 \
         WHEN 'KnowledgePublishRequested' THEN 0 \
         WHEN 'KnowledgeRollbackRequested' THEN 0 \
-        WHEN 'IngestionSkipped' THEN 1 \
-        WHEN 'IngestionRejected' THEN 1 \
-        WHEN 'IngestionFailed' THEN 1 \
-        WHEN 'IngestionDead' THEN 1 \
-        WHEN 'KnowledgePublished' THEN 1 \
-        WHEN 'KnowledgeSuperseded' THEN 1 \
-        WHEN 'KnowledgeRolledBack' THEN 1 \
+        WHEN 'KnowledgeStaged' THEN 1 \
+        WHEN 'DocumentIndexed' THEN 2 \
+        WHEN 'ChunksEmbedded' THEN 3 \
+        WHEN 'DocumentChunked' THEN 4 \
+        WHEN 'QualityChecked' THEN 5 \
+        WHEN 'PageDistilled' THEN 6 \
+        WHEN 'PageCleaned' THEN 7 \
+        WHEN 'IngestionSkipped' THEN 8 \
+        WHEN 'IngestionRejected' THEN 8 \
+        WHEN 'IngestionFailed' THEN 8 \
+        WHEN 'IngestionDead' THEN 8 \
+        WHEN 'KnowledgePublished' THEN 8 \
+        WHEN 'KnowledgeSuperseded' THEN 8 \
+        WHEN 'KnowledgeRolledBack' THEN 8 \
+        WHEN 'PageFetched' THEN 9 \
         WHEN 'UrlDiscovered' THEN 10 \
         WHEN 'CrawlJobCreated' THEN 20 \
         ELSE 30 \

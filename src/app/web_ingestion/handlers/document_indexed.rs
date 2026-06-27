@@ -98,6 +98,20 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let embedding_model = ctx.embedding_model().to_string();
     let embedding_provider = ctx.embedding_provider_name().to_string();
     let dimension = ctx.embedding_dimension();
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        document_id = document.document_id,
+        publish_record_id = publish_record.id,
+        chunk_manifest_count = manifests.len(),
+        collection = %collection,
+        embedding_provider = %embedding_provider,
+        embedding_model = %embedding_model,
+        dimension,
+        "DocumentIndexed: preparing vector manifest"
+    );
 
     // ── Build vector manifest rows + upsert to Qdrant (active=false) ───────
     let mut new_manifests = Vec::with_capacity(manifests.len());
@@ -116,6 +130,14 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             embedding_dimension: dimension as u32,
         });
     }
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        publish_record_id = publish_record.id,
+        point_count = new_manifests.len(),
+        collection = %collection,
+        "DocumentIndexed: vector manifest built"
+    );
 
     if let Some(vs) = ctx.vector_store.as_ref() {
         upsert_points(
@@ -156,6 +178,13 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             )));
         }
     }
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        publish_record_id = publish_record.id,
+        vector_manifest_count = new_manifests.len(),
+        "DocumentIndexed: vector manifest persisted"
+    );
 
     ctx.audit_repo
         .insert(NewAuditLog {
@@ -191,6 +220,12 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        publish_record_id = publish_record.id,
+        "DocumentIndexed: indexing complete; emitting KnowledgeStaged"
+    );
     terminal_events::emit_next(
         &ctx.outbox_repo,
         ev::KNOWLEDGE_STAGED,
@@ -218,6 +253,13 @@ async fn upsert_points(
     vs.ensure_collection(collection, dimension, VectorDistance::Cosine)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("ensure_collection: {e}")))?;
+    tracing::debug!(
+        run_id,
+        collection,
+        dimension,
+        point_count = vector_manifests.len(),
+        "DocumentIndexed: qdrant collection ready"
+    );
 
     let mut points = Vec::with_capacity(vector_manifests.len());
     for (cm, vm) in chunk_manifests.iter().zip(vector_manifests.iter()) {
@@ -261,8 +303,22 @@ async fn upsert_points(
         });
     }
 
+    let point_count = points.len();
+    tracing::debug!(
+        run_id,
+        collection,
+        point_count,
+        dimension,
+        "DocumentIndexed: qdrant upsert started"
+    );
     vs.upsert_points(collection, points)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("qdrant upsert: {e}")))?;
+    tracing::debug!(
+        run_id,
+        collection,
+        point_count,
+        "DocumentIndexed: qdrant upsert completed"
+    );
     Ok(())
 }

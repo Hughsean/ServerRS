@@ -24,7 +24,14 @@ pub async fn run_tick(
         .list_enabled()
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+    let source_count = sources.len();
+    tracing::debug!(
+        source_count,
+        pipeline_version,
+        "web ingestion scheduler tick: enabled sources loaded"
+    );
 
+    let mut created_jobs = 0usize;
     for source in sources {
         let job = crawl_job_repo
             .insert(NewWebCrawlJob {
@@ -53,6 +60,17 @@ pub async fn run_tick(
             })
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
+        created_jobs += 1;
+        tracing::debug!(
+            source_id = source.id,
+            job_id = job.id,
+            "web ingestion scheduler tick: crawl job event enqueued"
+        );
     }
+    tracing::debug!(
+        source_count,
+        created_jobs,
+        "web ingestion scheduler tick completed"
+    );
     Ok(())
 }

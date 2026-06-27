@@ -111,6 +111,19 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         &run.version_key,
         &chunker_config,
     );
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        title = %title,
+        sections = sections.len(),
+        chunk_count = chunk_outputs.len(),
+        target_min = chunker_config.target_min,
+        target_max = chunker_config.target_max,
+        chunker_version = %chunker_config.chunker_version,
+        "DocumentChunked: chunker completed"
+    );
 
     if chunk_outputs.is_empty() {
         // Nothing to chunk — reject (cannot index an empty document).
@@ -134,6 +147,14 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let document_id = ensure_staged_document(ctx, &run, &source_url).await?;
     let publish_record_id = ensure_publish_record(ctx, &run, document_id).await?;
     let saved_chunks = ensure_chunks(ctx, document_id, &chunk_outputs).await?;
+    tracing::debug!(
+        run_id,
+        document_id,
+        publish_record_id,
+        saved_chunks = saved_chunks.len(),
+        expected_chunks = chunk_outputs.len(),
+        "DocumentChunked: staged document and chunks ensured"
+    );
 
     // Alignment guard: the persisted chunks MUST correspond 1:1 (and in
     // chunk_index order) to the chunker output before we build the manifest.
@@ -224,6 +245,13 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
+    tracing::debug!(
+        run_id,
+        document_id,
+        publish_record_id,
+        chunk_count = chunk_outputs.len(),
+        "DocumentChunked: manifest persisted; emitting ChunksEmbedded"
+    );
     terminal_events::emit_next(
         &ctx.outbox_repo,
         ev::CHUNKS_EMBEDDED,

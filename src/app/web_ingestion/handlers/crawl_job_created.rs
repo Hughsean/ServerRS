@@ -32,6 +32,13 @@ pub async fn handle(
     let source_id = job.source_id.ok_or_else(|| {
         WebIngestionError::Internal("CrawlJobCreated: crawl_job has no source_id".into())
     })?;
+    tracing::debug!(
+        job_id,
+        source_id,
+        scheduled_at = ?job.scheduled_at,
+        status = %job.status,
+        "CrawlJobCreated: job loaded"
+    );
 
     // payload.source_id mismatch MUST fail (§5.3 #4 — not just warn).
     if let Some(payload_src) = event.payload["source_id"].as_u64() {
@@ -89,6 +96,7 @@ pub async fn handle(
         "crawl job URL batch selected"
     );
 
+    let selected_count = due.len();
     for url in due {
         let dedupe_version = enqueue_dedupe_version(
             &url.url_hash,
@@ -123,6 +131,12 @@ pub async fn handle(
     ctx.crawl_job_repo
         .mark_finished(job_id, "succeeded")
         .await?;
+    tracing::debug!(
+        job_id,
+        source_id,
+        selected_urls = selected_count,
+        "CrawlJobCreated: URL_DISCOVERED events enqueued"
+    );
     Ok(())
 }
 

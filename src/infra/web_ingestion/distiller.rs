@@ -30,12 +30,15 @@ impl OpenAiKnowledgeDistiller {
             "{}/chat/completions",
             self.config.base_url.trim_end_matches('/')
         );
-        let response = self
+        let mut request = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
-            .json(body)
+            .json(body);
+        if let Some(api_key) = request_api_key(&self.config) {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+        }
+        let response = request
             .send()
             .await
             .map_err(|error| WebIngestionError::Internal(format!("distill HTTP: {error}")))?;
@@ -77,7 +80,7 @@ impl KnowledgeDistiller for OpenAiKnowledgeDistiller {
         cleaned_text: &str,
         url: &str,
     ) -> Result<DistillResult, WebIngestionError> {
-        if self.config.api_key.trim().is_empty() {
+        if distill_llm_requires_api_key(&self.config) && self.config.api_key.trim().is_empty() {
             return Err(WebIngestionError::DistillApiKeyEmpty);
         }
 
@@ -271,4 +274,46 @@ mod tests {
         assert!(parsed.accept);
         assert_eq!(parsed.title, "标题");
     }
+
+    #[test]
+    fn ollama_distiller_allows_empty_api_key() {
+        let config = DistillLlmConfig {
+            provider: "Ollama".into(),
+            base_url: "http://127.0.0.1:11111/v1".into(),
+            api_key: String::new(),
+            ..DistillLlmConfig::default()
+        };
+
+        assert!(!distill_llm_requires_api_key(&config));
+        assert_eq!(request_api_key(&config), None);
+    }
+
+    #[test]
+    fn remote_deepseek_distiller_requires_api_key() {
+        let config = DistillLlmConfig::default();
+
+        assert!(distill_llm_requires_api_key(&config));
+        assert_eq!(request_api_key(&config), None);
+    }
+}
+
+fn request_api_key(config: &DistillLlmConfig) -> Option<&str> {
+    let api_key = config.api_key.trim();
+    if api_key.is_empty() {
+        None
+    } else {
+        Some(api_key)
+    }
+}
+
+fn distill_llm_requires_api_key(config: &DistillLlmConfig) -> bool {
+    let provider = config.provider.trim().to_ascii_lowercase();
+    if provider.contains("ollama") {
+        return false;
+    }
+
+    let base_url = config.base_url.trim().to_ascii_lowercase();
+    !(base_url.starts_with("http://127.0.0.1")
+        || base_url.starts_with("http://localhost")
+        || base_url.starts_with("http://[::1]"))
 }

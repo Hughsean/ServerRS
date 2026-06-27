@@ -4,6 +4,8 @@
 //! and mark published / failed / dead based on the handler result. No business
 //! logic lives here — that is in `handlers/`.
 
+use std::time::Instant;
+
 use crate::app::web_ingestion::event_types::aggregate;
 use crate::app::web_ingestion::event_types::event as ev;
 use crate::app::web_ingestion::handlers;
@@ -27,9 +29,45 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    if events.is_empty() {
+        tracing::debug!(
+            claim_token = %claim_token,
+            "web ingestion dispatcher tick: no events claimed"
+        );
+        return Ok(());
+    }
+
+    tracing::debug!(
+        claim_token = %claim_token,
+        claimed = events.len(),
+        first_event_id = ?events.first().map(|event| event.id),
+        last_event_id = ?events.last().map(|event| event.id),
+        "web ingestion dispatcher claimed events"
+    );
+
     for event in events {
+        let started = Instant::now();
+        tracing::debug!(
+            event_id = event.id,
+            event_type = %event.event_type,
+            aggregate_type = %event.aggregate_type,
+            aggregate_id = event.aggregate_id,
+            retry_count = event.retry_count,
+            "web ingestion event handling started"
+        );
         let result = dispatch(&event, ctx).await;
-        finalize(ctx, &event, &claim_token, result).await;
+        let ok = result.is_ok();
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        finalize(ctx, &event, &claim_token, result, elapsed_ms).await;
+        if ok {
+            tracing::debug!(
+                event_id = event.id,
+                event_type = %event.event_type,
+                aggregate_id = event.aggregate_id,
+                elapsed_ms,
+                "web ingestion event handling completed"
+            );
+        }
     }
     Ok(())
 }
@@ -69,10 +107,19 @@ async fn finalize(
     event: &DomainEvent,
     claim_token: &str,
     result: Result<(), WebIngestionError>,
+    elapsed_ms: u64,
 ) {
     match result {
         Ok(()) => match ctx.outbox_repo.mark_published(event.id, claim_token).await {
-            Ok(true) => {}
+            Ok(true) => {
+                tracing::debug!(
+                    event_id = event.id,
+                    event_type = %event.event_type,
+                    aggregate_id = event.aggregate_id,
+                    elapsed_ms,
+                    "web ingestion event marked published"
+                );
+            }
             Ok(false) => tracing::warn!(
                 event_id = event.id,
                 "mark_published: 0 rows — lock stolen or already processed"
@@ -102,7 +149,7 @@ async fn finalize(
                     }
                     tracing::warn!(
                         event_id = event.id, event_type = %event.event_type, is_dead,
-                        retry_delay_secs = delay, error = %e, "event handler failed"
+                        retry_delay_secs = delay, elapsed_ms, error = %e, "event handler failed"
                     );
                 }
                 Ok(false) => tracing::warn!(

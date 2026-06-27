@@ -84,6 +84,10 @@ pub async fn init_web_ingestion(
         dispatcher = wc.dispatcher_enabled,
         auto_publish = wc.auto_publish,
         proxy_enabled = !wc.fetch_proxy_url.trim().is_empty(),
+        scheduler_interval_secs = wc.scheduler_interval_secs,
+        dispatcher_interval_secs = wc.dispatcher_interval_secs,
+        outbox_batch_size = wc.outbox_batch_size,
+        max_urls_per_source_per_job = wc.max_urls_per_source_per_job,
         "网页知识摄取基础设施初始化完成"
     );
 

@@ -109,6 +109,17 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .await?;
     let ch = hash::content_hash(&fetch_result.body_text);
     let url_h = hash::url_hash(&fetch_result.final_url);
+    tracing::debug!(
+        source_id = effective_source_id,
+        source_url_id,
+        url = %db_url,
+        final_url = %fetch_result.final_url,
+        body_bytes = fetch_result.body.len(),
+        body_chars = fetch_result.body_text.chars().count(),
+        content_hash = %ch,
+        url_hash = %url_h,
+        "UrlDiscovered: fetch completed"
+    );
 
     // ── Upsert web_page — url column written from DB url (§5.3 #5) ──────────
     let page = match ctx
@@ -149,6 +160,14 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         page.latest_success_run_id,
         &ch,
     ) {
+        tracing::debug!(
+            source_id = effective_source_id,
+            source_url_id,
+            page_id = page.id,
+            existing_run_id,
+            content_hash = %ch,
+            "UrlDiscovered: content unchanged; emitting skipped"
+        );
         ctx.source_url_repo
             .mark_crawled(source_url_id, &ch, Utc::now())
             .await?;
@@ -178,6 +197,15 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
     // ── run_key idempotency with RESUME (§5.8 special requirement) ──────────
     if let Some(existing) = ctx.run_repo.find_by_run_key(&rk).await? {
+        tracing::debug!(
+            run_id = existing.id,
+            source_id = effective_source_id,
+            source_url_id,
+            page_id = page.id,
+            stage = %existing.stage,
+            status = %existing.status,
+            "UrlDiscovered: existing run found; checking resume"
+        );
         let outcome = resume_existing_run(ctx, &existing, &ch, &fetch_result.body_text).await?;
         if outcome == ResumeOutcome::FetchedOrLater {
             let fetched_at = Utc::now();
@@ -216,6 +244,19 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             profile.embedding_dimension as u32,
         )
         .await?;
+    tracing::debug!(
+        run_id = run.id,
+        source_id = effective_source_id,
+        source_url_id,
+        page_id = page.id,
+        content_hash = %ch,
+        run_key = %rk,
+        version_key = %vk,
+        embedding_provider = %profile.embedding_provider,
+        embedding_model = %profile.embedding_model,
+        embedding_dimension = profile.embedding_dimension,
+        "UrlDiscovered: ingestion run created"
+    );
 
     // pending/pending → running/fetching
     if !sm::transition(
@@ -284,6 +325,15 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         })
         .await?;
 
+    tracing::debug!(
+        run_id = run.id,
+        source_id = effective_source_id,
+        source_url_id,
+        page_id = page.id,
+        body_bytes = fetch_result.body.len(),
+        body_chars = fetch_result.body_text.chars().count(),
+        "UrlDiscovered: fetched body persisted; emitting PageFetched"
+    );
     emit_page_fetched(ctx, run.id, &vk, &ch).await
 }
 
@@ -330,12 +380,20 @@ async fn resume_existing_run(
             )
             .await?;
             emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
+            tracing::debug!(
+                run_id = existing.id,
+                "UrlDiscovered resume: fetching run advanced; emitted PageFetched"
+            );
             Ok(ResumeOutcome::FetchedOrLater)
         }
         run_stage::FETCHED => {
             // Re-emit PageFetched (idempotent via event_key) so the pipeline
             // continues even if the original event was lost.
             emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
+            tracing::debug!(
+                run_id = existing.id,
+                "UrlDiscovered resume: fetched run; emitted PageFetched"
+            );
             Ok(ResumeOutcome::FetchedOrLater)
         }
         other => {

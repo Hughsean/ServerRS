@@ -56,6 +56,17 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .vector_manifest_repo
         .list_by_publish_record(publish_record.id)
         .await?;
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        publish_record_id = publish_record.id,
+        chunk_count = chunk_manifests.len(),
+        vector_count = vector_manifests.len(),
+        already_staged,
+        "KnowledgeStaged: staged artifacts loaded"
+    );
     if chunk_manifests.is_empty() || vector_manifests.is_empty() {
         return Err(WebIngestionError::Internal(
             "KnowledgeStaged: chunk/vector manifest missing — cannot stage".into(),

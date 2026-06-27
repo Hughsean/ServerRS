@@ -48,6 +48,17 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             )));
         }
     }
+    tracing::debug!(
+        publish_record_id,
+        run_id = record.run_id,
+        source_id = record.source_id,
+        page_id = record.page_id,
+        document_id = record.document_id,
+        active = record.active,
+        publish_status = %record.publish_status,
+        automatic = ?event.payload["automatic"].as_bool(),
+        "publish: candidate record loaded"
+    );
 
     // Rejected runs can never publish. Staged decisions may be published only
     // through an explicit manual request; automatic requests are emitted only
@@ -105,7 +116,22 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .await?;
 
     // ── Atomic DB publish (lock + supersede old + activate new) ────────────
+    tracing::debug!(
+        publish_record_id,
+        run_id = record.run_id,
+        document_id = record.document_id,
+        "publish: transactional publish started"
+    );
     let outcome = ctx.publish_repo.publish_in_tx(publish_record_id).await?;
+    tracing::debug!(
+        publish_record_id,
+        activated_record_id = outcome.activated_record_id,
+        activated_document_id = outcome.activated_document_id,
+        deactivated_record_id = ?outcome.deactivated_record_id,
+        deactivated_document_id = ?outcome.deactivated_document_id,
+        was_already_active = outcome.was_already_active,
+        "publish: transactional publish completed"
+    );
 
     if outcome.was_already_active {
         reconcile_published_run(ctx, record.run_id).await?;
@@ -114,6 +140,12 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     }
 
     let dimension = ctx.embedding_dimension();
+    tracing::debug!(
+        publish_record_id,
+        dimension,
+        deactivated_record_id = ?outcome.deactivated_record_id,
+        "publish: qdrant activation sync starting"
+    );
 
     // ── Qdrant re-sync: deactivate old, activate new ───────────────────────
     // DB is already committed & authoritative. A Qdrant failure here is logged
@@ -146,6 +178,10 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             .await?;
     }
     sync_qdrant(ctx, record.id, dimension, true, "publish").await;
+    tracing::debug!(
+        publish_record_id,
+        "publish: qdrant activation sync requested"
+    );
 
     reconcile_published_run(ctx, record.run_id).await?;
 
@@ -190,6 +226,11 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         })
         .await?;
 
+    tracing::debug!(
+        publish_record_id,
+        run_id = record.run_id,
+        "publish: emitted KnowledgePublished"
+    );
     Ok(())
 }
 

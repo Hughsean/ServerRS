@@ -755,7 +755,7 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
 3. Dispatcher 从 outbox 取出事件，分发处理
 4. 处理成功 → 标记 outbox 事件为 published
 
-Dispatcher 领取事件时会优先处理 `PageFetched` 之后的流水线事件，再处理 `UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不清洗已抓页面。
+Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。
 
 如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里，重启后会继续处理。
 

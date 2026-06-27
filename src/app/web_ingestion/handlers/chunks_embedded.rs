@@ -65,6 +65,15 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             "ChunksEmbedded: no chunks for staged document".into(),
         ));
     }
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        document_id = document.document_id,
+        chunk_count = chunks.len(),
+        "ChunksEmbedded: staged chunks loaded"
+    );
 
     // chunked → embedding (only when entering at chunked)
     if run.stage == run_stage::CHUNKED
@@ -87,7 +96,25 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     // ── Batch embedding (§9.2: never one-request-per-chunk) ────────────────
     let expected_dim = ctx.embedding_dimension();
     let batch_size = ctx.config.embedding_batch_size.max(1);
-    let embedded = embed_missing(ctx, &chunks, batch_size, expected_dim).await?;
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        chunk_count = chunks.len(),
+        batch_size,
+        expected_dim,
+        provider = %ctx.embedding_provider_name(),
+        model = %ctx.embedding_model(),
+        "ChunksEmbedded: embedding missing chunks"
+    );
+    let embedded = embed_missing(ctx, run_id, &chunks, batch_size, expected_dim).await?;
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        written_embeddings = embedded,
+        total_chunks = chunks.len(),
+        expected_dim,
+        "ChunksEmbedded: embedding completed"
+    );
 
     ctx.run_repo
         .update_embedding_info(
@@ -129,6 +156,12 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
+    tracing::debug!(
+        run_id,
+        document_id = document.document_id,
+        written_embeddings = embedded,
+        "ChunksEmbedded: embedding info persisted; emitting DocumentIndexed"
+    );
     terminal_events::emit_next(
         &ctx.outbox_repo,
         ev::DOCUMENT_INDEXED,
@@ -143,6 +176,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 /// embeddings written this call.
 async fn embed_missing(
     ctx: &PipelineContext,
+    run_id: u64,
     chunks: &[KnowledgeChunk],
     batch_size: usize,
     expected_dim: usize,
@@ -160,12 +194,27 @@ async fn embed_missing(
             pending.push(chunk);
         }
     }
+    tracing::debug!(
+        run_id,
+        total_chunks = chunks.len(),
+        pending_chunks = pending.len(),
+        batch_size,
+        expected_dim,
+        "ChunksEmbedded: missing embedding scan completed"
+    );
     if pending.is_empty() {
         return Ok(0);
     }
 
     let mut written = 0usize;
-    for batch in pending.chunks(batch_size) {
+    for (batch_index, batch) in pending.chunks(batch_size).enumerate() {
+        tracing::debug!(
+            run_id,
+            batch_index,
+            batch_len = batch.len(),
+            expected_dim,
+            "ChunksEmbedded: embedding batch request started"
+        );
         let texts: Vec<String> = batch.iter().map(|c| c.content.clone()).collect();
         let vectors = ctx
             .embedding_provider
@@ -180,6 +229,7 @@ async fn embed_missing(
             });
         }
 
+        let batch_written_start = written;
         for (chunk, vector) in batch.iter().zip(vectors.into_iter()) {
             if vector.len() != expected_dim {
                 return Err(WebIngestionError::EmbeddingDimensionMismatch {
@@ -202,6 +252,13 @@ async fn embed_missing(
                 .map_err(|e| WebIngestionError::Internal(format!("save embedding: {e}")))?;
             written += 1;
         }
+        tracing::debug!(
+            run_id,
+            batch_index,
+            batch_written = written - batch_written_start,
+            total_written = written,
+            "ChunksEmbedded: embedding batch persisted"
+        );
     }
     Ok(written)
 }

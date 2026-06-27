@@ -55,8 +55,24 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         )
     })?;
     let result = QualityResult::from_json(quality_json);
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        decision = %result.decision,
+        reason = %result.reason,
+        should_publish = result.should_publish,
+        "QualityChecked: persisted quality decision loaded"
+    );
 
     if result.is_rejected() {
+        tracing::debug!(
+            run_id,
+            decision = %result.decision,
+            reason = %result.reason,
+            "QualityChecked: rejected; emitting terminal rejection"
+        );
         let _ = sm::transition(
             &ctx.run_repo,
             run_id,
@@ -120,6 +136,11 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         })
         .await?;
 
+    tracing::debug!(
+        run_id,
+        decision = %result.decision,
+        "QualityChecked: passed; emitting DocumentChunked"
+    );
     terminal_events::emit_next(
         &ctx.outbox_repo,
         ev::DOCUMENT_CHUNKED,

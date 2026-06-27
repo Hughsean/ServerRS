@@ -103,6 +103,19 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     }
 
     let result = QualityResult::from_decision(&decision, quality_score, risk_flags.clone());
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        quality_score,
+        decision = %result.decision,
+        should_publish = result.should_publish,
+        sections = sections_count,
+        risk_flags = risk_flags.len(),
+        reason = %result.reason,
+        "PageDistilled: quality gate evaluated"
+    );
 
     // Persist the STABLE quality_result (§7.3).
     ctx.run_repo
@@ -131,6 +144,13 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         None,
     )
     .await?;
+
+    tracing::debug!(
+        run_id,
+        page_id = run.page_id,
+        decision = %result.decision,
+        "PageDistilled: quality result persisted; emitting QualityChecked"
+    );
 
     terminal_events::emit_next(
         &ctx.outbox_repo,

@@ -83,6 +83,15 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             id: run.page_id,
         })?;
     let url = page.canonical_url.as_deref().unwrap_or(&page.url);
+    tracing::debug!(
+        run_id,
+        source_id = run.source_id,
+        source_url_id = ?run.source_url_id,
+        page_id = run.page_id,
+        clean_chars = clean_text.chars().count(),
+        url,
+        "PageCleaned: starting distill"
+    );
     let distill_result = match ctx.distiller.distill(&clean_text, &url).await {
         Ok(r) => r,
         Err(WebIngestionError::DistillJsonParseFailed { error }) => {
@@ -105,6 +114,18 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         }
         Err(e) => return Err(e),
     };
+
+    tracing::debug!(
+        run_id,
+        page_id = run.page_id,
+        quality_score = distill_result.distilled.quality_score,
+        should_publish = distill_result.distilled.should_publish,
+        sections = distill_result.distilled.sections.len(),
+        risk_flags = distill_result.distilled.risk_flags.len(),
+        input_tokens = ?distill_result.llm_input_tokens,
+        output_tokens = ?distill_result.llm_output_tokens,
+        "PageCleaned: distill completed"
+    );
 
     let distilled_value = serde_json::to_value(&distill_result.distilled)
         .map_err(|e| WebIngestionError::Internal(format!("serialize distilled: {e}")))?;
@@ -137,6 +158,12 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         None,
     )
     .await?;
+
+    tracing::debug!(
+        run_id,
+        page_id = run.page_id,
+        "PageCleaned: distilled json persisted; emitting PageDistilled"
+    );
 
     terminal_events::emit_next(
         &ctx.outbox_repo,
