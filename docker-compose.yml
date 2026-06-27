@@ -4,20 +4,12 @@ services:
     container_name: serverrs-mysql
     restart: unless-stopped
     environment:
-      # 设置 root 密码
       MYSQL_ROOT_PASSWORD: passwd
-      # 默认数据库名称
       MYSQL_DATABASE: digital_companion
-      # 设置用户名
-      #      MYSQL_USER: user
-      # 设置用户密码
-      #      MYSQL_PASSWORD: pwd
-      # 映射端口
     ports:
       - "3306:3306"
     # 数据持久化
     volumes:
-      # XXX: 修改为自己的路径
       - ./data/mysql8:/var/lib/mysql
 
   qdrant:
