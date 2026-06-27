@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::rag::{KnowledgeChunk, KnowledgeDocument, RAGRepoT};
@@ -197,7 +197,7 @@ impl RetrievalService {
         for (chunk, score) in raw {
             // Validate chunk status
             if chunk.status != 1 {
-                debug!(
+                trace!(
                     chunk_id = chunk.chunk_id,
                     "keyword chunk disabled; skipping"
                 );
@@ -209,12 +209,12 @@ impl RetrievalService {
                     if can_read_document(&doc, user_id) {
                         results.push((chunk, score));
                     } else {
-                        debug!(chunk_id = chunk.chunk_id, doc_id = doc.document_id,
+                        trace!(chunk_id = chunk.chunk_id, doc_id = doc.document_id,
                                visibility = %doc.visibility, "keyword chunk denied by visibility");
                     }
                 }
                 Ok(None) => {
-                    debug!(
+                    trace!(
                         chunk_id = chunk.chunk_id,
                         "keyword chunk document missing; skipping"
                     );
@@ -248,7 +248,7 @@ impl RetrievalService {
             let chunk = match self.repo.find_chunk_by_id(chunk_id).await {
                 Ok(Some(c)) => c,
                 Ok(None) => {
-                    debug!(chunk_id, "chunk not found in MySQL; skipping");
+                    trace!(chunk_id, "chunk not found in MySQL; skipping");
                     continue;
                 }
                 Err(e) => {
@@ -259,7 +259,7 @@ impl RetrievalService {
 
             // 2. Chunk status
             if chunk.status != 1 {
-                debug!(
+                trace!(
                     chunk_id,
                     "chunk disabled (status={}); skipping", chunk.status
                 );
@@ -270,7 +270,7 @@ impl RetrievalService {
             let document = match self.repo.find_document_by_id(chunk.document_id).await {
                 Ok(Some(d)) => d,
                 Ok(None) => {
-                    debug!(doc_id = chunk.document_id, "document missing; skipping");
+                    trace!(doc_id = chunk.document_id, "document missing; skipping");
                     continue;
                 }
                 Err(e) => {
@@ -281,7 +281,7 @@ impl RetrievalService {
 
             // 4. Permission + lifecycle check
             if !can_read_document(&document, user_id) {
-                debug!(chunk_id, doc_id = document.document_id,
+                trace!(chunk_id, doc_id = document.document_id,
                        visibility = %document.visibility,
                        "permission denied");
                 continue;

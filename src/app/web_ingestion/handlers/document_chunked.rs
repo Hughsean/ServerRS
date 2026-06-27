@@ -111,7 +111,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         &run.version_key,
         &chunker_config,
     );
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -147,7 +147,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let document_id = ensure_staged_document(ctx, &run, &source_url).await?;
     let publish_record_id = ensure_publish_record(ctx, &run, document_id).await?;
     let saved_chunks = ensure_chunks(ctx, document_id, &chunk_outputs).await?;
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id,
         publish_record_id,
@@ -245,7 +245,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id,
         publish_record_id,

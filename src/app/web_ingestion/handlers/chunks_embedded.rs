@@ -65,7 +65,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             "ChunksEmbedded: no chunks for staged document".into(),
         ));
     }
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -96,7 +96,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     // ── Batch embedding (§9.2: never one-request-per-chunk) ────────────────
     let expected_dim = ctx.embedding_dimension();
     let batch_size = ctx.config.embedding_batch_size.max(1);
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         chunk_count = chunks.len(),
@@ -107,7 +107,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         "ChunksEmbedded: embedding missing chunks"
     );
     let embedded = embed_missing(ctx, run_id, &chunks, batch_size, expected_dim).await?;
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         written_embeddings = embedded,
@@ -156,7 +156,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         written_embeddings = embedded,
@@ -194,7 +194,7 @@ async fn embed_missing(
             pending.push(chunk);
         }
     }
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         total_chunks = chunks.len(),
         pending_chunks = pending.len(),
@@ -208,7 +208,7 @@ async fn embed_missing(
 
     let mut written = 0usize;
     for (batch_index, batch) in pending.chunks(batch_size).enumerate() {
-        tracing::debug!(
+        tracing::trace!(
             run_id,
             batch_index,
             batch_len = batch.len(),
@@ -252,7 +252,7 @@ async fn embed_missing(
                 .map_err(|e| WebIngestionError::Internal(format!("save embedding: {e}")))?;
             written += 1;
         }
-        tracing::debug!(
+        tracing::trace!(
             run_id,
             batch_index,
             batch_written = written - batch_written_start,

@@ -67,7 +67,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let (_title, clean_text) = html_cleaner::clean(body);
     let raw_chars = body.chars().count();
     let clean_chars = clean_text.chars().count();
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -140,7 +140,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         page_id = run.page_id,
         clean_chars,

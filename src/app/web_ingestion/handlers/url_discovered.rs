@@ -109,7 +109,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         .await?;
     let ch = hash::content_hash(&fetch_result.body_text);
     let url_h = hash::url_hash(&fetch_result.final_url);
-    tracing::debug!(
+    tracing::trace!(
         source_id = effective_source_id,
         source_url_id,
         url = %db_url,
@@ -160,7 +160,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         page.latest_success_run_id,
         &ch,
     ) {
-        tracing::debug!(
+        tracing::trace!(
             source_id = effective_source_id,
             source_url_id,
             page_id = page.id,
@@ -197,7 +197,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
     // ── run_key idempotency with RESUME (§5.8 special requirement) ──────────
     if let Some(existing) = ctx.run_repo.find_by_run_key(&rk).await? {
-        tracing::debug!(
+        tracing::trace!(
             run_id = existing.id,
             source_id = effective_source_id,
             source_url_id,
@@ -244,7 +244,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             profile.embedding_dimension as u32,
         )
         .await?;
-    tracing::debug!(
+    tracing::trace!(
         run_id = run.id,
         source_id = effective_source_id,
         source_url_id,
@@ -325,7 +325,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         })
         .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id = run.id,
         source_id = effective_source_id,
         source_url_id,
@@ -380,7 +380,7 @@ async fn resume_existing_run(
             )
             .await?;
             emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
-            tracing::debug!(
+            tracing::trace!(
                 run_id = existing.id,
                 "UrlDiscovered resume: fetching run advanced; emitted PageFetched"
             );
@@ -390,7 +390,7 @@ async fn resume_existing_run(
             // Re-emit PageFetched (idempotent via event_key) so the pipeline
             // continues even if the original event was lost.
             emit_page_fetched(ctx, existing.id, &existing.version_key, content_hash).await?;
-            tracing::debug!(
+            tracing::trace!(
                 run_id = existing.id,
                 "UrlDiscovered resume: fetched run; emitted PageFetched"
             );

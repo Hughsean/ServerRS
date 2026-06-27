@@ -7,7 +7,7 @@ use qdrant_client::qdrant::{
     point_id::PointIdOptions,
 };
 use qdrant_client::{Payload, Qdrant};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::domain::vector_store::{
     VectorCondition, VectorDistance, VectorFilter, VectorPoint, VectorSearchHit, VectorStoreT,
@@ -186,7 +186,7 @@ impl VectorStoreT for QdrantVectorStore {
                     "collection '{collection}' has dimension {existing_dim} but config expects {dimension}"
                 )));
             }
-            debug!(
+            trace!(
                 collection,
                 dimension, "collection exists with matching dimension"
             );
@@ -245,7 +245,7 @@ impl VectorStoreT for QdrantVectorStore {
                 ))
             })?;
 
-        debug!(collection, count, "upserted points to Qdrant");
+        trace!(collection, count, "upserted points to Qdrant");
         Ok(())
     }
 
@@ -283,7 +283,7 @@ impl VectorStoreT for QdrantVectorStore {
             })
             .collect();
 
-        debug!(collection, count = hits.len(), "Qdrant search completed");
+        trace!(collection, count = hits.len(), "Qdrant search completed");
         Ok(hits)
     }
 

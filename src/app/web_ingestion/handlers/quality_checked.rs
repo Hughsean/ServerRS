@@ -55,7 +55,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         )
     })?;
     let result = QualityResult::from_json(quality_json);
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -67,7 +67,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     );
 
     if result.is_rejected() {
-        tracing::debug!(
+        tracing::trace!(
             run_id,
             decision = %result.decision,
             reason = %result.reason,
@@ -136,7 +136,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         })
         .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         decision = %result.decision,
         "QualityChecked: passed; emitting DocumentChunked"

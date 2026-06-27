@@ -98,7 +98,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     let embedding_model = ctx.embedding_model().to_string();
     let embedding_provider = ctx.embedding_provider_name().to_string();
     let dimension = ctx.embedding_dimension();
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -130,7 +130,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             embedding_dimension: dimension as u32,
         });
     }
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         publish_record_id = publish_record.id,
@@ -178,7 +178,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             )));
         }
     }
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         publish_record_id = publish_record.id,
@@ -220,7 +220,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         document_id = document.document_id,
         publish_record_id = publish_record.id,
@@ -253,7 +253,7 @@ async fn upsert_points(
     vs.ensure_collection(collection, dimension, VectorDistance::Cosine)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("ensure_collection: {e}")))?;
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         collection,
         dimension,
@@ -304,7 +304,7 @@ async fn upsert_points(
     }
 
     let point_count = points.len();
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         collection,
         point_count,
@@ -314,7 +314,7 @@ async fn upsert_points(
     vs.upsert_points(collection, points)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("qdrant upsert: {e}")))?;
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         collection,
         point_count,

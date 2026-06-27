@@ -3,7 +3,7 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{info, trace, warn};
 
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
@@ -140,7 +140,7 @@ impl TaskWorker {
         );
         while let Some(event) = self.receiver.recv().await {
             for h in &self.handlers {
-                debug!(handler = h.name(), event = ?event, "分发事件");
+                trace!(handler = h.name(), event = ?event, "分发事件");
                 h.handle(&event).await;
             }
         }

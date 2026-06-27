@@ -21,6 +21,7 @@ use tokio::task::{JoinHandle, JoinSet};
 
 /// Run one dispatcher tick: claim a batch and process each event.
 pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
+    let tick_started = Instant::now();
     let claim_token = format!("dispatcher:{}", uuid::Uuid::new_v4());
     let dispatcher_parallelism = ctx.config.dispatcher_parallelism.max(1);
     let claim_limit = ctx
@@ -36,16 +37,17 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     if events.is_empty() {
-        tracing::debug!(
+        tracing::trace!(
             claim_token = %claim_token,
             "web ingestion dispatcher tick: no events claimed"
         );
         return Ok(());
     }
 
+    let claimed_count = events.len();
     tracing::debug!(
         claim_token = %claim_token,
-        claimed = events.len(),
+        claimed = claimed_count,
         dispatcher_parallelism,
         claim_limit,
         lock_ttl_secs,
@@ -70,6 +72,12 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
             tracing::error!(error = %e, "web ingestion dispatcher task panicked or was cancelled");
         }
     }
+    tracing::debug!(
+        claim_token = %claim_token,
+        processed = claimed_count,
+        elapsed_ms = tick_started.elapsed().as_millis() as u64,
+        "web ingestion dispatcher batch completed"
+    );
     Ok(())
 }
 
@@ -104,7 +112,7 @@ async fn process_claimed_event(
     };
 
     let started = Instant::now();
-    tracing::debug!(
+    tracing::trace!(
         event_id = event.id,
         event_type = %event.event_type,
         aggregate_type = %event.aggregate_type,
@@ -118,7 +126,7 @@ async fn process_claimed_event(
     finalize(&ctx, &event, &claim_token, result, elapsed_ms).await;
     heartbeat.stop().await;
     if ok {
-        tracing::debug!(
+        tracing::trace!(
             event_id = event.id,
             event_type = %event.event_type,
             aggregate_id = event.aggregate_id,
@@ -228,7 +236,7 @@ impl EventLockHeartbeat {
                         {
                             Ok(true) => {}
                             Ok(false) => {
-                                tracing::debug!(
+                                tracing::trace!(
                                     event_id,
                                     "web ingestion event lock heartbeat skipped: lock no longer owned"
                                 );
@@ -295,7 +303,7 @@ async fn finalize(
     match result {
         Ok(()) => match ctx.outbox_repo.mark_published(event.id, claim_token).await {
             Ok(true) => {
-                tracing::debug!(
+                tracing::trace!(
                     event_id = event.id,
                     event_type = %event.event_type,
                     aggregate_id = event.aggregate_id,

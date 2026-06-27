@@ -23,9 +23,7 @@ pub fn init_tracing(configured_level: &str) -> WorkerGuard {
     // 非阻塞文件写入
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(configured_level))
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = build_env_filter(configured_level);
 
     let stdout_layer = fmt::layer()
         .with_writer(std::io::stdout)
@@ -51,4 +49,21 @@ pub fn init_tracing(configured_level: &str) -> WorkerGuard {
         .init();
 
     guard
+}
+
+fn build_env_filter(configured_level: &str) -> EnvFilter {
+    if let Ok(filter) = EnvFilter::try_from_default_env() {
+        return filter;
+    }
+
+    let mut filter =
+        EnvFilter::try_new(configured_level).unwrap_or_else(|_| EnvFilter::new("info"));
+
+    for directive in ["sqlx::query=warn"] {
+        if let Ok(directive) = directive.parse() {
+            filter = filter.add_directive(directive);
+        }
+    }
+
+    filter
 }

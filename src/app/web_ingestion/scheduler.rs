@@ -25,7 +25,7 @@ pub async fn run_tick(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     let source_count = sources.len();
-    tracing::debug!(
+    tracing::trace!(
         source_count,
         pipeline_version,
         "web ingestion scheduler tick: enabled sources loaded"
@@ -61,7 +61,7 @@ pub async fn run_tick(
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
         created_jobs += 1;
-        tracing::debug!(
+        tracing::trace!(
             source_id = source.id,
             job_id = job.id,
             "web ingestion scheduler tick: crawl job event enqueued"

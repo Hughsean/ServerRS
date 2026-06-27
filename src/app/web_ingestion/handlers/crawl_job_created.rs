@@ -32,7 +32,7 @@ pub async fn handle(
     let source_id = job.source_id.ok_or_else(|| {
         WebIngestionError::Internal("CrawlJobCreated: crawl_job has no source_id".into())
     })?;
-    tracing::debug!(
+    tracing::trace!(
         job_id,
         source_id,
         scheduled_at = ?job.scheduled_at,

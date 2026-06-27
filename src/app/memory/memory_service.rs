@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::domain::llm::{ChatMessage, EmbeddingProvider};
 use crate::domain::memory::{
@@ -282,7 +282,7 @@ impl MemoryService {
         let extracted = memories.len();
 
         if memories.is_empty() || !self.context_is_current(user_id, expected_version).await? {
-            debug!(user_id, extracted, "记忆提取跳过: 提取为空或版本过期");
+            trace!(user_id, extracted, "记忆提取跳过: 提取为空或版本过期");
             return Ok(Vec::new());
         }
 
@@ -591,11 +591,11 @@ impl MemoryService {
                         continue;
                     }
                     if mem.status != 1 {
-                        debug!(memory_id, "memory is disabled; skipping");
+                        trace!(memory_id, "memory is disabled; skipping");
                         continue;
                     }
                     if !policy.includes(&mem) {
-                        debug!(
+                        trace!(
                             memory_id,
                             "memory is outside personalization policy; skipping"
                         );
@@ -604,7 +604,7 @@ impl MemoryService {
                     results.push(mem);
                 }
                 Ok(None) => {
-                    debug!(memory_id, "memory not found in MySQL; skipping");
+                    trace!(memory_id, "memory not found in MySQL; skipping");
                     continue;
                 }
                 Err(e) => {

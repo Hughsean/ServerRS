@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::trace;
 
 use crate::domain::llm::{EmbeddingProvider, LlmError};
 
@@ -143,7 +143,7 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             return Ok(Vec::new());
         }
 
-        debug!(
+        trace!(
             "OllamaEmbeddingProvider.embed -> {} ({} texts, batch size {})",
             self.embed_url(),
             texts.len(),

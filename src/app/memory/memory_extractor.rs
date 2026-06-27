@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewMemory, UserMemory, is_allowed_memory_type};
@@ -115,7 +115,7 @@ impl MemoryExtractor {
         };
 
         let trimmed = response.content.trim();
-        debug!(
+        trace!(
             user_id,
             raw=%trimmed,
             "记忆提取 LLM 原始回复"
@@ -126,12 +126,12 @@ impl MemoryExtractor {
         let items: Vec<LlmMemoryItem> = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(e) => {
-                debug!(user_id, json = %json_str.chars().take(300).collect::<String>(), error = %e, "记忆提取 JSON 数组解析失败，尝试单对象");
+                trace!(user_id, json = %json_str.chars().take(300).collect::<String>(), error = %e, "记忆提取 JSON 数组解析失败，尝试单对象");
                 // Try parsing as a single object wrapped in an array
                 let single: LlmMemoryItem = match serde_json::from_str(&json_str) {
                     Ok(v) => v,
                     Err(e2) => {
-                        debug!(user_id, error2 = %e2, "记忆提取单对象解析也失败");
+                        trace!(user_id, error2 = %e2, "记忆提取单对象解析也失败");
                         return Vec::new();
                     }
                 };
@@ -139,7 +139,7 @@ impl MemoryExtractor {
             }
         };
         let parsed_count = items.len();
-        debug!(user_id, parsed_count, "记忆提取 JSON 解析成功");
+        trace!(user_id, parsed_count, "记忆提取 JSON 解析成功");
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result: Vec<NewMemory> = Vec::new();

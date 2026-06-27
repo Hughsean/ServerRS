@@ -103,7 +103,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     }
 
     let result = QualityResult::from_decision(&decision, quality_score, risk_flags.clone());
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -145,7 +145,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         page_id = run.page_id,
         decision = %result.decision,

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::trace;
 
 use crate::domain::llm::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmError, LlmProvider, TokenUsage,
@@ -221,7 +221,7 @@ impl LlmProvider for OllamaProvider {
                 .map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
-        debug!("OllamaProvider.chat -> {url}");
+        trace!("OllamaProvider.chat -> {url}");
 
         let response: ChatResponse = self.post_json(&url, &body).await?;
 
@@ -286,7 +286,7 @@ impl LlmProvider for OllamaProvider {
                 .map(|r| ReasoningConfig { enabled: r.enabled }),
         };
 
-        debug!("OllamaProvider.chat_with_tools -> {url}");
+        trace!("OllamaProvider.chat_with_tools -> {url}");
 
         let response: ChatResponse = self.post_json(&url, &body).await?;
 

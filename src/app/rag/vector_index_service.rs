@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::memory::{ConversationSummary, MemoryRepoT, UserMemory};
@@ -238,7 +238,7 @@ impl VectorIndexService {
             )
             .await;
 
-        debug!(chunk_id = chunk.chunk_id, vector_id = %vector_id, "indexed knowledge chunk");
+        trace!(chunk_id = chunk.chunk_id, vector_id = %vector_id, "indexed knowledge chunk");
         Ok(vector_id)
     }
 
@@ -369,7 +369,7 @@ impl VectorIndexService {
                 actual_dim,
             )
             .await;
-        debug!(memory_id=memory.memory_id, vector_id=%vector_id, "indexed memory");
+        trace!(memory_id=memory.memory_id, vector_id=%vector_id, "indexed memory");
         Ok(vector_id)
     }
 
@@ -453,7 +453,7 @@ impl VectorIndexService {
             )
             .await?;
 
-        debug!(summary_id = summary.summary_id, vector_id = %vector_id, "indexed summary");
+        trace!(summary_id = summary.summary_id, vector_id = %vector_id, "indexed summary");
         Ok(vector_id)
     }
 

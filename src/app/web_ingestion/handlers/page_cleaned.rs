@@ -83,7 +83,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             id: run.page_id,
         })?;
     let url = page.canonical_url.as_deref().unwrap_or(&page.url);
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         source_id = run.source_id,
         source_url_id = ?run.source_url_id,
@@ -115,7 +115,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         Err(e) => return Err(e),
     };
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         page_id = run.page_id,
         quality_score = distill_result.distilled.quality_score,
@@ -159,7 +159,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     )
     .await?;
 
-    tracing::debug!(
+    tracing::trace!(
         run_id,
         page_id = run.page_id,
         "PageCleaned: distilled json persisted; emitting PageDistilled"
