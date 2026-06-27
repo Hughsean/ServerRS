@@ -42,8 +42,8 @@ max_tool_depth = 10
 provider = "Ollama"
 base_url = "http://127.0.0.1:11111/v1"
 chat_model = "qwen3:14b"
-# Inject via WEB_INGESTION_DISTILL_LLM_API_KEY (or DEEPSEEK_API_KEY) env var.
-# Never commit a real key here.
+# Ollama/local OpenAI-compatible endpoints can leave api_key empty.
+# Remote providers should inject WEB_INGESTION_DISTILL_LLM_API_KEY or DEEPSEEK_API_KEY.
 temperature = 0.1
 top_p = 0.9
 timeout_secs = 180
@@ -200,6 +200,5 @@ default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
 default_encoding = "wav"
 timeout_secs = 30
 sample_rate = 24000
-
 
 
