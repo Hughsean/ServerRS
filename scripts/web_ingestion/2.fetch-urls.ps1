@@ -14,8 +14,9 @@ param(
     [int]$MaxPages = 1000,
     [ValidateRange(0, 4)]
     [int]$MaxDepth = 0,
-    [ValidateRange(500, 60000)]
-    [int]$DelayMs = 1500
+    [ValidateRange(50, 60000)]
+    [int]$DelayMs = 1500,
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,7 +104,9 @@ while ($categoryQueue.Count -gt 0 -and $urls.Count -lt $MaxPages) {
         continue
     }
 
-    Write-Host "Reading $($current.Title) at depth $($current.Depth)..."
+    if (-not $Quiet) {
+        Write-Host "Reading $($current.Title) at depth $($current.Depth)..."
+    }
     $pageContinuation = $null
     do {
         $query = @{
@@ -176,4 +179,6 @@ $urls |
     Sort-Object |
     Set-Content -LiteralPath $target -Encoding utf8
 
-Write-Host "Wrote $($urls.Count) Wikipedia URLs from $($visitedCategories.Count) categories to $target"
+if (-not $Quiet) {
+    Write-Host "Wrote $($urls.Count) Wikipedia URLs from $($visitedCategories.Count) categories to $target"
+}

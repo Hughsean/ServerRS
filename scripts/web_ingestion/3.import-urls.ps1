@@ -16,6 +16,8 @@ param(
     [string]$Database = "digital_companion",
     [string]$User = "root",
     [string]$Password = "passwd",
+    [string]$DatabaseUrl = $env:DATABASE_URL,
+    [string]$MySqlCommand = "mysql",
     [ValidateRange(1, 2000)]
     [int]$BatchSize = 250,
     [switch]$AutoPublish
@@ -27,10 +29,90 @@ function ConvertTo-SqlString([string]$Value) {
     return "'" + $Value.Replace("\", "\\").Replace("'", "''") + "'"
 }
 
+function ConvertFrom-DatabaseUrl([string]$Url) {
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url.Trim(), [UriKind]::Absolute, [ref]$uri)) {
+        throw "Invalid DatabaseUrl: $Url"
+    }
+    if ($uri.Scheme -notin @("mysql", "mariadb")) {
+        throw "DatabaseUrl must use mysql:// or mariadb://, got '$($uri.Scheme)://'."
+    }
+
+    $userInfo = $uri.UserInfo.Split(":", 2)
+    if ($userInfo.Count -eq 0 -or -not $userInfo[0]) {
+        throw "DatabaseUrl must include a username."
+    }
+
+    $databaseName = [Uri]::UnescapeDataString($uri.AbsolutePath.TrimStart("/"))
+    if (-not $databaseName) {
+        throw "DatabaseUrl must include a database name path, for example mysql://user:pass@host:3306/db_name."
+    }
+
+    [pscustomobject]@{
+        Host = $uri.Host
+        Port = if ($uri.Port -gt 0) { $uri.Port } else { 3306 }
+        User = [Uri]::UnescapeDataString($userInfo[0])
+        Password = if ($userInfo.Count -gt 1) { [Uri]::UnescapeDataString($userInfo[1]) } else { "" }
+        Database = $databaseName
+        SslMode = Get-UrlQueryValue $uri.Query "ssl-mode"
+    }
+}
+
+function Get-UrlQueryValue([string]$Query, [string]$Name) {
+    if (-not $Query) {
+        return $null
+    }
+    $trimmed = $Query.TrimStart("?")
+    foreach ($pair in $trimmed.Split("&", [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        $parts = $pair.Split("=", 2)
+        $key = [Uri]::UnescapeDataString($parts[0])
+        if ($key -eq $Name) {
+            if ($parts.Count -eq 1) {
+                return ""
+            }
+            return [Uri]::UnescapeDataString($parts[1])
+        }
+    }
+    return $null
+}
+
 function Invoke-MySql([string]$Sql) {
-    $Sql | docker exec -i -e "MYSQL_PWD=$Password" $Container `
-        mysql "--user=$User" "--database=$Database" `
-        --default-character-set=utf8mb4 --batch --raw
+    if ($DatabaseUrl -and $DatabaseUrl.Trim()) {
+        if (-not (Get-Command $MySqlCommand -ErrorAction SilentlyContinue)) {
+            throw "mysql command '$MySqlCommand' was not found. Install MySQL client or omit -DatabaseUrl to use Docker mode."
+        }
+
+        $conn = ConvertFrom-DatabaseUrl $DatabaseUrl
+        $previousMysqlPwd = $env:MYSQL_PWD
+        try {
+            $env:MYSQL_PWD = $conn.Password
+            $args = @(
+                "--host=$($conn.Host)",
+                "--port=$($conn.Port)",
+                "--user=$($conn.User)",
+                "--database=$($conn.Database)",
+                "--protocol=TCP",
+                "--default-character-set=utf8mb4",
+                "--batch",
+                "--raw"
+            )
+            if ($conn.SslMode) {
+                $args += "--ssl-mode=$($conn.SslMode)"
+            }
+            $Sql | & $MySqlCommand @args
+        }
+        finally {
+            $env:MYSQL_PWD = $previousMysqlPwd
+        }
+    }
+    else {
+        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            throw "docker command was not found. Provide -DatabaseUrl to connect with a local mysql client instead."
+        }
+        $Sql | docker exec -i -e "MYSQL_PWD=$Password" $Container `
+            mysql "--user=$User" "--database=$Database" `
+            --default-character-set=utf8mb4 --batch --raw
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "mysql command failed with exit code $LASTEXITCODE"
     }

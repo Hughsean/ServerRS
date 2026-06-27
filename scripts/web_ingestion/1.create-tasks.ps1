@@ -3,8 +3,9 @@
 一次性创建多主题中文维基百科知识采集任务。
 
 .DESCRIPTION
-按主题调用 fetch-wikipedia-category-urls.ps1 生成 URL，再调用
-import-web-source-urls.ps1 创建 web_sources 并导入 web_source_urls。
+按主题调用 2.fetch-urls.ps1 生成 URL，再调用
+3.import-urls.ps1 创建 web_sources 并导入 web_source_urls。
+传入 -ExportOnly 时只生成 URL 文件和 manifest，不写数据库。
 脚本不会启动 ServerRS；服务器启动后的第一次调度会创建抓取批次。
 #>
 
@@ -21,8 +22,11 @@ param(
     [ValidateRange(0, 4)]
     [int]$CategoryDepth = 1,
 
-    [ValidateRange(500, 60000)]
+    [ValidateRange(50, 60000)]
     [int]$ApiDelayMs = 1500,
+
+    [ValidateRange(1, 16)]
+    [int]$Parallelism = 4,
 
     [string]$ProxyUrl = "http://127.0.0.1:7890",
 
@@ -35,8 +39,11 @@ param(
     [string]$Database = "digital_companion",
     [string]$User = "root",
     [string]$Password = "passwd",
+    [string]$DatabaseUrl = $env:DATABASE_URL,
+    [string]$MySqlCommand = "mysql",
 
     [switch]$AutoPublishReviewedGroups,
+    [switch]$ExportOnly,
     [switch]$StopOnError,
     [switch]$PlanOnly
 )
@@ -44,8 +51,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$fetchScript = Join-Path $PSScriptRoot "fetch-wikipedia-category-urls.ps1"
-$importScript = Join-Path $PSScriptRoot "import-web-source-urls.ps1"
+$fetchScript = Join-Path $PSScriptRoot "2.fetch-urls.ps1"
+$importScript = Join-Path $PSScriptRoot "3.import-urls.ps1"
 $outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
     [System.IO.Path]::GetFullPath($OutputDirectory)
 }
@@ -118,8 +125,13 @@ Write-Host "Wikipedia knowledge task plan"
 Write-Host "Topics: $($selectedTopics.Count)"
 Write-Host "Maximum pages per topic: $MaxPagesPerTopic"
 Write-Host "Category depth: $CategoryDepth"
+Write-Host "Parallelism: $Parallelism"
 Write-Host "Proxy: $(if ($ProxyUrl) { $ProxyUrl } else { '<direct>' })"
 Write-Host "Output directory: $outputRoot"
+Write-Host "Mode: $(if ($ExportOnly) { 'export URL files only' } else { 'export URL files and import database sources' })"
+if (-not $ExportOnly) {
+    Write-Host "Database: $(if ($DatabaseUrl) { 'direct URL connection' } else { "docker container '$Container'" })"
+}
 Write-Host ""
 
 $selectedTopics |
@@ -134,16 +146,30 @@ if ($PlanOnly) {
 if (-not (Test-Path -LiteralPath $fetchScript)) {
     throw "Missing fetch script: $fetchScript"
 }
-if (-not (Test-Path -LiteralPath $importScript)) {
-    throw "Missing import script: $importScript"
-}
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "docker command was not found."
+if (-not (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)) {
+    throw "Start-ThreadJob was not found. Run with PowerShell 7+ or install the ThreadJob module."
 }
 
-$containerRunning = docker inspect --format "{{.State.Running}}" $Container 2>$null
-if ($LASTEXITCODE -ne 0 -or $containerRunning.Trim() -ne "true") {
-    throw "MySQL container '$Container' is not running."
+if (-not $ExportOnly) {
+    if (-not (Test-Path -LiteralPath $importScript)) {
+        throw "Missing import script: $importScript"
+    }
+
+    if ($DatabaseUrl -and $DatabaseUrl.Trim()) {
+        if (-not (Get-Command $MySqlCommand -ErrorAction SilentlyContinue)) {
+            throw "mysql command '$MySqlCommand' was not found. Install MySQL client or omit -DatabaseUrl to use Docker mode."
+        }
+    }
+    else {
+        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            throw "docker command was not found. Provide -DatabaseUrl to connect with a local mysql client instead."
+        }
+
+        $containerRunning = docker inspect --format "{{.State.Running}}" $Container 2>$null
+        if ($LASTEXITCODE -ne 0 -or $containerRunning.Trim() -ne "true") {
+            throw "MySQL container '$Container' is not running."
+        }
+    }
 }
 
 $categoryTitles = ($selectedTopics | ForEach-Object { "Category:$($_.Category)" }) -join "|"
@@ -175,6 +201,108 @@ if ($missingCategories.Count -gt 0) {
 
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 
+$jobs = [System.Collections.Generic.List[object]]::new()
+foreach ($topic in $selectedTopics) {
+    $sourceName = "zhwiki-$($topic.Slug)"
+    while (@($jobs | Where-Object { $_.State -eq "Running" }).Count -ge $Parallelism) {
+        $completed = Wait-Job -Job $jobs -Any
+        foreach ($job in @($completed)) {
+            Write-Host "Fetched topic job finished: $($job.Name)"
+        }
+    }
+
+    Write-Host "Queueing [$($topic.Group)] $($topic.Category) -> $sourceName"
+    $jobs.Add((Start-ThreadJob -Name $sourceName -ScriptBlock {
+        param(
+            [pscustomobject]$Topic,
+            [string]$FetchScript,
+            [string]$OutputRoot,
+            [string]$UserAgent,
+            [int]$MaxPagesPerTopic,
+            [int]$CategoryDepth,
+            [string]$ProxyUrl,
+            [int]$ApiDelayMs,
+            [bool]$AutoPublishReviewedGroups
+        )
+
+        $ErrorActionPreference = "Stop"
+        $sourceName = "zhwiki-$($Topic.Slug)"
+        $urlFile = Join-Path $OutputRoot "$sourceName.txt"
+        $autoPublish = $AutoPublishReviewedGroups -and -not [bool]$Topic.StrictReview
+
+        try {
+            & $FetchScript `
+                -Category $Topic.Category `
+                -OutputFile $urlFile `
+                -UserAgent $UserAgent `
+                -MaxPages $MaxPagesPerTopic `
+                -MaxDepth $CategoryDepth `
+                -ProxyUrl $ProxyUrl `
+                -DelayMs $ApiDelayMs `
+                -Quiet
+
+            $rawUrls = @(
+                Get-Content -LiteralPath $urlFile |
+                    ForEach-Object { $_.Trim() } |
+                    Where-Object { $_ }
+            )
+
+            [pscustomobject]@{
+                Group = $Topic.Group
+                Category = $Topic.Category
+                Description = $Topic.Description
+                SourceName = $sourceName
+                UrlFile = $urlFile
+                RawUrls = $rawUrls
+                AutoPublish = $autoPublish
+                Status = "fetched"
+                Error = ""
+            }
+        }
+        catch {
+            [pscustomobject]@{
+                Group = $Topic.Group
+                Category = $Topic.Category
+                Description = $Topic.Description
+                SourceName = $sourceName
+                UrlFile = $urlFile
+                RawUrls = @()
+                AutoPublish = $autoPublish
+                Status = "failed"
+                Error = $_.Exception.Message
+            }
+        }
+    } -ArgumentList @(
+        $topic,
+        $fetchScript,
+        $outputRoot,
+        $UserAgent,
+        $MaxPagesPerTopic,
+        $CategoryDepth,
+        $ProxyUrl,
+        $ApiDelayMs,
+        [bool]$AutoPublishReviewedGroups
+    )))
+}
+
+if ($jobs.Count -gt 0) {
+    Wait-Job -Job $jobs | Out-Null
+}
+
+$fetchResults = @(
+    foreach ($job in $jobs) {
+        Receive-Job -Job $job
+    }
+)
+if ($jobs.Count -gt 0) {
+    Remove-Job -Job $jobs
+}
+
+$fetchBySource = @{}
+foreach ($fetchResult in $fetchResults) {
+    $fetchBySource[$fetchResult.SourceName] = $fetchResult
+}
+
 $seenUrls = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
 )
@@ -182,65 +310,8 @@ $results = [System.Collections.Generic.List[object]]::new()
 
 foreach ($topic in $selectedTopics) {
     $sourceName = "zhwiki-$($topic.Slug)"
-    $urlFile = Join-Path $outputRoot "$sourceName.txt"
-    $autoPublish = $AutoPublishReviewedGroups -and -not $topic.StrictReview
-
-    Write-Host ""
-    Write-Host "[$($topic.Group)] $($topic.Category) -> $sourceName"
-
-    try {
-        & $fetchScript `
-            -Category $topic.Category `
-            -OutputFile $urlFile `
-            -UserAgent $UserAgent `
-            -MaxPages $MaxPagesPerTopic `
-            -MaxDepth $CategoryDepth `
-            -ProxyUrl $ProxyUrl `
-            -DelayMs $ApiDelayMs
-
-        $topicUrls = [System.Collections.Generic.List[string]]::new()
-        foreach ($url in Get-Content -LiteralPath $urlFile) {
-            $candidate = $url.Trim()
-            if ($candidate -and $seenUrls.Add($candidate)) {
-                $topicUrls.Add($candidate)
-            }
-        }
-
-        $topicUrls |
-            Sort-Object |
-            Set-Content -LiteralPath $urlFile -Encoding utf8
-
-        if ($topicUrls.Count -eq 0) {
-            throw "No unique article URLs were found for category '$($topic.Category)'."
-        }
-
-        $importArgs = @{
-            SourceName = $sourceName
-            Description = $topic.Description
-            UrlFile = $urlFile
-            AllowedDomains = @("zh.wikipedia.org")
-            CrawlIntervalSecs = $CrawlIntervalSecs
-            Container = $Container
-            Database = $Database
-            User = $User
-            Password = $Password
-        }
-        if ($autoPublish) {
-            $importArgs["AutoPublish"] = $true
-        }
-        & $importScript @importArgs
-
-        $results.Add([pscustomobject]@{
-            Group = $topic.Group
-            Category = $topic.Category
-            SourceName = $sourceName
-            UrlCount = $topicUrls.Count
-            AutoPublish = $autoPublish
-            Status = "created"
-            Error = ""
-        })
-    }
-    catch {
+    $fetchResult = $fetchBySource[$sourceName]
+    if ($null -eq $fetchResult) {
         $results.Add([pscustomobject]@{
             Group = $topic.Group
             Category = $topic.Category
@@ -248,11 +319,116 @@ foreach ($topic in $selectedTopics) {
             UrlCount = 0
             AutoPublish = $false
             Status = "failed"
+            Error = "fetch job produced no result"
+        })
+        if ($StopOnError) {
+            break
+        }
+        continue
+    }
+
+    if ($fetchResult.Status -eq "failed") {
+        $results.Add([pscustomobject]@{
+            Group = $fetchResult.Group
+            Category = $fetchResult.Category
+            SourceName = $fetchResult.SourceName
+            UrlCount = 0
+            AutoPublish = $fetchResult.AutoPublish
+            Status = "failed"
+            Error = $fetchResult.Error
+        })
+        Write-Warning "Failed to fetch '$($fetchResult.SourceName)': $($fetchResult.Error)"
+        if ($StopOnError) {
+            break
+        }
+        continue
+    }
+
+    $topicUrls = [System.Collections.Generic.List[string]]::new()
+    foreach ($url in @($fetchResult.RawUrls)) {
+        $candidate = $url.Trim()
+        if ($candidate -and $seenUrls.Add($candidate)) {
+            $topicUrls.Add($candidate)
+        }
+    }
+
+    $topicUrls |
+        Sort-Object |
+        Set-Content -LiteralPath $fetchResult.UrlFile -Encoding utf8
+
+    if ($topicUrls.Count -eq 0) {
+        $results.Add([pscustomobject]@{
+            Group = $fetchResult.Group
+            Category = $fetchResult.Category
+            SourceName = $fetchResult.SourceName
+            UrlCount = 0
+            AutoPublish = $fetchResult.AutoPublish
+            Status = "failed"
+            Error = "No unique article URLs were found for category '$($fetchResult.Category)'."
+        })
+        if ($StopOnError) {
+            break
+        }
+        continue
+    }
+
+    if ($ExportOnly) {
+        $results.Add([pscustomobject]@{
+            Group = $fetchResult.Group
+            Category = $fetchResult.Category
+            SourceName = $fetchResult.SourceName
+            UrlCount = $topicUrls.Count
+            AutoPublish = $fetchResult.AutoPublish
+            Status = "exported"
+            Error = ""
+        })
+        continue
+    }
+
+    try {
+        $importArgs = @{
+            SourceName = $fetchResult.SourceName
+            Description = $fetchResult.Description
+            UrlFile = $fetchResult.UrlFile
+            AllowedDomains = @("zh.wikipedia.org")
+            CrawlIntervalSecs = $CrawlIntervalSecs
+            Container = $Container
+            Database = $Database
+            User = $User
+            Password = $Password
+            MySqlCommand = $MySqlCommand
+        }
+        if ($DatabaseUrl -and $DatabaseUrl.Trim()) {
+            $importArgs["DatabaseUrl"] = $DatabaseUrl
+        }
+        if ($fetchResult.AutoPublish) {
+            $importArgs["AutoPublish"] = $true
+        }
+        & $importScript @importArgs
+
+        $results.Add([pscustomobject]@{
+            Group = $fetchResult.Group
+            Category = $fetchResult.Category
+            SourceName = $fetchResult.SourceName
+            UrlCount = $topicUrls.Count
+            AutoPublish = $fetchResult.AutoPublish
+            Status = "created"
+            Error = ""
+        })
+    }
+    catch {
+        $results.Add([pscustomobject]@{
+            Group = $fetchResult.Group
+            Category = $fetchResult.Category
+            SourceName = $fetchResult.SourceName
+            UrlCount = $topicUrls.Count
+            AutoPublish = $fetchResult.AutoPublish
+            Status = "failed"
             Error = $_.Exception.Message
         })
-        Write-Warning "Failed to create '$sourceName': $($_.Exception.Message)"
+        Write-Warning "Failed to import '$($fetchResult.SourceName)': $($_.Exception.Message)"
         if ($StopOnError) {
-            throw
+            break
         }
     }
 }
@@ -261,10 +437,15 @@ $manifestPath = Join-Path $outputRoot "task-manifest.csv"
 $results | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding utf8
 
 Write-Host ""
-Write-Host "Task creation summary"
+Write-Host "$(if ($ExportOnly) { 'URL export summary' } else { 'Task creation summary' })"
 $results | Format-Table Group, Category, UrlCount, AutoPublish, Status -AutoSize
 Write-Host "Manifest: $manifestPath"
-Write-Host "Start ServerRS with 'cargo run' to trigger the first scheduler tick."
+if ($ExportOnly) {
+    Write-Host "URL files were exported only; run this script without -ExportOnly or import-web-source-urls.ps1 to load them into web ingestion."
+}
+else {
+    Write-Host "Start ServerRS with 'cargo run' to trigger the first scheduler tick."
+}
 
 $failedCount = @($results | Where-Object { $_.Status -eq "failed" }).Count
 if ($failedCount -gt 0) {
