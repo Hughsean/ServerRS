@@ -14,6 +14,8 @@ where
 ///
 /// The cleanup intentionally removes `<think>...</think>` before scanning, so
 /// JSON-shaped drafts inside Qwen reasoning blocks do not get parsed as output.
+/// Some Qwen/Ollama responses only include a dangling `</think>` marker; in
+/// that case everything up to and including the marker is treated as reasoning.
 pub fn clean_llm_json_response(raw: &str) -> String {
     let without_thinking = strip_thinking_blocks(raw);
     let trimmed = without_thinking.trim();
@@ -29,6 +31,13 @@ pub fn strip_thinking_blocks(input: &str) -> String {
 
     loop {
         let Some(start) = rest.find("<think>") else {
+            if output.is_empty() {
+                if let Some(end) = rest.find("</think>") {
+                    rest = &rest[end + "</think>".len()..];
+                    output.push_str(rest);
+                    break;
+                }
+            }
             output.push_str(rest);
             break;
         };
@@ -112,6 +121,20 @@ mod tests {
         );
 
         assert_eq!(cleaned, r#"{"decision":"new","candidate_memory_id":null}"#);
+    }
+
+    #[test]
+    fn drops_dangling_qwen_think_close_prefix() {
+        let cleaned = clean_llm_json_response(
+            r#"（内心OS：这里可能有 {"draft": true} 这种草稿。）
+            </think>
+            [{"memory_type":"fact","content":"用户叫 Alice"}]"#,
+        );
+
+        assert_eq!(
+            cleaned,
+            r#"[{"memory_type":"fact","content":"用户叫 Alice"}]"#
+        );
     }
 
     #[test]

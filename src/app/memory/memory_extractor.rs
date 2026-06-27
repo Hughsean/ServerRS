@@ -29,6 +29,8 @@ struct LlmMemoryItem {
     #[serde(default)]
     memory_type: String,
     content: String,
+    #[serde(default)]
+    canonical_form: Option<String>,
     #[serde(default = "default_confidence")]
     confidence: f64,
 }
@@ -51,11 +53,28 @@ const EXTRACTION_PROMPT: &str = "\
   - memory_type: 类型，只能是 \"preference\"（偏好）、\"fact\"（事实）、\
 \"emotional_pattern\"（情绪模式）、\"goal\"（目标）之一
   - content: 记忆内容，用中文简洁陈述（例如 \"用户喜欢徒步旅行\"）
+  - canonical_form: 标准记忆形态，用稳定、原子化、可去重的格式表达同一事实或偏好
   - confidence: 置信度，0.0~1.0 之间的数字
 
 只提取用户明确表达、对长期陪伴有用的信息。不要提取助手建议。不要保存一次性闲聊、网页内容、工具输出或不确定推测。不得保存风险标签、危机信号、安全判断、自伤风险分析、临床诊断、人格障碍标签、身份证号、手机号、住址、密码、银行卡、API Key 等内容。
 
-仅返回合法的 JSON 数组，不要额外文字或 markdown。如果没有值得提取的信息，返回空数组 []。";
+canonical_form 规则：
+- 必须保留 content 的真实含义，不得添加 content 没有表达的信息。
+- 用“用户”为主语，尽量写成一条稳定的标准事实。
+- 对身份资料使用键值式表达，例如 \"用户姓名=Alice；年龄=24；职业=平面设计师\"。
+- 对偏好使用集合式表达，例如 \"用户偏好=画画,摄影\"。
+- 对目标使用 \"用户目标=...\"。
+- 对情绪模式使用 \"用户情绪模式=...\"。
+- 人名、宠物名、专有名词保留原大小写和原文写法。
+- 不要包含“可能、似乎、聊天中提到”等来源描述。
+
+输出示例：
+[
+  {\"memory_type\":\"fact\",\"content\":\"用户的名字是 Alice，24岁，职业是平面设计师\",\"canonical_form\":\"用户姓名=Alice；年龄=24；职业=平面设计师\",\"confidence\":0.95},
+  {\"memory_type\":\"preference\",\"content\":\"用户喜欢画画和摄影\",\"canonical_form\":\"用户偏好=画画,摄影\",\"confidence\":0.9}
+]
+
+仅返回合法的 JSON 数组，不要额外文字、markdown、代码块、思考过程、<think> 或 </think> 标签。如果没有值得提取的信息，返回空数组 []。";
 
 impl MemoryExtractor {
     pub fn new(llm: Arc<dyn LlmProvider>) -> Self {
@@ -96,7 +115,11 @@ impl MemoryExtractor {
         };
 
         let trimmed = response.content.trim();
-        debug!(user_id, response_len = trimmed.len(), raw = %trimmed.chars().take(300).collect::<String>(), "记忆提取 LLM 原始回复");
+        debug!(
+            user_id,
+            raw=%trimmed,
+            "记忆提取 LLM 原始回复"
+        );
 
         let json_str = clean_llm_json_response(trimmed);
 
@@ -146,9 +169,20 @@ impl MemoryExtractor {
             } else {
                 content
             };
+            let canonical_form = item
+                .canonical_form
+                .as_deref()
+                .map(normalize_canonical_text)
+                .filter(|value| !value.is_empty())
+                .map(|value| truncate_chars(&value, 300));
 
-            // Batch dedup by type + content
-            let dedup_key = format!("{memory_type}|{truncated}");
+            // Batch dedup by type + canonical form when available.
+            let dedup_basis = canonical_form.as_deref().unwrap_or(&truncated);
+            let dedup_key = format!(
+                "{}|{}",
+                memory_type,
+                normalize_canonical_text(dedup_basis).to_lowercase()
+            );
             if !seen.insert(dedup_key) {
                 continue;
             }
@@ -156,7 +190,7 @@ impl MemoryExtractor {
             result.push(NewMemory {
                 user_id,
                 memory_key: None,
-                canonical_form: None,
+                canonical_form,
                 memory_type,
                 content: truncated,
                 confidence,
@@ -378,6 +412,18 @@ Rules:
     }
 }
 
+fn normalize_canonical_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() > max_chars {
+        value.chars().take(max_chars).collect::<String>() + "..."
+    } else {
+        value.to_string()
+    }
+}
+
 /// Mock LLM provider used in both the extractor and service unit tests.
 #[cfg(test)]
 pub(crate) mod test_utils {
@@ -397,7 +443,7 @@ pub(crate) mod test_utils {
         ) -> Result<ChatCompletionResponse, LlmError> {
             Ok(ChatCompletionResponse {
                 content: r#"[
-                    {"memory_type": "preference", "content": "user likes jazz music", "confidence": 0.9},
+                    {"memory_type": "preference", "content": "user likes jazz music", "canonical_form": "用户偏好=爵士乐", "confidence": 0.9},
                     {"memory_type": "profile", "content": "user is a college student", "confidence": 0.8}
                 ]"#
                 .to_string(),
@@ -443,6 +489,10 @@ mod tests {
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].memory_type, "preference");
         assert_eq!(memories[0].content, "user likes jazz music");
+        assert_eq!(
+            memories[0].canonical_form.as_deref(),
+            Some("用户偏好=爵士乐")
+        );
         assert_eq!(memories[0].user_id, 42);
     }
 

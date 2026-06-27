@@ -56,6 +56,19 @@ fn canonicalize_memory(content: &str) -> String {
         .to_lowercase()
 }
 
+fn standardize_canonical_form(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn effective_canonical_form(memory: &NewMemory) -> String {
+    memory
+        .canonical_form
+        .as_deref()
+        .map(standardize_canonical_form)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| standardize_canonical_form(&memory.content))
+}
+
 fn memory_key(canonical_form: &str) -> String {
     Sha256::digest(canonical_form.as_bytes())
         .iter()
@@ -308,8 +321,9 @@ impl MemoryService {
             };
 
             // ── Exact-key dedup ──
-            let canonical_form = canonicalize_memory(&memory.content);
-            let key = memory_key(&canonical_form);
+            let canonical_form = effective_canonical_form(&memory);
+            let key_material = canonicalize_memory(&canonical_form);
+            let key = memory_key(&key_material);
             memory.canonical_form = Some(canonical_form);
             memory.memory_key = Some(key.clone());
             if let Some(existing) = self.repo.find_by_memory_key(user_id, &key).await? {
@@ -854,6 +868,28 @@ mod tests {
         let second = canonicalize_memory("user likes jazz");
         assert_eq!(first, second);
         assert_eq!(memory_key(&first), memory_key(&second));
+    }
+
+    #[test]
+    fn effective_canonical_form_prefers_standard_memory_shape() {
+        let memory = NewMemory {
+            user_id: 1,
+            memory_key: None,
+            canonical_form: Some(" 用户姓名=Alice；年龄=24；职业=平面设计师 ".into()),
+            memory_type: "fact".into(),
+            content: "用户的名字是Alice，24岁，职业是平面设计师".into(),
+            confidence: 0.9,
+            merge_decision: "new".into(),
+            source_conversation_id: Some(1),
+            source_message_id: Some(1),
+        };
+
+        let canonical = effective_canonical_form(&memory);
+        assert_eq!(canonical, "用户姓名=Alice；年龄=24；职业=平面设计师");
+        assert_eq!(
+            canonicalize_memory(&canonical),
+            "用户姓名=alice；年龄=24；职业=平面设计师"
+        );
     }
 
     fn test_memory(memory_type: &str) -> NewMemory {

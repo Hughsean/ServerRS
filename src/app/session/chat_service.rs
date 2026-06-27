@@ -10,7 +10,9 @@ use crate::app::agent::agent_runtime::{AgentResponse, AgentRuntime};
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::vector_index_service::VectorIndexService;
 use crate::domain::conversation::conversation::Conversation;
+use crate::domain::conversation::conversation_message::ConversationMessage;
 use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::llm::ChatMessage;
 use crate::domain::tasks::task_event::{ConversationLifecycleTask, TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user_context_control::{
@@ -21,6 +23,8 @@ use crate::shared::error::AppError;
 
 /// Per-user mutex for serializing concurrent requests from the same user.
 type UserMutexMap = DashMap<u64, Arc<Mutex<()>>>;
+
+const FALLBACK_RECENT_MESSAGE_LIMIT: u64 = 100;
 
 /// ChatService is the primary business entry point for the sessionless,
 /// per-user conversation model.
@@ -135,7 +139,11 @@ impl ChatService {
             .as_ref()
             .and_then(|loc| serde_json::to_value(loc).ok());
 
-        // 3. Call AgentRuntime::respond
+        // 3. Load recent persisted dialogue before the current turn. The runtime
+        // will append the current user message and apply the final context limit.
+        let recent_messages = self.load_recent_chat_messages(conversation_id).await?;
+
+        // 4. Call AgentRuntime::respond
         let response: AgentResponse = self
             .agent_runtime
             .respond(
@@ -144,11 +152,11 @@ impl ChatService {
                 text,
                 emotion,
                 location_value,
-                Vec::new(), // recent_messages — AgentRuntime loads from DB
+                recent_messages,
             )
             .await?;
 
-        // 4. Publish TurnClosedEvent for post-processing
+        // 5. Publish TurnClosedEvent for post-processing
         let event = TaskEvent::TurnClosed(TurnClosedEvent {
             user_id,
             conversation_id,
@@ -245,5 +253,126 @@ impl ChatService {
             }
         }
         Ok(result)
+    }
+
+    async fn load_recent_chat_messages(
+        &self,
+        conversation_id: u64,
+    ) -> Result<Vec<ChatMessage>, AppError> {
+        let limit = match self.agent_runtime.max_context_messages() {
+            0 => FALLBACK_RECENT_MESSAGE_LIMIT,
+            1 => return Ok(Vec::new()),
+            value => value.saturating_sub(1) as u64,
+        };
+        let messages = self
+            .conv_repo
+            .find_messages_before(conversation_id, None, limit)
+            .await?;
+        Ok(messages
+            .into_iter()
+            .filter_map(conversation_message_to_chat_message)
+            .collect())
+    }
+}
+
+fn conversation_message_to_chat_message(message: ConversationMessage) -> Option<ChatMessage> {
+    if !matches!(
+        message.sender_role.as_str(),
+        "system" | "user" | "assistant"
+    ) {
+        return None;
+    }
+    if message.message_type != "text" {
+        return None;
+    }
+
+    let content = conversation_message_text(&message);
+    if content.trim().is_empty() {
+        return None;
+    }
+
+    Some(ChatMessage {
+        role: message.sender_role,
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    })
+}
+
+fn conversation_message_text(message: &ConversationMessage) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(&message.content) else {
+        return message.content.clone();
+    };
+
+    let mut text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| message.content.clone());
+
+    if message.sender_role == "user" {
+        if let Some(emotion) = value
+            .get("emotion")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|emotion| !emotion.is_empty())
+        {
+            text = format!("{text}\n\n[user emotion: {emotion}]");
+        }
+    }
+
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn message(role: &str, message_type: &str, content: &str) -> ConversationMessage {
+        ConversationMessage {
+            id: 1,
+            conversation_id: 1,
+            sender_role: role.into(),
+            sender_user_id: None,
+            message_type: message_type.into(),
+            content: content.into(),
+            token_count: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn converts_persisted_text_json_to_chat_message() {
+        let converted = conversation_message_to_chat_message(message(
+            "assistant",
+            "text",
+            r#"{"text":"你好"}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(converted.role, "assistant");
+        assert_eq!(converted.content, "你好");
+    }
+
+    #[test]
+    fn preserves_historical_user_emotion() {
+        let converted = conversation_message_to_chat_message(message(
+            "user",
+            "text",
+            r#"{"text":"今天很累","emotion":"sad"}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(converted.content, "今天很累\n\n[user emotion: sad]");
+    }
+
+    #[test]
+    fn skips_non_dialogue_or_non_text_messages() {
+        assert!(conversation_message_to_chat_message(message("plugin", "text", "x")).is_none());
+        assert!(conversation_message_to_chat_message(message("user", "image", "x")).is_none());
     }
 }

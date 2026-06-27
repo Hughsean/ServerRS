@@ -238,6 +238,10 @@ impl AgentRuntime {
         }
     }
 
+    pub fn max_context_messages(&self) -> usize {
+        self.settings.max_context_messages
+    }
+
     /// 处理单条用户消息并返回 Agent 的响应。
     pub async fn respond(
         &self,
