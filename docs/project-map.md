@@ -735,7 +735,7 @@ async fn main() {
  |------|--------|--------|
  | `web_sources` | 来源表 | 要爬取的网站配置（种子 URL、规则） |
  | `web_source_urls` | URL 表 | 从来源发现的待爬 URL 队列 |
- | `web_pages` | 网页表 | 爬取到的原始 HTML 和提取的文本 |
+| `web_pages` | 网页表 | 网页实体索引：URL、hash、latest run 指针；正文不在这里 |
  | `web_crawl_jobs` | 爬取任务表 | 爬虫任务记录 |
  | `knowledge_ingestion_runs` | 运行记录表 | 每次知识摄入流水线的运行记录 |
  | `knowledge_documents` | 文档表 | 爬取/蒸馏后生成的文档 |

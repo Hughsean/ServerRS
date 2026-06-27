@@ -29,18 +29,18 @@ fn to_naive(dt: DateTime<Utc>) -> NaiveDateTime {
 // WebSourceRepository
 // ============================================================================
 
-pub struct SeaOrmWebSourceRepository {
+pub struct WebSourceRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmWebSourceRepository {
+impl WebSourceRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl WebSourceRepoT for SeaOrmWebSourceRepository {
+impl WebSourceRepoT for WebSourceRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSource>, WebIngestionError> {
         let row = web_sources::Entity::find_by_id(id)
             .one(&self.db)
@@ -1398,14 +1398,18 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
         lock_ttl_secs: u32,
         limit: u64,
     ) -> Result<Vec<DomainEvent>, WebIngestionError> {
-        let stmt = Statement::from_sql_and_values(
-            DatabaseBackend::MySql,
+        let priority_sql = outbox_event_priority_sql();
+        let claim_sql = format!(
             "UPDATE domain_event_outbox SET status = 'processing', locked_by = ?, \
              locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() \
              WHERE id IN (SELECT id FROM (SELECT id FROM domain_event_outbox \
              WHERE (status IN ('pending','failed') OR (status = 'processing' AND locked_until < NOW())) \
              AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
-             ORDER BY created_at ASC LIMIT ?) AS tmp)",
+             ORDER BY {priority_sql}, created_at ASC LIMIT ?) AS tmp)"
+        );
+        let stmt = Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            claim_sql,
             vec![
                 Value::String(Some(claim_token.into())),
                 Value::Unsigned(Some(lock_ttl_secs)),
@@ -1476,6 +1480,34 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
             .map_err(map_db_err)?;
         Ok(rows.into_iter().map(model_to_event).collect())
     }
+}
+
+fn outbox_event_priority_sql() -> &'static str {
+    // Continue already-fetched pages before discovering more URLs. Otherwise a
+    // large seed import can keep PageFetched/PageCleaned events behind thousands
+    // of UrlDiscovered events, leaving runs stuck at running/fetched.
+    "CASE event_type \
+        WHEN 'PageFetched' THEN 0 \
+        WHEN 'PageCleaned' THEN 0 \
+        WHEN 'PageDistilled' THEN 0 \
+        WHEN 'QualityChecked' THEN 0 \
+        WHEN 'DocumentChunked' THEN 0 \
+        WHEN 'ChunksEmbedded' THEN 0 \
+        WHEN 'DocumentIndexed' THEN 0 \
+        WHEN 'KnowledgeStaged' THEN 0 \
+        WHEN 'KnowledgePublishRequested' THEN 0 \
+        WHEN 'KnowledgeRollbackRequested' THEN 0 \
+        WHEN 'IngestionSkipped' THEN 1 \
+        WHEN 'IngestionRejected' THEN 1 \
+        WHEN 'IngestionFailed' THEN 1 \
+        WHEN 'IngestionDead' THEN 1 \
+        WHEN 'KnowledgePublished' THEN 1 \
+        WHEN 'KnowledgeSuperseded' THEN 1 \
+        WHEN 'KnowledgeRolledBack' THEN 1 \
+        WHEN 'UrlDiscovered' THEN 10 \
+        WHEN 'CrawlJobCreated' THEN 20 \
+        ELSE 30 \
+    END"
 }
 
 fn model_to_event(m: domain_event_outbox::Model) -> DomainEvent {

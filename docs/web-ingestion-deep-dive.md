@@ -81,7 +81,7 @@
  ```
  web_sources                 来源配置（种子 URL、域名、审批状态）
  web_source_urls             从来源发现的 URL（调度队列）
- web_pages                   抓取到的网页内容
+web_pages                   网页实体索引（URL、hash、latest run 指针；正文不在这里）
  web_crawl_jobs              爬取任务
  knowledge_ingestion_runs    摄入运行记录（每次处理的完整追踪）
  knowledge_documents         处理后的文档
@@ -752,10 +752,12 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
  保证"操作数据库"和"发事件"是**原子**的。流程：
  1. Handler 先写入业务数据（如创建 ingestion_run）
  2. 然后写入一条 outbox 事件（在同一数据库事务中）
- 3. Dispatcher 从 outbox 取出事件，分发处理
- 4. 处理成功 → 标记 outbox 事件为 published
+3. Dispatcher 从 outbox 取出事件，分发处理
+4. 处理成功 → 标记 outbox 事件为 published
 
- 如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里，重启后会继续处理。
+Dispatcher 领取事件时会优先处理 `PageFetched` 之后的流水线事件，再处理 `UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不清洗已抓页面。
+
+如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里，重启后会继续处理。
 
 ### 12.3 为什么要有 Qdrant 同步？DB 不是也有数据吗？
 

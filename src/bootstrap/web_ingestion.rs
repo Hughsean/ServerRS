@@ -17,7 +17,7 @@ use crate::domain::rag::RAGRepoT;
 use crate::domain::vector_store::VectorStoreT;
 use crate::infra::web_ingestion::distiller::OpenAiKnowledgeDistiller;
 use crate::infra::web_ingestion::fetcher::WebFetcher;
-use crate::infra::web_ingestion::repositories::*;
+use crate::infra::web_ingestion::repo::*;
 use crate::infra::web_ingestion::review_repository::SeaOrmKnowledgeReviewRepository;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
@@ -59,7 +59,7 @@ pub async fn init_web_ingestion(
     );
 
     let ctx = PipelineContext {
-        source_repo: Arc::new(SeaOrmWebSourceRepository::new(db.clone())),
+        source_repo: Arc::new(WebSourceRepo::new(db.clone())),
         source_url_repo: Arc::new(SeaOrmWebSourceUrlRepository::new(db.clone())),
         crawl_job_repo: Arc::new(SeaOrmWebCrawlJobRepository::new(db.clone())),
         page_repo: Arc::new(SeaOrmWebPageRepository::new(db.clone())),

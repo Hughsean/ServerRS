@@ -7,5 +7,5 @@
 
 pub mod distiller;
 pub mod fetcher;
-pub mod repositories;
+pub mod repo;
 pub mod review_repository;
