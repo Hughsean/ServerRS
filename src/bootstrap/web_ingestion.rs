@@ -87,6 +87,7 @@ pub async fn init_web_ingestion(
         scheduler_interval_secs = wc.scheduler_interval_secs,
         dispatcher_interval_secs = wc.dispatcher_interval_secs,
         outbox_batch_size = wc.outbox_batch_size,
+        dispatcher_parallelism = wc.dispatcher_parallelism,
         max_urls_per_source_per_job = wc.max_urls_per_source_per_job,
         "网页知识摄取基础设施初始化完成"
     );

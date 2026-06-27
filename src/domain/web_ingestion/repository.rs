@@ -566,6 +566,13 @@ pub trait OutboxRepoT: Send + Sync {
     ) -> Result<Vec<DomainEvent>, WebIngestionError>;
     /// Mark a claimed event as published (success).
     async fn mark_published(&self, id: u64, claim_token: &str) -> Result<bool, WebIngestionError>;
+    /// Extend the lock for a claimed event while a long handler is still alive.
+    async fn renew_lock(
+        &self,
+        id: u64,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+    ) -> Result<bool, WebIngestionError>;
     /// Mark a claimed event as failed (retryable) or dead (retries exhausted).
     async fn mark_failed_or_dead(
         &self,

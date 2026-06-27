@@ -169,13 +169,30 @@ url_enqueue_dedupe_secs = 86400
 # 单例下调度器可以勤快一点，避免 15 分钟一轮太慢
 scheduler_interval_secs = 60
 
-# dispatcher 仍是单循环顺序处理，调太小只是更快捡新任务
+# dispatcher 每轮会 claim 至多 min(outbox_batch_size, dispatcher_parallelism) 个事件并发处理
 dispatcher_interval_secs = 1
 outbox_batch_size = 30
+dispatcher_parallelism = 10
 outbox_lock_ttl_secs = 600
 
 retry_base_delay_secs = 30
 retry_max_delay_secs = 1800
+
+[web_ingestion.handler_parallelism]
+default = 1
+crawl_job_created = 1
+url_discovered = 4
+page_fetched = 6
+page_cleaned = 2
+page_distilled = 4
+quality_checked = 4
+document_chunked = 2
+chunks_embedded = 2
+document_indexed = 2
+knowledge_staged = 2
+knowledge_publish_requested = 1
+knowledge_rollback_requested = 1
+terminal = 8
 
 
 
@@ -200,5 +217,4 @@ default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
 default_encoding = "wav"
 timeout_secs = 30
 sample_rate = 24000
-
 

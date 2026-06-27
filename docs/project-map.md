@@ -894,7 +894,7 @@ async fn main() {
 | `[embedding]` | provider, base_url, model, dimension | ollama, http://127.0.0.1:11434, nomic-embed-text, 768 | 向量嵌入；dimension 会作为 `dimensions` 请求字段 |
 | `[agent]` | enabled, memory_enabled, max_context_messages | false, true, 50 | Agent 开关与上下文窗口 |
 | `[qdrant]` | enabled, url, rag/memory/summary collection | false, http://127.0.0.1:6333, rag_chunks/user_memories/conversation_summaries | 向量数据库 |
-| `[web_ingestion]` | enabled, scheduler_enabled, dispatcher_enabled, auto_publish | false, false, false, false | 知识摄入，主开关关闭时不会启动 worker |
+| `[web_ingestion]` | enabled, scheduler_enabled, dispatcher_enabled, dispatcher_parallelism, auto_publish | false, false, false, 1, false | 知识摄入；主开关关闭时不会启动 worker，dispatcher 支持按 handler 限流并发 |
 | `[tts]` | provider, api_key, resource_id, model | volcengine, "", "", seed-tts-2.0-standard | 语音合成 |
 | `[qq_bot]` | enabled, self_qq_id, http_base_url, ws_host/ws_port | false, 0, http://127.0.0.1:3000, 0.0.0.0:6700 | QQ 机器人 |
 | `[ssh_tunnels.*]` | host, user, local_port, remote_port, direction, bind_address | 无 | SSH 隧道（数据库/Ollama 引用） |

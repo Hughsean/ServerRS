@@ -550,34 +550,51 @@ impl IngestionRunRepoT for SeaOrmIngestionRunRepository {
         new_stage: &str,
         last_error: Option<&str>,
     ) -> Result<bool, WebIngestionError> {
-        let row = knowledge_ingestion_runs::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .ok_or_else(|| WebIngestionError::NotFound {
-                entity: "knowledge_ingestion_run".into(),
-                id,
-            })?;
         use crate::domain::web_ingestion::state_machine::can_transition_run;
-        // Optimistic concurrency: check expected state
-        if row.status != expected_status || row.stage != expected_stage {
-            return Ok(false);
-        }
-        // State machine validation
-        if !can_transition_run(&row.status, &row.stage, new_status, new_stage) {
+
+        // Validate the declared edge before touching the row. The actual CAS is
+        // the UPDATE below; rows_affected=0 means another worker moved it first.
+        if !can_transition_run(expected_status, expected_stage, new_status, new_stage) {
             return Err(WebIngestionError::InvalidTransition {
-                from_status: row.status.clone(),
-                from_stage: row.stage.clone(),
+                from_status: expected_status.to_string(),
+                from_stage: expected_stage.to_string(),
                 to_status: new_status.to_string(),
                 to_stage: new_stage.to_string(),
             });
         }
-        let mut active: knowledge_ingestion_runs::ActiveModel = row.into();
-        active.status = Set(new_status.to_string());
-        active.stage = Set(new_stage.to_string());
-        active.last_error = Set(last_error.map(|s| s.to_string()));
-        active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(true)
+
+        let stmt = Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE knowledge_ingestion_runs \
+             SET status = ?, stage = ?, last_error = ?, updated_at = NOW() \
+             WHERE id = ? AND status = ? AND stage = ?",
+            vec![
+                Value::String(Some(new_status.to_string().into())),
+                Value::String(Some(new_stage.to_string().into())),
+                Value::String(last_error.map(|s| s.to_string().into())),
+                Value::BigUnsigned(Some(id)),
+                Value::String(Some(expected_status.to_string().into())),
+                Value::String(Some(expected_stage.to_string().into())),
+            ],
+        );
+        let result = self.db.execute_raw(stmt).await.map_err(map_db_err)?;
+        if result.rows_affected() > 0 {
+            return Ok(true);
+        }
+
+        let exists = knowledge_ingestion_runs::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .is_some();
+        if exists {
+            Ok(false)
+        } else {
+            Err(WebIngestionError::NotFound {
+                entity: "knowledge_ingestion_run".into(),
+                id,
+            })
+        }
     }
     async fn update_distill_result(
         &self,
@@ -1398,33 +1415,94 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
         lock_ttl_secs: u32,
         limit: u64,
     ) -> Result<Vec<DomainEvent>, WebIngestionError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let priority_sql = outbox_event_priority_sql();
-        let claim_sql = format!(
-            "UPDATE domain_event_outbox SET status = 'processing', locked_by = ?, \
-             locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() \
-             WHERE id IN (SELECT id FROM (SELECT id FROM domain_event_outbox \
-             WHERE (status IN ('pending','failed') OR (status = 'processing' AND locked_until < NOW())) \
-             AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
-             ORDER BY {priority_sql}, created_at ASC LIMIT ?) AS tmp)"
+        let txn = self.db.begin().await.map_err(map_db_err)?;
+
+        let select_sql = format!(
+            "SELECT id FROM domain_event_outbox \
+             WHERE (status IN ('pending','failed') \
+                    OR (status = 'processing' AND locked_until < NOW())) \
+               AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
+             ORDER BY {priority_sql}, created_at ASC \
+             LIMIT ? \
+             FOR UPDATE SKIP LOCKED"
         );
-        let stmt = Statement::from_sql_and_values(
+        let select_stmt = Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            claim_sql,
-            vec![
-                Value::String(Some(claim_token.into())),
-                Value::Unsigned(Some(lock_ttl_secs)),
-                Value::BigUnsigned(Some(limit)),
-            ],
+            select_sql,
+            vec![Value::BigUnsigned(Some(limit))],
         );
-        self.db.execute_raw(stmt).await.map_err(map_db_err)?;
-        let rows = domain_event_outbox::Entity::find()
+        let selected = txn.query_all_raw(select_stmt).await.map_err(map_db_err)?;
+        let mut ids = Vec::with_capacity(selected.len());
+        for row in selected {
+            let id: u64 = row
+                .try_get("", "id")
+                .map_err(|e| WebIngestionError::Internal(e.to_string()))?;
+            ids.push(id);
+        }
+
+        if ids.is_empty() {
+            txn.commit().await.map_err(map_db_err)?;
+            return Ok(Vec::new());
+        }
+
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let update_sql = format!(
+            "UPDATE domain_event_outbox \
+             SET status = 'processing', locked_by = ?, \
+                 locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() \
+             WHERE id IN ({placeholders})"
+        );
+        let mut values = vec![
+            Value::String(Some(claim_token.into())),
+            Value::Unsigned(Some(lock_ttl_secs)),
+        ];
+        values.extend(ids.iter().map(|id| Value::BigUnsigned(Some(*id))));
+        let update_stmt =
+            Statement::from_sql_and_values(DatabaseBackend::MySql, update_sql, values);
+        txn.execute_raw(update_stmt).await.map_err(map_db_err)?;
+
+        let mut rows = domain_event_outbox::Entity::find()
+            .filter(domain_event_outbox::Column::Id.is_in(ids.clone()))
             .filter(domain_event_outbox::Column::LockedBy.eq(claim_token))
             .filter(domain_event_outbox::Column::Status.eq("processing"))
-            .order_by_asc(domain_event_outbox::Column::CreatedAt)
-            .all(&self.db)
+            .all(&txn)
             .await
             .map_err(map_db_err)?;
+        rows.sort_by_key(|row| {
+            ids.iter()
+                .position(|id| *id == row.id)
+                .unwrap_or(usize::MAX)
+        });
+        txn.commit().await.map_err(map_db_err)?;
         Ok(rows.into_iter().map(model_to_event).collect())
+    }
+    async fn renew_lock(
+        &self,
+        id: u64,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+    ) -> Result<bool, WebIngestionError> {
+        let stmt = Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE domain_event_outbox \
+             SET locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() \
+             WHERE id = ? AND status = 'processing' AND locked_by = ?",
+            vec![
+                Value::Unsigned(Some(lock_ttl_secs)),
+                Value::BigUnsigned(Some(id)),
+                Value::String(Some(claim_token.into())),
+            ],
+        );
+        let result = self.db.execute_raw(stmt).await.map_err(map_db_err)?;
+        Ok(result.rows_affected() > 0)
     }
     async fn mark_published(&self, id: u64, claim_token: &str) -> Result<bool, WebIngestionError> {
         let stmt = Statement::from_sql_and_values(

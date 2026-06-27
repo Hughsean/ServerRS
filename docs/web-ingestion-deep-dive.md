@@ -116,6 +116,7 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
                     │  (事件队列)   │    保证异步可靠处理
                     └──────┬───────┘
                           │ Dispatcher 代码默认每 5 秒轮询一次，取出事件
+                          │ 同一轮内按事件类型限流并发处理
                            ▼
               ┌────────────────────────────┐
               │   Dispatcher (分发器)       │
@@ -141,9 +142,10 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
  驱动方式：异步事件驱动（Event-Driven Architecture）
    - 每个事件都写入 MySQL 的 domain_event_outbox 表
-   - Dispatcher 定时轮询 → 取事件 → 路由到对应 Handler
+   - Dispatcher 定时轮询 → 批量领取事件 → 按事件类型限流并发路由到 Handler
    - Handler 执行完毕后写入新事件 → 进入下一阶段
    - 幂等性保证：每个事件有唯一 event_key（SHA-256）
+   - 竞争保护：run 阶段推进使用 SQL 原子 CAS，outbox 事件处理期间会续租锁
    - 重试机制：失败后指数退避重试（最多 5 次）
  ```
 
@@ -458,6 +460,21 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
  ```
  到达同一状态不视为错误。
 
+ 运行表的阶段推进不是“先查再改”，而是单条 SQL CAS：
+ ```sql
+ UPDATE knowledge_ingestion_runs
+ SET status = ?, stage = ?
+ WHERE id = ? AND status = ? AND stage = ?
+ ```
+
+ 因此多个 dispatcher 或多个主机实例同时处理同一个 run 时，只有一个 worker 会得到 `rows_affected = 1` 并继续发下游事件；其他 worker 会看到状态已被推进，按幂等重放处理。
+
+### 6.5 Outbox 锁与恢复
+
+ Dispatcher 领取事件时在事务内使用 `FOR UPDATE SKIP LOCKED` 锁定候选行，再写入 `locked_by/locked_until`。长耗时 handler（蒸馏、embedding、Qdrant upsert 等）执行期间会周期性续租 `locked_until`。
+
+ 如果进程或主机崩溃，续租停止；`locked_until` 过期后，其他实例可以重新领取事件。handler 会根据 run 当前阶段和已落库 artifact 做 resume，因此重复事件不会直接造成重复发布。
+
 ---
 
 ## 七、SSRF 防护 —— 网页抓取的安全性
@@ -547,13 +564,30 @@ chunk_target_max = 1000          # 目标最大分块大小（字符）
 
 # 调度/分发
 scheduler_interval_secs = 300    # 代码默认 5 分钟；批量导入后可临时调小
-dispatcher_interval_secs = 5     # 单 dispatcher 顺序处理事件
-outbox_batch_size = 20
-outbox_lock_ttl_secs = 300
+dispatcher_interval_secs = 5
+outbox_batch_size = 20           # 每轮最多尝试领取的事件数
+dispatcher_parallelism = 8       # 每轮实际并发上限：min(outbox_batch_size, dispatcher_parallelism)
+outbox_lock_ttl_secs = 300       # 事件锁 TTL；处理期间会自动续租
 retry_base_delay_secs = 30
 retry_max_delay_secs = 1800
 embedding_batch_size = 32
 qdrant_collection = "web_ingestion"
+
+[web_ingestion.handler_parallelism]
+default = 1
+crawl_job_created = 1
+url_discovered = 4               # 抓取阶段；同 host 仍受 min_request_interval_ms 限速
+page_fetched = 6                 # HTML 清洗，CPU/内存轻中等
+page_cleaned = 2                 # LLM 蒸馏，建议保守
+page_distilled = 4
+quality_checked = 4
+document_chunked = 2
+chunks_embedded = 2              # embedding provider 压力较大，建议保守
+document_indexed = 2
+knowledge_staged = 2
+knowledge_publish_requested = 1  # 发布/激活建议单 worker
+knowledge_rollback_requested = 1
+terminal = 8
 
 # LLM 蒸馏配置（独立于聊天 LLM）
 [web_ingestion.distill_llm]
@@ -755,9 +789,9 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
 3. Dispatcher 从 outbox 取出事件，分发处理
 4. 处理成功 → 标记 outbox 事件为 published
 
-Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。
+Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。领取后会按 `[web_ingestion.handler_parallelism]` 限流并发执行。
 
-如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里，重启后会继续处理。
+如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里；锁续租停止后，`locked_until` 到期，重启后的实例或其他主机实例会继续处理。
 
 ### 12.3 为什么要有 Qdrant 同步？DB 不是也有数据吗？
 

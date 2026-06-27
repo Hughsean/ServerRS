@@ -4,7 +4,8 @@
 //! and mark published / failed / dead based on the handler result. No business
 //! logic lives here — that is in `handlers/`.
 
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::app::web_ingestion::event_types::aggregate;
 use crate::app::web_ingestion::event_types::event as ev;
@@ -12,20 +13,25 @@ use crate::app::web_ingestion::handlers;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::DomainEvent;
+use crate::domain::web_ingestion::repository::{DomainEvent, OutboxRepoT};
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 use crate::shared::error::AppError;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
 
 /// Run one dispatcher tick: claim a batch and process each event.
 pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
     let claim_token = format!("dispatcher:{}", uuid::Uuid::new_v4());
+    let dispatcher_parallelism = ctx.config.dispatcher_parallelism.max(1);
+    let claim_limit = ctx
+        .config
+        .outbox_batch_size
+        .min(dispatcher_parallelism as u64)
+        .max(1);
+    let lock_ttl_secs = ctx.config.outbox_lock_ttl_secs.max(1);
     let events = ctx
         .outbox_repo
-        .claim_batch(
-            &claim_token,
-            ctx.config.outbox_lock_ttl_secs,
-            ctx.config.outbox_batch_size,
-        )
+        .claim_batch(&claim_token, lock_ttl_secs, claim_limit)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
@@ -40,36 +46,213 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
     tracing::debug!(
         claim_token = %claim_token,
         claimed = events.len(),
+        dispatcher_parallelism,
+        claim_limit,
+        lock_ttl_secs,
         first_event_id = ?events.first().map(|event| event.id),
         last_event_id = ?events.last().map(|event| event.id),
         "web ingestion dispatcher claimed events"
     );
 
+    let limiters = Arc::new(HandlerLimiters::new(ctx));
+    let mut join_set = JoinSet::new();
     for event in events {
-        let started = Instant::now();
-        tracing::debug!(
-            event_id = event.id,
-            event_type = %event.event_type,
-            aggregate_type = %event.aggregate_type,
-            aggregate_id = event.aggregate_id,
-            retry_count = event.retry_count,
-            "web ingestion event handling started"
-        );
-        let result = dispatch(&event, ctx).await;
-        let ok = result.is_ok();
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        finalize(ctx, &event, &claim_token, result, elapsed_ms).await;
-        if ok {
-            tracing::debug!(
-                event_id = event.id,
-                event_type = %event.event_type,
-                aggregate_id = event.aggregate_id,
-                elapsed_ms,
-                "web ingestion event handling completed"
-            );
+        let task_ctx = ctx.clone();
+        let task_claim_token = claim_token.clone();
+        let task_limiters = Arc::clone(&limiters);
+        join_set.spawn(async move {
+            process_claimed_event(task_ctx, event, task_claim_token, task_limiters).await;
+        });
+    }
+
+    while let Some(joined) = join_set.join_next().await {
+        if let Err(e) = joined {
+            tracing::error!(error = %e, "web ingestion dispatcher task panicked or was cancelled");
         }
     }
     Ok(())
+}
+
+async fn process_claimed_event(
+    ctx: PipelineContext,
+    event: DomainEvent,
+    claim_token: String,
+    limiters: Arc<HandlerLimiters>,
+) {
+    let heartbeat = EventLockHeartbeat::start(
+        Arc::clone(&ctx.outbox_repo),
+        event.id,
+        claim_token.clone(),
+        ctx.config.outbox_lock_ttl_secs.max(1),
+    );
+    let _permit = match limiters.acquire(&event.event_type).await {
+        Ok(permit) => permit,
+        Err(e) => {
+            finalize(
+                &ctx,
+                &event,
+                &claim_token,
+                Err(WebIngestionError::Internal(format!(
+                    "handler limiter closed: {e}"
+                ))),
+                0,
+            )
+            .await;
+            heartbeat.stop().await;
+            return;
+        }
+    };
+
+    let started = Instant::now();
+    tracing::debug!(
+        event_id = event.id,
+        event_type = %event.event_type,
+        aggregate_type = %event.aggregate_type,
+        aggregate_id = event.aggregate_id,
+        retry_count = event.retry_count,
+        "web ingestion event handling started"
+    );
+    let result = dispatch(&event, &ctx).await;
+    let ok = result.is_ok();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    finalize(&ctx, &event, &claim_token, result, elapsed_ms).await;
+    heartbeat.stop().await;
+    if ok {
+        tracing::debug!(
+            event_id = event.id,
+            event_type = %event.event_type,
+            aggregate_id = event.aggregate_id,
+            elapsed_ms,
+            "web ingestion event handling completed"
+        );
+    }
+}
+
+struct HandlerLimiters {
+    default: Arc<Semaphore>,
+    crawl_job_created: Arc<Semaphore>,
+    url_discovered: Arc<Semaphore>,
+    page_fetched: Arc<Semaphore>,
+    page_cleaned: Arc<Semaphore>,
+    page_distilled: Arc<Semaphore>,
+    quality_checked: Arc<Semaphore>,
+    document_chunked: Arc<Semaphore>,
+    chunks_embedded: Arc<Semaphore>,
+    document_indexed: Arc<Semaphore>,
+    knowledge_staged: Arc<Semaphore>,
+    knowledge_publish_requested: Arc<Semaphore>,
+    knowledge_rollback_requested: Arc<Semaphore>,
+    terminal: Arc<Semaphore>,
+}
+
+impl HandlerLimiters {
+    fn new(ctx: &PipelineContext) -> Self {
+        let c = &ctx.config.handler_parallelism;
+        Self {
+            default: semaphore(c.default),
+            crawl_job_created: semaphore(c.crawl_job_created),
+            url_discovered: semaphore(c.url_discovered),
+            page_fetched: semaphore(c.page_fetched),
+            page_cleaned: semaphore(c.page_cleaned),
+            page_distilled: semaphore(c.page_distilled),
+            quality_checked: semaphore(c.quality_checked),
+            document_chunked: semaphore(c.document_chunked),
+            chunks_embedded: semaphore(c.chunks_embedded),
+            document_indexed: semaphore(c.document_indexed),
+            knowledge_staged: semaphore(c.knowledge_staged),
+            knowledge_publish_requested: semaphore(c.knowledge_publish_requested),
+            knowledge_rollback_requested: semaphore(c.knowledge_rollback_requested),
+            terminal: semaphore(c.terminal),
+        }
+    }
+
+    async fn acquire(
+        &self,
+        event_type: &str,
+    ) -> Result<OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        self.limiter_for(event_type).acquire_owned().await
+    }
+
+    fn limiter_for(&self, event_type: &str) -> Arc<Semaphore> {
+        match event_type {
+            ev::CRAWL_JOB_CREATED => Arc::clone(&self.crawl_job_created),
+            ev::URL_DISCOVERED => Arc::clone(&self.url_discovered),
+            ev::PAGE_FETCHED => Arc::clone(&self.page_fetched),
+            ev::PAGE_CLEANED => Arc::clone(&self.page_cleaned),
+            ev::PAGE_DISTILLED => Arc::clone(&self.page_distilled),
+            ev::QUALITY_CHECKED => Arc::clone(&self.quality_checked),
+            ev::DOCUMENT_CHUNKED => Arc::clone(&self.document_chunked),
+            ev::CHUNKS_EMBEDDED => Arc::clone(&self.chunks_embedded),
+            ev::DOCUMENT_INDEXED => Arc::clone(&self.document_indexed),
+            ev::KNOWLEDGE_STAGED => Arc::clone(&self.knowledge_staged),
+            ev::KNOWLEDGE_PUBLISH_REQUESTED => Arc::clone(&self.knowledge_publish_requested),
+            ev::KNOWLEDGE_ROLLBACK_REQUESTED => Arc::clone(&self.knowledge_rollback_requested),
+            ev::INGESTION_SKIPPED
+            | ev::INGESTION_REJECTED
+            | ev::INGESTION_FAILED
+            | ev::INGESTION_DEAD
+            | ev::KNOWLEDGE_PUBLISHED
+            | ev::KNOWLEDGE_SUPERSEDED
+            | ev::KNOWLEDGE_ROLLED_BACK => Arc::clone(&self.terminal),
+            _ => Arc::clone(&self.default),
+        }
+    }
+}
+
+fn semaphore(workers: usize) -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(workers.max(1)))
+}
+
+struct EventLockHeartbeat {
+    stop_tx: tokio::sync::oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
+impl EventLockHeartbeat {
+    fn start(
+        outbox_repo: Arc<dyn OutboxRepoT>,
+        event_id: u64,
+        claim_token: String,
+        lock_ttl_secs: u32,
+    ) -> Self {
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let heartbeat_secs = (lock_ttl_secs as u64 / 2).max(1);
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(heartbeat_secs));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        match outbox_repo
+                            .renew_lock(event_id, &claim_token, lock_ttl_secs.max(1))
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                tracing::debug!(
+                                    event_id,
+                                    "web ingestion event lock heartbeat skipped: lock no longer owned"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    event_id,
+                                    error = %e,
+                                    "web ingestion event lock heartbeat failed"
+                                );
+                            }
+                        }
+                    }
+                    _ = &mut stop_rx => break,
+                }
+            }
+        });
+        Self { stop_tx, task }
+    }
+
+    async fn stop(self) {
+        let _ = self.stop_tx.send(());
+        let _ = self.task.await;
+    }
 }
 
 /// Route an event to its handler. Unknown types → Err (never marked published).

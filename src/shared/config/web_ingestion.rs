@@ -114,6 +114,8 @@ pub struct WebIngestionConfig {
     pub dispatcher_interval_secs: u64,
     #[serde(default = "default_web_ingestion_outbox_batch_size")]
     pub outbox_batch_size: u64,
+    #[serde(default = "default_web_ingestion_dispatcher_parallelism")]
+    pub dispatcher_parallelism: usize,
     #[serde(default = "default_web_ingestion_outbox_lock_ttl_secs")]
     pub outbox_lock_ttl_secs: u32,
     #[serde(default = "default_web_ingestion_retry_base_delay_secs")]
@@ -121,7 +123,64 @@ pub struct WebIngestionConfig {
     #[serde(default = "default_web_ingestion_retry_max_delay_secs")]
     pub retry_max_delay_secs: u64,
     #[serde(default)]
+    pub handler_parallelism: WebIngestionHandlerParallelismConfig,
+    #[serde(default)]
     pub distill_llm: DistillLlmConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebIngestionHandlerParallelismConfig {
+    #[serde(default = "default_web_ingestion_handler_default_parallelism")]
+    pub default: usize,
+    #[serde(default = "default_web_ingestion_handler_crawl_job_created_parallelism")]
+    pub crawl_job_created: usize,
+    #[serde(default = "default_web_ingestion_handler_url_discovered_parallelism")]
+    pub url_discovered: usize,
+    #[serde(default = "default_web_ingestion_handler_page_fetched_parallelism")]
+    pub page_fetched: usize,
+    #[serde(default = "default_web_ingestion_handler_page_cleaned_parallelism")]
+    pub page_cleaned: usize,
+    #[serde(default = "default_web_ingestion_handler_page_distilled_parallelism")]
+    pub page_distilled: usize,
+    #[serde(default = "default_web_ingestion_handler_quality_checked_parallelism")]
+    pub quality_checked: usize,
+    #[serde(default = "default_web_ingestion_handler_document_chunked_parallelism")]
+    pub document_chunked: usize,
+    #[serde(default = "default_web_ingestion_handler_chunks_embedded_parallelism")]
+    pub chunks_embedded: usize,
+    #[serde(default = "default_web_ingestion_handler_document_indexed_parallelism")]
+    pub document_indexed: usize,
+    #[serde(default = "default_web_ingestion_handler_knowledge_staged_parallelism")]
+    pub knowledge_staged: usize,
+    #[serde(default = "default_web_ingestion_handler_publish_requested_parallelism")]
+    pub knowledge_publish_requested: usize,
+    #[serde(default = "default_web_ingestion_handler_rollback_requested_parallelism")]
+    pub knowledge_rollback_requested: usize,
+    #[serde(default = "default_web_ingestion_handler_terminal_parallelism")]
+    pub terminal: usize,
+}
+
+impl Default for WebIngestionHandlerParallelismConfig {
+    fn default() -> Self {
+        Self {
+            default: default_web_ingestion_handler_default_parallelism(),
+            crawl_job_created: default_web_ingestion_handler_crawl_job_created_parallelism(),
+            url_discovered: default_web_ingestion_handler_url_discovered_parallelism(),
+            page_fetched: default_web_ingestion_handler_page_fetched_parallelism(),
+            page_cleaned: default_web_ingestion_handler_page_cleaned_parallelism(),
+            page_distilled: default_web_ingestion_handler_page_distilled_parallelism(),
+            quality_checked: default_web_ingestion_handler_quality_checked_parallelism(),
+            document_chunked: default_web_ingestion_handler_document_chunked_parallelism(),
+            chunks_embedded: default_web_ingestion_handler_chunks_embedded_parallelism(),
+            document_indexed: default_web_ingestion_handler_document_indexed_parallelism(),
+            knowledge_staged: default_web_ingestion_handler_knowledge_staged_parallelism(),
+            knowledge_publish_requested:
+                default_web_ingestion_handler_publish_requested_parallelism(),
+            knowledge_rollback_requested:
+                default_web_ingestion_handler_rollback_requested_parallelism(),
+            terminal: default_web_ingestion_handler_terminal_parallelism(),
+        }
+    }
 }
 
 impl Default for WebIngestionConfig {
@@ -153,9 +212,11 @@ impl Default for WebIngestionConfig {
             scheduler_interval_secs: default_web_ingestion_scheduler_interval_secs(),
             dispatcher_interval_secs: default_web_ingestion_dispatcher_interval_secs(),
             outbox_batch_size: default_web_ingestion_outbox_batch_size(),
+            dispatcher_parallelism: default_web_ingestion_dispatcher_parallelism(),
             outbox_lock_ttl_secs: default_web_ingestion_outbox_lock_ttl_secs(),
             retry_base_delay_secs: default_web_ingestion_retry_base_delay_secs(),
             retry_max_delay_secs: default_web_ingestion_retry_max_delay_secs(),
+            handler_parallelism: WebIngestionHandlerParallelismConfig::default(),
             distill_llm: DistillLlmConfig::default(),
         }
     }
@@ -224,6 +285,9 @@ fn default_web_ingestion_dispatcher_interval_secs() -> u64 {
 fn default_web_ingestion_outbox_batch_size() -> u64 {
     20
 }
+fn default_web_ingestion_dispatcher_parallelism() -> usize {
+    1
+}
 fn default_web_ingestion_outbox_lock_ttl_secs() -> u32 {
     300
 }
@@ -232,4 +296,81 @@ fn default_web_ingestion_retry_base_delay_secs() -> u64 {
 }
 fn default_web_ingestion_retry_max_delay_secs() -> u64 {
     1800
+}
+
+fn default_web_ingestion_handler_default_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_crawl_job_created_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_url_discovered_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_page_fetched_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_page_cleaned_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_page_distilled_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_quality_checked_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_document_chunked_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_chunks_embedded_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_document_indexed_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_knowledge_staged_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_publish_requested_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_rollback_requested_parallelism() -> usize {
+    1
+}
+fn default_web_ingestion_handler_terminal_parallelism() -> usize {
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::AppConfig;
+
+    #[test]
+    fn parses_handler_parallelism_with_distill_table_declared_first() {
+        let raw = r#"
+            [web_ingestion.distill_llm]
+            provider = "ollama"
+            chat_model = "qwen3:8b"
+
+            [web_ingestion]
+            enabled = true
+            dispatcher_enabled = true
+            dispatcher_parallelism = 10
+
+            [web_ingestion.handler_parallelism]
+            url_discovered = 4
+            page_cleaned = 2
+            chunks_embedded = 2
+            terminal = 8
+        "#;
+
+        let config: AppConfig = toml::from_str(raw).expect("config should parse");
+        assert!(config.web_ingestion.enabled);
+        assert_eq!(config.web_ingestion.distill_llm.provider, "ollama");
+        assert_eq!(config.web_ingestion.dispatcher_parallelism, 10);
+        assert_eq!(config.web_ingestion.handler_parallelism.url_discovered, 4);
+        assert_eq!(config.web_ingestion.handler_parallelism.page_cleaned, 2);
+        assert_eq!(config.web_ingestion.handler_parallelism.chunks_embedded, 2);
+        assert_eq!(config.web_ingestion.handler_parallelism.terminal, 8);
+    }
 }

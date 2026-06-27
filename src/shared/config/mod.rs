@@ -50,7 +50,9 @@ pub use self::qq_bot::QqBotConfig;
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::ssh::{SshTunnelConfig, TunnelDirection};
 pub use self::tts::TtsConfig;
-pub use self::web_ingestion::{DistillLlmConfig, WebIngestionConfig};
+pub use self::web_ingestion::{
+    DistillLlmConfig, WebIngestionConfig, WebIngestionHandlerParallelismConfig,
+};
 
 // ── AppConfig ─────────────────────────────────────────────────────
 
@@ -385,6 +387,11 @@ impl AppConfig {
         if let Ok(val) = std::env::var("WEB_INGESTION_OUTBOX_BATCH_SIZE") {
             if let Ok(n) = val.parse::<u64>() {
                 self.web_ingestion.outbox_batch_size = n;
+            }
+        }
+        if let Ok(val) = std::env::var("WEB_INGESTION_DISPATCHER_PARALLELISM") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.web_ingestion.dispatcher_parallelism = n;
             }
         }
         if let Ok(val) = std::env::var("WEB_INGESTION_OUTBOX_LOCK_TTL_SECS") {
