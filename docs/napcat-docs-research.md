@@ -1,8 +1,17 @@
 # NapCatQQ 官方文档研读笔记
 
-> 研读时间：2026-06-16  
-> 文档站：https://napneko.github.io/  
-> 目标：深入理解 NapCatQQ 的 OneBot 11 协议实现、API、事件系统、配置等规范
+> 研读时间：2026-06-16
+> 最后核对：2026-06-27（仅核对本项目集成方式，未重新抓取官方站）
+> 文档站：https://napneko.github.io/
+> 目标：记录当时对 NapCatQQ / OneBot 11 的研读结论。官方文档版本会变化，升级 NapCat 前应重新核对官方站。
+
+## 当前 ServerRS 对接方式
+
+- `qq_bot` 受 Cargo feature `qq_bot` 和 `[qq_bot].enabled` 双重控制。
+- NapCat HTTP API 地址来自 `[qq_bot].http_base_url`，默认 `http://127.0.0.1:3000`。
+- ServerRS 可监听 NapCat 反向 WebSocket，地址由 `[qq_bot].ws_host` / `[qq_bot].ws_port` 控制，默认 `0.0.0.0:6700`。
+- 如果配置了 `[qq_bot].ws_url`，则可使用正向 WebSocket URL。
+- 语音回复通过 TTS 生成本地文件，再经 `/tts` 静态目录暴露给 NapCat 发送 `record` 段。
 
 ---
 
@@ -16,7 +25,7 @@
 | **配置** | 基础配置（WebUI/文件配置）、高级配置（FFmpeg/PacketBackend）|
 | **使用** | 接入框架、社区资源 |
 | **开发** | 请求接口、上报事件、消息类型、处理文件、插件开发（含 API 参考）|
-| **API 文档** | 版本选择（最新 v4.18.6，OpenAPI 规范）|
+| **API 文档** | 版本选择（研读时记录为 v4.18.6，OpenAPI 规范；当前版本需以官方站为准）|
 | **协议** | 协议概述、网络通讯、事件基础结构、事件字段详情、基础接口、消息元素定义、差异实现说明 |
 | **其余** | 喵喵、安全、联系 |
 

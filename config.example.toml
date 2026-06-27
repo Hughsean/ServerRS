@@ -27,11 +27,11 @@ model = "qwen3-embedding:4b"
 dimension = 2560
 batch_size = 32
 timeout_secs = 120
-qdrant_collection = "rag_default"
+qdrant_collection = "rag_chunks_2560"
 
 [llm]
 provider = "Ollama"
-base_url = "http://127.0.0.1:11434/v1"
+base_url = "http://127.0.0.1:11111/v1"
 chat_model = "qwen3:14b"
 temperature = 0.7
 top_p = 0.9
@@ -40,7 +40,7 @@ max_tool_depth = 10
 
 [web_ingestion.distill_llm]
 provider = "Ollama"
-base_url = "http://127.0.0.1:11434/v1"
+base_url = "http://127.0.0.1:11111/v1"
 chat_model = "qwen3:14b"
 # Inject via WEB_INGESTION_DISTILL_LLM_API_KEY (or DEEPSEEK_API_KEY) env var.
 # Never commit a real key here.
@@ -60,9 +60,9 @@ remote_port = 6334
 enabled = true
 url = "http://127.0.0.1:6334"
 # api_key = ""
-rag_collection = "rag_chunks"
-memory_collection = "user_memories"
-summary_collection = "conversation_summaries"
+rag_collection = "rag_chunks_2560"
+memory_collection = "user_memories_2560"
+summary_collection = "conversation_summaries_2560"
 tunnel = "qdrant"
 ################################
 
@@ -113,7 +113,6 @@ timeout_seconds = 120
 cleanup_interval_secs = 20
 
 # ── Plugins (weather, news, etc.) ──
-
 [plugins.weather]
 # Inject via WEATHER_API_KEY env var — do NOT commit a real key here.
 api_key = ""
@@ -134,11 +133,11 @@ timeout_secs = 10
 
 [plugins.fetch_web_content]
 enabled = true
-proxy_url = "http://127.0.0.1:7890"
+# proxy_url = "http://127.0.0.1:7890"
 
 [plugins.baidu_baike]
 enabled = true
-proxy_url = "http://127.0.0.1:7890"
+# proxy_url = "http://127.0.0.1:7890"
 
 
 
@@ -156,7 +155,7 @@ auto_publish = true
 auto_publish_min_score = 0.78
 
 pipeline_version = "20260612"
-fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:xxx@xxx.com)"
+fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:hughsean@qq.com)"
 fetch_proxy_url = "http://127.0.0.1:7890"
 
 # 对同一 host 的抓取节流。Wikipedia 建议别太激进
@@ -181,8 +180,8 @@ retry_max_delay_secs = 1800
 
 
 [qq_bot]
-enabled = true
-self_qq_id = 983473516     # 你的机器人QQ号
+enabled = false
+self_qq_id = 'xxx'     # 你的机器人QQ号
 http_base_url = "http://127.0.0.1:3000"
 ws_url = "ws://127.0.0.1:6700"
 tts_output_dir = "./data/tts/"
