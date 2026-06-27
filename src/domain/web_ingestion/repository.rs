@@ -553,6 +553,13 @@ pub struct NewOutboxEvent {
     pub max_retries: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxClaimQuota {
+    pub event_types: Vec<String>,
+    pub exclude_event_types: Vec<String>,
+    pub limit: u64,
+}
+
 #[async_trait]
 pub trait OutboxRepoT: Send + Sync {
     /// Insert an event, relying on UNIQUE(event_key) for idempotency.
@@ -563,6 +570,18 @@ pub trait OutboxRepoT: Send + Sync {
         claim_token: &str,
         lock_ttl_secs: u32,
         limit: u64,
+    ) -> Result<Vec<DomainEvent>, WebIngestionError>;
+    /// Atomically claim events by ordered event-type quotas.
+    ///
+    /// Each quota caps how many events from a handler group may be locked in
+    /// this claim. This prevents slow stages from locking more events than
+    /// their configured workers can actually run.
+    async fn claim_batch_by_quotas(
+        &self,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+        quotas: &[OutboxClaimQuota],
+        max_total: u64,
     ) -> Result<Vec<DomainEvent>, WebIngestionError>;
     /// Mark a claimed event as published (success).
     async fn mark_published(&self, id: u64, claim_token: &str) -> Result<bool, WebIngestionError>;

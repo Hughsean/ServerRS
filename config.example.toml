@@ -40,7 +40,7 @@ max_tool_depth = 10
 
 [web_ingestion.distill_llm]
 provider = "Ollama"
-base_url = "http://127.0.0.1:11111/v1"
+base_url = "http://127.0.0.1:18080/v1"
 chat_model = "qwen3:14b"
 # Ollama/local OpenAI-compatible endpoints can leave api_key empty.
 # Remote providers should inject WEB_INGESTION_DISTILL_LLM_API_KEY or DEEPSEEK_API_KEY.
@@ -76,6 +76,9 @@ bind_address = "0.0.0.0"
 [server]
 host = "0.0.0.0"
 port = 8080
+
+[logging]
+level = "debug"
 
 [cors]
 allowed_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]
@@ -146,7 +149,7 @@ enabled = true
 
 [web_ingestion]
 enabled = true
-scheduler_enabled = true
+scheduler_enabled = false
 dispatcher_enabled = true
 
 # 初期构建知识库可以打开；如果混入高风险来源，改成 true + 手动发布
@@ -155,7 +158,7 @@ auto_publish = true
 auto_publish_min_score = 0.78
 
 pipeline_version = "20260612"
-fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:hughsean@qq.com)"
+fetch_user_agent = "ServerRSKnowledgeBot/0.1 (mailto:xxx@xxx.com)"
 fetch_proxy_url = "http://127.0.0.1:7890"
 
 # 对同一 host 的抓取节流。Wikipedia 建议别太激进
@@ -166,17 +169,18 @@ request_jitter_ms = 500
 max_urls_per_source_per_job = 100
 url_enqueue_dedupe_secs = 86400
 
-# 单例下调度器可以勤快一点，避免 15 分钟一轮太慢
+# 单例下调度器可以勤快一点
 scheduler_interval_secs = 60
 
-# dispatcher 每轮会 claim 至多 min(outbox_batch_size, dispatcher_parallelism) 个事件并发处理
+# dispatcher 每轮总领取数 <= min(outbox_batch_size, dispatcher_parallelism)。
+# 领取时会按 handler_parallelism 给各事件类型分配配额，避免慢阶段锁住过多任务。
 dispatcher_interval_secs = 1
 outbox_batch_size = 30
 dispatcher_parallelism = 10
 outbox_lock_ttl_secs = 600
 
-retry_base_delay_secs = 30
-retry_max_delay_secs = 1800
+retry_base_delay_secs = 90
+retry_max_delay_secs = 5400
 
 [web_ingestion.handler_parallelism]
 default = 1
@@ -186,9 +190,9 @@ page_fetched = 6
 page_cleaned = 2
 page_distilled = 4
 quality_checked = 4
-document_chunked = 2
-chunks_embedded = 2
-document_indexed = 2
+document_chunked = 4
+chunks_embedded = 4
+document_indexed = 4
 knowledge_staged = 2
 knowledge_publish_requested = 1
 knowledge_rollback_requested = 1
@@ -217,4 +221,3 @@ default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
 default_encoding = "wav"
 timeout_secs = 30
 sample_rate = 24000
-

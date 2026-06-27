@@ -13,8 +13,9 @@ use crate::app::web_ingestion::handlers;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{DomainEvent, OutboxRepoT};
+use crate::domain::web_ingestion::repository::{DomainEvent, OutboxClaimQuota, OutboxRepoT};
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
+use crate::shared::config::WebIngestionHandlerParallelismConfig;
 use crate::shared::error::AppError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
@@ -30,9 +31,10 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
         .min(dispatcher_parallelism as u64)
         .max(1);
     let lock_ttl_secs = ctx.config.outbox_lock_ttl_secs.max(1);
+    let claim_quotas = build_claim_quotas(&ctx.config.handler_parallelism);
     let events = ctx
         .outbox_repo
-        .claim_batch(&claim_token, lock_ttl_secs, claim_limit)
+        .claim_batch_by_quotas(&claim_token, lock_ttl_secs, &claim_quotas, claim_limit)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
@@ -51,6 +53,7 @@ pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
         dispatcher_parallelism,
         claim_limit,
         lock_ttl_secs,
+        quota_groups = claim_quotas.len(),
         first_event_id = ?events.first().map(|event| event.id),
         last_event_id = ?events.last().map(|event| event.id),
         "web ingestion dispatcher claimed events"
@@ -209,6 +212,89 @@ impl HandlerLimiters {
 
 fn semaphore(workers: usize) -> Arc<Semaphore> {
     Arc::new(Semaphore::new(workers.max(1)))
+}
+
+fn build_claim_quotas(c: &WebIngestionHandlerParallelismConfig) -> Vec<OutboxClaimQuota> {
+    let known_event_types = known_event_types();
+    vec![
+        claim_quota(
+            &[ev::KNOWLEDGE_PUBLISH_REQUESTED],
+            c.knowledge_publish_requested,
+        ),
+        claim_quota(
+            &[ev::KNOWLEDGE_ROLLBACK_REQUESTED],
+            c.knowledge_rollback_requested,
+        ),
+        claim_quota(&[ev::KNOWLEDGE_STAGED], c.knowledge_staged),
+        claim_quota(&[ev::DOCUMENT_INDEXED], c.document_indexed),
+        claim_quota(&[ev::CHUNKS_EMBEDDED], c.chunks_embedded),
+        claim_quota(&[ev::DOCUMENT_CHUNKED], c.document_chunked),
+        claim_quota(&[ev::QUALITY_CHECKED], c.quality_checked),
+        claim_quota(&[ev::PAGE_DISTILLED], c.page_distilled),
+        claim_quota(&[ev::PAGE_CLEANED], c.page_cleaned),
+        claim_quota(
+            &[
+                ev::INGESTION_SKIPPED,
+                ev::INGESTION_REJECTED,
+                ev::INGESTION_FAILED,
+                ev::INGESTION_DEAD,
+                ev::KNOWLEDGE_PUBLISHED,
+                ev::KNOWLEDGE_SUPERSEDED,
+                ev::KNOWLEDGE_ROLLED_BACK,
+            ],
+            c.terminal,
+        ),
+        claim_quota(&[ev::PAGE_FETCHED], c.page_fetched),
+        claim_quota(&[ev::URL_DISCOVERED], c.url_discovered),
+        claim_quota(&[ev::CRAWL_JOB_CREATED], c.crawl_job_created),
+        OutboxClaimQuota {
+            event_types: Vec::new(),
+            exclude_event_types: known_event_types,
+            limit: worker_limit(c.default),
+        },
+    ]
+}
+
+fn claim_quota(event_types: &[&str], workers: usize) -> OutboxClaimQuota {
+    OutboxClaimQuota {
+        event_types: event_types
+            .iter()
+            .map(|event_type| (*event_type).to_string())
+            .collect(),
+        exclude_event_types: Vec::new(),
+        limit: worker_limit(workers),
+    }
+}
+
+fn worker_limit(workers: usize) -> u64 {
+    workers.max(1) as u64
+}
+
+fn known_event_types() -> Vec<String> {
+    [
+        ev::CRAWL_JOB_CREATED,
+        ev::URL_DISCOVERED,
+        ev::PAGE_FETCHED,
+        ev::PAGE_CLEANED,
+        ev::PAGE_DISTILLED,
+        ev::QUALITY_CHECKED,
+        ev::DOCUMENT_CHUNKED,
+        ev::CHUNKS_EMBEDDED,
+        ev::DOCUMENT_INDEXED,
+        ev::KNOWLEDGE_STAGED,
+        ev::KNOWLEDGE_PUBLISH_REQUESTED,
+        ev::KNOWLEDGE_ROLLBACK_REQUESTED,
+        ev::INGESTION_SKIPPED,
+        ev::INGESTION_REJECTED,
+        ev::INGESTION_FAILED,
+        ev::INGESTION_DEAD,
+        ev::KNOWLEDGE_PUBLISHED,
+        ev::KNOWLEDGE_SUPERSEDED,
+        ev::KNOWLEDGE_ROLLED_BACK,
+    ]
+    .iter()
+    .map(|event_type| (*event_type).to_string())
+    .collect()
 }
 
 struct EventLockHeartbeat {
@@ -401,4 +487,79 @@ async fn mark_run_dead(ctx: &PipelineContext, event: &DomainEvent, error: &str) 
 /// Convenience: build a claim token (exposed for tests).
 pub fn new_claim_token() -> String {
     format!("dispatcher:{}", uuid::Uuid::new_v4())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quota_for<'a>(quotas: &'a [OutboxClaimQuota], event_type: &str) -> &'a OutboxClaimQuota {
+        quotas
+            .iter()
+            .find(|quota| quota.event_types.iter().any(|value| value == event_type))
+            .expect("quota for event type")
+    }
+
+    #[test]
+    fn claim_quotas_follow_handler_parallelism() {
+        let mut config = WebIngestionHandlerParallelismConfig::default();
+        config.page_cleaned = 2;
+        config.chunks_embedded = 3;
+        config.url_discovered = 4;
+
+        let quotas = build_claim_quotas(&config);
+
+        assert_eq!(quota_for(&quotas, ev::PAGE_CLEANED).limit, 2);
+        assert_eq!(quota_for(&quotas, ev::CHUNKS_EMBEDDED).limit, 3);
+        assert_eq!(quota_for(&quotas, ev::URL_DISCOVERED).limit, 4);
+    }
+
+    #[test]
+    fn claim_quotas_prefer_late_pipeline_without_overclaiming_stage() {
+        let mut config = WebIngestionHandlerParallelismConfig::default();
+        config.document_indexed = 1;
+        config.page_cleaned = 2;
+        config.page_fetched = 6;
+
+        let quotas = build_claim_quotas(&config);
+        let document_indexed_pos = quotas
+            .iter()
+            .position(|quota| {
+                quota
+                    .event_types
+                    .contains(&ev::DOCUMENT_INDEXED.to_string())
+            })
+            .unwrap();
+        let page_cleaned_pos = quotas
+            .iter()
+            .position(|quota| quota.event_types.contains(&ev::PAGE_CLEANED.to_string()))
+            .unwrap();
+        let page_fetched_pos = quotas
+            .iter()
+            .position(|quota| quota.event_types.contains(&ev::PAGE_FETCHED.to_string()))
+            .unwrap();
+
+        assert!(document_indexed_pos < page_cleaned_pos);
+        assert!(page_cleaned_pos < page_fetched_pos);
+        assert_eq!(quota_for(&quotas, ev::PAGE_CLEANED).limit, 2);
+    }
+
+    #[test]
+    fn default_quota_excludes_known_events() {
+        let config = WebIngestionHandlerParallelismConfig::default();
+        let quotas = build_claim_quotas(&config);
+        let default_quota = quotas.last().expect("default quota");
+
+        assert!(default_quota.event_types.is_empty());
+        assert!(
+            default_quota
+                .exclude_event_types
+                .contains(&ev::PAGE_CLEANED.to_string())
+        );
+        assert!(
+            default_quota
+                .exclude_event_types
+                .contains(&ev::CRAWL_JOB_CREATED.to_string())
+        );
+    }
 }

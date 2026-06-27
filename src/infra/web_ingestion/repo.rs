@@ -1415,34 +1415,63 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
         lock_ttl_secs: u32,
         limit: u64,
     ) -> Result<Vec<DomainEvent>, WebIngestionError> {
-        if limit == 0 {
+        let quotas = vec![OutboxClaimQuota {
+            event_types: Vec::new(),
+            exclude_event_types: Vec::new(),
+            limit,
+        }];
+        self.claim_batch_by_quotas(claim_token, lock_ttl_secs, &quotas, limit)
+            .await
+    }
+    async fn claim_batch_by_quotas(
+        &self,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+        quotas: &[OutboxClaimQuota],
+        max_total: u64,
+    ) -> Result<Vec<DomainEvent>, WebIngestionError> {
+        if max_total == 0 || quotas.is_empty() {
             return Ok(Vec::new());
         }
 
         let priority_sql = outbox_event_priority_sql();
         let txn = self.db.begin().await.map_err(map_db_err)?;
+        let mut ids = Vec::new();
 
-        let select_sql = format!(
-            "SELECT id FROM domain_event_outbox \
-             WHERE (status IN ('pending','failed') \
-                    OR (status = 'processing' AND locked_until < NOW())) \
-               AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
-             ORDER BY {priority_sql}, created_at ASC \
-             LIMIT ? \
-             FOR UPDATE SKIP LOCKED"
-        );
-        let select_stmt = Statement::from_sql_and_values(
-            DatabaseBackend::MySql,
-            select_sql,
-            vec![Value::BigUnsigned(Some(limit))],
-        );
-        let selected = txn.query_all_raw(select_stmt).await.map_err(map_db_err)?;
-        let mut ids = Vec::with_capacity(selected.len());
-        for row in selected {
-            let id: u64 = row
-                .try_get("", "id")
-                .map_err(|e| WebIngestionError::Internal(e.to_string()))?;
-            ids.push(id);
+        for quota in quotas {
+            let remaining = max_total.saturating_sub(ids.len() as u64);
+            if remaining == 0 {
+                break;
+            }
+            let quota_limit = quota.limit.min(remaining);
+            if quota_limit == 0 {
+                continue;
+            }
+
+            let mut event_scope_sql = String::new();
+            let mut values = Vec::new();
+            append_event_type_scope(&mut event_scope_sql, &mut values, quota);
+            values.push(Value::BigUnsigned(Some(quota_limit)));
+
+            let select_sql = format!(
+                "SELECT id FROM domain_event_outbox \
+                 WHERE (status IN ('pending','failed') \
+                        OR (status = 'processing' AND locked_until < NOW())) \
+                   AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
+                   {event_scope_sql} \
+                 ORDER BY {priority_sql}, created_at ASC \
+                 LIMIT ? \
+                 FOR UPDATE SKIP LOCKED"
+            );
+            let select_stmt =
+                Statement::from_sql_and_values(DatabaseBackend::MySql, select_sql, values);
+            let selected = txn.query_all_raw(select_stmt).await.map_err(map_db_err)?;
+            for row in selected {
+                let id: u64 = row
+                    .try_get("", "id")
+                    .map_err(|e| WebIngestionError::Internal(e.to_string()))?;
+                ids.push(id);
+            }
         }
 
         if ids.is_empty() {
@@ -1586,6 +1615,40 @@ fn outbox_event_priority_sql() -> &'static str {
         WHEN 'CrawlJobCreated' THEN 20 \
         ELSE 30 \
     END"
+}
+
+fn append_event_type_scope(sql: &mut String, values: &mut Vec<Value>, quota: &OutboxClaimQuota) {
+    if !quota.event_types.is_empty() {
+        let placeholders = std::iter::repeat("?")
+            .take(quota.event_types.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(" AND event_type IN (");
+        sql.push_str(&placeholders);
+        sql.push(')');
+        values.extend(
+            quota
+                .event_types
+                .iter()
+                .map(|event_type| Value::String(Some(event_type.clone().into()))),
+        );
+    }
+
+    if !quota.exclude_event_types.is_empty() {
+        let placeholders = std::iter::repeat("?")
+            .take(quota.exclude_event_types.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(" AND event_type NOT IN (");
+        sql.push_str(&placeholders);
+        sql.push(')');
+        values.extend(
+            quota
+                .exclude_event_types
+                .iter()
+                .map(|event_type| Value::String(Some(event_type.clone().into()))),
+        );
+    }
 }
 
 fn model_to_event(m: domain_event_outbox::Model) -> DomainEvent {

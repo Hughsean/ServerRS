@@ -2,7 +2,7 @@
 
 > 本文件专门详解 ServerRS 中最复杂的子系统 —— 知识摄入自动化流水线。
 > 建议先阅读 `project-map.md` 了解项目全貌，再深入此模块。
-> 最后核对：2026-06-27，基于当前 `src/app/web_ingestion`、`src/infra/web_ingestion`、`src/shared/config/web_ingestion.rs` 和 `scripts/web_ingestion`。
+> 最后核对：2026-06-28，基于当前 `src/app/web_ingestion`、`src/infra/web_ingestion`、`src/shared/config/web_ingestion.rs` 和 `scripts/web_ingestion`。
 
 ---
 
@@ -115,8 +115,8 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
                     │  Outbox      │  ★ 事件发件箱（MySQL 表）
                     │  (事件队列)   │    保证异步可靠处理
                     └──────┬───────┘
-                          │ Dispatcher 代码默认每 5 秒轮询一次，取出事件
-                          │ 同一轮内按事件类型限流并发处理
+                          │ Dispatcher 代码默认每 5 秒轮询一次
+                          │ 按阶段优先级 + handler 容量领取事件
                            ▼
               ┌────────────────────────────┐
               │   Dispatcher (分发器)       │
@@ -142,7 +142,7 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
  驱动方式：异步事件驱动（Event-Driven Architecture）
    - 每个事件都写入 MySQL 的 domain_event_outbox 表
-   - Dispatcher 定时轮询 → 批量领取事件 → 按事件类型限流并发路由到 Handler
+   - Dispatcher 定时轮询 → 按 handler 容量领取事件 → 并发路由到 Handler
    - Handler 执行完毕后写入新事件 → 进入下一阶段
    - 幂等性保证：每个事件有唯一 event_key（SHA-256）
    - 竞争保护：run 阶段推进使用 SQL 原子 CAS，outbox 事件处理期间会续租锁
@@ -260,21 +260,21 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
  **Distiller** 代码在 `infra/web_ingestion/distiller.rs`：
 
- 它会向配置的 LLM（如 DeepSeek、Qwen）发送一个**结构化提取提示词**，
- 要求 AI 输出标准 JSON，包含：
+ 它会向配置的 LLM（如 DeepSeek、Qwen/Ollama）发送一次**结构化提取提示词**，
+ 要求 AI 输出标准 JSON。标题、摘要、章节、质量分、风险标签和发布建议都来自这一次 Chat LLM 调用；后续 `PageDistilled` 只做规则校验，不再调用 LLM。
 
  ```json
  {
-   "accept": true/false,          // 网页内容是否可用
+   "accept": true,
    "title": "文档标题",
    "summary": "3-5句话摘要",
    "keywords": ["关键词"],
-   "sections": [                   // 正文按章节切分
+   "sections": [
      { "heading": "标题", "body": "正文", "summary": "摘要" }
    ],
-   "quality_score": 0.0~1.0,      // 质量评分
-   "risk_flags": ["高危标签"],      // 如 self_harm_crisis
-   "should_publish": true/false
+   "quality_score": 0.82,
+   "risk_flags": ["educational"],
+   "should_publish": false
  }
  ```
 
@@ -565,8 +565,8 @@ chunk_target_max = 1000          # 目标最大分块大小（字符）
 # 调度/分发
 scheduler_interval_secs = 300    # 代码默认 5 分钟；批量导入后可临时调小
 dispatcher_interval_secs = 5
-outbox_batch_size = 20           # 每轮最多尝试领取的事件数
-dispatcher_parallelism = 8       # 每轮实际并发上限：min(outbox_batch_size, dispatcher_parallelism)
+outbox_batch_size = 20           # 每轮最多领取的 outbox 事件总数上限
+dispatcher_parallelism = 8       # 每轮并发上限；总领取数 <= min(outbox_batch_size, dispatcher_parallelism)
 outbox_lock_ttl_secs = 300       # 事件锁 TTL；处理期间会自动续租
 retry_base_delay_secs = 30
 retry_max_delay_secs = 1800
@@ -600,6 +600,8 @@ temperature = 0.1                # 蒸馏用低温度，确保输出稳定
 top_p = 0.9
 timeout_secs = 120
 ```
+
+Dispatcher 领取 outbox 事件时不是简单 `ORDER BY priority LIMIT N`。当前实现会先按流水线深度排序，再按 `[web_ingestion.handler_parallelism]` 给每个事件类型组分配领取配额。例如 `page_cleaned = 2` 时，一轮最多锁定 2 条 `PageCleaned` 事件，剩余总并发容量会留给其他阶段，避免慢阶段把大量事件锁在内存里等待 worker。
 
 ---
 
@@ -744,15 +746,15 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
     → 创建 publish_record（status=staged）
     → 发射 DocumentChunked 事件
 
- 9. DocumentChunked → 向量化每个 Chunk
+ 9. DocumentChunked → ChunksEmbedded：向量化每个 Chunk
     → 存入 knowledge_embeddings 表
     → 发射 ChunksEmbedded 事件
 
- 10. ChunksEmbedded → Qdrant 索引
+ 10. ChunksEmbedded → DocumentIndexed：建立向量索引
      → 写入 Qdrant 向量库（如果启用）
      → 发射 DocumentIndexed 事件
 
- 11. DocumentIndexed → 暂存区
+ 11. DocumentIndexed → KnowledgeStaged：进入暂存区
      → 创建 publish_record（active=0）
      → 发射 KnowledgeStaged 事件
 
@@ -786,10 +788,21 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
  保证"操作数据库"和"发事件"是**原子**的。流程：
  1. Handler 先写入业务数据（如创建 ingestion_run）
  2. 然后写入一条 outbox 事件（在同一数据库事务中）
-3. Dispatcher 从 outbox 取出事件，分发处理
+3. Dispatcher 从 outbox 按阶段配额领取事件，分发处理
 4. 处理成功 → 标记 outbox 事件为 published
 
-Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。领取后会按 `[web_ingestion.handler_parallelism]` 限流并发执行。
+Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。
+
+同时，领取动作本身会遵守 `[web_ingestion.handler_parallelism]`。仓库层提供 `claim_batch_by_quotas`，Dispatcher 会把每个事件类型组转换成配额后再领取：
+
+```text
+本轮总上限 = min(outbox_batch_size, dispatcher_parallelism)
+PageCleaned 领取上限 = handler_parallelism.page_cleaned
+ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
+...
+```
+
+这意味着慢阶段不会一次锁住超过自身 worker 数的事件。例如 `page_cleaned = 2`，即使 outbox 里有大量 `PageCleaned`，本轮也只会领取 2 条，其他容量会继续分配给后续或其他可运行阶段。多实例部署时也能减少"某个实例提前锁住但还没开始处理"造成的吞吐浪费。
 
 如果 Dispatcher 在处理中间崩溃了，事件还在 outbox 表里；锁续租停止后，`locked_until` 到期，重启后的实例或其他主机实例会继续处理。
 
@@ -1059,6 +1072,48 @@ embedding_json JSON,
  # 通过环境变量注入：set DEEPSEEK_API_KEY=sk-xxx
  temperature = 0.1
  ```
+
+### 使用两个 Ollama 做蒸馏负载均衡
+
+Web Ingestion 的 `distill_llm.base_url` 只配置一个 OpenAI-compatible 入口。如果有两台 Ollama，推荐在 ServerRS 本机前置一个 Nginx，把两个 Ollama tunnel 合成一个本地入口：
+
+```text
+127.0.0.1:11111 -> SSH tunnel -> Ollama A :11434
+127.0.0.1:11112 -> SSH tunnel -> Ollama B :11434
+127.0.0.1:18080 -> Nginx -> 11111 / 11112
+```
+
+仓库内提供了示例配置：`nginx/ollama-distill-lb.conf`。启动/检查命令：
+
+```powershell
+nginx -p "d:\WorkSpace\ServerRS\nginx" -c "ollama-distill-lb.conf" -t
+nginx -p "d:\WorkSpace\ServerRS\nginx" -c "ollama-distill-lb.conf"
+curl http://127.0.0.1:18080/health
+curl http://127.0.0.1:18080/v1/models
+```
+
+ServerRS 只需要指向这个本地入口：
+
+```toml
+[web_ingestion.distill_llm]
+provider = "Ollama"
+base_url = "http://127.0.0.1:18080/v1"
+chat_model = "qwen3:14b"
+temperature = 0.1
+top_p = 0.9
+timeout_secs = 180
+```
+
+要让两台 Ollama 都有活干，还需要把蒸馏阶段 worker 打开，例如：
+
+```toml
+[web_ingestion]
+dispatcher_parallelism = 10
+outbox_batch_size = 30
+
+[web_ingestion.handler_parallelism]
+page_cleaned = 2
+```
 
 ### 全部重置（重新处理所有已抓取内容）
 
