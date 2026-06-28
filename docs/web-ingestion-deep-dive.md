@@ -100,54 +100,82 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ## 三、整体架构图
 
- ```
- ┌──────────────────────────────────────────────────────────────────────────┐
- │                         Web Ingestion 架构总览                          │
- └──────────────────────────────────────────────────────────────────────────┘
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Web Ingestion Architecture Overview                  │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-                    ┌──────────────┐
-                    │  Scheduler   │  ← 定时器（代码默认每 300 秒）
-                    │  (调度器)    │     遍历所有启用的来源
-                    └──────┬───────┘
-                           │ 创建爬取任务 + 发射 CrawlJobCreated
-                           ▼
-                    ┌──────────────┐
-                    │  Outbox      │  ★ 事件发件箱（MySQL 表）
-                    │  (事件队列)   │    保证异步可靠处理
-                    └──────┬───────┘
-                          │ Dispatcher 代码默认每 5 秒轮询一次
-                          │ 按阶段优先级 + handler 容量领取事件
-                           ▼
-              ┌────────────────────────────┐
-              │   Dispatcher (分发器)       │
-              │   根据事件类型 -> 路由到     │
-              │   对应的 Handler             │
-              └──────┬─────────────────────┘
-                     │
-      ┌──────────────┼──────────────────┐
-      ▼              ▼                  ▼
- ┌──────────┐ ┌──────────┐     ┌──────────────┐
- │ 处理 1:  │ │ 处理 2:  │     │   处理 N:    │
- │ URL 发现 │ │ 页面蒸馏 │ ... │   发布激活   │
- │ + 抓取   │ │ (AI)    │     │  (Qdrant同步)│
- └──────────┘ └──────────┘     └──────────────┘
-      │              │                │
-      └──────────────┴────────────────┘
-                     │ 每步完成后写入新的 Outbox 事件
-                     ▼
-              ┌──────────────┐
-              │  Ingestion   │  ★ 一次完整的"摄入运行"
-              │  Run (运行)   │     从 pending → published
-              └──────────────┘     状态机驱动，23 个阶段
+                         ┌──────────────────┐
+                         │    Scheduler     │  ← Timer: default interval is
+                         │                  │     every 300 seconds
+                         │                  │     Iterates over all enabled
+                         │                  │     sources
+                         └────────┬─────────┘
+                                  │
+                                  │ Creates crawl jobs and emits
+                                  │ CrawlJobCreated events
+                                  ▼
+                         ┌──────────────────┐
+                         │      Outbox      │  ★ Event outbox
+                         │                  │    MySQL-backed event queue
+                         │                  │    Ensures reliable async
+                         │                  │    processing
+                         └────────┬─────────┘
+                                  │
+                                  │ Dispatcher polls every 5 seconds by default
+                                  │ Claims events by stage priority and handler
+                                  │ capacity
+                                  ▼
+                  ┌──────────────────────────────────────┐
+                  │             Dispatcher               │
+                  │                                      │
+                  │  Routes events to the corresponding  │
+                  │  Handler based on event type         │
+                  └───────────────┬──────────────────────┘
+                                  │
+                ┌─────────────────┼─────────────────┐
+                ▼                 ▼                 ▼
+        ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+        │ Handler 1:   │  │ Handler 2:   │  │ Handler N:       │
+        │ URL Discovery│  │ Page         │  │ Publish &        │
+        │ + Crawling   │  │ Distillation │  │ Activation       │
+        │              │  │ (AI)         │  │ Qdrant Sync      │
+        └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘
+               │                 │                   │
+               └─────────────────┴───────────────────┘
+                                  │
+                                  │ Each completed step writes a new
+                                  │ Outbox event
+                                  ▼
+                         ┌──────────────────┐
+                         │  Ingestion Run   │  ★ One complete ingestion
+                         │                  │    execution
+                         │                  │    State machine:
+                         │                  │    pending → published
+                         │                  │    23 stages
+                         └──────────────────┘
 
- 驱动方式：异步事件驱动（Event-Driven Architecture）
-   - 每个事件都写入 MySQL 的 domain_event_outbox 表
-   - Dispatcher 定时轮询 → 按 handler 容量领取事件 → 并发路由到 Handler
-   - Handler 执行完毕后写入新事件 → 进入下一阶段
-   - 幂等性保证：每个事件有唯一 event_key（SHA-256）
-   - 竞争保护：run 阶段推进使用 SQL 原子 CAS，outbox 事件处理期间会续租锁
-   - 重试机制：失败后指数退避重试（最多 5 次）
- ```
+执行模型：事件驱动架构
+
+  - 每个事件都会持久化写入 MySQL 的 domain_event_outbox 表。
+
+  - Dispatcher 按固定间隔轮询，根据 Handler 容量和阶段优先级领取事件，
+    然后并发路由到对应的 Handler。
+
+  - Handler 完成处理后，会向 Outbox 写入新的事件，
+    推动工作流进入下一个阶段。
+
+  - 幂等性通过每个事件唯一的 event_key 保证，
+    event_key 使用 SHA-256 生成。
+
+  - 竞争保护：
+      - 运行阶段流转使用 SQL 原子比较并交换（CAS）。
+      - Outbox 事件在处理期间会续租锁。
+
+  - 重试策略：
+      - 失败事件使用指数退避进行重试。
+      - 最大重试次数：5 次。
+```
 
 ---
 
