@@ -4,7 +4,8 @@ local_port = 3306
 remote_port = 3306
 
 [database]
-url = "replaced by .env"
+# Required template when tunnel is set.
+url = "mysql://user:password@{ip}:{port}/digital_companion"
 max_connections = 10
 tunnel = "mysql"
 ################################
@@ -14,7 +15,8 @@ local_port = 11111
 remote_port = 11434
 
 [ollama]
-base_url = "http://127.0.0.1:11111/v1"
+# Required template when tunnel is set. {ip}/{port} are replaced with the tunnel local endpoint.
+base_url = "http://{ip}:{port}/v1"
 model = "qwen3:14b"
 temperature = 0.5
 top_p = 0.9
@@ -22,7 +24,9 @@ tunnel = "ollama"
 
 [embedding]
 provider = "Ollama-local"
-base_url = "http://127.0.0.1:11434/v1"
+# Required template when tunnel is set. The /v1 path comes from this template.
+base_url = "http://{ip}:{port}/v1"
+tunnel = "ollama"
 model = "qwen3-embedding:4b"
 dimension = 2560
 batch_size = 32
@@ -31,7 +35,9 @@ qdrant_collection = "rag_chunks_2560"
 
 [llm]
 provider = "Ollama"
-base_url = "http://127.0.0.1:11111/v1"
+# Required template when tunnel is set.
+base_url = "http://{ip}:{port}/v1"
+tunnel = "ollama"
 chat_model = "qwen3:14b"
 temperature = 0.7
 top_p = 0.9
@@ -40,6 +46,7 @@ max_tool_depth = 10
 
 [web_ingestion.distill_llm]
 provider = "Ollama"
+# Concrete URL because this section does not declare a tunnel.
 base_url = "http://127.0.0.1:18080/v1"
 chat_model = "qwen3:14b"
 # Ollama/local OpenAI-compatible endpoints can leave api_key empty.
@@ -58,7 +65,8 @@ remote_port = 6334
 # When disabled (default), vector search falls back to MySQL keyword search.
 [qdrant]
 enabled = true
-url = "http://127.0.0.1:6334"
+# Required template when tunnel is set.
+url = "http://{ip}:{port}"
 # api_key = ""
 rag_collection = "rag_chunks_2560"
 memory_collection = "user_memories_2560"

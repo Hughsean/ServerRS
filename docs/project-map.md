@@ -888,13 +888,13 @@ async fn main() {
 | 配置段 | 关键字段 | 代码默认值 | 说明 |
 |--------|---------|--------|------|
 | `[server]` | host, port | 0.0.0.0:8080 | 监听地址 |
-| `[database]` | url, max_connections, tunnel | mysql://user:password@127.0.0.1:3306/app_db, 10, none | MySQL 连接 |
+| `[database]` | url, max_connections, tunnel | 配置段内必填, 10, none | MySQL 连接；有 tunnel 时 url 必须使用 `{ip}` / `{port}` 模板 |
 | `[jwt]` | secret, access_ttl_secs, refresh_ttl_secs | CHANGE_ME..., 900, 2592000 | JWT 密钥与 TTL |
-| `[llm]` | provider, base_url, chat_model, enable_reasoning | openai, http://127.0.0.1:11434/v1, qwen2.5:14b, true | 聊天模型 |
-| `[embedding]` | provider, base_url, model, dimension | ollama, http://127.0.0.1:11434, nomic-embed-text, 768 | 向量嵌入；dimension 会作为 `dimensions` 请求字段 |
+| `[llm]` | provider, base_url, chat_model, enable_reasoning, tunnel | openai, 配置段内必填, qwen2.5:14b, true, none | 聊天模型；有 tunnel 时 base_url 必须使用 `{ip}` / `{port}` 模板 |
+| `[embedding]` | provider, base_url, model, dimension, tunnel | ollama, 配置段内必填, nomic-embed-text, 768, none | 向量嵌入；有 tunnel 时 base_url 必须使用 `{ip}` / `{port}` 模板；dimension 会作为 `dimensions` 请求字段 |
 | `[agent]` | enabled, memory_enabled, max_context_messages | false, true, 50 | Agent 开关与上下文窗口 |
-| `[qdrant]` | enabled, url, rag/memory/summary collection | false, http://127.0.0.1:6333, rag_chunks/user_memories/conversation_summaries | 向量数据库 |
-| `[web_ingestion]` | enabled, scheduler_enabled, dispatcher_enabled, outbox_batch_size, dispatcher_parallelism, auto_publish | false, false, false, 20, 1, false | 知识摄入；主开关关闭时不会启动 worker，dispatcher 按 handler 配额领取 outbox 事件并并发处理 |
+| `[qdrant]` | enabled, url, tunnel, rag/memory/summary collection | false, 配置段内必填, none, rag_chunks/user_memories/conversation_summaries | 向量数据库；有 tunnel 时 url 必须使用 `{ip}` / `{port}` 模板 |
+| `[web_ingestion]` | enabled, scheduler_enabled, dispatcher_enabled, outbox_batch_size, dispatcher_parallelism, auto_publish | false, false, false, 20, 1, false | 知识摄入；蒸馏 base_url 有 tunnel 时必须使用 `{ip}` / `{port}` 模板；dispatcher 按 handler 配额领取 outbox 事件并并发处理 |
 | `[tts]` | provider, api_key, resource_id, model | volcengine, "", "", seed-tts-2.0-standard | 语音合成 |
 | `[qq_bot]` | enabled, self_qq_id, http_base_url, ws_host/ws_port | false, 0, http://127.0.0.1:3000, 0.0.0.0:6700 | QQ 机器人 |
 | `[ssh_tunnels.*]` | host, user, local_port, remote_port, direction, bind_address | 无 | SSH 隧道（数据库/Ollama 引用） |

@@ -21,22 +21,21 @@ use crate::domain::user::user_context_control::{
 };
 use crate::shared::error::AppError;
 
-/// Per-user mutex for serializing concurrent requests from the same user.
+/// 每个用户独立的 mutex，用于串行化同一用户的并发请求。
 type UserMutexMap = DashMap<u64, Arc<Mutex<()>>>;
 
 const FALLBACK_RECENT_MESSAGE_LIMIT: u64 = 100;
 
-/// ChatService is the primary business entry point for the sessionless,
-/// per-user conversation model.
+/// ChatService 是无会话、按用户维护对话模型的主要业务入口。
 ///
 /// Flow:
-/// 1. Acquire per-user lock
-/// 2. find_or_create_for_user(user_id) — single Conversation per user
-/// 3. Build AgentContext via PromptBuilder (inside AgentRuntime)
-/// 4. Call AgentRuntime::respond
-/// 5. Persist user + assistant messages (AgentRuntime handles persistence)
-/// 6. Return reply
-/// 7. After response closed: emit TurnClosedEvent for post-processing
+/// 1. 获取 per-user lock
+/// 2. find_or_create_for_user(user_id) —— 每个用户对应一个 Conversation
+/// 3. 通过 PromptBuilder 构建 AgentContext（在 AgentRuntime 内部完成）
+/// 4. 调用 AgentRuntime::respond
+/// 5. 持久化 user + assistant messages（由 AgentRuntime 处理）
+/// 6. 返回 reply
+/// 7. 响应结束后，发送 TurnClosedEvent 供后处理使用
 pub struct ChatService {
     task_publisher: Arc<dyn TaskPublisher>,
     conv_repo: Arc<dyn ConversationRepoT>,
@@ -53,7 +52,7 @@ pub struct ChatOpenResult {
     pub personalization_enabled: bool,
 }
 
-/// Response from a single chat turn.
+/// 单轮聊天的响应结果。
 #[derive(Debug, Clone)]
 pub struct ChatTurnResponse {
     pub reply: String,
@@ -81,7 +80,7 @@ impl ChatService {
         }
     }
 
-    /// Acquire (or create) the per-user mutex.
+    /// 获取（或创建）当前用户对应的 mutex。
     fn user_lock(&self, user_id: u64) -> Arc<Mutex<()>> {
         self.user_locks
             .entry(user_id)
@@ -91,16 +90,16 @@ impl ChatService {
     }
 
     /// POST /api/v1/chat/open
-    /// Ensure a Conversation exists for this user. Returns the conversation metadata.
-    /// Publishes ConversationCreated when the conversation is newly created.
+    /// 确保该用户存在一个 Conversation，并返回 conversation metadata。
+    /// 如果是新建的 conversation，则发布 ConversationCreated。
     pub async fn open(&self, user_id: u64) -> Result<ChatOpenResult, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
         let conversation = self.conv_repo.find_or_create_for_user(user_id).await?;
 
-        // Heuristic: a brand-new conversation has message_count == 0.
-        // Publish ConversationCreated for audit trail.
+        // 启发式判断：全新的 conversation 会有 message_count == 0。
+        // 发布 ConversationCreated，便于审计追踪。
         if conversation.message_count == 0 {
             let event = TaskEvent::ConversationCreated(ConversationLifecycleTask {
                 conversation_id: conversation.id,
@@ -119,7 +118,7 @@ impl ChatService {
     }
 
     /// POST /api/v1/chat/messages
-    /// Process a user message and return the assistant's reply.
+    /// 处理用户消息，并返回 assistant 的回复。
     pub async fn send_message(
         &self,
         user_id: u64,
@@ -130,20 +129,20 @@ impl ChatService {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
-        // 1. Ensure conversation exists
+        // 1. 确保 conversation 存在
         let conversation = self.conv_repo.find_or_create_for_user(user_id).await?;
         let conversation_id = conversation.id;
 
-        // 2. Build location JSON value
+        // 2. 构建 location 的 JSON value
         let location_value = location
             .as_ref()
             .and_then(|loc| serde_json::to_value(loc).ok());
 
-        // 3. Load recent persisted dialogue before the current turn. The runtime
-        // will append the current user message and apply the final context limit.
+        // 3. 加载当前轮之前最近持久化的对话。runtime 会追加当前用户消息，
+        // 并应用最终的上下文长度限制。
         let recent_messages = self.load_recent_chat_messages(conversation_id).await?;
 
-        // 4. Call AgentRuntime::respond
+        // 4. 调用 AgentRuntime::respond
         let response: AgentResponse = self
             .agent_runtime
             .respond(
@@ -156,7 +155,7 @@ impl ChatService {
             )
             .await?;
 
-        // 5. Publish TurnClosedEvent for post-processing
+        // 5. 发布 TurnClosedEvent，供后处理使用
         let event = TaskEvent::TurnClosed(TurnClosedEvent {
             user_id,
             conversation_id,
@@ -176,7 +175,7 @@ impl ChatService {
         })
     }
 
-    /// Locks the user for admin / lifecycle operations.
+    /// 为 admin / lifecycle 操作锁定该用户。
     pub fn lock(&self, user_id: u64) -> Arc<Mutex<()>> {
         self.user_lock(user_id)
     }

@@ -34,6 +34,8 @@ fn default_true() -> bool {
     true
 }
 
+use std::collections::BTreeSet;
+
 use serde::Deserialize;
 
 pub use self::auth_storage::{AuthConfig, JwtConfig, StorageConfig};
@@ -157,6 +159,8 @@ impl AppConfig {
             }
         };
         cfg.apply_env_overrides();
+        cfg.resolve_tunnel_templates()
+            .unwrap_or_else(|e| panic!("invalid application configuration: {e}"));
         cfg.validate()
             .unwrap_or_else(|e| panic!("invalid application configuration: {e}"));
         cfg
@@ -164,9 +168,8 @@ impl AppConfig {
 
     /// Validate configuration consistency.
     pub fn validate(&self) -> Result<(), String> {
-        if self.database.url.trim().is_empty() {
-            return Err("database.url cannot be empty".into());
-        }
+        self.validate_tunnel_references()?;
+        validate_required_url(&self.database.url, "database.url")?;
         if self.database.max_connections == 0 {
             return Err("database.max_connections must be at least 1".into());
         }
@@ -182,13 +185,26 @@ impl AppConfig {
         if self.rag.chunk_size == 0 || self.rag.chunk_overlap >= self.rag.chunk_size {
             return Err("rag.chunk_overlap must be smaller than rag.chunk_size".into());
         }
+        validate_required_url(&self.llm.base_url, "llm.base_url")?;
         if self.llm.timeout_secs == 0 {
             return Err("llm.timeout_secs must be greater than zero".into());
         }
+        validate_required_url(&self.embedding.base_url, "embedding.base_url")?;
         if self.embedding.batch_size == 0 || self.embedding.timeout_secs == 0 {
             return Err(
                 "embedding.batch_size and embedding.timeout_secs must be greater than zero".into(),
             );
+        }
+        if self.qdrant.enabled {
+            validate_required_url(&self.qdrant.url, "qdrant.url")?;
+        }
+        if self.web_ingestion.enabled
+            && (self.web_ingestion.scheduler_enabled || self.web_ingestion.dispatcher_enabled)
+        {
+            validate_required_url(
+                &self.web_ingestion.distill_llm.base_url,
+                "web_ingestion.distill_llm.base_url",
+            )?;
         }
         if !self.rag.hybrid_vector_weight.is_finite()
             || !self.rag.hybrid_keyword_weight.is_finite()
@@ -249,6 +265,119 @@ impl AppConfig {
         }
         if self.fresh_context.distill_llm.timeout_secs == 0 {
             return Err("fresh_context.distill_llm.timeout_secs must be greater than zero".into());
+        }
+        if self.fresh_context.enabled && self.fresh_context.dispatcher_enabled {
+            validate_required_url(
+                &self.fresh_context.distill_llm.base_url,
+                "fresh_context.distill_llm.base_url",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 返回所有被业务配置引用的 SSH 隧道名称。
+    ///
+    /// 启动层只需要关心这个集合，不需要逐个扫描 database/llm/qdrant 等配置段。
+    pub fn referenced_ssh_tunnel_names(&self) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        push_tunnel_name(&mut names, self.database.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.ollama.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.llm.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.embedding.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.qdrant.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.web_ingestion.distill_llm.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.fresh_context.distill_llm.tunnel.as_deref());
+        names
+    }
+
+    /// 返回启动时真正需要拉起的 SSH 隧道。
+    ///
+    /// 远程转发隧道用于对外暴露端口，保持无条件启动；本地转发仅在被配置引用时启动。
+    pub fn active_ssh_tunnels(&self) -> Vec<(String, SshTunnelConfig)> {
+        let referenced = self.referenced_ssh_tunnel_names();
+        self.ssh_tunnels
+            .iter()
+            .filter(|(name, cfg)| {
+                matches!(cfg.direction, TunnelDirection::Remote) || referenced.contains(*name)
+            })
+            .map(|(name, cfg)| (name.clone(), cfg.clone()))
+            .collect()
+    }
+
+    fn validate_tunnel_references(&self) -> Result<(), String> {
+        for name in self.referenced_ssh_tunnel_names() {
+            if !self.ssh_tunnels.contains_key(&name) {
+                return Err(format!("ssh tunnel '{name}' is referenced but not defined"));
+            }
+        }
+        Ok(())
+    }
+
+    /// 根据本地 SSH 隧道端点替换 URL 模板占位符。
+    ///
+    /// 有 tunnel 的字段必须显式写 `{ip}` 和 `{port}`，后端只做占位符替换。
+    /// 没有 tunnel 的字段按普通 URL 使用，不允许残留 `{ip}` / `{port}`。
+    fn resolve_tunnel_templates(&mut self) -> Result<(), String> {
+        if let Some(url) = render_tunnel_template(
+            "database.url",
+            &self.ssh_tunnels,
+            self.database.tunnel.as_deref(),
+            &self.database.url,
+        )? {
+            self.database.url = url;
+        }
+
+        if let Some(url) = render_tunnel_template(
+            "ollama.base_url",
+            &self.ssh_tunnels,
+            self.ollama.tunnel.as_deref(),
+            &self.ollama.base_url,
+        )? {
+            self.ollama.base_url = url;
+        }
+
+        if let Some(url) = render_tunnel_template(
+            "llm.base_url",
+            &self.ssh_tunnels,
+            self.llm.tunnel.as_deref(),
+            &self.llm.base_url,
+        )? {
+            self.llm.base_url = url;
+        }
+
+        if let Some(url) = render_tunnel_template(
+            "embedding.base_url",
+            &self.ssh_tunnels,
+            self.embedding.tunnel.as_deref(),
+            &self.embedding.base_url,
+        )? {
+            self.embedding.base_url = url;
+        }
+
+        if let Some(url) = render_tunnel_template(
+            "qdrant.url",
+            &self.ssh_tunnels,
+            self.qdrant.tunnel.as_deref(),
+            &self.qdrant.url,
+        )? {
+            self.qdrant.url = url;
+        }
+
+        if let Some(url) = render_tunnel_template(
+            "web_ingestion.distill_llm.base_url",
+            &self.ssh_tunnels,
+            self.web_ingestion.distill_llm.tunnel.as_deref(),
+            &self.web_ingestion.distill_llm.base_url,
+        )? {
+            self.web_ingestion.distill_llm.base_url = url;
+        }
+        if let Some(url) = render_tunnel_template(
+            "fresh_context.distill_llm.base_url",
+            &self.ssh_tunnels,
+            self.fresh_context.distill_llm.tunnel.as_deref(),
+            &self.fresh_context.distill_llm.base_url,
+        )? {
+            self.fresh_context.distill_llm.base_url = url;
         }
         Ok(())
     }
@@ -615,3 +744,354 @@ impl AppConfig {
 }
 
 mod display_config;
+
+fn push_tunnel_name(names: &mut BTreeSet<String>, name: Option<&str>) {
+    if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        names.insert(name.to_string());
+    }
+}
+
+const TUNNEL_TEMPLATE_IP: &str = "{ip}";
+const TUNNEL_TEMPLATE_PORT: &str = "{port}";
+
+fn render_tunnel_template(
+    field_name: &str,
+    tunnels: &std::collections::HashMap<String, SshTunnelConfig>,
+    tunnel_name: Option<&str>,
+    template_url: &str,
+) -> Result<Option<String>, String> {
+    let Some(name) = tunnel_name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+    let template = template_url.trim();
+    if template.is_empty() {
+        return Err(format!(
+            "{field_name} cannot be empty when tunnel '{name}' is set; use {TUNNEL_TEMPLATE_IP} and {TUNNEL_TEMPLATE_PORT} placeholders"
+        ));
+    }
+    if !template.contains(TUNNEL_TEMPLATE_IP) || !template.contains(TUNNEL_TEMPLATE_PORT) {
+        return Err(format!(
+            "{field_name} must contain {TUNNEL_TEMPLATE_IP} and {TUNNEL_TEMPLATE_PORT} when tunnel '{name}' is set"
+        ));
+    }
+    let tunnel = tunnels
+        .get(name)
+        .ok_or_else(|| format!("ssh tunnel '{name}' is referenced but not defined"))?;
+    if !matches!(tunnel.direction, TunnelDirection::Local) {
+        return Err(format!(
+            "{field_name} references ssh tunnel '{name}', but URL rewriting requires a local tunnel"
+        ));
+    }
+    let host = tunnel
+        .bind_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .unwrap_or("127.0.0.1");
+    let rendered = template
+        .replace(TUNNEL_TEMPLATE_IP, host)
+        .replace(TUNNEL_TEMPLATE_PORT, &tunnel.local_port.to_string());
+    parse_url(&rendered, field_name)?;
+    Ok(Some(rendered))
+}
+
+fn validate_required_url(value: &str, field_name: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!(
+            "{field_name} cannot be empty; set it to a URL template"
+        ));
+    }
+    if contains_tunnel_template_placeholder(value) {
+        return Err(format!(
+            "{field_name} contains unresolved {TUNNEL_TEMPLATE_IP}/{TUNNEL_TEMPLATE_PORT} placeholders; configure tunnel or use a concrete URL"
+        ));
+    }
+    parse_url(value, field_name)?;
+    Ok(())
+}
+
+fn parse_url(template: &str, field_name: &str) -> Result<reqwest::Url, String> {
+    reqwest::Url::parse(template)
+        .map_err(|error| format!("{field_name} must be a valid absolute URL: {error}"))
+}
+
+fn contains_tunnel_template_placeholder(value: &str) -> bool {
+    value.contains(TUNNEL_TEMPLATE_IP) || value.contains(TUNNEL_TEMPLATE_PORT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_secret() -> String {
+        "01234567890123456789012345678901".into()
+    }
+
+    #[test]
+    fn internal_default_config_keeps_url_fields_empty() {
+        let config = AppConfig::default();
+
+        assert!(config.database.url.is_empty());
+        assert!(config.ollama.base_url.is_empty());
+        assert!(config.llm.base_url.is_empty());
+        assert!(config.embedding.base_url.is_empty());
+        assert!(config.qdrant.url.is_empty());
+        assert!(config.web_ingestion.distill_llm.base_url.is_empty());
+        assert!(config.fresh_context.distill_llm.base_url.is_empty());
+    }
+
+    #[test]
+    fn renders_llm_url_template_from_tunnel() {
+        let raw = r#"
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [llm]
+            base_url = "https://{ip}:{port}/v1"
+            tunnel = "ollama"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        config.resolve_tunnel_templates().unwrap();
+
+        assert_eq!(config.llm.base_url, "https://127.0.0.1:11111/v1");
+        assert_eq!(
+            config.referenced_ssh_tunnel_names(),
+            BTreeSet::from(["ollama".to_string()])
+        );
+    }
+
+    #[test]
+    fn tunnel_requires_url_template_field() {
+        let raw = r#"
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [llm]
+            tunnel = "ollama"
+        "#;
+
+        let error = toml::from_str::<AppConfig>(raw).unwrap_err().to_string();
+
+        assert!(error.contains("missing field `base_url`"));
+    }
+
+    #[test]
+    fn tunnel_requires_ip_and_port_placeholders() {
+        let raw = r#"
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [llm]
+            base_url = "http://127.0.0.1:11434/v1"
+            tunnel = "ollama"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        let error = config.resolve_tunnel_templates().unwrap_err();
+
+        assert!(error.contains("llm.base_url must contain {ip} and {port}"));
+    }
+
+    #[test]
+    fn renders_database_url_template_from_tunnel() {
+        let raw = r#"
+            [ssh_tunnels.mysql]
+            host = "host-a"
+            local_port = 13306
+            remote_port = 3306
+
+            [database]
+            url = "mysql://root:password@{ip}:{port}/digital_companion"
+            tunnel = "mysql"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        config.resolve_tunnel_templates().unwrap();
+
+        assert_eq!(
+            config.database.url,
+            "mysql://root:password@127.0.0.1:13306/digital_companion"
+        );
+    }
+
+    #[test]
+    fn renders_embedding_distill_and_qdrant_templates_from_tunnels() {
+        let raw = r#"
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [ssh_tunnels.qdrant]
+            host = "host-b"
+            local_port = 6334
+            remote_port = 6333
+
+            [embedding]
+            base_url = "http://{ip}:{port}/v1"
+            tunnel = "ollama"
+
+            [web_ingestion.distill_llm]
+            base_url = "http://{ip}:{port}/v1"
+            tunnel = "ollama"
+
+            [fresh_context.distill_llm]
+            base_url = "http://{ip}:{port}/v1"
+            tunnel = "ollama"
+
+            [qdrant]
+            url = "http://{ip}:{port}"
+            tunnel = "qdrant"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        config.resolve_tunnel_templates().unwrap();
+
+        assert_eq!(config.embedding.base_url, "http://127.0.0.1:11111/v1");
+        assert_eq!(
+            config.web_ingestion.distill_llm.base_url,
+            "http://127.0.0.1:11111/v1"
+        );
+        assert_eq!(
+            config.fresh_context.distill_llm.base_url,
+            "http://127.0.0.1:11111/v1"
+        );
+        assert_eq!(config.qdrant.url, "http://127.0.0.1:6334");
+    }
+
+    #[test]
+    fn tunnel_template_preserves_url_structure() {
+        let raw = r#"
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [llm]
+            base_url = "https://{ip}:{port}/custom/v2?tenant=alpha"
+            tunnel = "ollama"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        config.resolve_tunnel_templates().unwrap();
+
+        assert_eq!(
+            config.llm.base_url,
+            "https://127.0.0.1:11111/custom/v2?tenant=alpha"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_tunnel_resolved_urls() {
+        let raw = r#"
+            [ssh_tunnels.mysql]
+            host = "host-db"
+            local_port = 13306
+            remote_port = 3306
+
+            [database]
+            url = "mysql://root:password@{ip}:{port}/digital_companion"
+            tunnel = "mysql"
+
+            [jwt]
+            secret = "01234567890123456789012345678901"
+
+            [ssh_tunnels.ollama]
+            host = "host-a"
+            local_port = 11111
+            remote_port = 11434
+
+            [ssh_tunnels.qdrant]
+            host = "host-b"
+            local_port = 6334
+            remote_port = 6333
+
+            [llm]
+            base_url = "http://{ip}:{port}/v1"
+            tunnel = "ollama"
+
+            [embedding]
+            base_url = "http://{ip}:{port}/v1"
+            tunnel = "ollama"
+
+            [qdrant]
+            enabled = true
+            url = "http://{ip}:{port}"
+            tunnel = "qdrant"
+        "#;
+        let mut config: AppConfig = toml::from_str(raw).unwrap();
+
+        config.resolve_tunnel_templates().unwrap();
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_tunnel_reference() {
+        let mut config = AppConfig::default();
+        config.jwt.secret = test_secret();
+        config.llm.tunnel = Some("missing".into());
+
+        let error = config.validate().unwrap_err();
+
+        assert!(error.contains("ssh tunnel 'missing' is referenced but not defined"));
+    }
+
+    #[test]
+    fn active_tunnels_include_referenced_local_and_all_remote() {
+        let mut config = AppConfig::default();
+        config.llm.tunnel = Some("ollama".into());
+        config.ssh_tunnels.insert(
+            "ollama".into(),
+            SshTunnelConfig {
+                host: "host-a".into(),
+                user: None,
+                local_port: 11111,
+                remote_port: 11434,
+                direction: TunnelDirection::Local,
+                bind_address: None,
+            },
+        );
+        config.ssh_tunnels.insert(
+            "unused".into(),
+            SshTunnelConfig {
+                host: "host-b".into(),
+                user: None,
+                local_port: 22222,
+                remote_port: 22222,
+                direction: TunnelDirection::Local,
+                bind_address: None,
+            },
+        );
+        config.ssh_tunnels.insert(
+            "public".into(),
+            SshTunnelConfig {
+                host: "host-c".into(),
+                user: None,
+                local_port: 8080,
+                remote_port: 8080,
+                direction: TunnelDirection::Remote,
+                bind_address: Some("0.0.0.0".into()),
+            },
+        );
+
+        let names = config
+            .active_ssh_tunnels()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            names,
+            BTreeSet::from(["ollama".to_string(), "public".to_string()])
+        );
+    }
+}

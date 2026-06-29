@@ -43,33 +43,13 @@ impl InfraContext {
 /// 启动 SSH 隧道管理器。
 ///
 /// - `-R`（远程转发）隧道无条件启动，用于暴露端口到公网。
-/// - `-L`（本地转发）隧道仅在被 database / ollama 引用时启动。
+/// - `-L`（本地转发）隧道仅在被业务配置引用时启动。
 fn start_ssh_tunnels(config: &AppConfig) -> Result<Option<SshTunnelManager>, std::io::Error> {
-    use crate::shared::config::TunnelDirection;
-
     if config.ssh_tunnels.is_empty() {
         return Ok(None);
     }
 
-    let mut referenced = std::collections::BTreeSet::new();
-    if let Some(ref name) = config.database.tunnel {
-        referenced.insert(name.as_str());
-    }
-    if let Some(ref name) = config.ollama.tunnel {
-        referenced.insert(name.as_str());
-    }
-    if let Some(ref name) = config.qdrant.tunnel {
-        referenced.insert(name.as_str());
-    }
-
-    let used_tunnels: Vec<(String, crate::shared::config::SshTunnelConfig)> = config
-        .ssh_tunnels
-        .iter()
-        .filter(|(name, cfg)| {
-            matches!(cfg.direction, TunnelDirection::Remote) || referenced.contains(name.as_str())
-        })
-        .map(|(name, cfg)| (name.clone(), cfg.clone()))
-        .collect();
+    let used_tunnels = config.active_ssh_tunnels();
 
     if used_tunnels.is_empty() {
         return Ok(None);

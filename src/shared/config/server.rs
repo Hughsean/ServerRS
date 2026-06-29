@@ -30,7 +30,6 @@ fn default_port() -> u16 {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
-    #[serde(default = "default_db_url")]
     pub url: String,
     #[serde(default = "default_db_max_conn")]
     pub max_connections: u32,
@@ -41,16 +40,13 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: default_db_url(),
+            url: String::new(),
             max_connections: default_db_max_conn(),
             tunnel: None,
         }
     }
 }
 
-fn default_db_url() -> String {
-    "mysql://user:password@127.0.0.1:3306/app_db".into()
-}
 fn default_db_max_conn() -> u32 {
     10
 }

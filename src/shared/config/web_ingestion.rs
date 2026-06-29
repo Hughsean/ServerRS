@@ -8,7 +8,6 @@ use super::default_true;
 pub struct DistillLlmConfig {
     #[serde(default = "default_distill_llm_provider")]
     pub provider: String,
-    #[serde(default = "default_distill_llm_base_url")]
     pub base_url: String,
     #[serde(default = "default_distill_llm_chat_model")]
     pub chat_model: String,
@@ -20,27 +19,27 @@ pub struct DistillLlmConfig {
     pub top_p: f64,
     #[serde(default = "default_distill_llm_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for DistillLlmConfig {
     fn default() -> Self {
         Self {
             provider: default_distill_llm_provider(),
-            base_url: default_distill_llm_base_url(),
+            base_url: String::new(),
             chat_model: default_distill_llm_chat_model(),
             api_key: String::new(),
             temperature: default_distill_llm_temperature(),
             top_p: default_distill_llm_top_p(),
             timeout_secs: default_distill_llm_timeout_secs(),
+            tunnel: None,
         }
     }
 }
 
 fn default_distill_llm_provider() -> String {
     "deepseek".into()
-}
-fn default_distill_llm_base_url() -> String {
-    "https://api.deepseek.com".into()
 }
 fn default_distill_llm_chat_model() -> String {
     "deepseek-chat".into()
@@ -350,6 +349,7 @@ mod tests {
         let raw = r#"
             [web_ingestion.distill_llm]
             provider = "ollama"
+            base_url = "http://127.0.0.1:11434/v1"
             chat_model = "qwen3:8b"
 
             [web_ingestion]

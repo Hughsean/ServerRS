@@ -6,7 +6,6 @@ use serde::Deserialize;
 pub struct QdrantConfig {
     #[serde(default = "default_qdrant_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_qdrant_url")]
     pub url: String,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -24,7 +23,7 @@ impl Default for QdrantConfig {
     fn default() -> Self {
         Self {
             enabled: default_qdrant_enabled(),
-            url: default_qdrant_url(),
+            url: String::new(),
             api_key: None,
             rag_collection: default_qdrant_rag_collection(),
             memory_collection: default_qdrant_memory_collection(),
@@ -36,9 +35,6 @@ impl Default for QdrantConfig {
 
 fn default_qdrant_enabled() -> bool {
     false
-}
-fn default_qdrant_url() -> String {
-    "http://127.0.0.1:6333".into()
 }
 pub fn default_qdrant_rag_collection() -> String {
     "rag_chunks".into()

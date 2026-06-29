@@ -4,7 +4,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OllamaConfig {
-    #[serde(default = "default_ollama_url")]
     pub base_url: String,
     #[serde(default = "default_ollama_model")]
     pub model: String,
@@ -19,7 +18,7 @@ pub struct OllamaConfig {
 impl Default for OllamaConfig {
     fn default() -> Self {
         Self {
-            base_url: default_ollama_url(),
+            base_url: String::new(),
             model: default_ollama_model(),
             temperature: default_ollama_temperature(),
             top_p: default_ollama_top_p(),
@@ -28,9 +27,6 @@ impl Default for OllamaConfig {
     }
 }
 
-fn default_ollama_url() -> String {
-    "http://127.0.0.1:11434/v1".into()
-}
 fn default_ollama_model() -> String {
     "qwen2.5:14b".into()
 }

@@ -8,7 +8,6 @@ use super::qdrant::default_qdrant_rag_collection;
 pub struct LlmConfig {
     #[serde(default = "default_llm_provider")]
     pub provider: String,
-    #[serde(default = "default_llm_base_url")]
     pub base_url: String,
     #[serde(default = "default_llm_chat_model")]
     pub chat_model: String,
@@ -24,13 +23,15 @@ pub struct LlmConfig {
     pub max_tool_depth: u32,
     #[serde(default = "default_llm_enable_reasoning")]
     pub enable_reasoning: bool,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             provider: default_llm_provider(),
-            base_url: default_llm_base_url(),
+            base_url: String::new(),
             chat_model: default_llm_chat_model(),
             embedding_model: default_llm_embedding_model(),
             temperature: default_llm_temperature(),
@@ -38,15 +39,13 @@ impl Default for LlmConfig {
             timeout_secs: default_llm_timeout_secs(),
             max_tool_depth: default_llm_max_tool_depth(),
             enable_reasoning: default_llm_enable_reasoning(),
+            tunnel: None,
         }
     }
 }
 
 fn default_llm_provider() -> String {
     "openai".into()
-}
-fn default_llm_base_url() -> String {
-    "http://127.0.0.1:11434/v1".into()
 }
 fn default_llm_chat_model() -> String {
     "qwen2.5:14b".into()
@@ -188,7 +187,6 @@ fn default_rag_hybrid_keyword_weight() -> f64 {
 pub struct EmbeddingConfig {
     #[serde(default = "default_embedding_provider")]
     pub provider: String,
-    #[serde(default = "default_embedding_base_url")]
     pub base_url: String,
     #[serde(default = "default_embedding_model")]
     pub model: String,
@@ -202,28 +200,28 @@ pub struct EmbeddingConfig {
     pub timeout_secs: u64,
     #[serde(default = "default_qdrant_rag_collection")]
     pub qdrant_collection: String,
+    #[serde(default)]
+    pub tunnel: Option<String>,
 }
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             provider: default_embedding_provider(),
-            base_url: default_embedding_base_url(),
+            base_url: String::new(),
             model: default_embedding_model(),
             api_key: default_embedding_api_key(),
             dimension: default_embedding_dimension(),
             batch_size: default_embedding_batch_size(),
             timeout_secs: default_embedding_timeout_secs(),
             qdrant_collection: default_qdrant_rag_collection(),
+            tunnel: None,
         }
     }
 }
 
 fn default_embedding_provider() -> String {
     "ollama".into()
-}
-fn default_embedding_base_url() -> String {
-    "http://127.0.0.1:11434".into()
 }
 fn default_embedding_model() -> String {
     "nomic-embed-text".into()
