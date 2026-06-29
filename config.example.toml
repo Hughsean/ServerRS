@@ -113,6 +113,78 @@ max_rag_chunks = 5
 memory_extraction_async = true
 summary_async = true
 
+# ── Semantic Context Routing ──
+# Disabled by default. When enabled, semantic classification uses embedding
+# prototypes to decide whether Fresh Context, Memory, and RAG should be used.
+[semantic_classification]
+enabled = false
+provider = "embedding"
+
+[[semantic_classification.taxonomies]]
+id = "context_routing"
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "fresh_positive_latest"
+label = "context.fresh.positive"
+text = "用户询问最新、最近、今天、当前、实时、新闻、版本变化或需要及时事实的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "fresh_negative_stable"
+label = "context.fresh.negative"
+text = "用户询问长期稳定知识、代码解释、创作、闲聊或不需要实时信息的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "memory_positive_personal"
+label = "context.memory.positive"
+text = "用户提到个人偏好、长期计划、关系、过去说过的事情或需要个性化记忆的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "memory_negative_generic"
+label = "context.memory.negative"
+text = "用户提出通用事实、一次性任务、代码问题或不需要个人历史的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "rag_positive_knowledge"
+label = "context.rag.positive"
+text = "用户询问项目知识库、文档、资料、规章、已入库内容或需要检索内部知识的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "rag_negative_none"
+label = "context.rag.negative"
+text = "用户提出简单聊天、无需外部资料的创作、直接推理或当前上下文已经足够的问题"
+weight = 1.0
+
+[[semantic_classification.taxonomies.prototypes]]
+id = "current_task_positive"
+label = "context.current_task.positive"
+text = "用户正在继续当前任务、引用刚才内容、让助手下一步实施或基于当前对话直接修改"
+weight = 1.0
+
+[context_routing]
+enabled = false
+taxonomy = "context_routing"
+margin = 0.05
+
+[context_routing.fresh_context]
+positive_threshold = 0.72
+negative_threshold = 0.72
+
+[context_routing.memory]
+positive_threshold = 0.68
+negative_threshold = 0.72
+low_confidence_top_k = 3
+
+[context_routing.rag]
+positive_threshold = 0.66
+negative_threshold = 0.72
+low_confidence_top_k = 1
+current_task_top_k = 0
+
 # ── Risk Detector (used in Phase 4) ──
 [detector]
 context_window_size = 4

@@ -124,6 +124,22 @@ impl fmt::Display for AppConfig {
 
         writeln!(
             f,
+            "semantic→ enabled={}, provider={}, taxonomies={}",
+            self.semantic_classification.enabled,
+            self.semantic_classification.provider,
+            self.semantic_classification.taxonomies.len()
+        )?;
+
+        writeln!(
+            f,
+            "routing → enabled={}, taxonomy={}, margin={}",
+            self.context_routing.enabled,
+            self.context_routing.taxonomy,
+            self.context_routing.margin
+        )?;
+
+        writeln!(
+            f,
             "tts      → provider={}, voice={}, encoding={}",
             self.tts.provider, self.tts.default_voice, self.tts.default_encoding
         )?;

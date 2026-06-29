@@ -17,6 +17,7 @@
 //! | `display_config.rs` | `Display for AppConfig` impl |
 
 pub mod auth_storage;
+pub mod context_routing;
 pub mod fresh_context;
 pub mod llm_agent_rag;
 pub mod mail_cors_log;
@@ -24,6 +25,7 @@ pub mod plugins;
 pub mod qdrant;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
+pub mod semantic_classification;
 pub mod server;
 pub mod ssh;
 pub mod tts;
@@ -39,6 +41,7 @@ use std::collections::BTreeSet;
 use serde::Deserialize;
 
 pub use self::auth_storage::{AuthConfig, JwtConfig, StorageConfig};
+pub use self::context_routing::ContextRoutingConfig;
 pub use self::fresh_context::FreshContextConfig;
 pub use self::llm_agent_rag::{AgentConfig, EmbeddingConfig, LlmConfig, RagConfig};
 pub use self::mail_cors_log::{
@@ -51,6 +54,9 @@ pub use self::plugins::{
 pub use self::qdrant::QdrantConfig;
 #[cfg(feature = "qq_bot")]
 pub use self::qq_bot::QqBotConfig;
+pub use self::semantic_classification::{
+    SemanticClassificationConfig, SemanticPrototypeConfig, SemanticTaxonomyConfig,
+};
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::ssh::{SshTunnelConfig, TunnelDirection};
 pub use self::tts::TtsConfig;
@@ -101,6 +107,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub fresh_context: FreshContextConfig,
     #[serde(default)]
+    pub semantic_classification: SemanticClassificationConfig,
+    #[serde(default)]
+    pub context_routing: ContextRoutingConfig,
+    #[serde(default)]
     pub tts: TtsConfig,
     #[serde(default)]
     pub ssh_tunnels: std::collections::HashMap<String, SshTunnelConfig>,
@@ -131,6 +141,8 @@ impl Default for AppConfig {
             embedding: Default::default(),
             web_ingestion: Default::default(),
             fresh_context: Default::default(),
+            semantic_classification: Default::default(),
+            context_routing: Default::default(),
             tts: Default::default(),
             ssh_tunnels: Default::default(),
             #[cfg(feature = "qq_bot")]
@@ -194,6 +206,31 @@ impl AppConfig {
             return Err(
                 "embedding.batch_size and embedding.timeout_secs must be greater than zero".into(),
             );
+        }
+        self.semantic_classification.validate()?;
+        self.context_routing.validate()?;
+        if self.context_routing.enabled {
+            if !self.semantic_classification.enabled {
+                return Err(
+                    "context_routing.enabled=true requires semantic_classification.enabled=true"
+                        .into(),
+                );
+            }
+            let taxonomy = self
+                .semantic_classification
+                .taxonomy(&self.context_routing.taxonomy)
+                .ok_or_else(|| {
+                    format!(
+                        "context_routing.taxonomy '{}' must reference an existing semantic taxonomy",
+                        self.context_routing.taxonomy
+                    )
+                })?;
+            if taxonomy.prototypes.is_empty() {
+                return Err(format!(
+                    "context_routing.taxonomy '{}' must contain at least one prototype",
+                    self.context_routing.taxonomy
+                ));
+            }
         }
         if self.qdrant.enabled {
             validate_required_url(&self.qdrant.url, "qdrant.url")?;
@@ -1043,6 +1080,22 @@ mod tests {
         let error = config.validate().unwrap_err();
 
         assert!(error.contains("ssh tunnel 'missing' is referenced but not defined"));
+    }
+
+    #[test]
+    fn context_routing_requires_semantic_taxonomy_when_enabled() {
+        let mut config = AppConfig::default();
+        config.context_routing.enabled = true;
+        config.context_routing.taxonomy = "context_routing".into();
+        config.semantic_classification.enabled = true;
+        config.semantic_classification.taxonomies = Vec::new();
+        config.jwt.secret = test_secret();
+        config.database.url = "mysql://root:password@127.0.0.1:3306/db".into();
+        config.llm.base_url = "http://127.0.0.1:11434/v1".into();
+        config.embedding.base_url = "http://127.0.0.1:11434/v1".into();
+
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("context_routing.taxonomy"));
     }
 
     #[test]
