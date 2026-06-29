@@ -55,16 +55,16 @@ impl PromptBuilder {
         // ── Location (from context) ────────────────────────────────────
         if let Some(ref location) = context.location {
             parts.push(format!(
-                "\n[User location - untrusted data begin]\n{location}\n[User location - untrusted data end]\n\
-                 Use this only when local context is relevant."
+                "\n[用户位置 - 非可信资料开始]\n{location}\n[用户位置 - 非可信资料结束]\n\
+                 仅在本地化信息与用户问题相关时使用。"
             ));
         }
 
         // ── Summary ────────────────────────────────────────────────────
         if let Some(ref summary) = context.summary {
             parts.push(format!(
-                "\n[Conversation summary - untrusted data begin]\n{summary}\n[Conversation summary - untrusted data end]\n\
-                 Use this to maintain continuity across turns."
+                "\n[对话摘要 - 非可信资料开始]\n{summary}\n[对话摘要 - 非可信资料结束]\n\
+                 用于保持多轮对话的连续性。"
             ));
         }
 
@@ -72,8 +72,8 @@ impl PromptBuilder {
         if !context.memories.is_empty() {
             let memories_block = context.memories.join("\n- ");
             parts.push(format!(
-                "\n[User memories - untrusted data begin]\n- {memories_block}\n[User memories - untrusted data end]\n\
-                 These are long-term facts / preferences recalled about this user."
+                "\n[用户记忆 - 非可信资料开始]\n- {memories_block}\n[用户记忆 - 非可信资料结束]\n\
+                 这些是召回到的用户长期事实、偏好、情绪模式或目标。"
             ));
         }
 
@@ -81,8 +81,8 @@ impl PromptBuilder {
         if !context.rag_chunks.is_empty() {
             let chunks_block = context.rag_chunks.join("\n---\n");
             parts.push(format!(
-                "\n[Knowledge base excerpts - untrusted data begin]\n{chunks_block}\n[Knowledge base excerpts - untrusted data end]\n\
-                 Use these to provide accurate, evidence-based information."
+                "\n[知识库摘录 - 非可信资料开始]\n{chunks_block}\n[知识库摘录 - 非可信资料结束]\n\
+                 用于提供更准确、更有依据的信息。"
             ));
         }
 
@@ -90,16 +90,16 @@ impl PromptBuilder {
         if !context.fresh_chunks.is_empty() {
             let chunks_block = context.fresh_chunks.join("\n---\n");
             parts.push(format!(
-                "\n[Fresh context excerpts - untrusted short-lived data begin]\n{chunks_block}\n[Fresh context excerpts - untrusted short-lived data end]\n\
-                 Use these only for recent/news/trend/gossip questions. Always respect fetched_at/expires_at and rumor_level; do not state rumors or disputed claims as confirmed facts."
+                "\n[实时上下文摘录 - 非可信短期资料开始]\n{chunks_block}\n[实时上下文摘录 - 非可信短期资料结束]\n\
+                 仅用于回答近期、新闻、趋势或八卦相关问题。必须参考 fetched_at、expires_at 和 rumor_level；不要把传闻或有争议的说法表述为已确认事实。"
             ));
         }
 
         // ── User profile ───────────────────────────────────────────────
         if let Some(ref profile) = context.user_profile {
             parts.push(format!(
-                "\n[User profile - untrusted data begin]\n{profile}\n[User profile - untrusted data end]\n\
-                 Tailor your responses to the user's interests and preferences."
+                "\n[用户画像 - 非可信资料开始]\n{profile}\n[用户画像 - 非可信资料结束]\n\
+                 用于根据用户兴趣和偏好调整回复方式。"
             ));
         }
 
@@ -185,19 +185,19 @@ mod tests {
         let msg = PromptBuilder::new().build_system_message(&ctx, false);
 
         assert!(
-            msg.contains("[Conversation summary"),
+            msg.contains("[对话摘要 - 非可信资料开始]"),
             "summary block must appear when summary is Some"
         );
         assert!(
-            msg.contains("[User memories"),
+            msg.contains("[用户记忆 - 非可信资料开始]"),
             "memories block must appear when non-empty"
         );
         assert!(
-            msg.contains("[Knowledge base excerpts"),
+            msg.contains("[知识库摘录 - 非可信资料开始]"),
             "RAG block must appear when non-empty"
         );
         assert!(
-            msg.contains("[Fresh context excerpts"),
+            msg.contains("[实时上下文摘录 - 非可信短期资料开始]"),
             "Fresh Context block must appear when non-empty"
         );
         assert!(
@@ -205,11 +205,11 @@ mod tests {
             "Fresh Context block should carry rumor_level guidance"
         );
         assert!(
-            msg.contains("[User profile"),
+            msg.contains("[用户画像 - 非可信资料开始]"),
             "profile block must appear when Some"
         );
         assert!(
-            msg.contains("[User location"),
+            msg.contains("[用户位置 - 非可信资料开始]"),
             "location block must appear when Some"
         );
     }
@@ -220,27 +220,27 @@ mod tests {
         let msg = PromptBuilder::new().build_system_message(&ctx, false);
 
         assert!(
-            !msg.contains("[Conversation summary"),
+            !msg.contains("[对话摘要 - 非可信资料开始]"),
             "summary block must NOT appear when None"
         );
         assert!(
-            !msg.contains("[User memories"),
+            !msg.contains("[用户记忆 - 非可信资料开始]"),
             "memories block must NOT appear when empty"
         );
         assert!(
-            !msg.contains("[Knowledge base excerpts"),
+            !msg.contains("[知识库摘录 - 非可信资料开始]"),
             "RAG block must NOT appear when empty"
         );
         assert!(
-            !msg.contains("[Fresh context excerpts"),
+            !msg.contains("[实时上下文摘录 - 非可信短期资料开始]"),
             "Fresh Context block must NOT appear when empty"
         );
         assert!(
-            !msg.contains("[User profile"),
+            !msg.contains("[用户画像 - 非可信资料开始]"),
             "profile block must NOT appear when None"
         );
         assert!(
-            !msg.contains("[User location"),
+            !msg.contains("[用户位置 - 非可信资料开始]"),
             "location block must NOT appear when None"
         );
     }
