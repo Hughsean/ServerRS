@@ -212,8 +212,7 @@ impl AppConfig {
         if self.context_routing.enabled {
             if !self.semantic_classification.enabled {
                 return Err(
-                    "context_routing.enabled=true requires semantic_classification.enabled=true"
-                        .into(),
+                    "context_routing.enabled=true 需要 semantic_classification.enabled=true".into(),
                 );
             }
             let taxonomy = self
@@ -221,13 +220,13 @@ impl AppConfig {
                 .taxonomy(&self.context_routing.taxonomy)
                 .ok_or_else(|| {
                     format!(
-                        "context_routing.taxonomy '{}' must reference an existing semantic taxonomy",
+                        "context_routing.taxonomy '{}' 必须引用已存在的语义分类体系",
                         self.context_routing.taxonomy
                     )
                 })?;
             if taxonomy.prototypes.is_empty() {
                 return Err(format!(
-                    "context_routing.taxonomy '{}' must contain at least one prototype",
+                    "context_routing.taxonomy '{}' 必须至少包含一个 prototype",
                     self.context_routing.taxonomy
                 ));
             }

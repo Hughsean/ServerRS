@@ -117,7 +117,7 @@ impl ContextRoutingConfig {
             self.rag.negative_threshold,
         )?;
         if self.taxonomy.trim().is_empty() {
-            return Err("context_routing.taxonomy must not be empty".into());
+            return Err("context_routing.taxonomy 不能为空".into());
         }
         Ok(())
     }
@@ -127,7 +127,7 @@ fn validate_threshold(field: &str, value: f64) -> Result<(), String> {
     if value.is_finite() && (0.0..=1.0).contains(&value) {
         Ok(())
     } else {
-        Err(format!("{field} must be between 0.0 and 1.0"))
+        Err(format!("{field} 必须在 0.0 到 1.0 之间"))
     }
 }
 

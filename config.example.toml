@@ -114,8 +114,8 @@ memory_extraction_async = true
 summary_async = true
 
 # ── Semantic Context Routing ──
-# Disabled by default. When enabled, semantic classification uses embedding
-# prototypes to decide whether Fresh Context, Memory, and RAG should be used.
+# 默认关闭。启用后，语义分类会使用 embedding prototype 判断是否需要
+# Fresh Context、Memory 和 RAG。
 [semantic_classification]
 enabled = false
 provider = "embedding"

@@ -42,33 +42,33 @@ impl SemanticClassificationConfig {
             return Ok(());
         }
         if !self.provider.eq_ignore_ascii_case("embedding") {
-            return Err("semantic_classification.provider must be embedding".into());
+            return Err("semantic_classification.provider 必须为 embedding".into());
         }
         for taxonomy in &self.taxonomies {
             let taxonomy_id = taxonomy.id.trim();
             if taxonomy_id.is_empty() {
-                return Err("semantic_classification.taxonomies.id must not be empty".into());
+                return Err("semantic_classification.taxonomies.id 不能为空".into());
             }
             for prototype in &taxonomy.prototypes {
                 let prototype_id = prototype.id.trim();
                 if prototype_id.is_empty() {
                     return Err(format!(
-                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.id must not be empty"
+                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.id 不能为空"
                     ));
                 }
                 if prototype.label.trim().is_empty() {
                     return Err(format!(
-                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.label must not be empty"
+                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.label 不能为空"
                     ));
                 }
                 if prototype.text.trim().is_empty() {
                     return Err(format!(
-                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.text must not be empty"
+                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.text 不能为空"
                     ));
                 }
                 if !prototype.weight.is_finite() || prototype.weight <= 0.0 {
                     return Err(format!(
-                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.weight must be greater than 0"
+                        "semantic_classification.taxonomies.{taxonomy_id}.prototypes.{prototype_id}.weight 必须大于 0"
                     ));
                 }
             }

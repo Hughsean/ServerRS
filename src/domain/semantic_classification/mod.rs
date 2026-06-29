@@ -95,11 +95,11 @@ impl SemanticClassificationSet {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SemanticClassificationError {
-    #[error("semantic taxonomy not found: {0}")]
+    #[error("语义分类体系不存在: {0}")]
     UnknownTaxonomy(String),
-    #[error("semantic taxonomy has no prototypes: {0}")]
+    #[error("语义分类体系没有配置原型: {0}")]
     EmptyPrototypeSet(String),
-    #[error("semantic classifier provider error: {0}")]
+    #[error("语义分类 provider 失败: {0}")]
     Provider(String),
 }
 

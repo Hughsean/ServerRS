@@ -48,7 +48,7 @@ impl EmbeddingSemanticClassifier {
 
             if vectors.len() != taxonomy.prototypes.len() {
                 return Err(SemanticClassificationError::Provider(format!(
-                    "embedding provider returned {} vectors for {} prototypes",
+                    "embedding provider 返回的向量数量为 {}，但原型数量为 {}",
                     vectors.len(),
                     taxonomy.prototypes.len()
                 )));
@@ -104,7 +104,7 @@ impl SemanticClassifierT for EmbeddingSemanticClassifier {
             .await
             .map_err(|error| SemanticClassificationError::Provider(error.to_string()))?;
         let query_vector = query_vectors.pop().ok_or_else(|| {
-            SemanticClassificationError::Provider("embedding provider returned no vectors".into())
+            SemanticClassificationError::Provider("embedding provider 未返回任何向量".into())
         })?;
 
         let mut best_by_label: HashMap<SemanticLabel, SemanticClassification> = HashMap::new();
@@ -205,9 +205,10 @@ mod tests {
             texts
                 .iter()
                 .map(|text| {
-                    self.vectors.get(text).cloned().ok_or_else(|| {
-                        LlmError::EmbeddingError(format!("missing vector for {text}"))
-                    })
+                    self.vectors
+                        .get(text)
+                        .cloned()
+                        .ok_or_else(|| LlmError::EmbeddingError(format!("缺少文本向量: {text}")))
                 })
                 .collect()
         }
