@@ -108,6 +108,21 @@ impl fmt::Display for AppConfig {
 
         writeln!(
             f,
+            "fresh   → enabled={}, scheduler={}, dispatcher={}, scheduler_interval={}s, dispatcher_interval={}s, collection={}, topic_items={}, expired_vectors={}, retrieval_chunks={}, distill_model={}",
+            self.fresh_context.enabled,
+            self.fresh_context.scheduler_enabled,
+            self.fresh_context.dispatcher_enabled,
+            self.fresh_context.scheduler_interval_secs,
+            self.fresh_context.dispatcher_interval_secs,
+            self.fresh_context.qdrant_collection,
+            self.fresh_context.max_topic_items_per_tick,
+            self.fresh_context.max_expired_vectors_per_tick,
+            self.fresh_context.max_retrieval_chunks,
+            self.fresh_context.distill_llm.chat_model
+        )?;
+
+        writeln!(
+            f,
             "tts      → provider={}, voice={}, encoding={}",
             self.tts.provider, self.tts.default_voice, self.tts.default_encoding
         )?;

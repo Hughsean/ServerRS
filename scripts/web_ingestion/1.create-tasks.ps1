@@ -50,7 +50,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $fetchScript = Join-Path $PSScriptRoot "2.fetch-urls.ps1"
 $importScript = Join-Path $PSScriptRoot "3.import-urls.ps1"
 $outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
@@ -88,6 +88,34 @@ $topics = @(
     [pscustomobject]@{ Group = "Culture"; Category = "建筑学"; Slug = "architecture"; Description = "中文维基百科建筑学条目"; StrictReview = $false },
     [pscustomobject]@{ Group = "Culture"; Category = "宗教"; Slug = "religion"; Description = "中文维基百科宗教条目"; StrictReview = $false },
 
+    # 更细分的高密度知识
+    [pscustomobject]@{ Group = "Specialized"; Category = "密码学"; Slug = "cryptography"; Description = "中文维基百科密码学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "信息论"; Slug = "information-theory"; Description = "中文维基百科信息论条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "控制论"; Slug = "cybernetics"; Description = "中文维基百科控制论条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "博弈论"; Slug = "game-theory"; Description = "中文维基百科博弈论条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "图论"; Slug = "graph-theory"; Description = "中文维基百科图论条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "拓扑学"; Slug = "topology"; Description = "中文维基百科拓扑学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "形式语言"; Slug = "formal-languages"; Description = "中文维基百科形式语言条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "编译原理"; Slug = "compiler-theory"; Description = "中文维基百科编译原理条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "数据库理论"; Slug = "database-theory"; Description = "中文维基百科数据库理论条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "分布式计算"; Slug = "distributed-computing"; Description = "中文维基百科分布式计算条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "计算语言学"; Slug = "computational-linguistics"; Description = "中文维基百科计算语言学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "人类学"; Slug = "anthropology"; Description = "中文维基百科人类学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "考古学"; Slug = "archaeology"; Description = "中文维基百科考古学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "文献学"; Slug = "philology"; Description = "中文维基百科文献学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "语言学"; Slug = "linguistics"; Description = "中文维基百科语言学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "文字"; Slug = "writing-systems"; Description = "中文维基百科文字条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "美学"; Slug = "aesthetics"; Description = "中文维基百科美学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "气象学"; Slug = "meteorology"; Description = "中文维基百科气象学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "海洋学"; Slug = "oceanography"; Description = "中文维基百科海洋学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "宇宙学"; Slug = "cosmology"; Description = "中文维基百科宇宙学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "机械工程"; Slug = "mechanical-engineering"; Description = "中文维基百科机械工程条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "电子工程"; Slug = "electronic-engineering"; Description = "中文维基百科电子工程条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "通信工程"; Slug = "telecommunications-engineering"; Description = "中文维基百科通信工程条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "声学"; Slug = "acoustics"; Description = "中文维基百科声学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "流体力学"; Slug = "fluid-dynamics"; Description = "中文维基百科流体力学条目"; StrictReview = $false },
+    [pscustomobject]@{ Group = "Specialized"; Category = "城市规划"; Slug = "urban-planning"; Description = "中文维基百科城市规划条目"; StrictReview = $false },
+
     # 需要严格审核的专业知识
     [pscustomobject]@{ Group = "Professional"; Category = "医学"; Slug = "medicine"; Description = "中文维基百科医学条目，必须人工审核"; StrictReview = $true },
     [pscustomobject]@{ Group = "Professional"; Category = "法学"; Slug = "law"; Description = "中文维基百科法学条目，必须人工审核"; StrictReview = $true },
@@ -95,7 +123,7 @@ $topics = @(
     [pscustomobject]@{ Group = "Professional"; Category = "藥學"; Slug = "pharmacy"; Description = "中文维基百科药学条目，必须人工审核"; StrictReview = $true }
 )
 
-$validGroups = @("All", "Structured", "General", "Culture", "Professional")
+$validGroups = @("All", "Structured", "General", "Culture", "Specialized", "Professional")
 $requestedGroups = @(
     $Groups |
         ForEach-Object { $_ -split "," } |
@@ -109,7 +137,7 @@ if ($invalidGroups.Count -gt 0) {
 }
 
 $selectedGroups = if ($requestedGroups -contains "All") {
-    @("Structured", "General", "Culture", "Professional")
+    @("Structured", "General", "Culture", "Specialized", "Professional")
 }
 else {
     $requestedGroups

@@ -41,6 +41,7 @@ pub struct AgentContext {
     pub summary: Option<String>,
     pub memories: Vec<String>,
     pub rag_chunks: Vec<String>,
+    pub fresh_chunks: Vec<String>,
     pub user_profile: Option<Value>,
     pub tools: Vec<ToolDefinition>,
     pub location: Option<Value>,

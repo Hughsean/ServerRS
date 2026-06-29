@@ -85,6 +85,30 @@ fn matches_condition(point: &StoredPoint, cond: &VectorCondition) -> bool {
             .and_then(|v| v.as_bool())
             .map(|v| v == *value)
             .unwrap_or(false),
+        VectorCondition::RangeI64 {
+            key,
+            gt,
+            gte,
+            lt,
+            lte,
+        } => {
+            let Some(value) = point.payload.get(key).and_then(|v| v.as_i64()) else {
+                return false;
+            };
+            if gt.is_some_and(|bound| value <= bound) {
+                return false;
+            }
+            if gte.is_some_and(|bound| value < bound) {
+                return false;
+            }
+            if lt.is_some_and(|bound| value >= bound) {
+                return false;
+            }
+            if lte.is_some_and(|bound| value > bound) {
+                return false;
+            }
+            true
+        }
     }
 }
 
@@ -310,6 +334,49 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m1");
+    }
+
+    #[tokio::test]
+    async fn test_filter_by_i64_range() {
+        let store = MockVectorStore::new();
+        store
+            .ensure_collection("fresh", 3, VectorDistance::Cosine)
+            .await
+            .unwrap();
+
+        store
+            .upsert_points(
+                "fresh",
+                vec![
+                    VectorPoint {
+                        id: "expired".into(),
+                        vector: vec![1.0, 0.0, 0.0],
+                        payload: json!({"expires_at_ts": 100}),
+                    },
+                    VectorPoint {
+                        id: "active".into(),
+                        vector: vec![1.0, 0.0, 0.0],
+                        payload: json!({"expires_at_ts": 200}),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        let filter = VectorFilter::default().with_condition(VectorCondition::RangeI64 {
+            key: "expires_at_ts".into(),
+            gt: Some(150),
+            gte: None,
+            lt: None,
+            lte: None,
+        });
+
+        let hits = store
+            .search("fresh", vec![1.0, 0.0, 0.0], filter, 5)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "active");
     }
 
     #[tokio::test]

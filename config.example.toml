@@ -199,6 +199,54 @@ knowledge_rollback_requested = 1
 terminal = 8
 
 
+# ── Fresh Context Configuration ─────────────────────────────────────────────
+# Short-lived news/trend/gossip context. Keep disabled until database/sql/fresh_context.sql
+# has been reviewed and applied.
+
+[fresh_context]
+enabled = false
+# scheduler collects enabled sources; dispatcher distills and publishes fetched items.
+scheduler_enabled = false
+dispatcher_enabled = false
+qdrant_collection = "fresh_chunks_2560"
+scheduler_interval_secs = 900
+dispatcher_interval_secs = 30
+max_sources_per_tick = 8
+max_items_per_source = 50
+max_pipeline_items_per_tick = 50
+chunk_size = 900
+chunk_overlap = 120
+max_indexable_chunks_per_tick = 100
+max_topic_items_per_tick = 100
+max_expired_vectors_per_tick = 200
+max_retrieval_chunks = 3
+fetch_timeout_secs = 20
+fetch_user_agent = "ServerRSFreshBot/0.1 (mailto:xxx@xxx.com)"
+fetch_proxy_url = "http://127.0.0.1:7890"
+
+# Hot/trendy content should expire quickly; background explainers can live longer.
+trend_ttl_secs = 86400
+gossip_ttl_secs = 259200
+news_ttl_secs = 1209600
+background_ttl_secs = 15552000
+
+# Retrieval ranking weights for fresh context.
+min_reliability_score = 0.35
+semantic_weight = 0.55
+freshness_weight = 0.25
+reliability_weight = 0.15
+heat_weight = 0.05
+
+[fresh_context.distill_llm]
+provider = "Ollama"
+base_url = "http://127.0.0.1:18080/v1"
+chat_model = "qwen3:14b"
+# Ollama/local OpenAI-compatible endpoints can leave api_key empty.
+# Remote providers should inject FRESH_CONTEXT_DISTILL_LLM_API_KEY or DEEPSEEK_API_KEY.
+temperature = 0.1
+top_p = 0.9
+timeout_secs = 180
+
 
 [qq_bot]
 enabled = false

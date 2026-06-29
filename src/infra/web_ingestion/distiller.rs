@@ -1,75 +1,25 @@
-use std::time::Duration;
-
 use async_trait::async_trait;
 
 use crate::domain::web_ingestion::distiller::{
     DistillResult, DistilledDocument, KnowledgeDistiller,
 };
 use crate::domain::web_ingestion::error::WebIngestionError;
+use crate::infra::llm::json_chat_client::{
+    JsonChatError, JsonChatMessage, JsonChatModelConfig, OpenAiJsonChatClient,
+};
 use crate::shared::config::DistillLlmConfig;
+#[cfg(test)]
 use crate::shared::llm_json;
 
 pub struct OpenAiKnowledgeDistiller {
-    client: reqwest::Client,
-    config: DistillLlmConfig,
+    client: OpenAiJsonChatClient,
 }
 
 impl OpenAiKnowledgeDistiller {
     pub fn new(config: DistillLlmConfig) -> Result<Self, WebIngestionError> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .build()
-            .map_err(|error| {
-                WebIngestionError::Internal(format!("distill client build: {error}"))
-            })?;
-        Ok(Self { client, config })
-    }
-
-    async fn call_llm(&self, body: &serde_json::Value) -> Result<DistillResult, WebIngestionError> {
-        let url = format!(
-            "{}/chat/completions",
-            self.config.base_url.trim_end_matches('/')
-        );
-        let mut request = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(body);
-        if let Some(api_key) = request_api_key(&self.config) {
-            request = request.header("Authorization", format!("Bearer {api_key}"));
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| WebIngestionError::Internal(format!("distill HTTP: {error}")))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let response_body = response.text().await.unwrap_or_default();
-            return Err(WebIngestionError::Internal(format!(
-                "distill LLM returned {status}: {response_body}"
-            )));
-        }
-
-        let json: serde_json::Value = response.json().await.map_err(|error| {
-            WebIngestionError::Internal(format!("distill response JSON: {error}"))
-        })?;
-        let input_tokens = json["usage"]["prompt_tokens"].as_u64().map(|v| v as u32);
-        let output_tokens = json["usage"]["completion_tokens"]
-            .as_u64()
-            .map(|v| v as u32);
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| WebIngestionError::DistillJsonParseFailed {
-                error: "missing choices[0].message.content".into(),
-            })?;
-        let distilled = parse_distilled_document(content)?;
-
-        Ok(DistillResult {
-            distilled,
-            llm_input_tokens: input_tokens,
-            llm_output_tokens: output_tokens,
-        })
+        let client = OpenAiJsonChatClient::new(JsonChatModelConfig::from(config))
+            .map_err(map_json_chat_error)?;
+        Ok(Self { client })
     }
 }
 
@@ -80,27 +30,21 @@ impl KnowledgeDistiller for OpenAiKnowledgeDistiller {
         cleaned_text: &str,
         url: &str,
     ) -> Result<DistillResult, WebIngestionError> {
-        if distill_llm_requires_api_key(&self.config) && self.config.api_key.trim().is_empty() {
-            return Err(WebIngestionError::DistillApiKeyEmpty);
-        }
+        let messages = [
+            JsonChatMessage::system(SYSTEM_INSTRUCTION),
+            JsonChatMessage::user(build_distill_prompt(cleaned_text, url)),
+        ];
+        let response = self
+            .client
+            .complete_json::<DistilledDocument>(&messages)
+            .await
+            .map_err(map_json_chat_error)?;
 
-        let body = serde_json::json!({
-            "model": self.config.chat_model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
-                {"role": "user", "content": build_distill_prompt(cleaned_text, url)}
-            ],
-            "temperature": self.config.temperature,
-            "top_p": self.config.top_p
-        });
-
-        match self.call_llm(&body).await {
-            Err(WebIngestionError::DistillJsonParseFailed { error }) => {
-                tracing::warn!(%error, "提取 JSON 解析失败，重试一次");
-                self.call_llm(&body).await
-            }
-            result => result,
-        }
+        Ok(DistillResult {
+            distilled: response.parsed,
+            llm_input_tokens: response.llm_input_tokens,
+            llm_output_tokens: response.llm_output_tokens,
+        })
     }
 }
 
@@ -172,12 +116,29 @@ END_UNTRUSTED_WEB_TEXT
     )
 }
 
+#[cfg(test)]
 fn parse_distilled_document(content: &str) -> Result<DistilledDocument, WebIngestionError> {
     llm_json::parse_llm_json::<DistilledDocument>(content).map_err(|error| {
         WebIngestionError::DistillJsonParseFailed {
             error: error.to_string(),
         }
     })
+}
+
+fn map_json_chat_error(error: JsonChatError) -> WebIngestionError {
+    match error {
+        JsonChatError::MissingApiKey => WebIngestionError::DistillApiKeyEmpty,
+        JsonChatError::JsonOutput(error) => WebIngestionError::DistillJsonParseFailed { error },
+        JsonChatError::ClientBuild(error)
+        | JsonChatError::Http(error)
+        | JsonChatError::ResponseJson(error) => {
+            WebIngestionError::Internal(format!("distill LLM: {error}"))
+        }
+        JsonChatError::ProviderStatus {
+            status,
+            body_preview,
+        } => WebIngestionError::Internal(format!("distill LLM returned {status}: {body_preview}")),
+    }
 }
 
 #[cfg(test)]
@@ -276,44 +237,14 @@ mod tests {
     }
 
     #[test]
-    fn ollama_distiller_allows_empty_api_key() {
-        let config = DistillLlmConfig {
-            provider: "Ollama".into(),
-            base_url: "http://127.0.0.1:11111/v1".into(),
-            api_key: String::new(),
-            ..DistillLlmConfig::default()
-        };
+    fn maps_json_chat_errors_to_web_ingestion_errors() {
+        let mapped = map_json_chat_error(JsonChatError::MissingApiKey);
+        assert!(matches!(mapped, WebIngestionError::DistillApiKeyEmpty));
 
-        assert!(!distill_llm_requires_api_key(&config));
-        assert_eq!(request_api_key(&config), None);
+        let mapped = map_json_chat_error(JsonChatError::JsonOutput("bad json".into()));
+        assert!(matches!(
+            mapped,
+            WebIngestionError::DistillJsonParseFailed { .. }
+        ));
     }
-
-    #[test]
-    fn remote_deepseek_distiller_requires_api_key() {
-        let config = DistillLlmConfig::default();
-
-        assert!(distill_llm_requires_api_key(&config));
-        assert_eq!(request_api_key(&config), None);
-    }
-}
-
-fn request_api_key(config: &DistillLlmConfig) -> Option<&str> {
-    let api_key = config.api_key.trim();
-    if api_key.is_empty() {
-        None
-    } else {
-        Some(api_key)
-    }
-}
-
-fn distill_llm_requires_api_key(config: &DistillLlmConfig) -> bool {
-    let provider = config.provider.trim().to_ascii_lowercase();
-    if provider.contains("ollama") {
-        return false;
-    }
-
-    let base_url = config.base_url.trim().to_ascii_lowercase();
-    !(base_url.starts_with("http://127.0.0.1")
-        || base_url.starts_with("http://localhost")
-        || base_url.starts_with("http://[::1]"))
 }

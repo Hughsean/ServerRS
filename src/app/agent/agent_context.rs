@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tracing::warn;
 
+use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
 use crate::app::summary::summary_service::SummaryService;
@@ -16,6 +18,7 @@ pub struct AgentContextBuilder {
     memory_service: Arc<MemoryService>,
     retrieval_service: Arc<RetrievalService>,
     summary_service: Arc<SummaryService>,
+    fresh_retrieval_service: Option<Arc<FreshRetrievalService>>,
     #[allow(dead_code)]
     conversation_repo: Arc<dyn ConversationRepoT>,
     user_profile_repo: Arc<dyn UserProfileRepoT>,
@@ -51,6 +54,7 @@ impl AgentContextBuilder {
         memory_service: Arc<MemoryService>,
         retrieval_service: Arc<RetrievalService>,
         summary_service: Arc<SummaryService>,
+        fresh_retrieval_service: Option<Arc<FreshRetrievalService>>,
         conversation_repo: Arc<dyn ConversationRepoT>,
         user_profile_repo: Arc<dyn UserProfileRepoT>,
     ) -> Self {
@@ -58,6 +62,7 @@ impl AgentContextBuilder {
             memory_service,
             retrieval_service,
             summary_service,
+            fresh_retrieval_service,
             conversation_repo,
             user_profile_repo,
         }
@@ -123,6 +128,23 @@ impl AgentContextBuilder {
                 .collect()
         };
 
+        let fresh_chunks = if rag_query.is_empty() {
+            Vec::new()
+        } else if let Some(fresh_retrieval_service) = &self.fresh_retrieval_service {
+            match fresh_retrieval_service.retrieve_for_query(&rag_query).await {
+                Ok(contexts) => contexts
+                    .into_iter()
+                    .map(|context| context.content)
+                    .collect(),
+                Err(error) => {
+                    warn!(error = %error, "Fresh Context retrieval failed; continuing without fresh context");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         let profile: Option<Value> = match user_profile {
             Some(p) => serde_json::to_value(p).ok(),
             None => self
@@ -141,6 +163,7 @@ impl AgentContextBuilder {
             summary,
             memories,
             rag_chunks,
+            fresh_chunks,
             user_profile: profile,
             tools,
             location,

@@ -591,6 +591,7 @@ mod tests {
             summary: None,
             memories: vec![],
             rag_chunks: vec![],
+            fresh_chunks: vec![],
             user_profile: None,
             location: None,
             tools: vec![ToolDefinition {

@@ -4,6 +4,7 @@ pub mod conversation_repo;
 pub mod conversation_summary_repo;
 pub mod depression_repo;
 pub mod diary_repo;
+pub mod fresh_context_repo;
 pub mod like_repo;
 pub mod memory_repo;
 pub mod music_repo;

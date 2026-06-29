@@ -3,6 +3,7 @@ pub mod auth;
 pub mod community;
 pub mod depression;
 pub mod diary;
+pub mod fresh_context;
 pub mod memory;
 pub mod music;
 pub mod psychology;

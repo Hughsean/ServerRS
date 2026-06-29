@@ -36,10 +36,29 @@ impl VectorFilter {
 /// 向量搜索 payload 的单个过滤条件。
 #[derive(Debug, Clone)]
 pub enum VectorCondition {
-    MatchString { key: String, value: String },
-    MatchU64 { key: String, value: u64 },
-    MatchI64 { key: String, value: i64 },
-    MatchBool { key: String, value: bool },
+    MatchString {
+        key: String,
+        value: String,
+    },
+    MatchU64 {
+        key: String,
+        value: u64,
+    },
+    MatchI64 {
+        key: String,
+        value: i64,
+    },
+    MatchBool {
+        key: String,
+        value: bool,
+    },
+    RangeI64 {
+        key: String,
+        gt: Option<i64>,
+        gte: Option<i64>,
+        lt: Option<i64>,
+        lte: Option<i64>,
+    },
 }
 
 /// 向量存储返回的搜索结果项。

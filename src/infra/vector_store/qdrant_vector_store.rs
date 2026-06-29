@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointId,
-    PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, Value, VectorParamsBuilder,
-    point_id::PointIdOptions,
+    PointStruct, Range, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, Value,
+    VectorParamsBuilder, point_id::PointIdOptions,
 };
 use qdrant_client::{Payload, Qdrant};
 use tracing::{debug, trace, warn};
@@ -113,6 +113,21 @@ impl QdrantVectorStore {
                 VectorCondition::MatchBool { key, value } => {
                     Condition::matches(key.clone(), *value)
                 }
+                VectorCondition::RangeI64 {
+                    key,
+                    gt,
+                    gte,
+                    lt,
+                    lte,
+                } => Condition::range(
+                    key.clone(),
+                    Range {
+                        gt: gt.map(|v| v as f64),
+                        gte: gte.map(|v| v as f64),
+                        lt: lt.map(|v| v as f64),
+                        lte: lte.map(|v| v as f64),
+                    },
+                ),
             })
             .collect();
         Some(Filter::all(conditions))

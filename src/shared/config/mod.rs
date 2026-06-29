@@ -17,6 +17,7 @@
 //! | `display_config.rs` | `Display for AppConfig` impl |
 
 pub mod auth_storage;
+pub mod fresh_context;
 pub mod llm_agent_rag;
 pub mod mail_cors_log;
 pub mod plugins;
@@ -36,6 +37,7 @@ fn default_true() -> bool {
 use serde::Deserialize;
 
 pub use self::auth_storage::{AuthConfig, JwtConfig, StorageConfig};
+pub use self::fresh_context::FreshContextConfig;
 pub use self::llm_agent_rag::{AgentConfig, EmbeddingConfig, LlmConfig, RagConfig};
 pub use self::mail_cors_log::{
     CorsConfig, DetectorConfig, LoggingConfig, MailConfig, OllamaConfig,
@@ -95,6 +97,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub web_ingestion: WebIngestionConfig,
     #[serde(default)]
+    pub fresh_context: FreshContextConfig,
+    #[serde(default)]
     pub tts: TtsConfig,
     #[serde(default)]
     pub ssh_tunnels: std::collections::HashMap<String, SshTunnelConfig>,
@@ -124,6 +128,7 @@ impl Default for AppConfig {
             qdrant: Default::default(),
             embedding: Default::default(),
             web_ingestion: Default::default(),
+            fresh_context: Default::default(),
             tts: Default::default(),
             ssh_tunnels: Default::default(),
             #[cfg(feature = "qq_bot")]
@@ -198,6 +203,52 @@ impl AppConfig {
                 "storage.backend={} is not implemented; use LOCAL",
                 self.storage.backend
             ));
+        }
+        if self.fresh_context.scheduler_interval_secs == 0
+            || self.fresh_context.dispatcher_interval_secs == 0
+            || self.fresh_context.fetch_timeout_secs == 0
+            || self.fresh_context.max_sources_per_tick == 0
+            || self.fresh_context.max_items_per_source == 0
+            || self.fresh_context.max_pipeline_items_per_tick == 0
+            || self.fresh_context.chunk_size == 0
+            || self.fresh_context.max_indexable_chunks_per_tick == 0
+            || self.fresh_context.max_topic_items_per_tick == 0
+            || self.fresh_context.max_expired_vectors_per_tick == 0
+            || self.fresh_context.max_retrieval_chunks == 0
+        {
+            return Err("fresh_context intervals and limits must be greater than zero".into());
+        }
+        if self.fresh_context.chunk_overlap >= self.fresh_context.chunk_size {
+            return Err("fresh_context.chunk_overlap must be less than chunk_size".into());
+        }
+        if self.fresh_context.trend_ttl_secs == 0
+            || self.fresh_context.gossip_ttl_secs == 0
+            || self.fresh_context.news_ttl_secs == 0
+            || self.fresh_context.background_ttl_secs == 0
+        {
+            return Err("fresh_context TTL values must be greater than zero".into());
+        }
+        let fresh_weight_sum = self.fresh_context.semantic_weight
+            + self.fresh_context.freshness_weight
+            + self.fresh_context.reliability_weight
+            + self.fresh_context.heat_weight;
+        if !fresh_weight_sum.is_finite()
+            || fresh_weight_sum <= 0.0
+            || self.fresh_context.semantic_weight < 0.0
+            || self.fresh_context.freshness_weight < 0.0
+            || self.fresh_context.reliability_weight < 0.0
+            || self.fresh_context.heat_weight < 0.0
+        {
+            return Err(
+                "fresh_context ranking weights must be non-negative and sum to a positive value"
+                    .into(),
+            );
+        }
+        if !(0.0..=1.0).contains(&self.fresh_context.min_reliability_score) {
+            return Err("fresh_context.min_reliability_score must be between 0.0 and 1.0".into());
+        }
+        if self.fresh_context.distill_llm.timeout_secs == 0 {
+            return Err("fresh_context.distill_llm.timeout_secs must be greater than zero".into());
         }
         Ok(())
     }
@@ -447,6 +498,46 @@ impl AppConfig {
         if let Ok(val) = std::env::var("WEB_INGESTION_DISTILL_LLM_TIMEOUT_SECS") {
             if let Ok(n) = val.parse::<u64>() {
                 self.web_ingestion.distill_llm.timeout_secs = n;
+            }
+        }
+        // ── Fresh Context Distill LLM ──
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_PROVIDER") {
+            if !val.is_empty() {
+                self.fresh_context.distill_llm.provider = val;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_BASE_URL") {
+            if !val.is_empty() {
+                self.fresh_context.distill_llm.base_url = val;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_CHAT_MODEL") {
+            if !val.is_empty() {
+                self.fresh_context.distill_llm.chat_model = val;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_API_KEY") {
+            if !val.is_empty() {
+                self.fresh_context.distill_llm.api_key = val;
+            }
+        } else if let Ok(val) = std::env::var("DEEPSEEK_API_KEY") {
+            if !val.is_empty() {
+                self.fresh_context.distill_llm.api_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_TEMPERATURE") {
+            if let Ok(n) = val.parse::<f64>() {
+                self.fresh_context.distill_llm.temperature = n;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_TOP_P") {
+            if let Ok(n) = val.parse::<f64>() {
+                self.fresh_context.distill_llm.top_p = n;
+            }
+        }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_DISTILL_LLM_TIMEOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.fresh_context.distill_llm.timeout_secs = n;
             }
         }
         // ── Embedding (separate from distill_llm) ──

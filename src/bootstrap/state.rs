@@ -11,6 +11,7 @@ use crate::app::auth::auth_service::AuthService;
 use crate::app::community::community_service::CommunityService;
 use crate::app::depression::depression_service::DepressionService;
 use crate::app::diary::diary_service::DiaryService;
+use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_extractor::MemoryExtractor;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::music::music_service::MusicService;
@@ -27,6 +28,7 @@ use crate::app::summary::summary_refresh_handler::SummaryRefreshHandler;
 use crate::app::summary::summary_service::SummaryService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
+use crate::bootstrap::fresh_context;
 use crate::bootstrap::infra::InfraContext;
 use crate::bootstrap::repos::RepoGraph;
 use crate::bootstrap::tasks::TaskContext;
@@ -34,11 +36,13 @@ use crate::bootstrap::vector::VectorContext;
 use crate::bootstrap::web_ingestion;
 use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::fresh_context::FreshContextRepoT;
 use crate::domain::llm::LlmProvider;
 use crate::domain::risk::risk_detector::RiskDetector;
 use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::domain::storage::ObjectStorage;
 use crate::domain::tasks::task_handler::TaskHandler;
+use crate::infra::db::imp::fresh_context_repo::FreshContextRepo;
 use crate::infra::detector::rule_based_detector::RuleBasedRiskDetector;
 use crate::infra::storage::local_storage::LocalObjectStorage;
 use crate::shared::config::AppConfig;
@@ -191,10 +195,26 @@ impl ServiceGraph {
         tasks.start_service_handlers(risk_audit_worker, summary_refresh_handler);
 
         // ── 代理运行时 ──
+        let fresh_retrieval: Option<Arc<FreshRetrievalService>> = if config.fresh_context.enabled {
+            vector.vector_store.as_ref().map(|vector_store| {
+                let fresh_repo: Arc<dyn FreshContextRepoT> =
+                    Arc::new(FreshContextRepo::new(infra.db.clone()));
+                Arc::new(FreshRetrievalService::new(
+                    fresh_repo,
+                    Arc::clone(vector_store),
+                    Arc::clone(&vector.embedding_provider),
+                    config.fresh_context.clone(),
+                ))
+            })
+        } else {
+            None
+        };
+
         let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
             Arc::clone(&memory_svc),
             Arc::clone(&retrieval),
             Arc::clone(&summary_service),
+            fresh_retrieval,
             Arc::clone(&conv_repo),
             Arc::clone(&profile_repo),
         ));
@@ -369,6 +389,17 @@ impl ServiceGraph {
             &vector.vector_store,
             &vector.embedding_provider,
             &rag_repo,
+            &mut tasks.background,
+        )
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+        // ── Fresh Context 短期上下文 ──
+        fresh_context::init_fresh_context(
+            config,
+            &infra.db,
+            &vector.vector_store,
+            &vector.embedding_provider,
             &mut tasks.background,
         )
         .await
