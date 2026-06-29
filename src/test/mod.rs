@@ -1,17 +1,19 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio::net::TcpStream;
+use tokio::time::{Duration, sleep};
+
 use crate::app::context_routing::ContextRoutingService;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::semantic_classification::{SemanticClassifierT, SemanticInput};
 use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::infra::semantic_classification::EmbeddingSemanticClassifier;
+use crate::infra::ssh_tunnel::SshTunnelManager;
 use crate::shared::config::AppConfig;
 
 fn real_config_path() -> PathBuf {
-    std::env::var_os("CONFIG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"))
+    PathBuf::from("config.toml")
 }
 
 #[test]
@@ -42,8 +44,8 @@ fn real_env_config_file_loads_and_validates() {
 }
 
 #[tokio::test]
-#[ignore = "需要本机真实 config.toml/.env 和可访问的 embedding 服务；手动运行: cargo test real_env --lib -- --ignored"]
-async fn real_env_context_router_initializes_when_enabled() {
+#[ignore = "需要本机真实 config.toml 和可访问的 embedding 服务；手动运行: cargo test real_env --lib -- --ignored --nocapture"]
+async fn real_env_context_router_routes_with_real_embedding() {
     let config_path = real_config_path();
     assert!(
         config_path.exists(),
@@ -52,10 +54,23 @@ async fn real_env_context_router_initializes_when_enabled() {
     );
 
     let config = AppConfig::load();
-    if !config.context_routing.enabled {
-        println!("真实配置未启用 context_routing，跳过路由初始化测试");
-        return;
-    }
+    assert!(
+        config.semantic_classification.enabled,
+        "config.toml 需要配置 semantic_classification.enabled = true"
+    );
+    assert!(
+        config.context_routing.enabled,
+        "config.toml 需要配置 context_routing.enabled = true"
+    );
+    assert!(
+        config
+            .semantic_classification
+            .taxonomy(&config.context_routing.taxonomy)
+            .is_some(),
+        "config.toml 的 context_routing.taxonomy 必须引用 semantic_classification.taxonomies 中存在的 id"
+    );
+
+    let tunnel_manager = ensure_hp_embedding_tunnel(&config).await;
 
     let embedding_provider: Arc<dyn EmbeddingProvider> =
         Arc::new(OllamaEmbeddingProvider::with_options(
@@ -76,16 +91,91 @@ async fn real_env_context_router_initializes_when_enabled() {
     );
     let router = ContextRoutingService::new(classifier, config.context_routing.clone());
 
-    let decision = router
+    let latest_decision = route_with_real_config(&router, &config, "今天有什么最新 AI 新闻").await;
+    assert!(
+        latest_decision.fresh_context.enabled,
+        "实时/最新问题应启用 Fresh Context，实际决策: {:?}",
+        latest_decision
+    );
+
+    let memory_decision =
+        route_with_real_config(&router, &config, "记住我喜欢简洁的中文回答").await;
+    assert!(
+        memory_decision.memory.top_k > 0,
+        "个人偏好/记忆问题应保留 Memory 预算，实际决策: {:?}",
+        memory_decision
+    );
+    assert_eq!(memory_decision.memory.reason, "memory_positive");
+
+    let current_task_decision =
+        route_with_real_config(&router, &config, "继续按刚才方案实现").await;
+    assert_eq!(
+        current_task_decision.rag.top_k, 0,
+        "继续当前任务的问题不应拉取 RAG，实际决策: {:?}",
+        current_task_decision
+    );
+
+    assert_eq!(
+        latest_decision.diagnostics.taxonomy,
+        config.context_routing.taxonomy
+    );
+
+    if let Some(manager) = tunnel_manager {
+        manager.shutdown().await;
+    }
+}
+
+async fn route_with_real_config(
+    router: &ContextRoutingService,
+    config: &AppConfig,
+    text: &str,
+) -> crate::app::context_routing::ContextRouteDecision {
+    router
         .route(
-            SemanticInput::new("今天有什么最新消息"),
+            SemanticInput::new(text),
             config.agent.max_memory_items,
             u64::from(config.agent.max_rag_chunks),
         )
-        .await;
+        .await
+}
 
+async fn ensure_hp_embedding_tunnel(config: &AppConfig) -> Option<SshTunnelManager> {
+    let tunnel_name = config
+        .embedding
+        .tunnel
+        .as_deref()
+        .expect("真实 embedding 测试需要配置 embedding.tunnel");
     assert_eq!(
-        decision.diagnostics.taxonomy,
-        config.context_routing.taxonomy
+        tunnel_name, "hp",
+        "真实 embedding 测试必须通过 HP tunnel，请配置 embedding.tunnel = \"hp\""
     );
+
+    let tunnel = config
+        .ssh_tunnels
+        .get(tunnel_name)
+        .unwrap_or_else(|| panic!("未找到 HP embedding tunnel 配置: ssh_tunnels.{tunnel_name}"))
+        .clone();
+
+    if is_local_port_open(tunnel.local_port).await {
+        return None;
+    }
+
+    let manager = SshTunnelManager::start(&[(tunnel_name.to_string(), tunnel.clone())])
+        .unwrap_or_else(|error| panic!("启动 HP embedding tunnel 失败: {error}"));
+    wait_for_local_port(tunnel.local_port).await;
+    Some(manager)
+}
+
+async fn wait_for_local_port(port: u16) {
+    for _ in 0..40 {
+        if is_local_port_open(port).await {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("HP embedding tunnel 未在本地端口 {port} 就绪");
+}
+
+async fn is_local_port_open(port: u16) -> bool {
+    TcpStream::connect(("127.0.0.1", port)).await.is_ok()
 }
