@@ -3,6 +3,9 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::warn;
 
+use crate::app::context_routing::{
+    ContextRouteDecision, ContextRoutingService, build_routing_input,
+};
 use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
@@ -19,6 +22,7 @@ pub struct AgentContextBuilder {
     retrieval_service: Arc<RetrievalService>,
     summary_service: Arc<SummaryService>,
     fresh_retrieval_service: Option<Arc<FreshRetrievalService>>,
+    context_routing_service: Option<Arc<ContextRoutingService>>,
     #[allow(dead_code)]
     conversation_repo: Arc<dyn ConversationRepoT>,
     user_profile_repo: Arc<dyn UserProfileRepoT>,
@@ -63,9 +67,18 @@ impl AgentContextBuilder {
             retrieval_service,
             summary_service,
             fresh_retrieval_service,
+            context_routing_service: None,
             conversation_repo,
             user_profile_repo,
         }
+    }
+
+    pub fn with_context_routing_service(
+        mut self,
+        context_routing_service: Option<Arc<ContextRoutingService>>,
+    ) -> Self {
+        self.context_routing_service = context_routing_service;
+        self
     }
 
     pub async fn build(
@@ -97,12 +110,24 @@ impl AgentContextBuilder {
         };
 
         let recall_query = build_recall_query(&recent_messages);
+        let routing_decision = if let Some(context_routing_service) = &self.context_routing_service
+        {
+            let input = build_routing_input(&recent_messages);
+            Some(
+                context_routing_service
+                    .route(input, max_memory_items, max_rag_chunks)
+                    .await,
+            )
+        } else {
+            None
+        };
+        let memory_top_k = routed_memory_top_k(routing_decision.as_ref(), max_memory_items);
 
-        let memories = if !memory_enabled || max_memory_items == 0 {
+        let memories = if !memory_enabled || memory_top_k == 0 {
             Vec::new()
         } else {
             self.memory_service
-                .recall(user_id, &recall_query, max_memory_items)
+                .recall(user_id, &recall_query, memory_top_k)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -116,11 +141,12 @@ impl AgentContextBuilder {
         };
 
         let rag_query = latest_user_query(&recent_messages);
-        let rag_chunks = if !rag_enabled || rag_query.is_empty() || max_rag_chunks == 0 {
+        let rag_top_k = routed_rag_top_k(routing_decision.as_ref(), max_rag_chunks);
+        let rag_chunks = if !rag_enabled || rag_query.is_empty() || rag_top_k == 0 {
             Vec::new()
         } else {
             self.retrieval_service
-                .retrieve(&rag_query, user_id, max_rag_chunks)
+                .retrieve(&rag_query, user_id, rag_top_k)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -131,13 +157,22 @@ impl AgentContextBuilder {
         let fresh_chunks = if rag_query.is_empty() {
             Vec::new()
         } else if let Some(fresh_retrieval_service) = &self.fresh_retrieval_service {
-            match fresh_retrieval_service.retrieve_for_query(&rag_query).await {
+            let result = match routing_decision.as_ref() {
+                Some(decision) if decision.fresh_context.enabled => {
+                    fresh_retrieval_service
+                        .retrieve_for_routed_query(&rag_query)
+                        .await
+                }
+                Some(_) => Ok(Vec::new()),
+                None => fresh_retrieval_service.retrieve_for_query(&rag_query).await,
+            };
+            match result {
                 Ok(contexts) => contexts
                     .into_iter()
                     .map(|context| context.content)
                     .collect(),
                 Err(error) => {
-                    warn!(error = %error, "Fresh Context retrieval failed; continuing without fresh context");
+                    warn!(error = %error, "Fresh Context 检索失败，继续使用无实时上下文结果");
                     Vec::new()
                 }
             }
@@ -171,9 +206,24 @@ impl AgentContextBuilder {
     }
 }
 
+fn routed_memory_top_k(decision: Option<&ContextRouteDecision>, default_top_k: u32) -> u32 {
+    decision
+        .map(|decision| decision.memory.top_k)
+        .unwrap_or(default_top_k)
+}
+
+fn routed_rag_top_k(decision: Option<&ContextRouteDecision>, default_top_k: u64) -> u64 {
+    decision
+        .map(|decision| u64::from(decision.rag.top_k))
+        .unwrap_or(default_top_k)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::context_routing::{
+        ContextRouteDecision, ContextRouteDiagnostics, FreshContextRoute, RetrievalBudgetRoute,
+    };
 
     #[test]
     fn latest_user_query_returns_most_recent() {
@@ -201,6 +251,58 @@ mod tests {
             },
         ];
         assert_eq!(latest_user_query(&messages), "第二轮问题");
+    }
+
+    #[test]
+    fn latest_user_query_still_drives_rag_and_fresh_query() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "旧问题".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "最新问题".into(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+
+        assert_eq!(latest_user_query(&messages), "最新问题");
+    }
+
+    #[test]
+    fn route_decision_overrides_memory_and_rag_budgets() {
+        let decision = ContextRouteDecision {
+            fresh_context: FreshContextRoute {
+                enabled: false,
+                confidence: 0.0,
+            },
+            memory: RetrievalBudgetRoute {
+                top_k: 0,
+                confidence: 0.9,
+                reason: "memory_negative".into(),
+            },
+            rag: RetrievalBudgetRoute {
+                top_k: 1,
+                confidence: 0.5,
+                reason: "rag_low_confidence".into(),
+            },
+            diagnostics: ContextRouteDiagnostics {
+                taxonomy: "context_routing".into(),
+                top_labels: Vec::new(),
+                fallback_used: false,
+            },
+        };
+
+        assert_eq!(routed_memory_top_k(Some(&decision), 10), 0);
+        assert_eq!(routed_rag_top_k(Some(&decision), 5), 1);
+        assert_eq!(routed_memory_top_k(None, 10), 10);
+        assert_eq!(routed_rag_top_k(None, 5), 5);
     }
 
     #[test]

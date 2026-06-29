@@ -55,6 +55,20 @@ impl FreshRetrievalService {
             return Ok(Vec::new());
         }
 
+        self.retrieve_without_intent_gate(query).await
+    }
+
+    pub async fn retrieve_for_routed_query(
+        &self,
+        query: &str,
+    ) -> Result<Vec<FreshRetrievedContext>, AppError> {
+        self.retrieve_without_intent_gate(query).await
+    }
+
+    async fn retrieve_without_intent_gate(
+        &self,
+        query: &str,
+    ) -> Result<Vec<FreshRetrievedContext>, AppError> {
         let limit = self.config.max_retrieval_chunks;
         let query_vector = self.embed_query(query).await?;
         let now = Utc::now();
@@ -75,12 +89,12 @@ impl FreshRetrievalService {
             .vector_store
             .search(&self.config.qdrant_collection, query_vector, filter, limit)
             .await
-            .map_err(|e| AppError::internal(format!("fresh context vector search failed: {e}")))?;
+            .map_err(|e| AppError::internal(format!("Fresh Context 向量检索失败: {e}")))?;
 
         let mut contexts = Vec::new();
         for hit in hits {
             let Some(chunk_id) = fresh_chunk_id_from_payload(&hit.payload) else {
-                warn!(hit_id = %hit.id, "Fresh Context Qdrant hit missing fresh_chunk_id");
+                warn!(hit_id = %hit.id, "Fresh Context Qdrant 命中缺少 fresh_chunk_id");
                 continue;
             };
             match self.validate_hit(chunk_id, hit.score as f64, now).await {
@@ -89,7 +103,7 @@ impl FreshRetrievalService {
                 Err(error) => warn!(
                     chunk_id,
                     error = %error,
-                    "Fresh Context hit validation failed"
+                    "Fresh Context 命中校验失败"
                 ),
             }
         }
@@ -156,16 +170,12 @@ impl FreshRetrievalService {
             .embedding_provider
             .embed(&[query.to_string()])
             .await
-            .map_err(|e| {
-                AppError::internal(format!("fresh context query embedding failed: {e}"))
-            })?;
+            .map_err(|e| AppError::internal(format!("Fresh Context 查询 embedding 失败: {e}")))?;
         vectors
             .into_iter()
             .next()
             .filter(|vector| !vector.is_empty())
-            .ok_or_else(|| {
-                AppError::internal("fresh context query embedding returned empty vector")
-            })
+            .ok_or_else(|| AppError::internal("Fresh Context 查询 embedding 返回空向量"))
     }
 }
 
@@ -313,6 +323,58 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("rumor_level"));
         assert_eq!(results[0].rumor_level, rumor_level::REPORTED);
+    }
+
+    #[tokio::test]
+    async fn routed_retrieval_bypasses_legacy_keyword_gate() {
+        let now = Utc::now();
+        let repo = Arc::new(MockFreshRepo {
+            source: test_source(),
+            item: test_item(now),
+            chunk: test_chunk(now),
+        });
+        let vector_store = Arc::new(MockVectorStore::new());
+        vector_store
+            .ensure_collection(
+                "fresh_test",
+                8,
+                crate::domain::vector_store::VectorDistance::Cosine,
+            )
+            .await
+            .unwrap();
+        vector_store
+            .upsert_points(
+                "fresh_test",
+                vec![crate::domain::vector_store::VectorPoint {
+                    id: "fresh_chunk:1".into(),
+                    vector: vec![1.0; 8],
+                    payload: json!({
+                        "fresh_chunk_id": 1,
+                        "active": true,
+                        "expires_at_ts": (now + chrono::Duration::hours(1)).timestamp()
+                    }),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let service = FreshRetrievalService::new(
+            repo,
+            vector_store,
+            Arc::new(MockEmbeddingProvider::new(8)),
+            FreshContextConfig {
+                qdrant_collection: "fresh_test".into(),
+                max_retrieval_chunks: 3,
+                ..FreshContextConfig::default()
+            },
+        );
+
+        let results = service
+            .retrieve_for_routed_query("外部事实语义触发")
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
     }
 
     fn test_source() -> FreshSource {
