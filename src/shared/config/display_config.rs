@@ -12,7 +12,8 @@ impl fmt::Display for AppConfig {
         writeln!(
             f,
             "database → {} (max {})",
-            self.database.url, self.database.max_connections
+            redact_url_credentials(&self.database.url),
+            self.database.max_connections
         )?;
 
         writeln!(
@@ -159,5 +160,48 @@ impl fmt::Display for AppConfig {
             }
         }
         Ok(())
+    }
+}
+
+fn redact_url_credentials(raw_url: &str) -> String {
+    let raw_url = raw_url.trim();
+    if raw_url.is_empty() {
+        return "<empty>".into();
+    }
+
+    let Ok(mut url) = reqwest::Url::parse(raw_url) else {
+        return "<invalid-url>".into();
+    };
+
+    if url.password().is_some() {
+        let _ = url.set_password(Some("***"));
+    }
+    url.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::shared::config::AppConfig;
+
+    #[test]
+    fn display_redacts_database_password() {
+        let mut config = AppConfig::default();
+        config.database.url = "mysql://root:very-secret@127.0.0.1:3306/digital_companion".into();
+
+        let rendered = config.to_string();
+
+        assert!(!rendered.contains("very-secret"));
+        assert!(rendered.contains("mysql://root:***@127.0.0.1:3306/digital_companion"));
+    }
+
+    #[test]
+    fn display_does_not_echo_invalid_database_url() {
+        let mut config = AppConfig::default();
+        config.database.url = "not a url with secret".into();
+
+        let rendered = config.to_string();
+
+        assert!(!rendered.contains("not a url with secret"));
+        assert!(rendered.contains("database → <invalid-url>"));
     }
 }
