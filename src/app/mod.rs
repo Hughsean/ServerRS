@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod auth;
 pub mod community;
+pub mod context_routing;
 pub mod depression;
 pub mod diary;
 pub mod fresh_context;
