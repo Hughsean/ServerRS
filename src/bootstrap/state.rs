@@ -9,6 +9,7 @@ use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings};
 use crate::app::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
 use crate::app::auth::auth_service::AuthService;
 use crate::app::community::community_service::CommunityService;
+use crate::app::context_routing::ContextRoutingService;
 use crate::app::depression::depression_service::DepressionService;
 use crate::app::diary::diary_service::DiaryService;
 use crate::app::fresh_context::retrieval::FreshRetrievalService;
@@ -40,10 +41,12 @@ use crate::domain::fresh_context::FreshContextRepoT;
 use crate::domain::llm::LlmProvider;
 use crate::domain::risk::risk_detector::RiskDetector;
 use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::semantic_classification::SemanticClassifierT;
 use crate::domain::storage::ObjectStorage;
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::infra::db::imp::fresh_context_repo::FreshContextRepo;
 use crate::infra::detector::rule_based_detector::RuleBasedRiskDetector;
+use crate::infra::semantic_classification::EmbeddingSemanticClassifier;
 use crate::infra::storage::local_storage::LocalObjectStorage;
 use crate::shared::config::AppConfig;
 
@@ -210,14 +213,40 @@ impl ServiceGraph {
             None
         };
 
-        let context_builder: Arc<AgentContextBuilder> = Arc::new(AgentContextBuilder::new(
-            Arc::clone(&memory_svc),
-            Arc::clone(&retrieval),
-            Arc::clone(&summary_service),
-            fresh_retrieval,
-            Arc::clone(&conv_repo),
-            Arc::clone(&profile_repo),
-        ));
+        let context_routing_service: Option<Arc<ContextRoutingService>> =
+            if config.context_routing.enabled {
+                let classifier: Arc<dyn SemanticClassifierT> = Arc::new(
+                    EmbeddingSemanticClassifier::from_config(
+                        &config.semantic_classification,
+                        Arc::clone(&vector.embedding_provider),
+                    )
+                    .await
+                    .map_err(|error| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("上下文路由分类器初始化失败: {error}"),
+                        )
+                    })?,
+                );
+                Some(Arc::new(ContextRoutingService::new(
+                    classifier,
+                    config.context_routing.clone(),
+                )))
+            } else {
+                None
+            };
+
+        let context_builder: Arc<AgentContextBuilder> = Arc::new(
+            AgentContextBuilder::new(
+                Arc::clone(&memory_svc),
+                Arc::clone(&retrieval),
+                Arc::clone(&summary_service),
+                fresh_retrieval,
+                Arc::clone(&conv_repo),
+                Arc::clone(&profile_repo),
+            )
+            .with_context_routing_service(context_routing_service),
+        );
 
         let tool_deps = AgentToolDeps {
             retrieval: Arc::clone(&retrieval),
