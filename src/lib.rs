@@ -4,3 +4,6 @@ pub mod bootstrap;
 pub mod domain;
 pub mod infra;
 pub mod shared;
+
+#[cfg(test)]
+mod test;
