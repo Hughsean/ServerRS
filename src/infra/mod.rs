@@ -5,6 +5,7 @@ pub mod fresh_context;
 pub mod llm;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
+pub mod semantic_classification;
 pub mod ssh_tunnel;
 pub mod storage;
 pub mod tasks;
