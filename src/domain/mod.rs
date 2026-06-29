@@ -14,6 +14,7 @@ pub mod psychology;
 pub mod qq_bot;
 pub mod rag;
 pub mod risk;
+pub mod semantic_classification;
 pub mod storage;
 pub mod summary;
 pub mod tasks;
