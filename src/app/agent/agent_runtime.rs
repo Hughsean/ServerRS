@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::agent_context::AgentContextBuilder;
 use super::prompt_builder::PromptBuilder;
@@ -309,6 +309,11 @@ impl AgentRuntime {
                 rag_enabled,
             )
             .await;
+
+        trace!(
+            user_id,
+            summary_enabled, memory_enabled, rag_enabled, "built AgentContext"
+        );
 
         // ── 步骤 4：使用工具进行 LLM 聊天 ──────────────────────────
         let registered_tools_available = !self.tools.is_empty();
