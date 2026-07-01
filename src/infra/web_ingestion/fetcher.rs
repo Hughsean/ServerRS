@@ -28,6 +28,7 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &[
 pub struct WebFetcher {
     client: reqwest::Client,
     max_body_bytes: u64,
+    dns_validation_mode: DnsValidationMode,
     min_request_interval: Duration,
     request_jitter_ms: u64,
     next_request_at: Arc<tokio::sync::Mutex<HashMap<String, tokio::time::Instant>>>,
@@ -35,6 +36,7 @@ pub struct WebFetcher {
 
 impl WebFetcher {
     pub fn new(config: &WebIngestionConfig) -> Result<Self, WebIngestionError> {
+        let proxy_enabled = !config.fetch_proxy_url.trim().is_empty();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -59,7 +61,7 @@ impl WebFetcher {
             .default_headers(headers)
             .no_proxy();
 
-        if !config.fetch_proxy_url.trim().is_empty() {
+        if proxy_enabled {
             let proxy = reqwest::Proxy::all(config.fetch_proxy_url.trim()).map_err(|e| {
                 WebIngestionError::Internal(format!("invalid web ingestion proxy URL: {e}"))
             })?;
@@ -72,6 +74,11 @@ impl WebFetcher {
         Ok(Self {
             client,
             max_body_bytes: config.max_body_bytes,
+            dns_validation_mode: if proxy_enabled {
+                DnsValidationMode::ProxyRemote
+            } else {
+                DnsValidationMode::ResolveLocally
+            },
             min_request_interval: Duration::from_millis(config.min_request_interval_ms),
             request_jitter_ms: config.request_jitter_ms,
             next_request_at: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -91,7 +98,8 @@ impl WebFetcher {
         let mut current_url = url.to_string();
         let mut redirects_followed = 0usize;
         let response = loop {
-            let parsed_url = validate_fetch_url(&current_url, allowed_domains).await?;
+            let parsed_url =
+                validate_fetch_url(&current_url, allowed_domains, self.dns_validation_mode).await?;
             self.wait_for_host(&parsed_url).await;
             let response = self
                 .client
@@ -242,6 +250,12 @@ impl WebContentFetcher for WebFetcher {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DnsValidationMode {
+    ResolveLocally,
+    ProxyRemote,
+}
+
 fn time_seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -272,6 +286,7 @@ fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<u64
 async fn validate_fetch_url(
     raw: &str,
     allowed_domains: Option<&[String]>,
+    dns_validation_mode: DnsValidationMode,
 ) -> Result<reqwest::Url, WebIngestionError> {
     let parsed = reqwest::Url::parse(raw.trim()).map_err(|e| WebIngestionError::SsrfRejected {
         url: raw.to_string(),
@@ -309,25 +324,75 @@ async fn validate_fetch_url(
         return Ok(parsed);
     }
 
-    let mut ips = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .map_err(|e| WebIngestionError::SsrfRejected {
+    if dns_validation_mode == DnsValidationMode::ProxyRemote {
+        tracing::debug!(
+            url = raw,
+            host = %host,
+            port,
+            "web ingestion fetcher skipped local DNS SSRF validation because proxy is configured"
+        );
+        return Ok(parsed);
+    }
+
+    validate_hostname_dns_for_url(raw, &host, port).await?;
+    Ok(parsed)
+}
+
+async fn validate_hostname_dns_for_url(
+    raw: &str,
+    host: &str,
+    port: u16,
+) -> Result<(), WebIngestionError> {
+    let mut ips = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+        WebIngestionError::SsrfRejected {
             url: raw.to_string(),
             reason: format!("DNS resolution failed: {e}"),
-        })?;
-    let mut resolved_any = false;
+        }
+    })?;
+
+    let mut resolved_ips = Vec::new();
     for addr in ips.by_ref() {
-        resolved_any = true;
-        validate_ip_for_url(addr.ip(), raw)?;
+        resolved_ips.push(addr.ip());
     }
-    if !resolved_any {
+    if resolved_ips.is_empty() {
         return Err(WebIngestionError::SsrfRejected {
             url: raw.to_string(),
             reason: "DNS resolution returned no addresses".into(),
         });
     }
 
-    Ok(parsed)
+    let resolved_ip_texts = resolved_ips
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        url = raw,
+        host = %host,
+        port,
+        resolved_ips = ?resolved_ip_texts,
+        "web ingestion fetcher DNS resolved"
+    );
+
+    for ip in resolved_ips {
+        if let Err(error) = validate_ip_for_url(ip, raw) {
+            let reason = match &error {
+                WebIngestionError::SsrfRejected { reason, .. } => reason.as_str(),
+                _ => "unknown",
+            };
+            tracing::warn!(
+                url = raw,
+                host = %host,
+                port,
+                rejected_ip = %ip,
+                resolved_ips = ?resolved_ip_texts,
+                reason = %reason,
+                "web ingestion fetcher DNS result rejected by SSRF guard"
+            );
+            return Err(error);
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_ip_for_url(ip: IpAddr, url: &str) -> Result<(), WebIngestionError> {
@@ -560,19 +625,53 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_url_rejects_userinfo() {
-        let error = validate_fetch_url("https://user:secret@example.com/path", None)
-            .await
-            .unwrap_err();
+        let error = validate_fetch_url(
+            "https://user:secret@example.com/path",
+            None,
+            DnsValidationMode::ResolveLocally,
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("userinfo"));
     }
 
     #[tokio::test]
     async fn test_fetch_url_applies_allowlist_before_dns() {
         let allowed = vec!["example.com".to_string()];
-        let error = validate_fetch_url("https://example.com.evil.invalid/path", Some(&allowed))
-            .await
-            .unwrap_err();
+        let error = validate_fetch_url(
+            "https://example.com.evil.invalid/path",
+            Some(&allowed),
+            DnsValidationMode::ResolveLocally,
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("not in allowed_domains"));
+    }
+
+    #[tokio::test]
+    async fn proxy_dns_mode_does_not_use_local_dns_for_hostnames() {
+        let parsed = validate_fetch_url(
+            "https://proxy-only.invalid/path",
+            None,
+            DnsValidationMode::ProxyRemote,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(parsed.host_str(), Some("proxy-only.invalid"));
+    }
+
+    #[tokio::test]
+    async fn proxy_dns_mode_still_rejects_ip_literals() {
+        let error = validate_fetch_url(
+            "https://127.0.0.1/path",
+            None,
+            DnsValidationMode::ProxyRemote,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("IPv4 loopback"));
     }
 
     #[test]
