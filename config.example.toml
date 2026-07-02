@@ -88,7 +88,11 @@ port = 8080
 level = "debug"
 
 [cors]
-allowed_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 ################################
 
 
@@ -222,7 +226,6 @@ enabled = true
 # proxy_url = "http://127.0.0.1:7890"
 
 
-
 # ── Web Ingestion Configuration ────────────────────────────────────────────
 # ALL DISABLED BY DEFAULT. Enable only after all P0 fixes are complete.
 
@@ -261,26 +264,27 @@ retry_base_delay_secs = 90
 retry_max_delay_secs = 5400
 
 [web_ingestion.handler_parallelism]
+# 这些字段名对应 handler 消费的输入 outbox 事件，
+# 不是 handler 内部实际执行的业务动作。
 default = 1
-crawl_job_created = 1
-url_discovered = 4
-page_fetched = 6
-page_cleaned = 4
-page_distilled = 4
-quality_checked = 4
-document_chunked = 4
-chunks_embedded = 4
-document_indexed = 4
-knowledge_staged = 2
-knowledge_publish_requested = 1
-knowledge_rollback_requested = 1
-terminal = 8
-
+crawl_job_created = 1            # 消费 CrawlJobCreated；选择到期 URL，并发出 UrlDiscovered
+url_discovered = 4               # 消费 UrlDiscovered；抓取页面并创建/恢复摄取运行
+page_fetched = 6                 # 消费 PageFetched；把已抓取 HTML 清洗成纯文本
+page_cleaned = 4                 # 消费 PageCleaned；对清洗后的文本执行 LLM 蒸馏
+page_distilled = 4               # 消费 PageDistilled；执行质量门控判断
+quality_checked = 4              # 消费 QualityChecked；分流到拒绝、分块或暂存
+document_chunked = 4             # 消费 DocumentChunked；保存暂存文档/分块并推进流程
+chunks_embedded = 4              # 消费 ChunksEmbedded；持久化 embedding 结果并推进流程
+document_indexed = 4             # 消费 DocumentIndexed；写入暂存向量索引元数据并推进流程
+knowledge_staged = 2             # 消费 KnowledgeStaged；完成暂存，必要时发起发布请求
+knowledge_publish_requested = 1  # 消费 KnowledgePublishRequested；激活暂存版本
+knowledge_rollback_requested = 1 # 消费 KnowledgeRollbackRequested；回滚当前激活版本
+terminal = 8                     # 消费 IngestionSkipped/KnowledgePublished 等终态事件
 
 
 [qq_bot]
 enabled = false
-self_qq_id = 1     # 你的机器人QQ号
+self_qq_id = 1                                     # 你的机器人QQ号
 http_base_url = "http://127.0.0.1:3000"
 ws_url = "ws://127.0.0.1:6700"
 tts_output_dir = "./data/tts/"

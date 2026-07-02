@@ -67,6 +67,25 @@ fn rejects_business_layer_back_edges() {
 }
 
 #[test]
+fn rejects_grouped_import_layer_back_edges() {
+    let workspace = TestWorkspace::new("rejects_grouped_import_layer_back_edges");
+    workspace.write(
+        "src/app/user_service.rs",
+        "use crate::{domain::user::User, infra::db::seaorm_impl::user_repo::UserRepo};\n",
+    );
+    workspace.write(
+        "src/domain/user.rs",
+        "use crate::{\n    shared::error::AppError,\n    infra::db::seaorm_impl::user_repo::UserRepo,\n};\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("grouped imports must not bypass layer checks");
+
+    assert_contains(&report.to_string(), "app layer must not depend on infra");
+    assert_contains(&report.to_string(), "domain layer must not depend on infra");
+}
+
+#[test]
 fn rejects_api_and_bootstrap_regressions() {
     let workspace = TestWorkspace::new("rejects_api_and_bootstrap_regressions");
     workspace.write(
@@ -79,7 +98,7 @@ fn rejects_api_and_bootstrap_regressions() {
     );
     workspace.write(
         "src/bootstrap/state.rs",
-        "use std::sync::Arc;\nfn build() { let service = Arc::new(UserService::new()); }\n",
+        "use std::sync::Arc;\npub struct ServiceGraph;\nimpl ServiceGraph { pub fn build() { let service = Arc::new(UserService::new()); } }\n",
     );
     workspace.write(
         "src/bootstrap/graph/mod.rs",
@@ -109,6 +128,42 @@ fn rejects_api_and_bootstrap_regressions() {
 }
 
 #[test]
+fn rejects_business_layer_imports_of_infra_only_external_crates() {
+    let workspace =
+        TestWorkspace::new("rejects_business_layer_imports_of_infra_only_external_crates");
+    workspace.write("src/app/cache_service.rs", "use redis::Client;\n");
+    workspace.write(
+        "src/domain/search.rs",
+        "use qdrant_client::qdrant::SearchPoints;\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("business layers must not import infra-only external crates");
+
+    assert_contains(
+        &report.to_string(),
+        "business layers must not import infrastructure-only crates",
+    );
+}
+
+#[test]
+fn rejects_service_graph_build_construction_after_file_move() {
+    let workspace = TestWorkspace::new("rejects_service_graph_build_construction_after_file_move");
+    workspace.write(
+        "src/bootstrap/service_graph.rs",
+        "use std::sync::Arc;\npub struct ServiceGraph;\nimpl ServiceGraph { pub fn build() { let service = Arc::new(UserService::new()); } }\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("ServiceGraph::build checks must follow the type, not a fixed file path");
+
+    assert_contains(
+        &report.to_string(),
+        "ServiceGraph::build must not directly construct services",
+    );
+}
+
+#[test]
 fn skips_qq_bot_sources_unless_feature_is_enabled() {
     let workspace = TestWorkspace::new("skips_qq_bot_sources_unless_feature_is_enabled");
     workspace.write(
@@ -116,12 +171,70 @@ fn skips_qq_bot_sources_unless_feature_is_enabled() {
         "use crate::infra::qq_bot::napcat::api::NapCatApiClient;\n",
     );
 
-    check_workspace(workspace.path(), FeatureSet { qq_bot: false })
-        .expect("qq_bot sources are ignored when feature is disabled");
+    check_workspace(
+        workspace.path(),
+        FeatureSet::new(["qq_bot"], std::iter::empty::<&str>()),
+    )
+    .expect("qq_bot sources are ignored when feature is disabled");
 
-    let report = check_workspace(workspace.path(), FeatureSet { qq_bot: true })
+    let report = check_workspace(workspace.path(), FeatureSet::new(["qq_bot"], ["qq_bot"]))
         .expect_err("qq_bot sources are checked when feature is enabled");
     assert_contains(&report.to_string(), "app layer must not depend on infra");
+}
+
+#[test]
+fn skips_declared_feature_sources_by_convention() {
+    let workspace = TestWorkspace::new("skips_declared_feature_sources_by_convention");
+    workspace.write(
+        "src/app/discord_bot/service.rs",
+        "use crate::infra::discord_bot::client::DiscordClient;\n",
+    );
+
+    check_workspace(
+        workspace.path(),
+        FeatureSet::new(["discord_bot"], std::iter::empty::<&str>()),
+    )
+    .expect("disabled feature sources are ignored by feature-name convention");
+
+    let report = check_workspace(
+        workspace.path(),
+        FeatureSet::new(["discord_bot"], ["discord_bot"]),
+    )
+    .expect_err("enabled feature sources are checked");
+    assert_contains(&report.to_string(), "app layer must not depend on infra");
+}
+
+#[test]
+fn rejects_app_state_extraction_anywhere_in_api_layer() {
+    let workspace = TestWorkspace::new("rejects_app_state_extraction_anywhere_in_api_layer");
+    workspace.write(
+        "src/api/http/chat_handler.rs",
+        "use axum::extract::State;\nuse crate::api::AppState;\nasync fn h(State(_state): State<AppState>) {}\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("all api handlers must use narrow state regardless of directory layout");
+    assert_contains(
+        &report.to_string(),
+        "handlers must extract narrow Axum state",
+    );
+}
+
+#[test]
+fn rejects_new_graph_child_provider_reexports_by_convention() {
+    let workspace = TestWorkspace::new("rejects_new_graph_child_provider_reexports_by_convention");
+    workspace.write(
+        "src/bootstrap/graph/mod.rs",
+        "mod new_detail_provider;\npub use new_detail_provider::build_new_detail;\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("new child providers must be blocked without updating a hard-coded list");
+
+    assert_contains(
+        &report.to_string(),
+        "graph child providers must not be re-exported",
+    );
 }
 
 #[test]

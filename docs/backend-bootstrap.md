@@ -216,7 +216,7 @@ AgentRuntime, KnowledgeReviewService
 1. Handler 直接拿 `State<AppState>`。
 2. 全局 service container / `OnceLock` / `lazy_static` DI。
 3. 在 `main.rs` 重新堆业务构造代码。
-4. 让 app 层直接依赖 SeaORM 实体。
+4. 让业务层直接依赖 SeaORM/Qdrant/Redis 等基础设施实现 crate。
 5. 绕过 `bootstrap::runtime` 启动后台 worker。
 
 ## 架构防回退检查
@@ -234,11 +234,19 @@ bootstrap -> api/app/domain/infra/shared/bootstrap
 
 额外禁止：
 - `api` 依赖 `bootstrap` 或 `infra`。
-- handler 直接提取 `State<AppState>`。
+- `api` 层任意位置直接提取 `State<AppState>`。
 - `AppState` 包装 `ServiceGraph`。
-- `bootstrap/state.rs` 直接 `Arc::new` / `Service::new` 构造业务服务。
-- `bootstrap/graph` 子 provider 对外 `pub mod` 或 `pub use`。
-- `api/app/domain/shared` 引入数据库基础设施类型。
+- `ServiceGraph::build` 直接 `Arc::new` / `Service::new` 构造业务服务；检查跟随
+  `impl ServiceGraph`，不绑定具体文件名。
+- `bootstrap/graph` 子 provider 对外 `pub mod`，或把非顶层聚合 provider
+  `pub use` 出去；公开 provider API 必须符合 `*Services + build_*_services` 约定。
+- `api/app/domain/shared` 引入 infra-only 外部 crate 或基础设施类型
+  （如 SeaORM/SQLx/Qdrant/Redis/WebSocket adapter）。
+- 普通 `use crate::infra::...` 和 grouped import（如 `use crate::{infra::...}`）
+  都会参与分层检查。
 - `OnceLock` / `lazy_static` 风格的全局 service container。
 
-`#[cfg(test)]` 测试模块会被忽略，允许 app 层测试使用 infra mock。`qq_bot` 相关源码在默认 feature 下不扫描；启用 `qq_bot` feature 时会参与检查。
+`#[cfg(test)]` 测试模块会被忽略，允许 app 层测试使用 infra mock。
+feature-gated 源码按 Cargo feature 和路径约定自动处理：声明了 feature `foo` 时，
+`src/**/foo/**`、`src/**/foo.rs` 以及带 `required-features = ["foo"]`
+的 bin 在 feature 未启用时跳过，启用后参与检查。
