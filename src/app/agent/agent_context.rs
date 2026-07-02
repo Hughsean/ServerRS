@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::app::context_routing::{
     ContextRouteDecision, ContextRoutingService, build_routing_input,
@@ -121,6 +121,13 @@ impl AgentContextBuilder {
         } else {
             None
         };
+        log_context_route_decision(
+            user_id,
+            conversation_id,
+            routing_decision.as_ref(),
+            max_memory_items,
+            max_rag_chunks,
+        );
         let memory_top_k = routed_memory_top_k(routing_decision.as_ref(), max_memory_items);
 
         let memories = if !memory_enabled || memory_top_k == 0 {
@@ -179,6 +186,16 @@ impl AgentContextBuilder {
         } else {
             Vec::new()
         };
+        log_context_retrieval_counts(
+            user_id,
+            conversation_id,
+            routing_decision.as_ref(),
+            memory_top_k,
+            rag_top_k,
+            memories.len(),
+            rag_chunks.len(),
+            fresh_chunks.len(),
+        );
 
         let profile: Option<Value> = match user_profile {
             Some(p) => serde_json::to_value(p).ok(),
@@ -216,6 +233,72 @@ fn routed_rag_top_k(decision: Option<&ContextRouteDecision>, default_top_k: u64)
     decision
         .map(|decision| u64::from(decision.rag.top_k))
         .unwrap_or(default_top_k)
+}
+
+fn log_context_route_decision(
+    user_id: u64,
+    conversation_id: Option<u64>,
+    decision: Option<&ContextRouteDecision>,
+    default_memory_top_k: u32,
+    default_rag_top_k: u64,
+) {
+    match decision {
+        Some(decision) => {
+            debug!(
+                user_id,
+                ?conversation_id,
+                routing_enabled = true,
+                taxonomy = %decision.diagnostics.taxonomy,
+                fresh_enabled = decision.fresh_context.enabled,
+                fresh_confidence = decision.fresh_context.confidence,
+                memory_top_k = decision.memory.top_k,
+                memory_reason = %decision.memory.reason,
+                memory_confidence = decision.memory.confidence,
+                rag_top_k = decision.rag.top_k,
+                rag_reason = %decision.rag.reason,
+                rag_confidence = decision.rag.confidence,
+                fallback_used = decision.diagnostics.fallback_used,
+                top_labels = ?decision.diagnostics.top_labels,
+                "Agent 上下文路由决策"
+            );
+        }
+        None => {
+            debug!(
+                user_id,
+                ?conversation_id,
+                routing_enabled = false,
+                memory_top_k = default_memory_top_k,
+                rag_top_k = default_rag_top_k,
+                "Agent 上下文路由未启用，使用默认召回预算"
+            );
+        }
+    }
+}
+
+fn log_context_retrieval_counts(
+    user_id: u64,
+    conversation_id: Option<u64>,
+    decision: Option<&ContextRouteDecision>,
+    memory_top_k: u32,
+    rag_top_k: u64,
+    memories_count: usize,
+    rag_chunks_count: usize,
+    fresh_chunks_count: usize,
+) {
+    debug!(
+        user_id,
+        ?conversation_id,
+        routing_enabled = decision.is_some(),
+        fresh_enabled = decision
+            .map(|decision| decision.fresh_context.enabled)
+            .unwrap_or(false),
+        memory_top_k,
+        rag_top_k,
+        memories_count,
+        rag_chunks_count,
+        fresh_chunks_count,
+        "Agent 上下文召回完成"
+    );
 }
 
 #[cfg(test)]
@@ -303,6 +386,39 @@ mod tests {
         assert_eq!(routed_rag_top_k(Some(&decision), 5), 1);
         assert_eq!(routed_memory_top_k(None, 10), 10);
         assert_eq!(routed_rag_top_k(None, 5), 5);
+    }
+
+    #[test]
+    fn route_decision_debug_helpers_accept_disabled_and_enabled_paths() {
+        let decision = ContextRouteDecision {
+            fresh_context: FreshContextRoute {
+                enabled: true,
+                confidence: 0.91,
+            },
+            memory: RetrievalBudgetRoute {
+                top_k: 7,
+                confidence: 0.82,
+                reason: "memory_positive".into(),
+            },
+            rag: RetrievalBudgetRoute {
+                top_k: 2,
+                confidence: 0.66,
+                reason: "rag_low_confidence".into(),
+            },
+            diagnostics: ContextRouteDiagnostics {
+                taxonomy: "context_routing".into(),
+                top_labels: vec![
+                    ("context.memory.positive".into(), 0.82),
+                    ("context.rag.positive".into(), 0.66),
+                ],
+                fallback_used: false,
+            },
+        };
+
+        log_context_route_decision(42, Some(9), Some(&decision), 10, 5);
+        log_context_retrieval_counts(42, Some(9), Some(&decision), 7, 2, 3, 2, 1);
+        log_context_route_decision(42, None, None, 10, 5);
+        log_context_retrieval_counts(42, None, None, 10, 5, 0, 0, 0);
     }
 
     #[test]

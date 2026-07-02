@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::agent_context::AgentContextBuilder;
 use super::prompt_builder::PromptBuilder;
@@ -310,6 +310,13 @@ impl AgentRuntime {
             )
             .await;
 
+        trace!(
+            conversation_id,
+            summary_enabled, memory_enabled, rag_enabled, "built AgentContext"
+        );
+
+        trace!(conversation_id, "AgentContext details:\n{:#?}", context);
+
         // ── 步骤 4：使用工具进行 LLM 聊天 ──────────────────────────
         let registered_tools_available = !self.tools.is_empty();
         let tools_available = self.settings.agent_enabled
@@ -319,6 +326,12 @@ impl AgentRuntime {
         let system_message = self
             .prompt_builder
             .build_system_message(&context, tools_available);
+
+        trace!(
+            conversation_id,
+            system_message = %system_message,
+            "built system message"
+        );
 
         let mut llm_messages = Vec::with_capacity(recent_messages.len() + 1);
         llm_messages.push(ChatMessage {
@@ -587,6 +600,14 @@ impl AgentRuntime {
                 task_epoch,
             );
         }
+
+        trace!(
+            conversation_id,
+            user_message = %user_message,
+            assistant_reply = %final_content,
+            tool_call_count = tool_traces.len(),
+            "AgentRuntime completed respond()"
+        );
 
         Ok(AgentResponse {
             reply: final_content,
