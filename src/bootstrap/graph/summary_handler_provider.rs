@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::app::summary::summary_refresh_handler::SummaryRefreshHandler;
 use crate::app::summary::summary_service::SummaryService;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::LlmProvider;
 use crate::domain::tasks::task_handler::TaskHandler;
 

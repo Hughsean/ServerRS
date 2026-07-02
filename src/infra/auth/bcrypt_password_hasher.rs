@@ -1,4 +1,4 @@
-use crate::domain::auth::password_service::PasswordService;
+use crate::domain::auth::password_service::PasswordServiceT;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone)]
@@ -14,7 +14,7 @@ impl Default for BcryptPasswordHasher {
     }
 }
 
-impl PasswordService for BcryptPasswordHasher {
+impl PasswordServiceT for BcryptPasswordHasher {
     fn hash(&self, raw_password: &str) -> Result<String, AppError> {
         bcrypt::hash(raw_password, self.cost)
             .map_err(|err| AppError::internal(format!("failed to hash password: {err}")))

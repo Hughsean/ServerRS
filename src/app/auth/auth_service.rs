@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
-use crate::domain::auth::password_service::PasswordService;
+use crate::domain::auth::password_service::PasswordServiceT;
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::tasks::task_event::{
@@ -120,7 +120,7 @@ pub struct LoginInput {
 
 pub struct AuthService {
     user_repo: Arc<dyn UserRepoT>,
-    password_service: Arc<dyn PasswordService>,
+    password_service: Arc<dyn PasswordServiceT>,
     token_service: Arc<dyn TokenServiceT>,
     refresh_token_store: Arc<dyn RefreshTokenStoreT>,
     task_publisher: Arc<dyn TaskPublisher>,
@@ -138,7 +138,7 @@ fn sha256_hex(s: &str) -> String {
 impl AuthService {
     pub fn new(
         user_repo: Arc<dyn UserRepoT>,
-        password_service: Arc<dyn PasswordService>,
+        password_service: Arc<dyn PasswordServiceT>,
         token_service: Arc<dyn TokenServiceT>,
         refresh_token_store: Arc<dyn RefreshTokenStoreT>,
         task_publisher: Arc<dyn TaskPublisher>,

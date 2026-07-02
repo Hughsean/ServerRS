@@ -5,7 +5,7 @@ use crate::domain::web_ingestion::review::{
     KnowledgeReviewPage, KnowledgeReviewRepoT, NewReviewPublishRequest, ReviewPublishRequest,
 };
 use crate::domain::web_ingestion::status::{publish_status, run_stage, run_status};
-use crate::infra::db::entities::{
+use crate::infra::repo::entities::{
     domain_event_outbox, knowledge_documents, knowledge_ingestion_runs, knowledge_publish_records,
     web_ingestion_audit_logs, web_pages, web_sources,
 };

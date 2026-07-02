@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
-use crate::domain::qq_bot::repository::GroupMessageRepository;
+use crate::domain::qq_bot::repository::GroupMessageRepoT;
 
 /// Handles ingestion of OneBot group messages into the system.
 ///
@@ -14,11 +14,11 @@ use crate::domain::qq_bot::repository::GroupMessageRepository;
 /// responsibility of the caller (listener) which knows `self_qq_id`. We persist
 /// whatever the caller already computed.
 pub struct MessageIngestionService {
-    message_repo: Arc<dyn GroupMessageRepository>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
 }
 
 impl MessageIngestionService {
-    pub fn new(message_repo: Arc<dyn GroupMessageRepository>) -> Self {
+    pub fn new(message_repo: Arc<dyn GroupMessageRepoT>) -> Self {
         Self { message_repo }
     }
 

@@ -4,16 +4,16 @@ use sea_orm::{
 };
 
 use crate::domain::qq_bot::attention::BotAccount;
-use crate::domain::qq_bot::repository::BotAccountRepository;
+use crate::domain::qq_bot::repository::BotAccountRepoT;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_bot_accounts;
+use crate::infra::repo::entities::qq_bot_accounts;
 
-pub struct SeaOrmBotAccountRepository {
+pub struct BotAccountRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmBotAccountRepository {
+impl BotAccountRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -36,7 +36,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl BotAccountRepository for SeaOrmBotAccountRepository {
+impl BotAccountRepoT for BotAccountRepo {
     async fn find_by_self_qq_id(&self, self_qq_id: i64) -> Result<Option<BotAccount>, AppError> {
         qq_bot_accounts::Entity::find()
             .filter(qq_bot_accounts::Column::SelfQqId.eq(self_qq_id))

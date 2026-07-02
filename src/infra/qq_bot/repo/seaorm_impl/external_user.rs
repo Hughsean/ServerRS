@@ -2,16 +2,16 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::config::ExternalUser;
-use crate::domain::qq_bot::repository::ExternalUserRepository;
+use crate::domain::qq_bot::repository::ExternalUserRepoT;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_external_users;
+use crate::infra::repo::entities::qq_external_users;
 
-pub struct SeaOrmExternalUserRepository {
+pub struct ExternalUserRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmExternalUserRepository {
+impl ExternalUserRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -34,7 +34,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl ExternalUserRepository for SeaOrmExternalUserRepository {
+impl ExternalUserRepoT for ExternalUserRepo {
     async fn find_by_qq_user_id(&self, qq_user_id: i64) -> Result<Option<ExternalUser>, AppError> {
         qq_external_users::Entity::find_by_id(qq_user_id)
             .one(&self.db)

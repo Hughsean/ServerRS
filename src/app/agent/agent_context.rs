@@ -11,7 +11,7 @@ use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
 use crate::app::summary::summary_service::SummaryService;
 use crate::domain::agent::{AgentContext, ToolDefinition};
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::ChatMessage;
 use crate::domain::user::user_profile::UserProfile;
 use crate::domain::user::user_profile_repository::UserProfileRepoT;

@@ -4,7 +4,7 @@ use crate::app::agent::agent_runtime::AgentRuntime;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::tasks::task_publisher::TaskPublisher;
 
 use super::BootstrapContext;

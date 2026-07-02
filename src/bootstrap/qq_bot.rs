@@ -28,12 +28,12 @@ use crate::app::qq_bot::trigger_evaluator::TriggerEvaluator;
 use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::llm::LlmProvider;
 use crate::domain::qq_bot::persona::BotPersona;
-use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
-use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
+use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
+use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::domain::qq_bot::repository::{
-    AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
-    GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummaryRepository,
-    OutboxRepository,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
+    GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummaryRepoT,
+    OutboxRepoT,
 };
 use crate::domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler};
 use crate::domain::tts::TtsProvider;
@@ -61,20 +61,20 @@ pub async fn init_qq_bot(
     tts_provider: Option<Arc<dyn TtsProvider>>,
     background: &mut BackgroundTasks,
     // 仓库（从 bootstrap 传入 mock 或真实实现）
-    bot_account_repo: Arc<dyn BotAccountRepository>,
-    group_repo: Arc<dyn GroupRepository>,
-    group_member_repo: Arc<dyn GroupMemberRepository>,
-    group_message_repo: Arc<dyn GroupMessageRepository>,
-    group_summary_repo: Arc<dyn GroupSummaryRepository>,
-    group_memory_repo: Arc<dyn GroupMemoryRepository>,
-    agent_turn_repo: Arc<dyn AgentTurnRepository>,
-    outbox_repo: Arc<dyn OutboxRepository>,
+    bot_account_repo: Arc<dyn BotAccountRepoT>,
+    group_repo: Arc<dyn GroupRepoT>,
+    group_member_repo: Arc<dyn GroupMemberRepoT>,
+    group_message_repo: Arc<dyn GroupMessageRepoT>,
+    group_summary_repo: Arc<dyn GroupSummaryRepoT>,
+    group_memory_repo: Arc<dyn GroupMemoryRepoT>,
+    agent_turn_repo: Arc<dyn AgentTurnRepoT>,
+    outbox_repo: Arc<dyn OutboxRepoT>,
     // Profile & user repos (optional for profile building)
     user_repo: Option<Arc<dyn UserRepoT>>,
-    external_user_repo: Option<Arc<dyn ExternalUserRepository>>,
-    user_profile_repo: Option<Arc<dyn QqUserProfileRepository>>,
+    external_user_repo: Option<Arc<dyn ExternalUserRepoT>>,
+    user_profile_repo: Option<Arc<dyn QqUserProfileRepoT>>,
     // Relationship repo (optional)
-    relationship_repo: Option<Arc<dyn RelationshipRepository>>,
+    relationship_repo: Option<Arc<dyn RelationshipRepoT>>,
 ) -> Result<Option<QqBotDependencies>, AppError> {
     let qc = &config.qq_bot;
 

@@ -11,7 +11,7 @@ use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::repository::{
-    GroupMemberRepository, GroupMemoryRepository, GroupMessageRepository, GroupSummaryRepository,
+    GroupMemberRepoT, GroupMemoryRepoT, GroupMessageRepoT, GroupSummaryRepoT,
 };
 
 /// Builds conversation context for the LLM when generating a reply.
@@ -26,10 +26,10 @@ use crate::domain::qq_bot::repository::{
 /// - Relationship context (optional)
 /// - Current attention state info
 pub struct ContextBuilder {
-    message_repo: Arc<dyn GroupMessageRepository>,
-    member_repo: Arc<dyn GroupMemberRepository>,
-    summary_repo: Arc<dyn GroupSummaryRepository>,
-    memory_repo: Arc<dyn GroupMemoryRepository>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
+    member_repo: Arc<dyn GroupMemberRepoT>,
+    summary_repo: Arc<dyn GroupSummaryRepoT>,
+    memory_repo: Arc<dyn GroupMemoryRepoT>,
     persona: BotPersona,
     max_recent_messages: u32,
     emotional_service: Option<Arc<EmotionalStateService>>,
@@ -39,10 +39,10 @@ pub struct ContextBuilder {
 
 impl ContextBuilder {
     pub fn new(
-        message_repo: Arc<dyn GroupMessageRepository>,
-        member_repo: Arc<dyn GroupMemberRepository>,
-        summary_repo: Arc<dyn GroupSummaryRepository>,
-        memory_repo: Arc<dyn GroupMemoryRepository>,
+        message_repo: Arc<dyn GroupMessageRepoT>,
+        member_repo: Arc<dyn GroupMemberRepoT>,
+        summary_repo: Arc<dyn GroupSummaryRepoT>,
+        memory_repo: Arc<dyn GroupMemoryRepoT>,
         persona: BotPersona,
         max_recent_messages: u32,
         emotional_service: Option<Arc<EmotionalStateService>>,

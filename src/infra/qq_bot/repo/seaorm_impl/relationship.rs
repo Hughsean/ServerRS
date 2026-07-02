@@ -2,16 +2,16 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::relationship::{RapportLevel, RelationshipState};
-use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
+use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_relationships;
+use crate::infra::repo::entities::qq_relationships;
 
-pub struct SeaOrmRelationshipRepository {
+pub struct RelationshipRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmRelationshipRepository {
+impl RelationshipRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -44,7 +44,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl RelationshipRepository for SeaOrmRelationshipRepository {
+impl RelationshipRepoT for RelationshipRepo {
     async fn find(
         &self,
         qq_group_id: i64,

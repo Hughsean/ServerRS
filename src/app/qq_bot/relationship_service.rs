@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::domain::qq_bot::relationship::RelationshipState;
-use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
+use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::shared::error::AppError;
 
 /// 关系服务 — 管理猫猫与每个群友的社交关系
@@ -13,11 +13,11 @@ use crate::shared::error::AppError;
 /// - 构建关系上下文字符串（供 context_builder 使用）
 /// - 从 LLM 回复中解析昵称偏好、兴趣等
 pub struct RelationshipService {
-    repo: Arc<dyn RelationshipRepository>,
+    repo: Arc<dyn RelationshipRepoT>,
 }
 
 impl RelationshipService {
-    pub fn new(repo: Arc<dyn RelationshipRepository>) -> Self {
+    pub fn new(repo: Arc<dyn RelationshipRepoT>) -> Self {
         Self { repo }
     }
 

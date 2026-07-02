@@ -1,17 +1,17 @@
 use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
+use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::user_profile::UserProfile;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_user_profiles;
+use crate::infra::repo::entities::qq_user_profiles;
 
-pub struct SeaOrmQqUserProfileRepository {
+pub struct QqUserProfileRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmQqUserProfileRepository {
+impl QqUserProfileRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -40,7 +40,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl QqUserProfileRepository for SeaOrmQqUserProfileRepository {
+impl QqUserProfileRepoT for QqUserProfileRepo {
     async fn find_by_qq_user_id(&self, qq_user_id: i64) -> Result<Option<UserProfile>, AppError> {
         qq_user_profiles::Entity::find_by_id(qq_user_id)
             .one(&self.db)

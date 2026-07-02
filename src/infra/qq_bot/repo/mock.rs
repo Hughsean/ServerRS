@@ -6,13 +6,13 @@ use tokio::sync::RwLock;
 use crate::domain::qq_bot::attention::BotAccount;
 use crate::domain::qq_bot::config::{ExternalUser, GroupConfig, GroupMember, TriggerPolicy};
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
-use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
+use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::relationship::RelationshipState;
-use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
+use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::domain::qq_bot::repository::{
-    AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
-    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummary,
-    GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
+    GroupMemory, GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary,
+    GroupSummaryRepoT, OutboxEntry, OutboxRepoT, OutboxStatus,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TurnStatus};
 use crate::domain::qq_bot::user_profile::UserProfile;
@@ -68,7 +68,7 @@ impl MockBotAccountRepo {
 }
 
 #[async_trait]
-impl BotAccountRepository for MockBotAccountRepo {
+impl BotAccountRepoT for MockBotAccountRepo {
     async fn find_by_self_qq_id(&self, self_qq_id: i64) -> Result<Option<BotAccount>, AppError> {
         Ok(self.store.read().await.get(&self_qq_id).cloned())
     }
@@ -106,7 +106,7 @@ impl MockExternalUserRepo {
 }
 
 #[async_trait]
-impl ExternalUserRepository for MockExternalUserRepo {
+impl ExternalUserRepoT for MockExternalUserRepo {
     async fn find_by_qq_user_id(&self, qq_user_id: i64) -> Result<Option<ExternalUser>, AppError> {
         Ok(self.store.read().await.get(&qq_user_id).cloned())
     }
@@ -140,7 +140,7 @@ impl MockGroupRepo {
 }
 
 #[async_trait]
-impl GroupRepository for MockGroupRepo {
+impl GroupRepoT for MockGroupRepo {
     async fn find_by_group_id(&self, qq_group_id: i64) -> Result<Option<GroupConfig>, AppError> {
         Ok(self.store.read().await.get(&qq_group_id).cloned())
     }
@@ -203,7 +203,7 @@ impl MockGroupMemberRepo {
 }
 
 #[async_trait]
-impl GroupMemberRepository for MockGroupMemberRepo {
+impl GroupMemberRepoT for MockGroupMemberRepo {
     async fn find(
         &self,
         qq_group_id: i64,
@@ -265,7 +265,7 @@ impl MockGroupMessageRepo {
 }
 
 #[async_trait]
-impl GroupMessageRepository for MockGroupMessageRepo {
+impl GroupMessageRepoT for MockGroupMessageRepo {
     async fn insert(&self, msg: &NormalizedMessage) -> Result<NormalizedMessage, AppError> {
         let key = (msg.bot_account_id, msg.platform_message_id.clone());
         if let Some(existing_id) = self.by_platform.read().await.get(&key) {
@@ -341,7 +341,7 @@ impl MockAgentTurnRepo {
 }
 
 #[async_trait]
-impl AgentTurnRepository for MockAgentTurnRepo {
+impl AgentTurnRepoT for MockAgentTurnRepo {
     async fn insert(&self, turn: &AgentTurn) -> Result<AgentTurn, AppError> {
         let mut id = self.next_id.write().await;
         let mut t = turn.clone();
@@ -419,7 +419,7 @@ impl MockOutboxRepo {
 }
 
 #[async_trait]
-impl OutboxRepository for MockOutboxRepo {
+impl OutboxRepoT for MockOutboxRepo {
     async fn insert(&self, entry: &OutboxEntry) -> Result<OutboxEntry, AppError> {
         let mut id = self.next_id.write().await;
         let mut e = entry.clone();
@@ -498,7 +498,7 @@ impl MockGroupSummaryRepo {
 }
 
 #[async_trait]
-impl GroupSummaryRepository for MockGroupSummaryRepo {
+impl GroupSummaryRepoT for MockGroupSummaryRepo {
     async fn find_active_rolling(
         &self,
         qq_group_id: i64,
@@ -544,7 +544,7 @@ impl MockGroupMemoryRepo {
 }
 
 #[async_trait]
-impl GroupMemoryRepository for MockGroupMemoryRepo {
+impl GroupMemoryRepoT for MockGroupMemoryRepo {
     async fn find_active_by_group(
         &self,
         qq_group_id: i64,
@@ -611,7 +611,7 @@ impl MockUserProfileRepo {
 }
 
 #[async_trait]
-impl QqUserProfileRepository for MockUserProfileRepo {
+impl QqUserProfileRepoT for MockUserProfileRepo {
     async fn find_by_qq_user_id(&self, qq_user_id: i64) -> Result<Option<UserProfile>, AppError> {
         Ok(self.store.read().await.get(&qq_user_id).cloned())
     }
@@ -667,7 +667,7 @@ impl MockRelationshipRepo {
 }
 
 #[async_trait]
-impl RelationshipRepository for MockRelationshipRepo {
+impl RelationshipRepoT for MockRelationshipRepo {
     async fn find(
         &self,
         qq_group_id: i64,

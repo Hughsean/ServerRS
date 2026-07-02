@@ -5,7 +5,7 @@ use serde_json::json;
 use tracing::{debug, warn};
 
 use crate::domain::conversation::conversation_message::ConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_handler::TaskHandler;
 

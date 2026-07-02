@@ -1,3 +1,3 @@
 pub mod conversation;
 pub mod conversation_message;
-pub mod conversation_repository;
+pub mod conversation_repo;

@@ -14,7 +14,7 @@ use crate::domain::llm::{ChatCompletionRequest, LlmProvider};
 use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::proactive::{ProactiveAction, ProactiveIntent};
-use crate::domain::qq_bot::repository::{GroupMessageRepository, GroupRepository};
+use crate::domain::qq_bot::repository::{GroupMessageRepoT, GroupRepoT};
 use crate::domain::qq_bot::{AttentionStore, QqBotError};
 
 /// 主动行为评估器 — 后台轮询，判断猫猫是否需要主动说话
@@ -26,8 +26,8 @@ use crate::domain::qq_bot::{AttentionStore, QqBotError};
 /// 通过后直接走 ContextBuilder + ReplyGenerator 管道生成回复并分发。
 pub struct ProactiveEvaluator {
     // Repositories
-    group_repo: Arc<dyn GroupRepository>,
-    message_repo: Arc<dyn GroupMessageRepository>,
+    group_repo: Arc<dyn GroupRepoT>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
 
     // Core services
     context_builder: Arc<ContextBuilder>,
@@ -56,8 +56,8 @@ pub struct ProactiveEvaluator {
 impl ProactiveEvaluator {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        group_repo: Arc<dyn GroupRepository>,
-        message_repo: Arc<dyn GroupMessageRepository>,
+        group_repo: Arc<dyn GroupRepoT>,
+        message_repo: Arc<dyn GroupMessageRepoT>,
         context_builder: Arc<ContextBuilder>,
         reply_generator: Arc<ReplyGenerator>,
         segment_dispatcher: Arc<SegmentDispatcher>,

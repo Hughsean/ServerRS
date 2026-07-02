@@ -4,17 +4,17 @@ use sea_orm::{
     QuerySelect, Set,
 };
 
-use crate::domain::qq_bot::repository::AgentTurnRepository;
+use crate::domain::qq_bot::repository::AgentTurnRepoT;
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_agent_turns;
+use crate::infra::repo::entities::qq_agent_turns;
 
-pub struct SeaOrmAgentTurnRepository {
+pub struct AgentTurnRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmAgentTurnRepository {
+impl AgentTurnRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -89,7 +89,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl AgentTurnRepository for SeaOrmAgentTurnRepository {
+impl AgentTurnRepoT for AgentTurnRepo {
     async fn insert(&self, turn: &AgentTurn) -> Result<AgentTurn, AppError> {
         let model = qq_agent_turns::ActiveModel {
             bot_account_id: Set(turn.bot_account_id),

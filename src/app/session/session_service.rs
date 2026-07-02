@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::risk::post_conversation_risk_audit::PostConversationRiskAudit;
 use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::error::AppError;

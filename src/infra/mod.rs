@@ -1,5 +1,5 @@
 pub mod auth;
-pub mod db;
+pub mod repo;
 pub mod detector;
 pub mod fresh_context;
 pub mod http;

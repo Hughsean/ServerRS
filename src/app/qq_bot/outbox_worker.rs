@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::time::{Duration, interval};
 use tracing::{error, info, warn};
 
-use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository};
+use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepoT};
 use crate::domain::qq_bot::{GroupMessageGateway, QqBotError};
 
 /// Background worker that polls the outbox table and sends pending messages.
@@ -14,7 +14,7 @@ use crate::domain::qq_bot::{GroupMessageGateway, QqBotError};
 /// 3. Send via the message gateway
 /// 4. Mark as Sent (success) or Failed (retry later)
 pub struct OutboxWorker {
-    outbox_repo: Arc<dyn OutboxRepository>,
+    outbox_repo: Arc<dyn OutboxRepoT>,
     message_gateway: Option<Arc<dyn GroupMessageGateway>>,
     poll_interval_secs: u64,
     batch_size: u32,
@@ -22,7 +22,7 @@ pub struct OutboxWorker {
 
 impl OutboxWorker {
     pub fn new(
-        outbox_repo: Arc<dyn OutboxRepository>,
+        outbox_repo: Arc<dyn OutboxRepoT>,
         message_gateway: Option<Arc<dyn GroupMessageGateway>>,
         poll_interval_secs: u64,
         batch_size: u32,

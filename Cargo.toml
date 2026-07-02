@@ -6,13 +6,31 @@ edition = "2024"
 [dependencies]
 # Async
 async-trait = "0.1.89"
-tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio = { version = "1.52.1", features = [
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "time",
+    "sync",
+] }
 futures-util = "0.3"
 
 # Web framework
 axum = { version = "0.8.9", features = ["macros", "multipart"] }
-tower-http = { version = "0.7.0", features = ["cors", "trace", "timeout", "compression-br", "fs"] }
-reqwest = { version = "0.13.4", features = ["json", "gzip", "deflate", "brotli", "native-tls"] }
+tower-http = { version = "0.7.0", features = [
+    "cors",
+    "trace",
+    "timeout",
+    "compression-br",
+    "fs",
+] }
+reqwest = { version = "0.13.4", features = [
+    "json",
+    "gzip",
+    "deflate",
+    "brotli",
+    "native-tls",
+] }
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 urlencoding = "2"
 
@@ -38,7 +56,10 @@ thiserror = "2.0.18"
 
 # Database
 sqlx = { version = "0.9.0", default-features = false, features = ["mysql-rsa"] }
-sea-orm = { version = "2.0.0-rc.41", features = [ "runtime-tokio", "sqlx-mysql"] }
+sea-orm = { version = "2.0.0-rc.41", features = [
+    "runtime-tokio",
+    "sqlx-mysql",
+] }
 qdrant-client = { version = "1.15", optional = true }
 
 # Time and date handling
@@ -47,11 +68,15 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 
 # Logging
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "time"] }
+tracing-subscriber = { version = "0.3.23", features = [
+    "env-filter",
+    "fmt",
+    "time",
+] }
 tracing-appender = "0.2"
 
 [features]
-default = ["qdrant"]
+default = ["qdrant", "qq_bot"]
 qq_bot = []
 qdrant = ["dep:qdrant-client"]
 

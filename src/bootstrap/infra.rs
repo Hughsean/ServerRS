@@ -3,7 +3,7 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::domain::llm::LlmProvider;
-use crate::infra::db::connection::init_db;
+use crate::infra::repo::connection::init_db;
 use crate::infra::llm::ollama_provider::OllamaProvider;
 use crate::infra::ssh_tunnel::SshTunnelManager;
 use crate::shared::config::AppConfig;

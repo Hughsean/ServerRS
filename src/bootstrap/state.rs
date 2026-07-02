@@ -30,7 +30,7 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::bootstrap::tasks::TaskContext;
 use crate::bootstrap::vector::VectorContext;
 use crate::domain::auth::token_service::TokenServiceT;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::config::AppConfig;
 

@@ -9,7 +9,7 @@ use super::prompt_builder::PromptBuilder;
 use crate::app::memory::memory_service::MemoryService;
 use crate::domain::agent::{AgentContext, AgentEventRepoT, NewAgentEvent};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::{
     ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig, ToolDefinition as LlmToolDef,
 };

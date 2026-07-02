@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::memory::{NewSummary, ROLLING_GENERAL_SUMMARY};
 use crate::domain::tasks::task_event::{TaskEvent, TurnClosedEvent};

@@ -6,7 +6,7 @@ use crate::app::context_routing::ContextRoutingService;
 use crate::bootstrap::repos::{RepoGraph, build_repos};
 use crate::domain::llm::{EmbeddingProvider, LlmProvider};
 use crate::domain::semantic_classification::SemanticClassifierT;
-use crate::infra::db::connection::init_db;
+use crate::infra::repo::connection::init_db;
 use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::infra::llm::ollama_provider::OllamaProvider;
 use crate::infra::semantic_classification::EmbeddingSemanticClassifier;

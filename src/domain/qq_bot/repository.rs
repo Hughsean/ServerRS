@@ -8,7 +8,7 @@ use super::turn::AgentTurn;
 // ── BotAccount Repository ───────────────────────────────────────────────
 
 #[async_trait]
-pub trait BotAccountRepository: Send + Sync {
+pub trait BotAccountRepoT: Send + Sync {
     async fn find_by_self_qq_id(
         &self,
         self_qq_id: i64,
@@ -23,7 +23,7 @@ pub trait BotAccountRepository: Send + Sync {
 // ── ExternalUser Repository ─────────────────────────────────────────────
 
 #[async_trait]
-pub trait ExternalUserRepository: Send + Sync {
+pub trait ExternalUserRepoT: Send + Sync {
     async fn find_by_qq_user_id(
         &self,
         qq_user_id: i64,
@@ -42,7 +42,7 @@ pub trait ExternalUserRepository: Send + Sync {
 // ── Group Repository ────────────────────────────────────────────────────
 
 #[async_trait]
-pub trait GroupRepository: Send + Sync {
+pub trait GroupRepoT: Send + Sync {
     async fn find_by_group_id(
         &self,
         qq_group_id: i64,
@@ -75,7 +75,7 @@ pub trait GroupRepository: Send + Sync {
 // ── GroupMember Repository ──────────────────────────────────────────────
 
 #[async_trait]
-pub trait GroupMemberRepository: Send + Sync {
+pub trait GroupMemberRepoT: Send + Sync {
     async fn find(
         &self,
         qq_group_id: i64,
@@ -100,7 +100,7 @@ pub trait GroupMemberRepository: Send + Sync {
 // ── GroupMessage Repository ─────────────────────────────────────────────
 
 #[async_trait]
-pub trait GroupMessageRepository: Send + Sync {
+pub trait GroupMessageRepoT: Send + Sync {
     /// 插入标准化后的消息。返回内部 ID。
     /// 幂等性：如果 `platform_message_id` + `bot_account_id` 已存在，返回现有记录。
     async fn insert(
@@ -130,7 +130,7 @@ pub trait GroupMessageRepository: Send + Sync {
 // ── AgentTurn Repository ────────────────────────────────────────────────
 
 #[async_trait]
-pub trait AgentTurnRepository: Send + Sync {
+pub trait AgentTurnRepoT: Send + Sync {
     async fn insert(&self, turn: &AgentTurn) -> Result<AgentTurn, crate::shared::error::AppError>;
     async fn update_response(
         &self,
@@ -158,7 +158,7 @@ pub trait AgentTurnRepository: Send + Sync {
 // ── Outbox Repository ───────────────────────────────────────────────────
 
 #[async_trait]
-pub trait OutboxRepository: Send + Sync {
+pub trait OutboxRepoT: Send + Sync {
     async fn insert(
         &self,
         entry: &OutboxEntry,
@@ -219,7 +219,7 @@ pub enum OutboxStatus {
 // ── GroupSummary Repository ─────────────────────────────────────────────
 
 #[async_trait]
-pub trait GroupSummaryRepository: Send + Sync {
+pub trait GroupSummaryRepoT: Send + Sync {
     /// 查找群组的活跃滚动摘要。
     async fn find_active_rolling(
         &self,
@@ -250,7 +250,7 @@ pub struct GroupSummary {
 // ── GroupMemory Repository ──────────────────────────────────────────────
 
 #[async_trait]
-pub trait GroupMemoryRepository: Send + Sync {
+pub trait GroupMemoryRepoT: Send + Sync {
     /// 查找群组的活跃记忆，按显著性排序。
     async fn find_active_by_group(
         &self,

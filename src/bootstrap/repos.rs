@@ -4,7 +4,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::domain::agent::AgentEventRepoT;
 use crate::domain::community::CommunityRepoT;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::depression::DepressionRepoT;
 use crate::domain::diary::DiaryRepoT;
 use crate::domain::memory::MemoryRepoT;
@@ -18,22 +18,22 @@ use crate::domain::user::user_context_control::UserContextControlRepoT;
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::domain::user::user_repository::UserRepoT;
-use crate::infra::db::seaorm_impl::agent_repo::AgentEventRepo;
-use crate::infra::db::seaorm_impl::community_repo::CommunityRepo;
-use crate::infra::db::seaorm_impl::conversation_repo::ConversationRepo;
-use crate::infra::db::seaorm_impl::conversation_summary_repo::ConversationSummaryRepo;
-use crate::infra::db::seaorm_impl::depression_repo::DepressionRepo;
-use crate::infra::db::seaorm_impl::diary_repo::DiaryRepo;
-use crate::infra::db::seaorm_impl::memory_repo::MemoryRepo;
-use crate::infra::db::seaorm_impl::music_repo::MusicRepo;
-use crate::infra::db::seaorm_impl::psychology_repo::PsychologyRepo;
-use crate::infra::db::seaorm_impl::rag_repo::RAGRepo;
-use crate::infra::db::seaorm_impl::risk_repo::RiskRepo;
-use crate::infra::db::seaorm_impl::stored_object_repo::StoredObjectRepo;
-use crate::infra::db::seaorm_impl::user_context_control_repo::UserContextControlRepo;
-use crate::infra::db::seaorm_impl::user_context_version_repo::UserContextVersionRepo;
-use crate::infra::db::seaorm_impl::user_profile_repo::UserProfileRepo;
-use crate::infra::db::seaorm_impl::user_repo::UserRepo;
+use crate::infra::repo::seaorm_impl::agent::AgentEventRepo;
+use crate::infra::repo::seaorm_impl::community::CommunityRepo;
+use crate::infra::repo::seaorm_impl::conversation::ConversationRepo;
+use crate::infra::repo::seaorm_impl::conversation_summary::ConversationSummaryRepo;
+use crate::infra::repo::seaorm_impl::depression::DepressionRepo;
+use crate::infra::repo::seaorm_impl::diary::DiaryRepo;
+use crate::infra::repo::seaorm_impl::memory::MemoryRepo;
+use crate::infra::repo::seaorm_impl::music::MusicRepo;
+use crate::infra::repo::seaorm_impl::psychology::PsychologyRepo;
+use crate::infra::repo::seaorm_impl::rag::RAGRepo;
+use crate::infra::repo::seaorm_impl::risk::RiskRepo;
+use crate::infra::repo::seaorm_impl::stored_object::StoredObjectRepo;
+use crate::infra::repo::seaorm_impl::user_context_control::UserContextControlRepo;
+use crate::infra::repo::seaorm_impl::user_context_version::UserContextVersionRepo;
+use crate::infra::repo::seaorm_impl::user_profile::UserProfileRepo;
+use crate::infra::repo::seaorm_impl::user::UserRepo;
 
 pub struct RepoGraph {
     pub user_repo: Arc<dyn UserRepoT>,

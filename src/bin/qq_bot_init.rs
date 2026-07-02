@@ -17,17 +17,17 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use server_rs::domain::qq_bot::repository::{
-    BotAccountRepository, ExternalUserRepository, GroupMemberRepository, GroupRepository,
+    BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT, GroupRepoT,
 };
 use server_rs::domain::qq_bot::{
     BotAccount, ExternalUser, GroupConfig, GroupMember, MemoryPolicy, ReplyPolicy, TriggerPolicy,
 };
-use server_rs::infra::db::connection::init_db;
+use server_rs::infra::repo::connection::init_db;
 use server_rs::infra::qq_bot::napcat::api::NapCatApiClient;
-use server_rs::infra::qq_bot::repositories::seaorm_bot_account_repository::SeaOrmBotAccountRepository;
-use server_rs::infra::qq_bot::repositories::seaorm_external_user_repository::SeaOrmExternalUserRepository;
-use server_rs::infra::qq_bot::repositories::seaorm_group_member_repository::SeaOrmGroupMemberRepository;
-use server_rs::infra::qq_bot::repositories::seaorm_group_repository::SeaOrmGroupRepository;
+use server_rs::infra::qq_bot::repo::seaorm_impl::bot_account::BotAccountRepo;
+use server_rs::infra::qq_bot::repo::seaorm_impl::external_user::ExternalUserRepo;
+use server_rs::infra::qq_bot::repo::seaorm_impl::group_member::GroupMemberRepo;
+use server_rs::infra::qq_bot::repo::seaorm_impl::group::GroupRepo;
 use server_rs::shared::config::AppConfig;
 
 #[tokio::main]
@@ -62,13 +62,13 @@ async fn main() {
         .expect("failed to connect to database");
     tracing::info!("数据库已连接");
 
-    let bot_account_repo: Arc<dyn BotAccountRepository> =
-        Arc::new(SeaOrmBotAccountRepository::new(db.clone()));
-    let group_repo: Arc<dyn GroupRepository> = Arc::new(SeaOrmGroupRepository::new(db.clone()));
-    let group_member_repo: Arc<dyn GroupMemberRepository> =
-        Arc::new(SeaOrmGroupMemberRepository::new(db.clone()));
-    let external_user_repo: Arc<dyn ExternalUserRepository> =
-        Arc::new(SeaOrmExternalUserRepository::new(db.clone()));
+    let bot_account_repo: Arc<dyn BotAccountRepoT> =
+        Arc::new(BotAccountRepo::new(db.clone()));
+    let group_repo: Arc<dyn GroupRepoT> = Arc::new(GroupRepo::new(db.clone()));
+    let group_member_repo: Arc<dyn GroupMemberRepoT> =
+        Arc::new(GroupMemberRepo::new(db.clone()));
+    let external_user_repo: Arc<dyn ExternalUserRepoT> =
+        Arc::new(ExternalUserRepo::new(db.clone()));
 
     // ── NapCat API client ─────────────────────────────────────────
     let token = if config.qq_bot.http_token.is_empty() {

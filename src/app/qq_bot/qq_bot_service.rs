@@ -9,7 +9,7 @@ use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
 use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::repository::{
-    AgentTurnRepository, BotAccountRepository, GroupMessageRepository, GroupRepository,
+    AgentTurnRepoT, BotAccountRepoT, GroupMessageRepoT, GroupRepoT,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
 use crate::domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler, QqBotError};
@@ -46,11 +46,11 @@ pub struct QqBotService {
     profile_builder: Option<Arc<ProfileBuilder>>,
 
     // Repositories
-    bot_account_repo: Arc<dyn BotAccountRepository>,
-    group_repo: Arc<dyn GroupRepository>,
-    turn_repo: Arc<dyn AgentTurnRepository>,
+    bot_account_repo: Arc<dyn BotAccountRepoT>,
+    group_repo: Arc<dyn GroupRepoT>,
+    turn_repo: Arc<dyn AgentTurnRepoT>,
     #[allow(dead_code)]
-    message_repo: Arc<dyn GroupMessageRepository>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
 
     // Attention
     attention_store: Arc<dyn AttentionStore>,
@@ -78,10 +78,10 @@ impl QqBotService {
         reply_generator: Arc<ReplyGenerator>,
         segment_dispatcher: Arc<SegmentDispatcher>,
         profile_builder: Option<Arc<ProfileBuilder>>,
-        bot_account_repo: Arc<dyn BotAccountRepository>,
-        group_repo: Arc<dyn GroupRepository>,
-        turn_repo: Arc<dyn AgentTurnRepository>,
-        message_repo: Arc<dyn GroupMessageRepository>,
+        bot_account_repo: Arc<dyn BotAccountRepoT>,
+        group_repo: Arc<dyn GroupRepoT>,
+        turn_repo: Arc<dyn AgentTurnRepoT>,
+        message_repo: Arc<dyn GroupMessageRepoT>,
         attention_store: Arc<dyn AttentionStore>,
         persona: BotPersona,
         emotional_service: Arc<EmotionalStateService>,

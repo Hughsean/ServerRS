@@ -18,7 +18,7 @@ use crate::app::storage::object_service::ObjectService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::domain::auth::token_service::TokenServiceT;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::risk::risk_repository::RiskRepoT;
 
 #[derive(Clone, FromRef)]

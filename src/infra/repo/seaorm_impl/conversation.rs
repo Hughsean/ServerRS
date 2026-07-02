@@ -8,7 +8,7 @@ use crate::domain::conversation::conversation::{Conversation, NewConversation};
 use crate::domain::conversation::conversation_message::{
     ConversationMessage, NewConversationMessage,
 };
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::{conversation_messages, conversations};

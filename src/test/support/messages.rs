@@ -5,7 +5,7 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
 use crate::domain::llm::ChatMessage;
-use crate::infra::db::entities::conversation_messages;
+use crate::infra::repo::entities::conversation_messages;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 

@@ -7,9 +7,9 @@ use crate::domain::llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::message::{MessageSegment, NormalizedMessage};
-use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
+use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::repository::{
-    ExternalUserRepository, GroupMemory, GroupMemoryRepository, GroupMessageRepository,
+    ExternalUserRepoT, GroupMemory, GroupMemoryRepoT, GroupMessageRepoT,
 };
 use crate::domain::qq_bot::user_profile::UserProfile;
 use crate::domain::user::user::NewUser;
@@ -46,10 +46,10 @@ impl Default for ProfileBuilderConfig {
 /// 简化版本，仅聚焦轻量统计和群聊级画像。
 pub struct ProfileBuilder {
     user_repo: Arc<dyn UserRepoT>,
-    external_user_repo: Arc<dyn ExternalUserRepository>,
-    user_profile_repo: Arc<dyn QqUserProfileRepository>,
-    group_memory_repo: Arc<dyn GroupMemoryRepository>,
-    message_repo: Arc<dyn GroupMessageRepository>,
+    external_user_repo: Arc<dyn ExternalUserRepoT>,
+    user_profile_repo: Arc<dyn QqUserProfileRepoT>,
+    group_memory_repo: Arc<dyn GroupMemoryRepoT>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
     llm_provider: Arc<dyn LlmProvider>,
     config: ProfileBuilderConfig,
 }
@@ -58,10 +58,10 @@ impl ProfileBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         user_repo: Arc<dyn UserRepoT>,
-        external_user_repo: Arc<dyn ExternalUserRepository>,
-        user_profile_repo: Arc<dyn QqUserProfileRepository>,
-        group_memory_repo: Arc<dyn GroupMemoryRepository>,
-        message_repo: Arc<dyn GroupMessageRepository>,
+        external_user_repo: Arc<dyn ExternalUserRepoT>,
+        user_profile_repo: Arc<dyn QqUserProfileRepoT>,
+        group_memory_repo: Arc<dyn GroupMemoryRepoT>,
+        message_repo: Arc<dyn GroupMessageRepoT>,
         llm_provider: Arc<dyn LlmProvider>,
         config: ProfileBuilderConfig,
     ) -> Self {
@@ -289,9 +289,9 @@ impl ProfileBuilder {
 
 /// 用于 tokio::spawn 的轻量克隆
 struct CloneInner {
-    user_profile_repo: Arc<dyn QqUserProfileRepository>,
-    message_repo: Arc<dyn GroupMessageRepository>,
-    group_memory_repo: Arc<dyn GroupMemoryRepository>,
+    user_profile_repo: Arc<dyn QqUserProfileRepoT>,
+    message_repo: Arc<dyn GroupMessageRepoT>,
+    group_memory_repo: Arc<dyn GroupMemoryRepoT>,
     llm_provider: Arc<dyn LlmProvider>,
 }
 

@@ -7,9 +7,9 @@ pub mod message;
 pub mod persona;
 pub mod ports;
 pub mod proactive;
-pub mod qq_profile_repository;
+pub mod qq_profile_repo;
 pub mod relationship;
-pub mod relationship_repository;
+pub mod relationship_repo;
 pub mod reply;
 pub mod repository;
 pub mod topic_state;
@@ -27,14 +27,14 @@ pub use message::{MessageDirection, MessageSegment, NormalizedMessage, ProcessSt
 pub use persona::{BotPersona, EmojiHabits, ToneProfile};
 pub use ports::{AttentionStore, GroupMessageGateway, GroupMessageHandler};
 pub use proactive::{ProactiveAction, ProactiveIntent};
-pub use qq_profile_repository::QqUserProfileRepository;
+pub use qq_profile_repo::QqUserProfileRepoT;
 pub use relationship::{RapportLevel, RelationshipState};
-pub use relationship_repository::RelationshipRepository;
+pub use relationship_repo::RelationshipRepoT;
 pub use reply::{BotReply, EmotionChange, RelationshipHints, ReplySegment, TimingHint};
 pub use repository::{
-    AgentTurnRepository, BotAccountRepository, ExternalUserRepository, GroupMemberRepository,
-    GroupMemory, GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummary,
-    GroupSummaryRepository, OutboxEntry, OutboxRepository, OutboxStatus,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
+    GroupMemory, GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary,
+    GroupSummaryRepoT, OutboxEntry, OutboxRepoT, OutboxStatus,
 };
 pub use topic_state::{TopicInfo, TopicState};
 pub use turn::{AgentTurn, TriggerType, TurnStatus};

@@ -4,16 +4,16 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, Value,
 };
 
-use crate::domain::qq_bot::repository::{GroupSummary, GroupSummaryRepository};
+use crate::domain::qq_bot::repository::{GroupSummary, GroupSummaryRepoT};
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_group_summaries;
+use crate::infra::repo::entities::qq_group_summaries;
 
-pub struct SeaOrmGroupSummaryRepository {
+pub struct GroupSummaryRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmGroupSummaryRepository {
+impl GroupSummaryRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -39,7 +39,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl GroupSummaryRepository for SeaOrmGroupSummaryRepository {
+impl GroupSummaryRepoT for GroupSummaryRepo {
     async fn find_active_rolling(
         &self,
         qq_group_id: i64,

@@ -2,16 +2,16 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::domain::qq_bot::config::GroupMember;
-use crate::domain::qq_bot::repository::GroupMemberRepository;
+use crate::domain::qq_bot::repository::GroupMemberRepoT;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_group_members;
+use crate::infra::repo::entities::qq_group_members;
 
-pub struct SeaOrmGroupMemberRepository {
+pub struct GroupMemberRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmGroupMemberRepository {
+impl GroupMemberRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -36,7 +36,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl GroupMemberRepository for SeaOrmGroupMemberRepository {
+impl GroupMemberRepoT for GroupMemberRepo {
     async fn find(
         &self,
         qq_group_id: i64,

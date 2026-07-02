@@ -6,7 +6,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{error, info, warn};
 
 use crate::domain::qq_bot::reply::{BotReply, ReplySegment};
-use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
+use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepoT, OutboxStatus};
 use crate::domain::qq_bot::{GroupMessageGateway, QqBotError};
 use crate::domain::tts::{TtsProvider, TtsRequest};
 
@@ -21,7 +21,7 @@ use crate::domain::tts::{TtsProvider, TtsRequest};
 /// - `Record` — Synthesises TTS, writes audio to local file, then sends as CQ:record
 pub struct SegmentDispatcher {
     message_gateway: Option<Arc<dyn GroupMessageGateway>>,
-    outbox_repo: Arc<dyn OutboxRepository>,
+    outbox_repo: Arc<dyn OutboxRepoT>,
     bot_account_id: u64,
     tts_provider: Option<Arc<dyn TtsProvider>>,
     tts_output_dir: PathBuf,
@@ -31,7 +31,7 @@ pub struct SegmentDispatcher {
 impl SegmentDispatcher {
     pub fn new(
         message_gateway: Option<Arc<dyn GroupMessageGateway>>,
-        outbox_repo: Arc<dyn OutboxRepository>,
+        outbox_repo: Arc<dyn OutboxRepoT>,
         bot_account_id: u64,
         tts_provider: Option<Arc<dyn TtsProvider>>,
         tts_output_dir: PathBuf,
@@ -47,7 +47,7 @@ impl SegmentDispatcher {
         }
     }
 
-    pub fn outbox_repo(&self) -> Arc<dyn OutboxRepository> {
+    pub fn outbox_repo(&self) -> Arc<dyn OutboxRepoT> {
         Arc::clone(&self.outbox_repo)
     }
 

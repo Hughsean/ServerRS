@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::domain::auth::refresh_token_revocation_repository::RefreshTokenRevocationRepository;
+use crate::domain::auth::refresh_token_revocation_repo::RefreshTokenRevocationRepoT;
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::shared::error::AppError;
 
@@ -28,7 +28,7 @@ impl InMemoryRefreshTokenRevocationRepository {
 }
 
 #[async_trait]
-impl RefreshTokenRevocationRepository for InMemoryRefreshTokenRevocationRepository {
+impl RefreshTokenRevocationRepoT for InMemoryRefreshTokenRevocationRepository {
     async fn revoke(&self, token_id: String, expires_at: u64) -> Result<(), AppError> {
         self.revoked.write().await.insert(token_id, expires_at);
         Ok(())

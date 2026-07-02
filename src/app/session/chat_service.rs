@@ -11,7 +11,7 @@ use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::vector_index_service::VectorIndexService;
 use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
-use crate::domain::conversation::conversation_repository::ConversationRepoT;
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::ChatMessage;
 use crate::domain::tasks::task_event::{ConversationLifecycleTask, TaskEvent, TurnClosedEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;

@@ -4,7 +4,7 @@ use super::user_profile::UserProfile;
 
 /// QQ 用户画像仓库 - 操作 qq_user_profiles 表
 #[async_trait]
-pub trait QqUserProfileRepository: Send + Sync {
+pub trait QqUserProfileRepoT: Send + Sync {
     /// 查找指定 QQ 用户的画像
     async fn find_by_qq_user_id(
         &self,

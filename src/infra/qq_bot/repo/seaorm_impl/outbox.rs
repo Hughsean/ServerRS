@@ -6,16 +6,16 @@ use sea_orm::{
     QuerySelect, Set, Value,
 };
 
-use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
+use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepoT, OutboxStatus};
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_message_outbox;
+use crate::infra::repo::entities::qq_message_outbox;
 
-pub struct SeaOrmOutboxRepository {
+pub struct OutboxRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmOutboxRepository {
+impl OutboxRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -65,7 +65,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl OutboxRepository for SeaOrmOutboxRepository {
+impl OutboxRepoT for OutboxRepo {
     async fn insert(&self, entry: &OutboxEntry) -> Result<OutboxEntry, AppError> {
         let model = qq_message_outbox::ActiveModel {
             bot_account_id: Set(entry.bot_account_id),

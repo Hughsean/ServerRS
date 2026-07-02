@@ -5,16 +5,16 @@ use sea_orm::{
 };
 
 use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage, ProcessStatus};
-use crate::domain::qq_bot::repository::GroupMessageRepository;
+use crate::domain::qq_bot::repository::GroupMessageRepoT;
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_group_messages;
+use crate::infra::repo::entities::qq_group_messages;
 
-pub struct SeaOrmGroupMessageRepository {
+pub struct GroupMessageRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmGroupMessageRepository {
+impl GroupMessageRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -57,7 +57,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl GroupMessageRepository for SeaOrmGroupMessageRepository {
+impl GroupMessageRepoT for GroupMessageRepo {
     async fn insert(&self, msg: &NormalizedMessage) -> Result<NormalizedMessage, AppError> {
         // Idempotency: check if message already exists by unique key
         let existing = qq_group_messages::Entity::find()

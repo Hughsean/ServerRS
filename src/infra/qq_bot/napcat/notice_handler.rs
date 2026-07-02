@@ -4,22 +4,22 @@ use tracing::{info, warn};
 
 use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::{ExternalUser, GroupMember};
-use crate::domain::qq_bot::repository::{ExternalUserRepository, GroupMemberRepository};
+use crate::domain::qq_bot::repository::{ExternalUserRepoT, GroupMemberRepoT};
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
 use super::listener::GroupNoticeHandler;
 
 /// Handles OneBot group notice events (member join/leave) by syncing to database.
 pub struct NapCatGroupNoticeHandler {
-    member_repo: Arc<dyn GroupMemberRepository>,
-    external_user_repo: Arc<dyn ExternalUserRepository>,
+    member_repo: Arc<dyn GroupMemberRepoT>,
+    external_user_repo: Arc<dyn ExternalUserRepoT>,
     napcat_api: Option<Arc<NapCatApiClient>>,
 }
 
 impl NapCatGroupNoticeHandler {
     pub fn new(
-        member_repo: Arc<dyn GroupMemberRepository>,
-        external_user_repo: Arc<dyn ExternalUserRepository>,
+        member_repo: Arc<dyn GroupMemberRepoT>,
+        external_user_repo: Arc<dyn ExternalUserRepoT>,
         napcat_api: Option<Arc<NapCatApiClient>>,
     ) -> Self {
         Self {

@@ -7,7 +7,7 @@ use crate::shared::error::AppError;
 ///
 /// 管理猫猫与每个群友的关系状态，持久化到数据库。
 #[async_trait]
-pub trait RelationshipRepository: Send + Sync {
+pub trait RelationshipRepoT: Send + Sync {
     /// 查找某群中某用户的关系
     async fn find(
         &self,

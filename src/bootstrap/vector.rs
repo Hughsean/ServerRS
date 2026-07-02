@@ -6,7 +6,7 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_index::VectorIndexRepoT;
 use crate::domain::vector_store::VectorStoreT;
-use crate::infra::db::seaorm_impl::vector_index_repo::VectorIndexRepo;
+use crate::infra::repo::seaorm_impl::vector_index::VectorIndexRepo;
 use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::shared::config::AppConfig;
 

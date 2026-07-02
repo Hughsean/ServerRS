@@ -5,16 +5,16 @@ use sea_orm::{
     QuerySelect, Set, Value,
 };
 
-use crate::domain::qq_bot::repository::{GroupMemory, GroupMemoryRepository};
+use crate::domain::qq_bot::repository::{GroupMemory, GroupMemoryRepoT};
 use crate::shared::error::AppError;
 
-use crate::infra::db::entities::qq_group_memories;
+use crate::infra::repo::entities::qq_group_memories;
 
-pub struct SeaOrmGroupMemoryRepository {
+pub struct GroupMemoryRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmGroupMemoryRepository {
+impl GroupMemoryRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -41,7 +41,7 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 }
 
 #[async_trait]
-impl GroupMemoryRepository for SeaOrmGroupMemoryRepository {
+impl GroupMemoryRepoT for GroupMemoryRepo {
     async fn find_active_by_group(
         &self,
         qq_group_id: i64,
