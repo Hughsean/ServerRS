@@ -97,6 +97,7 @@ graph::memory_provider   MemoryService 和 MemoryExtractor
 graph::summary_provider  SummaryService 和 SummaryRefreshHandler
 graph::agent_provider    Fresh Retrieval、Context Routing、Agent tools、AgentRuntime
 graph::domain_provider   领域服务和对象存储服务
+graph::integration_provider QQ Bot、Web Ingestion、Fresh Context 启动和后台任务注册
 ```
 
 认证图 `AuthGraph` 由 `runtime.rs` 构造一次，同时供 refresh token 清理任务和 `ServiceGraph::build` 使用；不要在服务图内部再次调用 `build_auth`。
