@@ -18,22 +18,22 @@ use crate::domain::user::user_context_control::UserContextControlRepoT;
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::domain::user::user_repository::UserRepoT;
-use crate::infra::db::imp::agent_repo::AgentEventRepo;
-use crate::infra::db::imp::community_repo::CommunityRepo;
-use crate::infra::db::imp::conversation_repo::ConversationRepo;
-use crate::infra::db::imp::conversation_summary_repo::ConversationSummaryRepo;
-use crate::infra::db::imp::depression_repo::DepressionRepo;
-use crate::infra::db::imp::diary_repo::DiaryRepo;
-use crate::infra::db::imp::memory_repo::MemoryRepo;
-use crate::infra::db::imp::music_repo::MusicRepo;
-use crate::infra::db::imp::psychology_repo::PsychologyRepo;
-use crate::infra::db::imp::rag_repo::RAGRepo;
-use crate::infra::db::imp::risk_repo::RiskRepo;
-use crate::infra::db::imp::stored_object_repo::StoredObjectRepo;
-use crate::infra::db::imp::user_context_control_repo::UserContextControlRepo;
-use crate::infra::db::imp::user_context_version_repo::UserContextVersionRepo;
-use crate::infra::db::imp::user_profile_repo::UserProfileRepo;
-use crate::infra::db::imp::user_repo::UserRepo;
+use crate::infra::db::seaorm_impl::agent_repo::AgentEventRepo;
+use crate::infra::db::seaorm_impl::community_repo::CommunityRepo;
+use crate::infra::db::seaorm_impl::conversation_repo::ConversationRepo;
+use crate::infra::db::seaorm_impl::conversation_summary_repo::ConversationSummaryRepo;
+use crate::infra::db::seaorm_impl::depression_repo::DepressionRepo;
+use crate::infra::db::seaorm_impl::diary_repo::DiaryRepo;
+use crate::infra::db::seaorm_impl::memory_repo::MemoryRepo;
+use crate::infra::db::seaorm_impl::music_repo::MusicRepo;
+use crate::infra::db::seaorm_impl::psychology_repo::PsychologyRepo;
+use crate::infra::db::seaorm_impl::rag_repo::RAGRepo;
+use crate::infra::db::seaorm_impl::risk_repo::RiskRepo;
+use crate::infra::db::seaorm_impl::stored_object_repo::StoredObjectRepo;
+use crate::infra::db::seaorm_impl::user_context_control_repo::UserContextControlRepo;
+use crate::infra::db::seaorm_impl::user_context_version_repo::UserContextVersionRepo;
+use crate::infra::db::seaorm_impl::user_profile_repo::UserProfileRepo;
+use crate::infra::db::seaorm_impl::user_repo::UserRepo;
 
 pub struct RepoGraph {
     pub user_repo: Arc<dyn UserRepoT>,

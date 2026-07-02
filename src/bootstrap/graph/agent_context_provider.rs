@@ -8,7 +8,7 @@ use crate::app::rag::retrieval_service::RetrievalService;
 use crate::app::summary::summary_service::SummaryService;
 use crate::domain::fresh_context::FreshContextRepoT;
 use crate::domain::semantic_classification::SemanticClassifierT;
-use crate::infra::db::imp::fresh_context_repo::FreshContextRepo;
+use crate::infra::db::seaorm_impl::fresh_context_repo::FreshContextRepo;
 use crate::infra::semantic_classification::EmbeddingSemanticClassifier;
 
 use super::BootstrapContext;

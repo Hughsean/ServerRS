@@ -181,7 +181,7 @@ fn fresh_retrieval_service(
     }
 
     let fresh_repo: Arc<dyn FreshContextRepoT> =
-        Arc::new(crate::infra::db::imp::fresh_context_repo::FreshContextRepo::new(db.clone()));
+        Arc::new(crate::infra::db::seaorm_impl::fresh_context_repo::FreshContextRepo::new(db.clone()));
     Some(Arc::new(FreshRetrievalService::new(
         fresh_repo,
         vector_store,
