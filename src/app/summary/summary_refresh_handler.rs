@@ -123,14 +123,15 @@ impl SummaryRefreshHandler {
             .join("\n");
         let previous_context = previous
             .as_ref()
-            .map(|summary| format!("\nPrevious rolling general summary:\n{}\n", summary.content))
+            .map(|summary| format!("\n上一版滚动对话摘要：\n{}\n", summary.content))
             .unwrap_or_default();
         let prompt = summary_prompt(&previous_context, &transcript);
         let request = ChatCompletionRequest {
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: "You write concise rolling conversation summaries.".into(),
+                    content: "你负责撰写简洁、事实准确的中文滚动对话摘要。必须使用中文输出。"
+                        .into(),
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
@@ -236,18 +237,13 @@ fn message_text(content: &str) -> String {
 
 fn summary_prompt(previous_context: &str, transcript: &str) -> String {
     format!(
-        "Summarize this conversation for future continuity. Keep it concise and factual.\n\
-         Include user concerns, stable preferences, current goals, unresolved topics, \
-         and ordinary context useful for continuity.\n\
-         Do NOT include risk labels, crisis signals, safety judgments, self-harm risk \
-         analysis, clinical diagnosis, or personality disorder labels. If sensitive or \
-         safety-related material appears, retain only ordinary conversational context \
-         without classification or safety labels.\n\
-         Merge the previous rolling summary with the new messages when a previous summary \
-         is provided.{previous_context}\nNew messages:\n{transcript}"
+        "请为后续对话连续性生成滚动对话摘要。必须使用中文，保持简洁、事实准确，不要输出英文标题。\n\
+         摘要需要覆盖：用户关注点、稳定偏好、当前目标、未解决话题，以及有助于保持连续性的普通上下文。\n\
+         不要包含风险标签、危机信号、安全判断、自伤风险分析、临床诊断或人格障碍标签。\n\
+         如果出现敏感或安全相关材料，只保留普通对话上下文，不做分类或安全标签。\n\
+         如果提供了上一版滚动摘要，请把上一版摘要与新消息合并为一份更新后的中文摘要。{previous_context}\n新消息：\n{transcript}"
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,9 +251,16 @@ mod tests {
     #[test]
     fn prompt_is_general_only() {
         let prompt = summary_prompt("", "user: hello");
-        assert!(prompt.contains("stable preferences"));
-        assert!(prompt.contains("Do NOT include risk labels"));
-        assert!(!prompt.contains("Include safety"));
+        assert!(prompt.contains("稳定偏好"));
+        assert!(prompt.contains("不要包含风险标签"));
+        assert!(!prompt.contains("安全判断、危机等级"));
+    }
+
+    #[test]
+    fn prompt_requires_chinese_summary() {
+        let prompt = summary_prompt("", "user: 今天有点累");
+        assert!(prompt.contains("必须使用中文"));
+        assert!(!prompt.contains("Summarize this conversation"));
     }
 
     #[test]

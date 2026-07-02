@@ -31,7 +31,7 @@ pub fn init_tracing(configured_level: &str) -> WorkerGuard {
         .with_timer(timer.clone())
         .with_line_number(true)
         .with_thread_ids(true)
-        .compact();
+        .pretty();
 
     let file_layer = fmt::layer()
         .with_writer(file_writer)

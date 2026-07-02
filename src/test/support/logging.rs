@@ -16,6 +16,8 @@ pub fn init() {
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_line_number(true)
         .with_test_writer()
+        .pretty()
         .try_init();
 }
