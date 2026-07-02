@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod fresh_context;
+pub mod graph;
 pub mod infra;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;

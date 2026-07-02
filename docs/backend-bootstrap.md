@@ -1,6 +1,6 @@
 # ServerRS 启动装配结构
 
-> 最后核对: 2026-06-27
+> 最后核对: 2026-07-02
 > 代码基准: 当前工作区 `src/main.rs` + `src/bootstrap/*`
 
 ## 概述
@@ -14,7 +14,7 @@ main.rs
        ├─ 2. RepoGraph       SeaORM 仓库集合
        ├─ 3. TaskContext     后台任务、任务发布器、清理循环
        ├─ 4. VectorContext   Embedding、Qdrant、VectorIndex
-       ├─ 5. ServiceGraph    业务服务、Agent、QQ Bot、Web Ingestion
+       ├─ 5. ServiceGraph    provider-based 业务服务、Agent、QQ Bot、Web Ingestion
        └─ 6. HTTP Serve      Axum Router、CORS、静态 TTS、优雅关闭
 ```
 
@@ -82,11 +82,24 @@ rag_repo, memory_repo, summary_repo
 
 Embedding 请求会把 `[embedding].dimension` 作为 `dimensions` 字段传给 Ollama/OpenAI-compatible `/embeddings`。如果已有 Qdrant collection 维度和配置不一致，启动会失败，需要换 collection 名称或重建 collection。
 
-### 5. `bootstrap::state`
+### 5. `bootstrap::state` + `bootstrap::graph`
 
 代码: `src/bootstrap/state.rs`
 
-职责：构造 `ServiceGraph`，然后转换为 Axum `AppState`。
+职责：构造 `ServiceGraph`，然后转换为 Axum `AppState`。`ServiceGraph::build` 保留服务图的显式编排；具体服务族的构造下沉到 `src/bootstrap/graph/*_provider.rs`，避免单个函数承载所有 `Arc::clone` 和 `Service::new` 细节。
+
+当前 provider：
+
+```text
+graph::risk_provider     风险检测服务和后置审计 handler
+graph::rag_provider      RetrievalService 和 IngestionService
+graph::memory_provider   MemoryService 和 MemoryExtractor
+graph::summary_provider  SummaryService 和 SummaryRefreshHandler
+graph::agent_provider    Fresh Retrieval、Context Routing、Agent tools、AgentRuntime
+graph::domain_provider   领域服务和对象存储服务
+```
+
+认证图 `AuthGraph` 由 `runtime.rs` 构造一次，同时供 refresh token 清理任务和 `ServiceGraph::build` 使用；不要在服务图内部再次调用 `build_auth`。
 
 主要服务：
 

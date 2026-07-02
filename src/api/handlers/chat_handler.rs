@@ -5,16 +5,16 @@ use axum::{
 use validator::Validate;
 
 use crate::api::dto::chat_dto::*;
-use crate::api::state::AppState;
+use crate::api::state::{ChatState, InternalState};
 use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::shared::error::AppError;
 
 /// POST /api/v1/chat/open
 pub async fn chat_open(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ChatOpenResponse>, AppError> {
-    let conv = state.chat.chat.open(auth_user.user_id).await?;
+    let conv = state.chat.open(auth_user.user_id).await?;
     Ok(Json(ChatOpenResponse {
         conversation: ChatConversationInfo {
             id: conv.conversation.id,
@@ -30,14 +30,13 @@ pub async fn chat_open(
 
 /// POST /api/v1/chat/messages
 pub async fn chat_send_message(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(body): Json<ChatMessageRequest>,
 ) -> Result<Json<ChatMessageResponse>, AppError> {
     // 校验请求参数
     body.validate().map_err(AppError::validation)?;
     let result = state
-        .chat
         .chat
         .send_message(auth_user.user_id, body.text, body.emotion, body.location)
         .await?;
@@ -57,7 +56,7 @@ pub async fn chat_send_message(
 
 /// GET /api/v1/chat/history
 pub async fn chat_history(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<ChatHistoryQuery>,
 ) -> Result<Json<ChatHistoryResponse>, AppError> {
@@ -68,7 +67,6 @@ pub async fn chat_history(
         ));
     }
     let Some(conv) = state
-        .chat
         .conv_repo
         .find_single_by_user_id(auth_user.user_id)
         .await?
@@ -80,7 +78,6 @@ pub async fn chat_history(
     };
 
     let messages = state
-        .chat
         .conv_repo
         .find_messages_before(conv.id, query.before_id, limit)
         .await?;
@@ -108,7 +105,7 @@ pub async fn chat_history(
 
 /// GET /api/v1/chat/memories
 pub async fn chat_memories(
-    State(state): State<AppState>,
+    State(state): State<InternalState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Query(query): Query<ChatMemoryQuery>,
 ) -> Result<Json<ChatMemoryResponse>, AppError> {
@@ -140,7 +137,6 @@ pub async fn chat_memories(
     }
 
     let memories = state
-        .internal
         .memory
         .find_by_user_id_filtered(auth_user.user_id, Some(1), &requested_types, limit)
         .await?;
@@ -168,10 +164,10 @@ pub async fn chat_memories(
 /// GET /api/v1/chat/persona
 ///
 pub async fn chat_persona(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ChatPersonaResponse>, AppError> {
-    let persona = state.chat.chat.persona(auth_user.user_id).await?;
+    let persona = state.chat.persona(auth_user.user_id).await?;
     Ok(Json(ChatPersonaResponse {
         has_active_persona: persona.has_active_persona,
         generated_at: persona.generated_at.map(|value| value.to_rfc3339()),
@@ -194,14 +190,13 @@ pub async fn chat_persona(
 /// （防止 IDOR — 用户不能通过猜测 ID 来禁用其他用户的记忆）
 /// 同步删除 Qdrant 索引。
 pub async fn chat_disable_memory(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Path(memory_id): Path<u64>,
 ) -> Result<Json<DisableMemoryResponse>, AppError> {
     // MemoryService::disable verifies ownership (mem.user_id != user_id → 403)
     // and syncs vector index deletion.
     state
-        .chat
         .chat
         .disable_memory(auth_user.user_id, memory_id)
         .await?;
@@ -214,10 +209,10 @@ pub async fn chat_disable_memory(
 /// POST /api/v1/chat/persona/reset
 ///
 pub async fn chat_persona_reset(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<PersonaResetResponse>, AppError> {
-    let result = state.chat.chat.reset_persona(auth_user.user_id).await?;
+    let result = state.chat.reset_persona(auth_user.user_id).await?;
     Ok(Json(PersonaResetResponse {
         reset: result.reset,
     }))
@@ -226,10 +221,10 @@ pub async fn chat_persona_reset(
 /// POST /api/v1/chat/persona/rebuild
 ///
 pub async fn chat_persona_rebuild(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<PersonaRebuildResponse>, AppError> {
-    let result = state.chat.chat.rebuild_persona(auth_user.user_id).await?;
+    let result = state.chat.rebuild_persona(auth_user.user_id).await?;
     Ok(Json(PersonaRebuildResponse {
         snapshot_id: result.snapshot_id,
     }))
@@ -238,10 +233,10 @@ pub async fn chat_persona_rebuild(
 /// POST /api/v1/chat/transcript/clear
 ///
 pub async fn chat_transcript_clear(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<TranscriptClearResponse>, AppError> {
-    let result = state.chat.chat.clear_transcript(auth_user.user_id).await?;
+    let result = state.chat.clear_transcript(auth_user.user_id).await?;
     Ok(Json(TranscriptClearResponse {
         cleared_messages: result.cleared_messages,
         cleared_summaries: result.cleared_summaries,
@@ -254,10 +249,10 @@ pub async fn chat_transcript_clear(
 /// POST /api/v1/chat/forget
 ///
 pub async fn chat_forget(
-    State(state): State<AppState>,
+    State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<ForgetResponse>, AppError> {
-    let result = state.chat.chat.forget(auth_user.user_id).await?;
+    let result = state.chat.forget(auth_user.user_id).await?;
     Ok(Json(ForgetResponse {
         messages_cleared: result.messages_cleared,
         summaries_cleared: result.summaries_cleared,

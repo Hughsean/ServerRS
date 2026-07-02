@@ -4,32 +4,27 @@ use crate::api::{
     AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
     InternalState, MusicState, ObjectState, PsychologyState, SignatureState, UserState,
 };
-use crate::app::agent::agent_context::AgentContextBuilder;
-use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings};
-use crate::app::agent::tool_registry::{AgentToolDeps, build_default_agent_tools};
+use crate::app::agent::agent_runtime::AgentRuntime;
 use crate::app::auth::auth_service::AuthService;
 use crate::app::community::community_service::CommunityService;
-use crate::app::context_routing::ContextRoutingService;
 use crate::app::depression::depression_service::DepressionService;
 use crate::app::diary::diary_service::DiaryService;
-use crate::app::fresh_context::retrieval::FreshRetrievalService;
-use crate::app::memory::memory_extractor::MemoryExtractor;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::music::music_service::MusicService;
 use crate::app::psychology::psychology_service::PsychologyService;
-use crate::app::rag::chunking::ChunkingService;
 use crate::app::rag::ingestion_service::IngestionService;
 use crate::app::rag::retrieval_service::RetrievalService;
-use crate::app::risk::post_conversation_risk_audit_worker::PostConversationRiskAuditWorker;
-use crate::app::risk::risk_detection_service::RiskDetectionService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
-use crate::app::summary::summary_refresh_handler::SummaryRefreshHandler;
-use crate::app::summary::summary_service::SummaryService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
+use crate::bootstrap::auth::AuthGraph;
 use crate::bootstrap::fresh_context;
+use crate::bootstrap::graph::{
+    BootstrapContext, build_agent_services, build_domain_services, build_memory_services,
+    build_rag_services, build_risk_services, build_summary_services,
+};
 use crate::bootstrap::infra::InfraContext;
 use crate::bootstrap::repos::RepoGraph;
 use crate::bootstrap::tasks::TaskContext;
@@ -37,17 +32,7 @@ use crate::bootstrap::vector::VectorContext;
 use crate::bootstrap::web_ingestion;
 use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::conversation::conversation_repository::ConversationRepoT;
-use crate::domain::fresh_context::FreshContextRepoT;
-use crate::domain::llm::LlmProvider;
-use crate::domain::risk::risk_detector::RiskDetector;
 use crate::domain::risk::risk_repository::RiskRepoT;
-use crate::domain::semantic_classification::SemanticClassifierT;
-use crate::domain::storage::ObjectStorage;
-use crate::domain::tasks::task_handler::TaskHandler;
-use crate::infra::db::imp::fresh_context_repo::FreshContextRepo;
-use crate::infra::detector::rule_based_detector::RuleBasedRiskDetector;
-use crate::infra::semantic_classification::EmbeddingSemanticClassifier;
-use crate::infra::storage::local_storage::LocalObjectStorage;
 use crate::shared::config::AppConfig;
 
 #[derive(Clone)]
@@ -81,46 +66,21 @@ impl ServiceGraph {
         repos: &RepoGraph,
         vector: &VectorContext,
         tasks: &mut TaskContext,
+        auth_graph: &AuthGraph,
     ) -> Result<Self, std::io::Error> {
         let user_repo = Arc::clone(&repos.user_repo);
         let profile_repo = Arc::clone(&repos.profile_repo);
-        let context_version_repo = Arc::clone(&repos.context_version_repo);
         let context_control_repo = Arc::clone(&repos.context_control_repo);
         let conv_repo = Arc::clone(&repos.conv_repo);
         let risk_repo = Arc::clone(&repos.risk_repo);
-        let psychology_repo = Arc::clone(&repos.psychology_repo);
-        let depression_repo = Arc::clone(&repos.depression_repo);
-        let diary_repo = Arc::clone(&repos.diary_repo);
-        let music_repo = Arc::clone(&repos.music_repo);
-        let community_repo = Arc::clone(&repos.community_repo);
-        let agent_event_repo = Arc::clone(&repos.agent_event_repo);
-        let stored_object_repo = Arc::clone(&repos.stored_object_repo);
         let rag_repo = Arc::clone(&repos.rag_repo);
-        let memory_repo = Arc::clone(&repos.memory_repo);
-        let summary_repo = Arc::clone(&repos.summary_repo);
-
-        // ── 认证基础设施 ──
-        let auth_graph = crate::bootstrap::auth::build_auth(
-            &infra.db,
-            &config.jwt,
-            &config.auth,
-            &user_repo,
-            &tasks.task_publisher,
-        );
-
-        // ── 风险检测 ──
-        let risk_detector: Arc<dyn RiskDetector> = Arc::new(RuleBasedRiskDetector::new());
-
-        let risk_detection_service = Arc::new(RiskDetectionService::new(
-            Arc::clone(&risk_repo),
-            Arc::clone(&tasks.task_publisher),
-            Arc::clone(&risk_detector),
-        ));
-        let risk_audit_worker: Arc<dyn TaskHandler> =
-            Arc::new(PostConversationRiskAuditWorker::new(
-                Arc::clone(&conv_repo),
-                Arc::clone(&risk_detection_service),
-            ));
+        let ctx = BootstrapContext {
+            config,
+            infra,
+            repos,
+            vector,
+        };
+        let risk = build_risk_services(&ctx, Arc::clone(&tasks.task_publisher));
 
         // ── 服务 ──
         let auth = Arc::clone(&auth_graph.auth_service);
@@ -133,160 +93,28 @@ impl ServiceGraph {
             Arc::clone(&risk_repo),
         ));
 
-        // ── RAG 与记忆服务 ──
-        let mut retrieval_svc = RetrievalService::new(
-            Arc::clone(&rag_repo),
-            Some(Arc::clone(&vector.embedding_provider)),
-        )
-        .with_hybrid_weights(
-            config.rag.hybrid_vector_weight,
-            config.rag.hybrid_keyword_weight,
-        );
-        if let Some(ref vs) = vector.vector_store {
-            retrieval_svc = retrieval_svc
-                .with_vector_store(Arc::clone(vs), config.qdrant.rag_collection.clone());
-        }
-        if config.web_ingestion.enabled {
-            retrieval_svc =
-                retrieval_svc.with_web_collection(config.web_ingestion.qdrant_collection.clone());
-        }
-        let retrieval: Arc<RetrievalService> = Arc::new(retrieval_svc);
+        // ── RAG、记忆、摘要服务 ──
+        let rag = build_rag_services(&ctx);
+        let retrieval = Arc::clone(&rag.retrieval);
+        let ingestion = Arc::clone(&rag.ingestion);
 
-        let chunking = ChunkingService::new();
-        let mut ingestion_svc = IngestionService::new(
-            Arc::clone(&rag_repo),
-            chunking,
-            Some(Arc::clone(&vector.embedding_provider)),
-        )
-        .with_chunking_config(config.rag.chunk_size, config.rag.chunk_overlap);
-        if let Some(ref vi) = vector.vector_index {
-            ingestion_svc = ingestion_svc.with_vector_index(Arc::clone(vi));
-        }
-        let ingestion: Arc<IngestionService> = Arc::new(ingestion_svc);
+        let memory = build_memory_services(&ctx);
+        let memory_svc = Arc::clone(&memory.memory);
 
-        let memory_extractor: Arc<MemoryExtractor> =
-            Arc::new(MemoryExtractor::new(Arc::clone(&infra.ollama_provider)));
-        let mut memory_svc = MemoryService::new(Arc::clone(&memory_repo), memory_extractor)
-            .with_personalization_profile_repo(Arc::clone(&profile_repo))
-            .with_context_version_repo(Arc::clone(&context_version_repo));
-        if let Some(ref vs) = vector.vector_store {
-            memory_svc = memory_svc.with_vector_search(
-                Arc::clone(vs),
-                Arc::clone(&vector.embedding_provider),
-                config.qdrant.memory_collection.clone(),
-            );
-        }
-        if let Some(ref vi) = vector.vector_index {
-            memory_svc = memory_svc.with_vector_index(Arc::clone(vi));
-        }
-        let memory_svc: Arc<MemoryService> = Arc::new(memory_svc);
-
-        // ── SummaryService ──
-        let summary_service: Arc<SummaryService> = Arc::new(SummaryService::new(
-            Arc::clone(&summary_repo),
-            vector.vector_index.clone(),
-        ));
-        let summary_refresh_handler: Arc<dyn TaskHandler> = Arc::new(SummaryRefreshHandler::new(
-            config.agent.enabled && config.agent.summary_enabled && config.agent.summary_async,
-            Arc::clone(&infra.ollama_provider) as Arc<dyn LlmProvider>,
-            Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
-            Arc::clone(&summary_service),
-            Arc::clone(&context_version_repo),
-        ));
+        let summary = build_summary_services(&ctx);
 
         // ── 注册后台任务 ──
-        tasks.start_service_handlers(risk_audit_worker, summary_refresh_handler);
+        tasks.start_service_handlers(risk.risk_audit_worker, summary.summary_refresh_handler);
 
         // ── 代理运行时 ──
-        let fresh_retrieval: Option<Arc<FreshRetrievalService>> = if config.fresh_context.enabled {
-            vector.vector_store.as_ref().map(|vector_store| {
-                let fresh_repo: Arc<dyn FreshContextRepoT> =
-                    Arc::new(FreshContextRepo::new(infra.db.clone()));
-                Arc::new(FreshRetrievalService::new(
-                    fresh_repo,
-                    Arc::clone(vector_store),
-                    Arc::clone(&vector.embedding_provider),
-                    config.fresh_context.clone(),
-                ))
-            })
-        } else {
-            None
-        };
-
-        let context_routing_service: Option<Arc<ContextRoutingService>> =
-            if config.context_routing.enabled {
-                let classifier: Arc<dyn SemanticClassifierT> = Arc::new(
-                    EmbeddingSemanticClassifier::from_config(
-                        &config.semantic_classification,
-                        Arc::clone(&vector.embedding_provider),
-                    )
-                    .await
-                    .map_err(|error| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("上下文路由分类器初始化失败: {error}"),
-                        )
-                    })?,
-                );
-                Some(Arc::new(ContextRoutingService::new(
-                    classifier,
-                    config.context_routing.clone(),
-                )))
-            } else {
-                None
-            };
-
-        let context_builder: Arc<AgentContextBuilder> = Arc::new(
-            AgentContextBuilder::new(
-                Arc::clone(&memory_svc),
-                Arc::clone(&retrieval),
-                Arc::clone(&summary_service),
-                fresh_retrieval,
-                Arc::clone(&conv_repo),
-                Arc::clone(&profile_repo),
-            )
-            .with_context_routing_service(context_routing_service),
-        );
-
-        let tool_deps = AgentToolDeps {
-            retrieval: Arc::clone(&retrieval),
-            memory: Arc::clone(&memory_svc),
-            diary_repo: Arc::clone(&diary_repo),
-            depression_repo: Arc::clone(&depression_repo),
-            music_repo: Arc::clone(&music_repo),
-            community_repo: Arc::clone(&community_repo),
-            plugins: config.plugins.clone(),
-        };
-
-        let agent_tools = build_default_agent_tools(&tool_deps, config.agent.enabled)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-
-        let agent_settings = AgentRuntimeSettings {
-            agent_enabled: config.agent.enabled,
-            memory_enabled: config.agent.memory_enabled,
-            rag_enabled: config.agent.rag_enabled,
-            summary_enabled: config.agent.summary_enabled,
-            max_context_messages: config.agent.max_context_messages as usize,
-            max_memory_items: config.agent.max_memory_items,
-            max_rag_chunks: config.agent.max_rag_chunks as u64,
-            memory_extraction_async: config.agent.memory_extraction_async,
-            max_tool_depth: config.llm.max_tool_depth as usize,
-            temperature: config.llm.temperature,
-            top_p: config.llm.top_p,
-            enable_reasoning: config.llm.enable_reasoning,
-        };
-
-        let agent_runtime: Arc<AgentRuntime> = Arc::new(AgentRuntime::new(
-            Arc::clone(&infra.ollama_provider),
+        let agent = build_agent_services(
+            &ctx,
+            Arc::clone(&retrieval),
             Arc::clone(&memory_svc),
-            Arc::clone(&agent_event_repo),
-            Arc::clone(&conv_repo),
-            Arc::clone(&profile_repo),
-            Arc::clone(&context_version_repo),
-            context_builder,
-            agent_tools,
-            agent_settings,
-        ));
+            Arc::clone(&summary.summary),
+        )
+        .await?;
+        let agent_runtime = Arc::clone(&agent.runtime);
 
         // ── ChatService ──
         let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
@@ -299,25 +127,7 @@ impl ServiceGraph {
         ));
 
         // ── 领域服务 ──
-        let psychology: Arc<PsychologyService> =
-            Arc::new(PsychologyService::new(Arc::clone(&psychology_repo)));
-        let depression: Arc<DepressionService> =
-            Arc::new(DepressionService::new(Arc::clone(&depression_repo)));
-        let diaries: Arc<DiaryService> = Arc::new(DiaryService::new(
-            Arc::clone(&diary_repo),
-            Some(Arc::clone(&infra.ollama_provider)),
-        ));
-        let local_storage: Arc<dyn ObjectStorage> = Arc::new(LocalObjectStorage::new(
-            std::path::PathBuf::from(&config.storage.base_path),
-        ));
-        let music: Arc<MusicService> = Arc::new(MusicService::new(Arc::clone(&music_repo)));
-        let community: Arc<CommunityService> =
-            Arc::new(CommunityService::new(Arc::clone(&community_repo)));
-        let objects: Arc<ObjectService> = Arc::new(ObjectService::new(
-            Arc::clone(&local_storage),
-            Arc::clone(&stored_object_repo),
-            config.storage.clone(),
-        ));
+        let domain = build_domain_services(&ctx);
 
         // ── QQ Bot ──
         #[cfg(feature = "qq_bot")]
@@ -438,12 +248,12 @@ impl ServiceGraph {
             auth,
             user,
             query,
-            objects,
-            psychology,
-            depression,
-            diaries,
-            music,
-            community,
+            objects: domain.objects,
+            psychology: domain.psychology,
+            depression: domain.depression,
+            diaries: domain.diaries,
+            music: domain.music,
+            community: domain.community,
             retrieval,
             ingestion,
             memory: memory_svc,

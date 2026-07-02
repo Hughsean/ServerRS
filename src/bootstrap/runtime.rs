@@ -42,7 +42,8 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let vector = VectorContext::new(&config, &infra, &repos).await?;
     vector.ensure_collections().await?;
     // 阶段 5: 业务服务
-    let services = ServiceGraph::build(&config, &infra, &repos, &vector, &mut tasks).await?;
+    let services =
+        ServiceGraph::build(&config, &infra, &repos, &vector, &mut tasks, &auth_graph).await?;
     // 阶段 6: HTTP 服务
     serve(&config, services, tasks, infra).await
 }
