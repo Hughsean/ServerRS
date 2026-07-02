@@ -215,3 +215,27 @@ AgentRuntime, KnowledgeReviewService
 3. 在 `main.rs` 重新堆业务构造代码。
 4. 让 app 层直接依赖 SeaORM 实体。
 5. 绕过 `bootstrap::runtime` 启动后台 worker。
+
+## 架构防回退检查
+
+代码库根目录的 `build.rs` 会在 `cargo check` / `cargo test` / `cargo build` 阶段运行 `build_support::architecture_guard`。这是轻量文本扫描，不做 AST 分析，目标是强制当前分层方向：
+
+```text
+shared   -> 只能依赖 shared/标准库/第三方库
+domain   -> shared
+app      -> domain/shared/app
+infra    -> domain/shared/infra
+api      -> api/app/domain/shared
+bootstrap -> api/app/domain/infra/shared/bootstrap
+```
+
+额外禁止：
+- `api` 依赖 `bootstrap` 或 `infra`。
+- handler 直接提取 `State<AppState>`。
+- `AppState` 包装 `ServiceGraph`。
+- `bootstrap/state.rs` 直接 `Arc::new` / `Service::new` 构造业务服务。
+- `bootstrap/graph` 子 provider 对外 `pub mod` 或 `pub use`。
+- `api/app/domain/shared` 引入数据库基础设施类型。
+- `OnceLock` / `lazy_static` 风格的全局 service container。
+
+`#[cfg(test)]` 测试模块会被忽略，允许 app 层测试使用 infra mock。`qq_bot` 相关源码在默认 feature 下不扫描；启用 `qq_bot` feature 时会参与检查。
