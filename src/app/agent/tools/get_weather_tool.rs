@@ -1,27 +1,21 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
+use crate::domain::http::{HttpClientT, HttpGetRequest};
 use crate::shared::config::WeatherPluginConfig;
 use crate::shared::error::AppError;
 
 pub struct GetWeatherTool {
     config: WeatherPluginConfig,
-    http_client: reqwest::Client,
+    http_client: Arc<dyn HttpClientT>,
 }
 
 impl GetWeatherTool {
-    pub fn new(config: WeatherPluginConfig) -> Self {
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
+    pub fn new(config: WeatherPluginConfig, http_client: Arc<dyn HttpClientT>) -> Self {
         Self {
             config,
             http_client,
@@ -291,9 +285,7 @@ impl GetWeatherTool {
     ) -> Result<Value, CityLookupError> {
         let response = self
             .http_client
-            .get(url)
-            .timeout(Duration::from_secs(10))
-            .send()
+            .get(HttpGetRequest::new(url).timeout_secs(10))
             .await
             .map_err(|e| {
                 tracing::warn!(
@@ -310,37 +302,23 @@ impl GetWeatherTool {
                 }
             })?;
 
-        let status = response.status();
-
-        let body = response.text().await.map_err(|e| {
-            tracing::warn!(
-                tool = "get_weather",
-                endpoint = "city_lookup",
-                location,
-                status = status.as_u16(),
-                error = %e,
-                "city lookup read body failed"
-            );
-            CityLookupError {
-                body: String::new(),
-                user_message: format!("地点查询失败，天气服务返回了无法解析的数据。"),
-            }
-        })?;
+        let status = response.status;
+        let body = response.text_lossy();
 
         let body_preview = body_preview(&body, 300);
 
-        if !status.is_success() {
+        if !response.is_success() {
             tracing::warn!(
                 tool = "get_weather",
                 endpoint = "city_lookup",
                 location,
-                status = status.as_u16(),
+                status,
                 body_preview,
                 "city lookup returned non-2xx"
             );
             return Err(CityLookupError {
                 body,
-                user_message: format!("地点查询失败，天气服务返回 HTTP {}。", status.as_u16()),
+                user_message: format!("地点查询失败，天气服务返回 HTTP {status}。"),
             });
         }
 
@@ -351,7 +329,7 @@ impl GetWeatherTool {
                     tool = "get_weather",
                     endpoint = "city_lookup",
                     location,
-                    status = status.as_u16(),
+                    status,
                     body_preview,
                     error = %e,
                     "city lookup JSON parse failed"
@@ -370,7 +348,7 @@ impl GetWeatherTool {
                 tool = "get_weather",
                 endpoint = "city_lookup",
                 location,
-                status = status.as_u16(),
+                status,
                 qweather_code = code,
                 body_preview,
                 "city lookup returned non-200 QWeather code"
@@ -427,7 +405,7 @@ impl GetWeatherTool {
             tool = "get_weather",
             endpoint = "city_lookup",
             location,
-            status = status.as_u16(),
+            status,
             qweather_code = code,
             "city lookup succeeded"
         );
@@ -485,9 +463,7 @@ impl GetWeatherTool {
     ) -> Result<Value, WeatherNowError> {
         let response = self
             .http_client
-            .get(url)
-            .timeout(Duration::from_secs(10))
-            .send()
+            .get(HttpGetRequest::new(url).timeout_secs(10))
             .await
             .map_err(|e| {
                 tracing::warn!(
@@ -504,37 +480,23 @@ impl GetWeatherTool {
                 }
             })?;
 
-        let status = response.status();
-
-        let body = response.text().await.map_err(|e| {
-            tracing::warn!(
-                tool = "get_weather",
-                endpoint = "weather_now",
-                location_id,
-                status = status.as_u16(),
-                error = %e,
-                "weather now read body failed"
-            );
-            WeatherNowError {
-                body: String::new(),
-                user_message: "实时天气查询失败，天气服务返回了无法解析的数据。".to_string(),
-            }
-        })?;
+        let status = response.status;
+        let body = response.text_lossy();
 
         let body_preview = body_preview(&body, 300);
 
-        if !status.is_success() {
+        if !response.is_success() {
             tracing::warn!(
                 tool = "get_weather",
                 endpoint = "weather_now",
                 location_id,
-                status = status.as_u16(),
+                status,
                 body_preview,
                 "weather now returned non-2xx"
             );
             return Err(WeatherNowError {
                 body,
-                user_message: format!("实时天气查询失败，天气服务返回 HTTP {}。", status.as_u16()),
+                user_message: format!("实时天气查询失败，天气服务返回 HTTP {status}。"),
             });
         }
 
@@ -545,7 +507,7 @@ impl GetWeatherTool {
                     tool = "get_weather",
                     endpoint = "weather_now",
                     location_id,
-                    status = status.as_u16(),
+                    status,
                     body_preview,
                     error = %e,
                     "weather now JSON parse failed"
@@ -564,7 +526,7 @@ impl GetWeatherTool {
                 tool = "get_weather",
                 endpoint = "weather_now",
                 location_id,
-                status = status.as_u16(),
+                status,
                 qweather_code = code,
                 body_preview,
                 "weather now returned non-200 QWeather code"
@@ -579,7 +541,7 @@ impl GetWeatherTool {
             tool = "get_weather",
             endpoint = "weather_now",
             location_id,
-            status = status.as_u16(),
+            status,
             qweather_code = code,
             "weather now succeeded"
         );
@@ -746,6 +708,7 @@ pub fn build_weather_prompt(location_name: &str, now: &Value, lang: &str) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::http::{HttpClientError, HttpGetRequest, HttpResponse};
 
     // ── API key / location tests ───────────────────────────────────────
 
@@ -756,7 +719,7 @@ mod tests {
             default_location: String::new(),
             ..WeatherPluginConfig::default()
         };
-        let tool = GetWeatherTool::new(config);
+        let tool = GetWeatherTool::new(config, test_http_client());
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -772,7 +735,7 @@ mod tests {
             default_location: String::new(),
             ..WeatherPluginConfig::default()
         };
-        let tool = GetWeatherTool::new(config);
+        let tool = GetWeatherTool::new(config, test_http_client());
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -1089,6 +1052,19 @@ mod tests {
                     }
                 }),
             }],
+        }
+    }
+
+    fn test_http_client() -> Arc<dyn HttpClientT> {
+        Arc::new(StubHttpClient)
+    }
+
+    struct StubHttpClient;
+
+    #[async_trait]
+    impl HttpClientT for StubHttpClient {
+        async fn get(&self, _request: HttpGetRequest) -> Result<HttpResponse, HttpClientError> {
+            Err(HttpClientError::new("unexpected HTTP call in unit test"))
         }
     }
 }

@@ -847,8 +847,8 @@ fn validate_required_url(value: &str, field_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_url(template: &str, field_name: &str) -> Result<reqwest::Url, String> {
-    reqwest::Url::parse(template)
+fn parse_url(template: &str, field_name: &str) -> Result<url::Url, String> {
+    url::Url::parse(template)
         .map_err(|error| format!("{field_name} must be a valid absolute URL: {error}"))
 }
 

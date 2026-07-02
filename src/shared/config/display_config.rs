@@ -185,7 +185,7 @@ fn redact_url_credentials(raw_url: &str) -> String {
         return "<empty>".into();
     }
 
-    let Ok(mut url) = reqwest::Url::parse(raw_url) else {
+    let Ok(mut url) = url::Url::parse(raw_url) else {
         return "<invalid-url>".into();
     };
 

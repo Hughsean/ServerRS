@@ -197,6 +197,10 @@ const BUSINESS_LAYER_FORBIDDEN_EXTERNAL_CRATES: &[InfraOnlyExternalCrate] = &[
         path: "tokio_tungstenite",
         reason: "websocket infrastructure",
     },
+    InfraOnlyExternalCrate {
+        path: "reqwest",
+        reason: "http client infrastructure",
+    },
 ];
 
 impl fmt::Display for ArchitectureReport {
@@ -486,12 +490,19 @@ fn forbidden_external_import_reason(line: &str) -> Option<&'static str> {
 
 fn references_external_crate(line: &str, crate_path: &str) -> bool {
     let compact = line.split_whitespace().collect::<String>();
-    let trimmed = line.trim_start();
+    let needle = format!("{crate_path}::");
 
-    compact.contains(&format!("use{crate_path}::"))
-        || compact.contains(&format!("{{{crate_path}::"))
-        || compact.contains(&format!(",{crate_path}::"))
-        || trimmed.starts_with(&format!("{crate_path}::"))
+    if compact.contains(&format!("use{needle}")) {
+        return true;
+    }
+
+    compact.match_indices(&needle).any(|(index, _)| {
+        index == 0
+            || compact[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !previous.is_ascii_alphanumeric() && previous != '_')
+    })
 }
 
 fn check_api_state_boundaries(

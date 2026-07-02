@@ -19,6 +19,7 @@ use crate::app::rag::retrieval_service::RetrievalService;
 use crate::domain::community::CommunityRepoT;
 use crate::domain::depression::DepressionRepoT;
 use crate::domain::diary::DiaryRepoT;
+use crate::domain::http::HttpClientT;
 use crate::domain::music::MusicRepoT;
 use crate::shared::config::PluginsConfig;
 use crate::shared::error::AppError;
@@ -34,6 +35,9 @@ pub struct AgentToolDeps {
     pub music_repo: Arc<dyn MusicRepoT>,
     pub community_repo: Arc<dyn CommunityRepoT>,
     pub plugins: PluginsConfig,
+    pub fetch_web_content_http_client: Arc<dyn HttpClientT>,
+    pub baidu_baike_http_client: Arc<dyn HttpClientT>,
+    pub weather_http_client: Arc<dyn HttpClientT>,
 }
 
 // ── Agent Tool Registration ────────────────────────────────────────────────
@@ -99,6 +103,7 @@ pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
             factory: |deps| {
                 Arc::new(FetchWebContentTool::new(
                     deps.plugins.fetch_web_content.clone(),
+                    Arc::clone(&deps.fetch_web_content_http_client),
                 ))
             },
         },
@@ -106,13 +111,23 @@ pub fn default_agent_tool_registrations() -> Vec<AgentToolRegistration> {
             key: "get_baidu_baike",
             order: 100,
             enabled_by_default: true,
-            factory: |deps| Arc::new(BaiduBaikeTool::new(deps.plugins.baidu_baike.clone())),
+            factory: |deps| {
+                Arc::new(BaiduBaikeTool::new(
+                    deps.plugins.baidu_baike.clone(),
+                    Arc::clone(&deps.baidu_baike_http_client),
+                ))
+            },
         },
         AgentToolRegistration {
             key: "get_weather",
             order: 120,
             enabled_by_default: true,
-            factory: |deps| Arc::new(GetWeatherTool::new(deps.plugins.weather.clone())),
+            factory: |deps| {
+                Arc::new(GetWeatherTool::new(
+                    deps.plugins.weather.clone(),
+                    Arc::clone(&deps.weather_http_client),
+                ))
+            },
         },
     ]
 }

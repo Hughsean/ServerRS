@@ -1,33 +1,21 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
+use crate::domain::http::{HttpClientT, HttpGetRequest};
 use crate::shared::config::BaiduBaikePluginConfig;
 use crate::shared::error::AppError;
 
 pub struct BaiduBaikeTool {
     config: BaiduBaikePluginConfig,
-    http_client: reqwest::Client,
+    http_client: Arc<dyn HttpClientT>,
 }
 
 impl BaiduBaikeTool {
-    pub fn new(config: BaiduBaikePluginConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .no_proxy();
-        if !config.proxy_url.trim().is_empty() {
-            builder = builder.proxy(
-                reqwest::Proxy::all(config.proxy_url.trim())
-                    .expect("invalid baidu_baike proxy URL"),
-            );
-        }
-        let http_client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-
+    pub fn new(config: BaiduBaikePluginConfig, http_client: Arc<dyn HttpClientT>) -> Self {
         Self {
             config,
             http_client,
@@ -83,18 +71,15 @@ impl AgentTool for BaiduBaikeTool {
         let url = format!("https://wapbaike.baidu.com/item/{encoded}");
 
         // Fetch page
-        let response = match self
-            .http_client
-            .get(&url)
+        let request = HttpGetRequest::new(url.clone())
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
             )
             .header("Accept", "text/html,application/xhtml+xml")
-            .header("Accept-Language", "zh-CN,zh;q=0.9")
-            .send()
-            .await
-        {
+            .header("Accept-Language", "zh-CN,zh;q=0.9");
+
+        let response = match self.http_client.get(request).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(tool = "get_baidu_baike", error = %e, "baike request failed");
@@ -102,23 +87,15 @@ impl AgentTool for BaiduBaikeTool {
             }
         };
 
-        let status = response.status();
-
-        if status.as_u16() == 404 {
+        if response.status == 404 {
             return Ok(format!("未找到关于「{keyword}」的百度百科内容。"));
         }
 
-        if !status.is_success() {
-            return Ok(format!("查询百度百科时发生错误: HTTP {status}"));
+        if !response.is_success() {
+            return Ok(format!("查询百度百科时发生错误: HTTP {}", response.status));
         }
 
-        let html = match response.text().await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(tool = "get_baidu_baike", error = %e, "read baike body failed");
-                return Ok(format!("查询百度百科时发生错误: {e}"));
-            }
-        };
+        let html = response.text_lossy();
 
         // Parse HTML
         let parsed = parse_baike_html(&html, &keyword, &url);
@@ -275,13 +252,17 @@ fn extract_polysemy(document: &scraper::Html) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::http::{HttpClientError, HttpGetRequest, HttpResponse};
 
     #[test]
     fn empty_keyword_returns_message() {
-        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig {
-            enabled: true,
-            ..Default::default()
-        });
+        let tool = BaiduBaikeTool::new(
+            BaiduBaikePluginConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            test_http_client(),
+        );
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -292,10 +273,13 @@ mod tests {
 
     #[test]
     fn disabled_returns_message() {
-        let tool = BaiduBaikeTool::new(BaiduBaikePluginConfig {
-            enabled: false,
-            ..Default::default()
-        });
+        let tool = BaiduBaikeTool::new(
+            BaiduBaikePluginConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            test_http_client(),
+        );
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -459,6 +443,19 @@ mod tests {
                     "required": ["keyword"]
                 }),
             }],
+        }
+    }
+
+    fn test_http_client() -> Arc<dyn HttpClientT> {
+        Arc::new(StubHttpClient)
+    }
+
+    struct StubHttpClient;
+
+    #[async_trait]
+    impl HttpClientT for StubHttpClient {
+        async fn get(&self, _request: HttpGetRequest) -> Result<HttpResponse, HttpClientError> {
+            Err(HttpClientError::new("unexpected HTTP call in unit test"))
         }
     }
 }

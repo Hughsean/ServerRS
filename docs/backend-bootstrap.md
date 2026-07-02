@@ -191,6 +191,8 @@ AgentRuntime, KnowledgeReviewService
 | `get_weather` | 天气查询 |
 
 工具注册顺序显式、key 唯一、tool name 唯一。`main.rs` 不直接依赖具体工具类型。
+需要 HTTP I/O 的工具只依赖 `domain::http::HttpClientT` 端口；`reqwest`
+实现位于 `infra::http`，由 `bootstrap::graph::agent_tool_provider` 按插件配置注入。
 
 ## 主链路上下文
 
@@ -216,7 +218,7 @@ AgentRuntime, KnowledgeReviewService
 1. Handler 直接拿 `State<AppState>`。
 2. 全局 service container / `OnceLock` / `lazy_static` DI。
 3. 在 `main.rs` 重新堆业务构造代码。
-4. 让业务层直接依赖 SeaORM/Qdrant/Redis 等基础设施实现 crate。
+4. 让业务层直接依赖 SeaORM/Qdrant/Redis/Reqwest 等基础设施实现 crate。
 5. 绕过 `bootstrap::runtime` 启动后台 worker。
 
 ## 架构防回退检查
@@ -241,7 +243,7 @@ bootstrap -> api/app/domain/infra/shared/bootstrap
 - `bootstrap/graph` 子 provider 对外 `pub mod`，或把非顶层聚合 provider
   `pub use` 出去；公开 provider API 必须符合 `*Services + build_*_services` 约定。
 - `api/app/domain/shared` 引入 infra-only 外部 crate 或基础设施类型
-  （如 SeaORM/SQLx/Qdrant/Redis/WebSocket adapter）。
+  （如 SeaORM/SQLx/Qdrant/Redis/Reqwest/WebSocket adapter）。
 - 普通 `use crate::infra::...` 和 grouped import（如 `use crate::{infra::...}`）
   都会参与分层检查。
 - `OnceLock` / `lazy_static` 风格的全局 service container。

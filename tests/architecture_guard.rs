@@ -147,6 +147,43 @@ fn rejects_business_layer_imports_of_infra_only_external_crates() {
 }
 
 #[test]
+fn rejects_business_layer_http_client_adapter_crates() {
+    let workspace = TestWorkspace::new("rejects_business_layer_http_client_adapter_crates");
+    workspace.write(
+        "src/app/agent/http_tool.rs",
+        "use reqwest::Client;\npub struct Tool { client: Client }\n",
+    );
+    workspace.write(
+        "src/shared/config/url.rs",
+        "fn parse(raw: &str) { let _ = reqwest::Url::parse(raw); }\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("business layers must not import HTTP client adapter crates");
+
+    assert_contains(
+        &report.to_string(),
+        "business layers must not import infrastructure-only crates",
+    );
+    assert_contains(&report.to_string(), "http client infrastructure");
+}
+
+#[test]
+fn rejects_inline_business_layer_infra_only_external_crate_references() {
+    let workspace =
+        TestWorkspace::new("rejects_inline_business_layer_infra_only_external_crate_references");
+    workspace.write(
+        "src/shared/config/url.rs",
+        "fn parse(raw: &str) { let _ = reqwest::Url::parse(raw); }\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("inline external crate references must not bypass checks");
+
+    assert_contains(&report.to_string(), "http client infrastructure");
+}
+
+#[test]
 fn rejects_service_graph_build_construction_after_file_move() {
     let workspace = TestWorkspace::new("rejects_service_graph_build_construction_after_file_move");
     workspace.write(

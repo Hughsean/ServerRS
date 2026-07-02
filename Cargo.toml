@@ -28,6 +28,7 @@ dashmap = "6.2.1"
 regex = "1.12.3"
 scraper = "0.27.0"
 toml = "1.1.2"
+url = "2.5.8"
 validator = { version = "0.20.0", features = ["derive"] }
 
 dotenvy = "0.15"

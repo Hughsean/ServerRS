@@ -5,6 +5,7 @@ pub mod conversation;
 pub mod depression;
 pub mod diary;
 pub mod fresh_context;
+pub mod http;
 pub mod like;
 pub mod llm;
 pub mod memory;

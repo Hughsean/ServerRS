@@ -1,36 +1,22 @@
 use std::net::ToSocketAddrs;
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::app::agent::agent_runtime::AgentTool;
 use crate::domain::agent::AgentContext;
+use crate::domain::http::{HttpClientT, HttpGetRequest};
 use crate::shared::config::FetchWebContentPluginConfig;
 use crate::shared::error::AppError;
 
 pub struct FetchWebContentTool {
     config: FetchWebContentPluginConfig,
-    http_client: reqwest::Client,
+    http_client: Arc<dyn HttpClientT>,
 }
 
 impl FetchWebContentTool {
-    pub fn new(config: FetchWebContentPluginConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy();
-        if !config.proxy_url.trim().is_empty() {
-            builder = builder.proxy(
-                reqwest::Proxy::all(config.proxy_url.trim())
-                    .expect("invalid fetch_web_content proxy URL"),
-            );
-        }
-        let http_client = builder
-            .build()
-            .expect("failed to build secure fetch_web_content HTTP client");
-
+    pub fn new(config: FetchWebContentPluginConfig, http_client: Arc<dyn HttpClientT>) -> Self {
         Self {
             config,
             http_client,
@@ -106,9 +92,7 @@ impl AgentTool for FetchWebContentTool {
             .unwrap_or(5000);
 
         // Fetch page
-        let response = match self
-            .http_client
-            .get(&url)
+        let request = HttpGetRequest::new(url.clone())
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -117,10 +101,9 @@ impl AgentTool for FetchWebContentTool {
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .send()
-            .await
-        {
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+
+        let response = match self.http_client.get(request).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(tool = "fetch_web_content", error = %e, "fetch request failed");
@@ -129,21 +112,16 @@ impl AgentTool for FetchWebContentTool {
         };
 
         // Check for redirects
-        let status = response.status();
-        if status.is_redirection() {
+        if response.is_redirection() {
             return Ok("网页发生重定向，出于安全原因未自动跟随，请提供最终公开 URL。".to_string());
         }
 
-        if !status.is_success() {
+        if !response.is_success() {
             return Ok("无法获取网页内容或网页内容为空。".to_string());
         }
 
         // Check Content-Type
-        if let Some(content_type) = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-        {
+        if let Some(content_type) = response.header("content-type") {
             let ct_lower = content_type.to_lowercase();
             let allowed = ct_lower.contains("text/html")
                 || ct_lower.contains("text/plain")
@@ -157,11 +135,7 @@ impl AgentTool for FetchWebContentTool {
         }
 
         // Check Content-Length (max 1MB)
-        if let Some(cl) = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-        {
+        if let Some(cl) = response.header("content-length") {
             if let Ok(len) = cl.parse::<u64>() {
                 if len > 1_048_576 {
                     return Ok("网页内容超过 1MB 限制，无法获取。".to_string());
@@ -170,14 +144,7 @@ impl AgentTool for FetchWebContentTool {
         }
 
         // Read body with 1MB limit
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(tool = "fetch_web_content", error = %e, "read response body failed");
-                return Ok("无法获取网页内容或网页内容为空。".to_string());
-            }
-        };
-
+        let bytes = response.body;
         if bytes.len() > 1_048_576 {
             return Ok("网页内容超过 1MB 限制，无法获取。".to_string());
         }
@@ -206,7 +173,7 @@ impl AgentTool for FetchWebContentTool {
 
 /// Validate a URL for SSRF safety. Checks scheme, host, and resolved IPs.
 async fn validate_url_ssrf(url: &str) -> Result<(), String> {
-    let parsed = match reqwest::Url::parse(url) {
+    let parsed = match url::Url::parse(url) {
         Ok(p) => p,
         Err(_) => return Err(format!("提供的URL格式无效: {url}")),
     };
@@ -368,15 +335,19 @@ fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::http::{HttpClientError, HttpGetRequest, HttpResponse};
 
     // ── URL validation ─────────────────────────────────────────────────
 
     #[test]
     fn rejects_empty_url() {
-        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig {
-            enabled: true,
-            ..Default::default()
-        });
+        let tool = FetchWebContentTool::new(
+            FetchWebContentPluginConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            test_http_client(),
+        );
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(tool.execute(&ctx, json!({"url": ""}))).unwrap();
@@ -433,10 +404,13 @@ mod tests {
 
     #[test]
     fn disabled_returns_message() {
-        let tool = FetchWebContentTool::new(FetchWebContentPluginConfig {
-            enabled: false,
-            ..Default::default()
-        });
+        let tool = FetchWebContentTool::new(
+            FetchWebContentPluginConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            test_http_client(),
+        );
         let ctx = test_context();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt
@@ -606,6 +580,19 @@ mod tests {
                     "required": ["url"]
                 }),
             }],
+        }
+    }
+
+    fn test_http_client() -> Arc<dyn HttpClientT> {
+        Arc::new(StubHttpClient)
+    }
+
+    struct StubHttpClient;
+
+    #[async_trait]
+    impl HttpClientT for StubHttpClient {
+        async fn get(&self, _request: HttpGetRequest) -> Result<HttpResponse, HttpClientError> {
+            Err(HttpClientError::new("unexpected HTTP call in unit test"))
         }
     }
 }

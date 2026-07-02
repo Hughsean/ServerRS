@@ -452,7 +452,7 @@ impl PsychologyService {
         }
         if let Some(url) = new.external_url.as_mut() {
             *url = url.trim().to_string();
-            let parsed = reqwest::Url::parse(url)
+            let parsed = url::Url::parse(url)
                 .map_err(|_| AppError::Validation("external_url is invalid".into()))?;
             if !matches!(parsed.scheme(), "http" | "https") {
                 return Err(AppError::Validation(
