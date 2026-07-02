@@ -5,7 +5,7 @@ use crate::domain::qq_bot::qq_profile_repository::QqUserProfileRepository;
 use crate::domain::qq_bot::user_profile::UserProfile;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_user_profiles;
+use crate::infra::db::entities::qq_user_profiles;
 
 pub struct SeaOrmQqUserProfileRepository {
     db: DatabaseConnection,

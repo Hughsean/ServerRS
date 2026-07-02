@@ -22,7 +22,7 @@ use server_rs::domain::qq_bot::repository::{
 use server_rs::domain::qq_bot::{
     BotAccount, ExternalUser, GroupConfig, GroupMember, MemoryPolicy, ReplyPolicy, TriggerPolicy,
 };
-use server_rs::infra::db::seaorm_db::init_db;
+use server_rs::infra::db::connection::init_db;
 use server_rs::infra::qq_bot::napcat::api::NapCatApiClient;
 use server_rs::infra::qq_bot::repositories::seaorm_bot_account_repository::SeaOrmBotAccountRepository;
 use server_rs::infra::qq_bot::repositories::seaorm_external_user_repository::SeaOrmExternalUserRepository;

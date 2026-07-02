@@ -8,7 +8,7 @@ use crate::domain::qq_bot::repository::AgentTurnRepository;
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_agent_turns;
+use crate::infra::db::entities::qq_agent_turns;
 
 pub struct SeaOrmAgentTurnRepository {
     db: DatabaseConnection,

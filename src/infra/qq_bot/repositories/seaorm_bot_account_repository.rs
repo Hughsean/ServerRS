@@ -7,7 +7,7 @@ use crate::domain::qq_bot::attention::BotAccount;
 use crate::domain::qq_bot::repository::BotAccountRepository;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_bot_accounts;
+use crate::infra::db::entities::qq_bot_accounts;
 
 pub struct SeaOrmBotAccountRepository {
     db: DatabaseConnection,

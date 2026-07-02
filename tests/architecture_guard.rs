@@ -43,7 +43,7 @@ fn rejects_business_layer_back_edges() {
     );
     workspace.write(
         "src/app/user_service.rs",
-        "use crate::infra::db::imp::user_repo::UserRepo;\n",
+        "use crate::infra::db::seaorm_impl::user_repo::UserRepo;\n",
     );
     workspace.write(
         "src/infra/user_repo.rs",

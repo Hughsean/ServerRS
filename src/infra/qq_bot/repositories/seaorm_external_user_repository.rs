@@ -5,7 +5,7 @@ use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::repository::ExternalUserRepository;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_external_users;
+use crate::infra::db::entities::qq_external_users;
 
 pub struct SeaOrmExternalUserRepository {
     db: DatabaseConnection,

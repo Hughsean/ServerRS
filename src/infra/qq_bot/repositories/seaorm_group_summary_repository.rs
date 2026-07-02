@@ -7,7 +7,7 @@ use sea_orm::{
 use crate::domain::qq_bot::repository::{GroupSummary, GroupSummaryRepository};
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_group_summaries;
+use crate::infra::db::entities::qq_group_summaries;
 
 pub struct SeaOrmGroupSummaryRepository {
     db: DatabaseConnection,

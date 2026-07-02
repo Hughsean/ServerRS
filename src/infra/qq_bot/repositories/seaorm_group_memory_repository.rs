@@ -8,7 +8,7 @@ use sea_orm::{
 use crate::domain::qq_bot::repository::{GroupMemory, GroupMemoryRepository};
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_group_memories;
+use crate::infra::db::entities::qq_group_memories;
 
 pub struct SeaOrmGroupMemoryRepository {
     db: DatabaseConnection,

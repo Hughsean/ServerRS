@@ -479,7 +479,7 @@ async fn main() {
  ├── mod.rs
  │
 ├── db/                         ★ 数据库实现
-│   ├── seaorm_db.rs            连接 MySQL
+│   ├── connection.rs           连接 MySQL
 │   ├── entities/               ★ SeaORM 实体（1 文件 = 1 表）
 │   │   ├── users.rs / user_profiles.rs / user_persona_snapshots.rs
 │   │   ├── conversations.rs / conversation_messages.rs / conversation_summaries.rs
@@ -492,7 +492,7 @@ async fn main() {
 │   │   ├── domain_event_outbox.rs / web_ingestion_audit_logs.rs
 │   │   ├── qq_*                 QQ Bot 相关表实体
 │   │   └── prelude.rs           实体导出的快捷引用
-│   └── imp/                     ★ domain trait 的 SeaORM 实现
+│   └── seaorm_impl/             ★ domain trait 的 SeaORM 实现
 │       ├── user_repo.rs / user_profile_repo.rs
 │       ├── user_context_version_repo.rs / user_context_control_repo.rs
 │       ├── conversation_repo.rs / conversation_summary_repo.rs

@@ -5,7 +5,7 @@ use crate::domain::qq_bot::config::{GroupConfig, MemoryPolicy, ReplyPolicy, Trig
 use crate::domain::qq_bot::repository::GroupRepository;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_groups;
+use crate::infra::db::entities::qq_groups;
 
 pub struct SeaOrmGroupRepository {
     db: DatabaseConnection,

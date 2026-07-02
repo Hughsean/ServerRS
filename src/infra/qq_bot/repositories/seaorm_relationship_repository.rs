@@ -5,7 +5,7 @@ use crate::domain::qq_bot::relationship::{RapportLevel, RelationshipState};
 use crate::domain::qq_bot::relationship_repository::RelationshipRepository;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_relationships;
+use crate::infra::db::entities::qq_relationships;
 
 pub struct SeaOrmRelationshipRepository {
     db: DatabaseConnection,

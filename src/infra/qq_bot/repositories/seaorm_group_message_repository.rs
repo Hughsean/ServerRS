@@ -8,7 +8,7 @@ use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage, Proces
 use crate::domain::qq_bot::repository::GroupMessageRepository;
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_group_messages;
+use crate::infra::db::entities::qq_group_messages;
 
 pub struct SeaOrmGroupMessageRepository {
     db: DatabaseConnection,

@@ -9,7 +9,7 @@ use sea_orm::{
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
 use crate::shared::error::AppError;
 
-use super::super::super::persistence::entities::qq_message_outbox;
+use crate::infra::db::entities::qq_message_outbox;
 
 pub struct SeaOrmOutboxRepository {
     db: DatabaseConnection,
