@@ -21,8 +21,9 @@ use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::bootstrap::auth::AuthGraph;
 use crate::bootstrap::graph::{
-    BootstrapContext, build_agent_services, build_domain_services, build_integration_services,
-    build_memory_services, build_rag_services, build_risk_services, build_summary_services,
+    BootstrapContext, build_agent_services, build_domain_services, build_identity_services,
+    build_integration_services, build_memory_services, build_rag_services, build_risk_services,
+    build_session_services, build_summary_services,
 };
 use crate::bootstrap::infra::InfraContext;
 use crate::bootstrap::repos::RepoGraph;
@@ -66,11 +67,6 @@ impl ServiceGraph {
         tasks: &mut TaskContext,
         auth_graph: &AuthGraph,
     ) -> Result<Self, std::io::Error> {
-        let user_repo = Arc::clone(&repos.user_repo);
-        let profile_repo = Arc::clone(&repos.profile_repo);
-        let context_control_repo = Arc::clone(&repos.context_control_repo);
-        let conv_repo = Arc::clone(&repos.conv_repo);
-        let risk_repo = Arc::clone(&repos.risk_repo);
         let ctx = BootstrapContext {
             config,
             infra,
@@ -79,16 +75,8 @@ impl ServiceGraph {
         };
         let risk = build_risk_services(&ctx, Arc::clone(&tasks.task_publisher));
 
-        // ── 服务 ──
-        let auth = Arc::clone(&auth_graph.auth_service);
-        let user: Arc<UserService> = Arc::new(UserService::new(
-            Arc::clone(&user_repo),
-            Arc::clone(&profile_repo),
-        ));
-        let query: Arc<SessionService> = Arc::new(SessionService::new(
-            Arc::clone(&conv_repo),
-            Arc::clone(&risk_repo),
-        ));
+        // ── 身份服务 ──
+        let identity = build_identity_services(&ctx, auth_graph);
 
         // ── RAG、记忆、摘要服务 ──
         let rag = build_rag_services(&ctx);
@@ -113,15 +101,13 @@ impl ServiceGraph {
         .await?;
         let agent_runtime = Arc::clone(&agent.runtime);
 
-        // ── ChatService ──
-        let chat_service: Arc<ChatService> = Arc::new(ChatService::new(
+        // ── 会话服务 ──
+        let session = build_session_services(
+            &ctx,
             Arc::clone(&tasks.task_publisher),
-            Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
             Arc::clone(&agent_runtime),
             Arc::clone(&memory_svc),
-            Arc::clone(&context_control_repo),
-            vector.vector_index.clone(),
-        ));
+        );
 
         // ── 领域服务 ──
         let domain = build_domain_services(&ctx);
@@ -131,9 +117,9 @@ impl ServiceGraph {
         let knowledge_review = integrations.knowledge_review;
 
         Ok(Self {
-            auth,
-            user,
-            query,
+            auth: identity.auth,
+            user: identity.user,
+            query: session.query,
             objects: domain.objects,
             psychology: domain.psychology,
             depression: domain.depression,
@@ -145,10 +131,10 @@ impl ServiceGraph {
             memory: memory_svc,
             agent_runtime,
             knowledge_review,
-            chat: chat_service,
-            chat_conv_repo: Arc::clone(&conv_repo) as Arc<dyn ConversationRepoT>,
-            token_service: Arc::clone(&auth_graph.token_service),
-            risk_repo: Arc::clone(&risk_repo),
+            chat: session.chat,
+            chat_conv_repo: session.conv_repo,
+            token_service: identity.token_service,
+            risk_repo: Arc::clone(&repos.risk_repo),
         })
     }
 }

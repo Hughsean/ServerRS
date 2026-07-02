@@ -91,13 +91,32 @@ Embedding 请求会把 `[embedding].dimension` 作为 `dimensions` 字段传给 
 当前 provider：
 
 ```text
-graph::risk_provider     风险检测服务和后置审计 handler
-graph::rag_provider      RetrievalService 和 IngestionService
-graph::memory_provider   MemoryService 和 MemoryExtractor
-graph::summary_provider  SummaryService 和 SummaryRefreshHandler
-graph::agent_provider    Fresh Retrieval、Context Routing、Agent tools、AgentRuntime
-graph::domain_provider   领域服务和对象存储服务
-graph::integration_provider QQ Bot、Web Ingestion、Fresh Context 启动和后台任务注册
+graph::identity_provider Auth/User/TokenService 装配
+graph::risk_provider     风险子系统总编排
+graph::risk_detection_provider 风险检测服务
+graph::risk_audit_provider 后置风险审计 handler
+graph::rag_provider      RAG 子系统总编排
+graph::rag_retrieval_provider RetrievalService
+graph::rag_ingestion_provider IngestionService
+graph::memory_provider   Memory 子系统总编排
+graph::memory_extractor_provider MemoryExtractor
+graph::memory_service_provider MemoryService
+graph::summary_provider  Summary 子系统总编排
+graph::summary_service_provider SummaryService
+graph::summary_handler_provider SummaryRefreshHandler
+graph::agent_provider    Agent 子系统总编排
+graph::agent_context_provider AgentContextBuilder、Fresh Retrieval、Context Routing
+graph::agent_tool_provider Agent tools 注册
+graph::agent_runtime_provider AgentRuntime 和 settings
+graph::session_provider  SessionService 和 ChatService
+graph::domain_provider   领域服务总编排
+graph::object_provider   ObjectService 和本地对象存储
+graph::wellbeing_provider Psychology/Depression/Diary 服务
+graph::content_provider  Music/Community 服务
+graph::integration_provider 集成子系统总编排
+graph::qq_bot_provider QQ Bot 启动和后台任务注册（feature `qq_bot`）
+graph::web_ingestion_provider Web Ingestion 启动和 KnowledgeReviewService
+graph::fresh_context_provider Fresh Context 启动和后台任务注册
 ```
 
 认证图 `AuthGraph` 由 `runtime.rs` 构造一次，同时供 refresh token 清理任务和 `ServiceGraph::build` 使用；不要在服务图内部再次调用 `build_auth`。
@@ -112,12 +131,10 @@ RetrievalService, IngestionService, MemoryService,
 AgentRuntime, KnowledgeReviewService
 ```
 
-`ServiceGraph::build` 还会：
-- 创建 `MemoryExtractor`。
-- 创建 `SummaryRefreshHandler` 和 `PostConversationRiskAuditWorker`。
-- 创建 `AgentContextBuilder`、默认 Agent tools、`AgentRuntime`。
-- 初始化 QQ Bot（feature `qq_bot`）及其主动发言、关系、情绪、TTS 等服务。
-- 初始化 Web Ingestion 的 scheduler/dispatcher/review service。
+`ServiceGraph::build` 只保留服务图拓扑：
+- 各业务服务族由 `graph::*_provider` 构造。
+- 后台 handler 由对应 provider 返回，并在 `TaskContext` 上集中注册。
+- QQ Bot、Web Ingestion、Fresh Context 通过 `integration_provider` 统一启动。
 
 ### 6. `bootstrap::runtime`
 
