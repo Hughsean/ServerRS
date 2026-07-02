@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::message::{NormalizedMessage, ProcessStatus};
 use crate::domain::qq_bot::persona::BotPersona;
@@ -13,9 +12,7 @@ use crate::domain::qq_bot::repository::{
     AgentTurnRepository, BotAccountRepository, GroupMessageRepository, GroupRepository,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TriggerType, TurnStatus};
-use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
-use crate::infra::qq_bot::napcat::api::NapCatApiClient;
-use crate::infra::qq_bot::napcat::listener::GroupMessageHandler;
+use crate::domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler, QqBotError};
 
 use super::context_builder::ContextBuilder;
 use super::emotional_state_service::EmotionalStateService;
@@ -56,7 +53,7 @@ pub struct QqBotService {
     message_repo: Arc<dyn GroupMessageRepository>,
 
     // Attention
-    attention_store: Arc<InMemoryAttentionStore>,
+    attention_store: Arc<dyn AttentionStore>,
 
     // Emotional state
     emotional_service: Arc<EmotionalStateService>,
@@ -85,7 +82,7 @@ impl QqBotService {
         group_repo: Arc<dyn GroupRepository>,
         turn_repo: Arc<dyn AgentTurnRepository>,
         message_repo: Arc<dyn GroupMessageRepository>,
-        attention_store: Arc<InMemoryAttentionStore>,
+        attention_store: Arc<dyn AttentionStore>,
         persona: BotPersona,
         emotional_service: Arc<EmotionalStateService>,
         topic_service: Arc<TopicService>,
@@ -131,7 +128,7 @@ impl QqBotService {
 
     /// Handle an incoming group message — full lifecycle.
     ///
-    /// This is the main entry point called by the WebSocket listener.
+    /// This is the main entry point called by the inbound message listener.
     pub async fn handle_group_message(&self, mut msg: NormalizedMessage) {
         let group_id = msg.qq_group_id;
 
@@ -369,7 +366,7 @@ impl QqBotService {
                     .turn_repo
                     .update_response(
                         related_turn_id.unwrap_or(0),
-                        0, // response_message_id (not available from NapCat API easily)
+                        0, // response_message_id is not available from the gateway here
                         TurnStatus::Responded,
                     )
                     .await;
@@ -428,7 +425,7 @@ impl QqBotService {
 
                 if matches!(e, QqBotError::Internal(_)) {
                     // send_direct could fail before it reaches per-segment fallback
-                    // (for example, no NapCat API client). In that case enqueue all.
+                    // (for example, no direct message gateway). In that case enqueue all.
                     let _ = self
                         .segment_dispatcher
                         .enqueue_reply(group_id, &reply, related_turn_id)
@@ -458,13 +455,13 @@ impl QqBotService {
     /// Create the outbox worker for this service.
     pub fn create_outbox_worker(
         self: &Arc<Self>,
-        napcat_api: Option<Arc<NapCatApiClient>>,
+        message_gateway: Option<Arc<dyn GroupMessageGateway>>,
         poll_interval_secs: u64,
         batch_size: u32,
     ) -> Arc<OutboxWorker> {
         Arc::new(OutboxWorker::new(
             Arc::clone(&self.segment_dispatcher.outbox_repo()),
-            napcat_api,
+            message_gateway,
             poll_interval_secs,
             batch_size,
         ))
@@ -473,7 +470,7 @@ impl QqBotService {
 
 // Internal helper — used by create_outbox_worker above
 
-/// Bridge: implement GroupMessageHandler so QqBotService can be used as a NapCatListener handler.
+/// Bridge: implement GroupMessageHandler so QqBotService can be used by an inbound listener.
 #[async_trait]
 impl GroupMessageHandler for QqBotService {
     async fn handle_group_message(&self, msg: NormalizedMessage, _raw_json: Value) {

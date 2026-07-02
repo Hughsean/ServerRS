@@ -135,6 +135,9 @@ AgentRuntime, KnowledgeReviewService
 - 各业务服务族由 `graph::*_provider` 构造。
 - 后台 handler 由对应 provider 返回，并在 `TaskContext` 上集中注册。
 - QQ Bot、Web Ingestion、Fresh Context 通过 `integration_provider` 统一启动。
+- QQ Bot 的 NapCat/注意力实现不得泄漏到 `app::qq_bot`：应用层只依赖
+  `domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler}` 端口，
+  具体实现由 `bootstrap::qq_bot` 装配。
 
 ### 6. `bootstrap::runtime`
 

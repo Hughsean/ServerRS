@@ -454,6 +454,7 @@ async fn main() {
  │   ├── turn.rs                对话轮次结构
  │   ├── persona.rs             人设定义
  │   ├── attention.rs           注意力机制
+ │   ├── ports.rs               ★ QQ Bot 外部能力端口（注意力、群消息发送、监听回调）
  │   ├── proactive.rs           主动行为定义
  │   ├── user_profile.rs        用户画像接口
  │   ├── relationship.rs        关系数据结构
@@ -525,11 +526,11 @@ async fn main() {
 	 │
 	 ├── qq_bot/                        ★★★ QQ 机器人基础设施
 	 │   ├── mod.rs                    模块声明
-	 │   ├── attention_store.rs        注意力存储
+	 │   ├── attention_store.rs        注意力存储（实现 domain::qq_bot::AttentionStore）
 	 │   ├── napcat/                   NapCat 协议适配
 	 │   │   ├── mod.rs
-	 │   │   ├── api.rs                ★ NapCat HTTP API 封装
-	 │   │   ├── listener.rs           ★ WebSocket 事件监听
+	 │   │   ├── api.rs                ★ NapCat HTTP API 封装（实现群消息发送端口）
+	 │   │   ├── listener.rs           ★ WebSocket 事件监听（依赖 domain handler 端口）
 	 │   │   ├── notice_handler.rs     通知事件处理
 	 │   │   └── message_parser.rs     消息解析
 	 │   ├── repositories/             ★ 数据库仓库实现

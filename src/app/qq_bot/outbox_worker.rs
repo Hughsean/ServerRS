@@ -3,20 +3,19 @@ use std::sync::Arc;
 use tokio::time::{Duration, interval};
 use tracing::{error, info, warn};
 
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository};
-use crate::infra::qq_bot::napcat::api::NapCatApiClient;
+use crate::domain::qq_bot::{GroupMessageGateway, QqBotError};
 
 /// Background worker that polls the outbox table and sends pending messages.
 ///
 /// Implements a reliable outbox pattern:
 /// 1. Poll for due entries (pending status, next_run_at <= now)
 /// 2. Mark as Sending
-/// 3. Send via NapCat API
+/// 3. Send via the message gateway
 /// 4. Mark as Sent (success) or Failed (retry later)
 pub struct OutboxWorker {
     outbox_repo: Arc<dyn OutboxRepository>,
-    napcat_api: Option<Arc<NapCatApiClient>>,
+    message_gateway: Option<Arc<dyn GroupMessageGateway>>,
     poll_interval_secs: u64,
     batch_size: u32,
 }
@@ -24,13 +23,13 @@ pub struct OutboxWorker {
 impl OutboxWorker {
     pub fn new(
         outbox_repo: Arc<dyn OutboxRepository>,
-        napcat_api: Option<Arc<NapCatApiClient>>,
+        message_gateway: Option<Arc<dyn GroupMessageGateway>>,
         poll_interval_secs: u64,
         batch_size: u32,
     ) -> Self {
         Self {
             outbox_repo,
-            napcat_api,
+            message_gateway,
             poll_interval_secs,
             batch_size,
         }
@@ -102,12 +101,12 @@ impl OutboxWorker {
         Ok(())
     }
 
-    /// Process a single outbox entry: send via NapCat API.
+    /// Process a single outbox entry: send via the message gateway.
     async fn process_entry(&self, entry: &OutboxEntry) -> Result<(), QqBotError> {
         let api = self
-            .napcat_api
+            .message_gateway
             .as_ref()
-            .ok_or_else(|| QqBotError::Internal("NapCat API client not configured".into()))?;
+            .ok_or_else(|| QqBotError::Internal("QQ message gateway not configured".into()))?;
 
         let outbox_id = entry.outbox_id.unwrap_or(0);
 
@@ -123,11 +122,11 @@ impl OutboxWorker {
                 QqBotError::Internal("outbox entry missing message in payload".into())
             })?;
 
-        // Send via NapCat API
-        let response = api.send_group_msg(group_id, message).await?;
+        // Send via the configured message gateway.
+        let platform_id = api.send_group_msg(group_id, message).await?;
 
         // Mark as sent
-        let platform_id = response.message_id.unwrap_or_default();
+        let platform_id = platform_id.unwrap_or_default();
         self.outbox_repo
             .mark_sent(outbox_id, &platform_id)
             .await

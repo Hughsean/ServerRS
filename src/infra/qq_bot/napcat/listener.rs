@@ -6,8 +6,8 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::message::{MessageDirection, NormalizedMessage};
+use crate::domain::qq_bot::{GroupMessageHandler, QqBotError};
 
 use super::message_parser::{ParsedEvent, normalize_text, parse_message_segments};
 
@@ -102,12 +102,6 @@ struct OneBotNoticeEvent {
     target_id: Option<i64>,
     #[serde(default)]
     time: i64,
-}
-
-/// Event handler trait for processed group messages.
-#[async_trait::async_trait]
-pub trait GroupMessageHandler: Send + Sync {
-    async fn handle_group_message(&self, msg: NormalizedMessage, raw_json: Value);
 }
 
 /// Event handler trait for group notice events (member join/leave).

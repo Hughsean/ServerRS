@@ -8,7 +8,7 @@ use crate::domain::qq_bot::bot_state::{EmotionalState, Mood};
 /// 内存情绪状态管理器（群级别）
 ///
 /// 每个群有独立的情绪状态，互不干扰。
-/// 类似 InMemoryAttentionStore 的模式，内部使用 RwLock<DashMap> 保护并发。
+/// 内部使用 RwLock<DashMap> 保护并发。
 pub struct EmotionalStateService {
     states: Arc<RwLock<DashMap<i64, EmotionalState>>>,
 }

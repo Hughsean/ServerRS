@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::domain::qq_bot::AttentionState;
+use crate::domain::qq_bot::{AttentionState, AttentionStore};
 
 /// QQ 机器人的内存注意力存储。
 /// Manages attention state across groups with atomic operations.
@@ -140,6 +140,33 @@ impl InMemoryAttentionStore {
             }
             _ => {}
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl AttentionStore for InMemoryAttentionStore {
+    async fn try_engage(&self, group_id: i64) -> bool {
+        InMemoryAttentionStore::try_engage(self, group_id).await
+    }
+
+    async fn confirm_engagement(&self, group_id: i64) {
+        InMemoryAttentionStore::confirm_engagement(self, group_id).await;
+    }
+
+    async fn start_cooldown(&self) {
+        InMemoryAttentionStore::start_cooldown(self).await;
+    }
+
+    async fn get_state(&self) -> AttentionState {
+        InMemoryAttentionStore::get_state(self).await
+    }
+
+    async fn can_process(&self, group_id: i64) -> bool {
+        InMemoryAttentionStore::can_process(self, group_id).await
+    }
+
+    async fn tick_idle(&self) {
+        InMemoryAttentionStore::tick_idle(self).await;
     }
 }
 

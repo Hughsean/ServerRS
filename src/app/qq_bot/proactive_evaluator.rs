@@ -11,12 +11,11 @@ use crate::app::qq_bot::reply_generator::ReplyGenerator;
 use crate::app::qq_bot::segment_dispatcher::SegmentDispatcher;
 use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::{ChatCompletionRequest, LlmProvider};
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::config::GroupConfig;
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::proactive::{ProactiveAction, ProactiveIntent};
 use crate::domain::qq_bot::repository::{GroupMessageRepository, GroupRepository};
-use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
+use crate::domain::qq_bot::{AttentionStore, QqBotError};
 
 /// 主动行为评估器 — 后台轮询，判断猫猫是否需要主动说话
 ///
@@ -36,7 +35,7 @@ pub struct ProactiveEvaluator {
     segment_dispatcher: Arc<SegmentDispatcher>,
 
     // Supporting services
-    attention_store: Arc<InMemoryAttentionStore>,
+    attention_store: Arc<dyn AttentionStore>,
     topic_service: Arc<TopicService>,
     emotional_service: Arc<EmotionalStateService>,
 
@@ -62,7 +61,7 @@ impl ProactiveEvaluator {
         context_builder: Arc<ContextBuilder>,
         reply_generator: Arc<ReplyGenerator>,
         segment_dispatcher: Arc<SegmentDispatcher>,
-        attention_store: Arc<InMemoryAttentionStore>,
+        attention_store: Arc<dyn AttentionStore>,
         topic_service: Arc<TopicService>,
         emotional_service: Arc<EmotionalStateService>,
         llm_provider: Arc<dyn LlmProvider>,

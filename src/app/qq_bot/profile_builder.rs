@@ -13,7 +13,7 @@ use crate::domain::qq_bot::repository::{
 };
 use crate::domain::qq_bot::user_profile::UserProfile;
 use crate::domain::user::user::NewUser;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::shared::llm_json::parse_llm_json;
 
 /// 画像构建服务配置
@@ -45,7 +45,7 @@ impl Default for ProfileBuilderConfig {
 /// 注意：用户级别的 LLM 画像依赖 `recent_by_user` 查询，当前暂用维护一个
 /// 简化版本，仅聚焦轻量统计和群聊级画像。
 pub struct ProfileBuilder {
-    user_repo: Arc<dyn UserRepository>,
+    user_repo: Arc<dyn UserRepoT>,
     external_user_repo: Arc<dyn ExternalUserRepository>,
     user_profile_repo: Arc<dyn QqUserProfileRepository>,
     group_memory_repo: Arc<dyn GroupMemoryRepository>,
@@ -57,7 +57,7 @@ pub struct ProfileBuilder {
 impl ProfileBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        user_repo: Arc<dyn UserRepository>,
+        user_repo: Arc<dyn UserRepoT>,
         external_user_repo: Arc<dyn ExternalUserRepository>,
         user_profile_repo: Arc<dyn QqUserProfileRepository>,
         group_memory_repo: Arc<dyn GroupMemoryRepository>,

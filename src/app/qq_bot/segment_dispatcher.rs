@@ -5,23 +5,22 @@ use serde_json;
 use tokio::time::{Duration, sleep};
 use tracing::{error, info, warn};
 
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::reply::{BotReply, ReplySegment};
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepository, OutboxStatus};
+use crate::domain::qq_bot::{GroupMessageGateway, QqBotError};
 use crate::domain::tts::{TtsProvider, TtsRequest};
-use crate::infra::qq_bot::napcat::api::NapCatApiClient;
 
 /// Dispatches multi-segment replies to the target group with human-like timing.
 ///
 /// Two modes:
-/// 1. **Direct send** — Sends segments one-by-one with configured delays via NapCat API
+/// 1. **Direct send** — Sends segments one-by-one with configured delays via the message gateway
 /// 2. **Outbox enqueue** — Writes segments to outbox for reliable delivery by OutboxWorker
 ///
 /// Special segment types:
-/// - `Poke` — Calls the dedicated `group_poke` API directly (not via send_group_msg)
+/// - `Poke` — Calls the dedicated group-poke gateway action directly
 /// - `Record` — Synthesises TTS, writes audio to local file, then sends as CQ:record
 pub struct SegmentDispatcher {
-    napcat_api: Option<Arc<NapCatApiClient>>,
+    message_gateway: Option<Arc<dyn GroupMessageGateway>>,
     outbox_repo: Arc<dyn OutboxRepository>,
     bot_account_id: u64,
     tts_provider: Option<Arc<dyn TtsProvider>>,
@@ -31,7 +30,7 @@ pub struct SegmentDispatcher {
 
 impl SegmentDispatcher {
     pub fn new(
-        napcat_api: Option<Arc<NapCatApiClient>>,
+        message_gateway: Option<Arc<dyn GroupMessageGateway>>,
         outbox_repo: Arc<dyn OutboxRepository>,
         bot_account_id: u64,
         tts_provider: Option<Arc<dyn TtsProvider>>,
@@ -39,7 +38,7 @@ impl SegmentDispatcher {
         tts_public_url_base: String,
     ) -> Self {
         Self {
-            napcat_api,
+            message_gateway,
             outbox_repo,
             bot_account_id,
             tts_provider,
@@ -52,11 +51,11 @@ impl SegmentDispatcher {
         Arc::clone(&self.outbox_repo)
     }
 
-    /// Send a BotReply to the group using the direct NapCat HTTP API.
+    /// Send a BotReply to the group using the direct message gateway.
     ///
     /// Sends segments one-by-one with configured delays.
     /// Special segments:
-    /// - `Poke` → calls `group_poke` API directly (not via send_group_msg, no delay)
+    /// - `Poke` → calls the group-poke gateway action directly, with no delay
     /// - `Record` → TTS-synthesises, writes audio file, sends as CQ:record
     ///
     /// On success, returns the last segment's platform message id (if available).
@@ -67,9 +66,9 @@ impl SegmentDispatcher {
         related_turn_id: Option<u64>,
     ) -> Result<Vec<String>, QqBotError> {
         let api = self
-            .napcat_api
+            .message_gateway
             .as_ref()
-            .ok_or_else(|| QqBotError::Internal("NapCat API client not configured".into()))?;
+            .ok_or_else(|| QqBotError::Internal("QQ message gateway not configured".into()))?;
 
         let mut sent_ids = Vec::new();
 
@@ -98,9 +97,9 @@ impl SegmentDispatcher {
                 ReplySegment::Record { text, voice } => {
                     match self.synthesize_record(text, voice).await {
                         Ok(cq_string) => match api.send_group_msg(group_id, &cq_string).await {
-                            Ok(data) => {
+                            Ok(message_id) => {
                                 info!(group_id, segment = i, "语音消息已发送");
-                                Ok(data.message_id)
+                                Ok(message_id)
                             }
                             Err(e) => {
                                 error!(group_id, error = %e, "发送语音消息失败");
@@ -117,12 +116,12 @@ impl SegmentDispatcher {
                 _ => {
                     let message_str = segment_to_onebot_string(segment);
                     match api.send_group_msg(group_id, &message_str).await {
-                        Ok(data) => {
-                            info!(group_id, segment = i, "消息段已通过 NapCat API 发送");
-                            Ok(data.message_id)
+                        Ok(message_id) => {
+                            info!(group_id, segment = i, "消息段已通过发送网关发送");
+                            Ok(message_id)
                         }
                         Err(e) => {
-                            error!(group_id, segment = i, error = %e, "通过 NapCat API 发送消息段失败");
+                            error!(group_id, segment = i, error = %e, "通过发送网关发送消息段失败");
                             Err(e)
                         }
                     }
@@ -185,7 +184,7 @@ impl SegmentDispatcher {
             ..
         } = segment
         {
-            if let Some(api) = &self.napcat_api {
+            if let Some(api) = &self.message_gateway {
                 if let Err(e) = api.group_poke(group_id, *target_user).await {
                     warn!(group_id, target_user, error = %e, "poke enqueue: direct send failed");
                 } else {

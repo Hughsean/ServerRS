@@ -14,8 +14,6 @@ pub struct NapCatGroupNoticeHandler {
     member_repo: Arc<dyn GroupMemberRepository>,
     external_user_repo: Arc<dyn ExternalUserRepository>,
     napcat_api: Option<Arc<NapCatApiClient>>,
-    /// bot_account_id to associate with new group members.
-    bot_account_id: u64,
 }
 
 impl NapCatGroupNoticeHandler {
@@ -23,13 +21,11 @@ impl NapCatGroupNoticeHandler {
         member_repo: Arc<dyn GroupMemberRepository>,
         external_user_repo: Arc<dyn ExternalUserRepository>,
         napcat_api: Option<Arc<NapCatApiClient>>,
-        bot_account_id: u64,
     ) -> Self {
         Self {
             member_repo,
             external_user_repo,
             napcat_api,
-            bot_account_id,
         }
     }
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::domain::qq_bot::GroupMessageGateway;
+
 /// Deserialize a JSON value that may be either a string or a number into `Option<String>`.
 fn deserialize_opt_string_or_number<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -280,6 +282,27 @@ impl NapCatApiClient {
                 super::super::QqBotError::MessageProcessing(format!("parse status: {e}"))
             })?,
         )
+    }
+}
+
+#[async_trait::async_trait]
+impl GroupMessageGateway for NapCatApiClient {
+    async fn send_group_msg(
+        &self,
+        group_id: i64,
+        message: &str,
+    ) -> Result<Option<String>, super::super::QqBotError> {
+        Ok(NapCatApiClient::send_group_msg(self, group_id, message)
+            .await?
+            .message_id)
+    }
+
+    async fn group_poke(
+        &self,
+        group_id: i64,
+        user_id: i64,
+    ) -> Result<(), super::super::QqBotError> {
+        NapCatApiClient::group_poke(self, group_id, user_id).await
     }
 }
 

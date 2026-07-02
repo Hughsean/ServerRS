@@ -35,11 +35,12 @@ use crate::domain::qq_bot::repository::{
     GroupMemoryRepository, GroupMessageRepository, GroupRepository, GroupSummaryRepository,
     OutboxRepository,
 };
+use crate::domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler};
 use crate::domain::tts::TtsProvider;
-use crate::domain::user::user_repository::UserRepository;
+use crate::domain::user::user_repository::UserRepoT;
 use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
 use crate::infra::qq_bot::napcat::api::NapCatApiClient;
-use crate::infra::qq_bot::napcat::listener::{GroupMessageHandler, NapCatListener};
+use crate::infra::qq_bot::napcat::listener::NapCatListener;
 use crate::infra::qq_bot::napcat::notice_handler::NapCatGroupNoticeHandler;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
@@ -47,8 +48,8 @@ use crate::shared::error::AppError;
 /// Dependency container for the QQ Bot subsystem.
 pub struct QqBotDependencies {
     pub service: Arc<QqBotService>,
-    pub attention_store: Arc<InMemoryAttentionStore>,
-    pub napcat_api: Option<Arc<NapCatApiClient>>,
+    pub attention_store: Arc<dyn AttentionStore>,
+    pub message_gateway: Option<Arc<dyn GroupMessageGateway>>,
 }
 
 /// Initialise the QQ Bot subsystem.
@@ -69,7 +70,7 @@ pub async fn init_qq_bot(
     agent_turn_repo: Arc<dyn AgentTurnRepository>,
     outbox_repo: Arc<dyn OutboxRepository>,
     // Profile & user repos (optional for profile building)
-    user_repo: Option<Arc<dyn UserRepository>>,
+    user_repo: Option<Arc<dyn UserRepoT>>,
     external_user_repo: Option<Arc<dyn ExternalUserRepository>>,
     user_profile_repo: Option<Arc<dyn QqUserProfileRepository>>,
     // Relationship repo (optional)
@@ -95,6 +96,7 @@ pub async fn init_qq_bot(
         qc.cooldown_secs,
         qc.idle_timeout_secs,
     ));
+    let attention_store_port: Arc<dyn AttentionStore> = attention_store.clone();
 
     // ── NapCat API 客户端 ──────────────────────────────────────────
     let napcat_api = if qc.self_qq_id != 0 {
@@ -110,6 +112,9 @@ pub async fn init_qq_bot(
     } else {
         None
     };
+    let message_gateway: Option<Arc<dyn GroupMessageGateway>> = napcat_api
+        .as_ref()
+        .map(|api| Arc::clone(api) as Arc<dyn GroupMessageGateway>);
 
     // ── LLM Provider（可选覆盖配置）───────────────
     let trigger_llm = Arc::clone(&llm_provider);
@@ -177,7 +182,7 @@ pub async fn init_qq_bot(
 
     let trigger = Arc::new(TriggerEvaluator::new(
         trigger_llm,
-        Arc::clone(&attention_store),
+        Arc::clone(&attention_store_port),
         persona.clone(),
         Some(Arc::clone(&topic_service)),
         Some(Arc::clone(&emotional_service)),
@@ -217,7 +222,7 @@ pub async fn init_qq_bot(
     };
 
     let segment_dispatcher = Arc::new(SegmentDispatcher::new(
-        napcat_api.clone(),
+        message_gateway.clone(),
         Arc::clone(&outbox_repo),
         bot_account_id,
         tts_provider,
@@ -236,7 +241,7 @@ pub async fn init_qq_bot(
         Arc::clone(&group_repo),
         Arc::clone(&agent_turn_repo),
         Arc::clone(&group_message_repo),
-        Arc::clone(&attention_store),
+        Arc::clone(&attention_store_port),
         persona,
         emotional_service.clone(),
         topic_service.clone(),
@@ -253,7 +258,7 @@ pub async fn init_qq_bot(
     // ── 启动发件箱 Worker（后台）──────────────────────────
     let outbox_worker = OutboxWorker::new(
         Arc::clone(&outbox_repo),
-        napcat_api.clone(),
+        message_gateway.clone(),
         qc.outbox_poll_interval_secs,
         qc.outbox_batch_size,
     );
@@ -285,7 +290,6 @@ pub async fn init_qq_bot(
             Arc::clone(&group_member_repo),
             Arc::clone(external_user_repo),
             napcat_api.clone(),
-            bot_account_id,
         )))
     } else {
         tracing::warn!("external_user_repo 不可用 — 群通知事件将不会同步");
@@ -327,7 +331,7 @@ pub async fn init_qq_bot(
             context_builder,
             reply_generator,
             segment_dispatcher,
-            Arc::clone(&attention_store),
+            Arc::clone(&attention_store_port),
             topic_service,
             emotional_service,
             llm_provider,
@@ -351,7 +355,7 @@ pub async fn init_qq_bot(
 
     Ok(Some(QqBotDependencies {
         service,
-        attention_store,
-        napcat_api,
+        attention_store: attention_store_port,
+        message_gateway,
     }))
 }

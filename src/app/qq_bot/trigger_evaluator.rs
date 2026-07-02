@@ -6,12 +6,11 @@ use tracing::{info, warn};
 use crate::app::qq_bot::emotional_state_service::EmotionalStateService;
 use crate::app::qq_bot::topic_service::TopicService;
 use crate::domain::llm::{ChatCompletionRequest, LlmProvider};
-use crate::domain::qq_bot::QqBotError;
 use crate::domain::qq_bot::attention::{BotAccount, TriggerDecision};
 use crate::domain::qq_bot::config::{GroupConfig, TriggerPolicy};
 use crate::domain::qq_bot::message::NormalizedMessage;
 use crate::domain::qq_bot::persona::BotPersona;
-use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
+use crate::domain::qq_bot::{AttentionStore, QqBotError};
 
 /// Two-layer trigger evaluator:
 ///
@@ -31,7 +30,7 @@ use crate::infra::qq_bot::attention_store::InMemoryAttentionStore;
 /// - Only invoked when bot is NOT in cooldown and group is engaged or idle
 pub struct TriggerEvaluator {
     llm_provider: Arc<dyn LlmProvider>,
-    attention_store: Arc<InMemoryAttentionStore>,
+    attention_store: Arc<dyn AttentionStore>,
     persona: BotPersona,
     topic_service: Option<Arc<TopicService>>,
     emotional_service: Option<Arc<EmotionalStateService>>,
@@ -40,7 +39,7 @@ pub struct TriggerEvaluator {
 impl TriggerEvaluator {
     pub fn new(
         llm_provider: Arc<dyn LlmProvider>,
-        attention_store: Arc<InMemoryAttentionStore>,
+        attention_store: Arc<dyn AttentionStore>,
         persona: BotPersona,
         topic_service: Option<Arc<TopicService>>,
         emotional_service: Option<Arc<EmotionalStateService>>,
