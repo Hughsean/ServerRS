@@ -78,6 +78,7 @@
  ```
 
  **数据库表（15 张）：**
+
  ```
  web_sources                 来源配置（种子 URL、域名、审批状态）
  web_source_urls             从来源发现的 URL（调度队列）
@@ -101,59 +102,55 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 ## 三、整体架构图
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Web Ingestion Architecture Overview                  │
-└──────────────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------------------+
+| Web Ingestion Architecture Overview                                          |
++------------------------------------------------------------------------------+
 
-                         ┌──────────────────┐
-                         │    Scheduler     │  ← Timer: default interval is
-                         │                  │     every 300 seconds
-                         │                  │     Iterates over all enabled
-                         │                  │     sources
-                         └────────┬─────────┘
-                                  │
-                                  │ Creates crawl jobs and emits
-                                  │ CrawlJobCreated events
-                                  ▼
-                         ┌──────────────────┐
-                         │      Outbox      │  ★ Event outbox
-                         │                  │    MySQL-backed event queue
-                         │                  │    Ensures reliable async
-                         │                  │    processing
-                         └────────┬─────────┘
-                                  │
-                                  │ Dispatcher polls every 5 seconds by default
-                                  │ Claims events by stage priority and handler
-                                  │ capacity
-                                  ▼
-                  ┌──────────────────────────────────────┐
-                  │             Dispatcher               │
-                  │                                      │
-                  │  Routes events to the corresponding  │
-                  │  Handler based on event type         │
-                  └───────────────┬──────────────────────┘
-                                  │
-                ┌─────────────────┼─────────────────┐
-                ▼                 ▼                 ▼
-        ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
-        │ Handler 1:   │  │ Handler 2:   │  │ Handler N:       │
-        │ URL Discovery│  │ Page         │  │ Publish &        │
-        │ + Crawling   │  │ Distillation │  │ Activation       │
-        │              │  │ (AI)         │  │ Qdrant Sync      │
-        └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘
-               │                 │                   │
-               └─────────────────┴───────────────────┘
-                                  │
-                                  │ Each completed step writes a new
-                                  │ Outbox event
-                                  ▼
-                         ┌──────────────────┐
-                         │  Ingestion Run   │  ★ One complete ingestion
-                         │                  │    execution
-                         │                  │    State machine:
-                         │                  │    pending → published
-                         │                  │    23 stages
-                         └──────────────────┘
+                         +------------------+
+                         | Scheduler        |
+                         | Timer: 300 sec   |
+                         | Iterates enabled |
+                         | sources          |
+                         +--------+---------+
+                                  |
+                                  | creates crawl jobs
+                                  | emits CrawlJobCreated
+                                  v
+                         +------------------+
+                         | Outbox           |
+                         | MySQL event queue|
+                         | reliable async   |
+                         | processing       |
+                         +--------+---------+
+                                  |
+                                  | Dispatcher polls every 5 sec
+                                  | claims by priority/capacity
+                                  v
+                  +--------------------------------------+
+                  | Dispatcher                           |
+                  | Routes each event to its handler     |
+                  | according to the event type          |
+                  +---------------+----------------------+
+                                  |
+                                  | fan-out to handlers
+                                  v
+                  +--------------------------------------+
+                  | Handler pool                         |
+                  | - URL discovery and crawling         |
+                  | - Page distillation (AI assisted)    |
+                  | - Publish/activation and Qdrant sync |
+                  +---------------+----------------------+
+                                  |
+                                  | completed steps write
+                                  | the next Outbox event
+                                  v
+                         +------------------+
+                         | Ingestion Run    |
+                         | One execution    |
+                         | State machine:   |
+                         | pending->publish |
+                         | 23 stages        |
+                         +------------------+
 
 执行模型：事件驱动架构
 
@@ -184,30 +181,66 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
  每个 URL 从被发现到发布，会经历一条严格的状态转换链。
 
  ```
- 状态链（14 步主路径）：
+Main lifecycle (matches can_transition_run):
 
- pending ──► fetching ──► fetched ──► cleaning ──► cleaned ──► distilling
-   (等待)     (正在抓)    (已抓完)    (正在清洗)    (已洗完)    (AI 理解中)
-      │
-      ▼
- distilling ──► distilled ──► quality_checked ──► chunking ──► chunked
-   (AI 理解中)   (已理解完)     (质量已检查)        (正在分块)   (已分完块)
-                     │
-                     ▼
- chunked ──► embedding ──► embedded ──► indexing ──► indexed ──► staging
- (已分完块)  (向量化中)    (已向量化)    (建索引中)   (已建索引)   (待暂存)
-                     │
-                     ▼
- staging ──► publishing ──► published（最终状态）
- (待暂存)    (发布中)        (已发布 ✓)
+pending
+  |
+  v
+fetching
+  |
+  v
+fetched
+  |-- unchanged   [terminal: skipped, content unchanged]
+  |-- rejected    [terminal: unusable content]
+  `-- cleaning
+        |
+        v
+      cleaned
+        |
+        v
+      distilling
+        |
+        v
+      distilled
+        |
+        v
+      quality_checked
+        |-- rejected  [terminal: quality rejected]
+        |-- staging   [shortcut: skip chunk/embed/index, then publish]
+        `-- chunking
+              |
+              v
+            chunked
+              |
+              v
+            embedding
+              |
+              v
+            embedded
+              |
+              v
+            indexing
+              |
+              v
+            indexed
+              |
+              v
+            staging
+              |
+              v
+            publishing
+              |
+              v
+            published  [terminal]
 
+Global transitions:
+  any non-terminal stage -> failed     [terminal]
+  any non-terminal stage -> dead       [terminal]
+  any non-terminal stage -> cancelled  [terminal]
 
- 分支路径：
- - fetched ──► unchanged（内容无变化 → 跳过）
- - quality_checked ──► rejected（质量不合格 → 拒绝）
- - 任意阶段 ──► failed（出错）
- - 任意阶段 ──► dead（重试耗尽）
- ```
+Idempotent rule:
+  same (status, stage) -> same (status, stage) is always allowed.
+```
 
  **状态机代码位置**：[`src/domain/web_ingestion/state_machine.rs`](/src/domain/web_ingestion/state_machine.rs)
 
@@ -223,22 +256,22 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 0 步：Scheduler（调度器）
 
- | 属性 | 说明 |
- |------|------|
- | 代码 | `src/app/web_ingestion/scheduler.rs` |
-| 触发方式 | 定时循环（代码默认每 300 秒 = 5 分钟；以配置文件为准） |
- | 干什么 | 遍历所有已启用的 `web_sources`，为每个来源创建一个 `web_crawl_job` |
- | 产出 | 发射 `CrawlJobCreated` 事件到 Outbox |
+| 属性     | 说明                                                               |
+| -------- | ------------------------------------------------------------------ |
+| 代码     | `src/app/web_ingestion/scheduler.rs`                               |
+| 触发方式 | 定时循环（代码默认每 300 秒 = 5 分钟；以配置文件为准）             |
+| 干什么   | 遍历所有已启用的 `web_sources`，为每个来源创建一个 `web_crawl_job` |
+| 产出     | 发射 `CrawlJobCreated` 事件到 Outbox                               |
 
 ---
 
 ### 第 1 步：CrawlJobCreated → UrlDiscovered（URL 发现 + 抓取）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/url_discovered.rs`（**最复杂的处理器**） |
- | 代码量 | 14,869 字节 |
- | 干什么 | 获取一个爬取任务 → 从来源的种子 URL 开始 → **真正用 HTTP 抓取网页** |
+| 属性   | 说明                                                                |
+| ------ | ------------------------------------------------------------------- |
+| 处理器 | `handlers/url_discovered.rs`（**最复杂的处理器**）                  |
+| 代码量 | 14,869 字节                                                         |
+| 干什么 | 获取一个爬取任务 → 从来源的种子 URL 开始 → **真正用 HTTP 抓取网页** |
 
  **详细流程：**
 
@@ -265,26 +298,27 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 2 步：PageFetched → PageCleaned（页面清洗）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/page_fetched.rs` |
- | 干什么 | 收到抓取完成的事件 → 调用 Extractor 把 HTML 转成纯文本 |
- | 核心工作 | 就是触发下一阶段 `PageCleaned` |
+| 属性     | 说明                                                   |
+| -------- | ------------------------------------------------------ |
+| 处理器   | `handlers/page_fetched.rs`                             |
+| 干什么   | 收到抓取完成的事件 → 调用 Extractor 把 HTML 转成纯文本 |
+| 核心工作 | 就是触发下一阶段 `PageCleaned`                         |
 
  **Extractor** 代码在 `app/web_ingestion/extractor.rs`，它：
- - 用 `scraper` 库解析 HTML
- - 删除 script / style / nav / footer / header 等无用标签
- - 提取标题和正文
- - 规范化空白字符（连续空格→一个空格，连续换行→一个换行）
+
+- 用 `scraper` 库解析 HTML
+- 删除 script / style / nav / footer / header 等无用标签
+- 提取标题和正文
+- 规范化空白字符（连续空格→一个空格，连续换行→一个换行）
 
 ---
 
 ### 第 3 步：PageCleaned → PageDistilled（LLM 蒸馏）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/page_cleaned.rs` |
- | 核心 | 调用 **KnowledgeDistiller**（LLM）理解网页内容 |
+| 属性   | 说明                                           |
+| ------ | ---------------------------------------------- |
+| 处理器 | `handlers/page_cleaned.rs`                     |
+| 核心   | 调用 **KnowledgeDistiller**（LLM）理解网页内容 |
 
  **Distiller** 代码在 `infra/web_ingestion/distiller.rs`：
 
@@ -313,38 +347,38 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 4 步：PageDistilled → QualityChecked（质量门控）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/page_distilled.rs` |
- | 核心判断 | 调用 `quality_gate::evaluate()` |
+| 属性     | 说明                            |
+| -------- | ------------------------------- |
+| 处理器   | `handlers/page_distilled.rs`    |
+| 核心判断 | 调用 `quality_gate::evaluate()` |
 
  **Quality Gate** 代码在 `app/web_ingestion/quality_gate.rs`。
 
  它执行以下规则（按顺序检查，任一不通过即拒绝/暂存）：
 
- | 规则 | 结果 |
- |------|------|
- | 清洗后的文本 < 100 字符 | ❌ 拒绝 |
- | AI 说 `accept = false` | ❌ 拒绝 |
- | 没有提取到章节 | ❌ 拒绝 |
- | 摘要是空的 | ❌ 拒绝 |
-| 质量分 < 0.65 | ❌ 拒绝（硬阈值，代码常量） |
- | 来源未审批 | ❌ 拒绝 |
- | 自残/药物剂量等高危标记 | ✅ 暂存（人工审核）|
- | 未知风险标记 | ✅ 暂存（人工审核）|
- | 配置要求 staging_required | ✅ 暂存 |
- | 来源不允许自动发布 | ✅ 暂存 |
+| 规则                            | 结果                             |
+| ------------------------------- | -------------------------------- |
+| 清洗后的文本 < 100 字符         | ❌ 拒绝                          |
+| AI 说 `accept = false`          | ❌ 拒绝                          |
+| 没有提取到章节                  | ❌ 拒绝                          |
+| 摘要是空的                      | ❌ 拒绝                          |
+| 质量分 < 0.65                   | ❌ 拒绝（硬阈值，代码常量）      |
+| 来源未审批                      | ❌ 拒绝                          |
+| 自残/药物剂量等高危标记         | ✅ 暂存（人工审核）              |
+| 未知风险标记                    | ✅ 暂存（人工审核）              |
+| 配置要求 staging_required       | ✅ 暂存                          |
+| 来源不允许自动发布              | ✅ 暂存                          |
 | 质量分 < auto_publish_min_score | ✅ 暂存（代码默认 0.85，可配置） |
- | **所有检查都通过** | ✅ **直接发布** |
+| **所有检查都通过**              | ✅ **直接发布**                  |
 
 ---
 
 ### 第 5 步：QualityChecked → DocumentChunked（文档分块）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/document_chunked.rs`（13,309 字节） |
- | 核心 | **Industrial Chunker**（工业级分块器）|
+| 属性   | 说明                                          |
+| ------ | --------------------------------------------- |
+| 处理器 | `handlers/document_chunked.rs`（13,309 字节） |
+| 核心   | **Industrial Chunker**（工业级分块器）        |
 
  **工业级分块器** 代码在 `app/web_ingestion/industrial_chunker.rs`（20,610 字节），
  专门针对中文优化：
@@ -369,17 +403,17 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
     - 超大段落（>1000 字符）按句号/问号等自然边界切分
  ```
 
- 每个 Chunk 会生成一个**确定性 Chunk Hash**（SHA-256），
- 保证同样的内容、同样的版本只会产生同样的 Chunk Hash，**天然幂等**。
+每个 Chunk 会生成一个**确定性 Chunk Hash**（SHA-256），
+保证同样的内容、同样的版本只会产生同样的 Chunk Hash，**天然幂等**。
 
 ---
 
 ### 第 6 步：DocumentChunked → ChunksEmbedded（向量化）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/chunks_embedded.rs` |
- | 干什么 | 给每个 Chunk 生成向量嵌入（Embedding）|
+| 属性   | 说明                                   |
+| ------ | -------------------------------------- |
+| 处理器 | `handlers/chunks_embedded.rs`          |
+| 干什么 | 给每个 Chunk 生成向量嵌入（Embedding） |
 
 使用 `[embedding]` 配置的 Embedding 模型把文本块变成向量。`OllamaEmbeddingProvider` 会把 `[embedding].dimension` 作为 `dimensions` 请求字段发送，并校验返回维度。
 向量元数据写入 `knowledge_chunks`，向量 JSON 写入 `knowledge_embeddings`；后续 Qdrant 索引从 DB 中读取这份向量。
@@ -388,10 +422,10 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 7 步：ChunksEmbedded → DocumentIndexed（索引建立）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/document_indexed.rs` |
- | 干什么 | 把向量写入 Qdrant 向量数据库（如果启用了 Qdrant）|
+| 属性   | 说明                                              |
+| ------ | ------------------------------------------------- |
+| 处理器 | `handlers/document_indexed.rs`                    |
+| 干什么 | 把向量写入 Qdrant 向量数据库（如果启用了 Qdrant） |
 
  Qdrant 的 Point ID 是确定性生成的（SHA-256），保证同样的 chunk 不会重复写入。
 
@@ -399,10 +433,10 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 8 步：DocumentIndexed → KnowledgeStaged（存入暂存区）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/document_indexed.rs`（后半段） |
- | 干什么 | 创建 `knowledge_publish_record`，状态 = staged |
+| 属性   | 说明                                           |
+| ------ | ---------------------------------------------- |
+| 处理器 | `handlers/document_indexed.rs`（后半段）       |
+| 干什么 | 创建 `knowledge_publish_record`，状态 = staged |
 
  此时数据已在数据库中，但处于**暂存状态**（`status=0`），
  用户的检索请求**查不到**这些数据。需要发布后才能被检索到。
@@ -411,22 +445,23 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 第 9 步：KnowledgeStaged → PublishRequested（发布请求）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/knowledge_staged.rs` |
- | 触发 | 如果 Quality Gate 判定为 Publishable + auto_publish=true，则自动发射发布请求 |
- | 人工触发 | 管理员通过 `POST /api/v1/admin/web-ingestion/reviews/{id}/publish` 手动触发 |
+| 属性     | 说明                                                                         |
+| -------- | ---------------------------------------------------------------------------- |
+| 处理器   | `handlers/knowledge_staged.rs`                                               |
+| 触发     | 如果 Quality Gate 判定为 Publishable + auto_publish=true，则自动发射发布请求 |
+| 人工触发 | 管理员通过 `POST /api/v1/admin/web-ingestion/reviews/{id}/publish` 手动触发  |
 
 ---
 
 ### 第 10 步：PublishRequested → Published（正式发布）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/publish_requested.rs`（10,242 字节）|
-| 最重要的事 | **事务性发布**：替换旧版本 + 激活新版本 |
+| 属性       | 说明                                           |
+| ---------- | ---------------------------------------------- |
+| 处理器     | `handlers/publish_requested.rs`（10,242 字节） |
+| 最重要的事 | **事务性发布**：替换旧版本 + 激活新版本        |
 
  **原子操作：**
+
  1. `publish_in_tx()`：在一个 MySQL 事务内完成
     - 将同来源/同页面的旧版本标记为 `superseded`（被替代）
     - 将新版本标记为 `active`（当前活跃版本）
@@ -438,12 +473,13 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
 ### 可选步骤：Rollback（回滚）
 
- | 属性 | 说明 |
- |------|------|
- | 处理器 | `handlers/rollback_requested.rs` |
- | 触发 | 管理员手动请求回滚到旧版本 |
+| 属性   | 说明                             |
+| ------ | -------------------------------- |
+| 处理器 | `handlers/rollback_requested.rs` |
+| 触发   | 管理员手动请求回滚到旧版本       |
 
  回滚时：
+
  1. 把当前活跃版本标记为 `rolled_back`
  2. 把目标旧版本重新标记为 `active`
  3. 同步 Qdrant 状态
@@ -457,38 +493,47 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 ### 6.1 事件级别幂等
 
  每个 Outbox 事件都有一个 **event_key**（SHA-256 哈希）：
+
  ```
  event_key = sha256(event_type | aggregate_type | aggregate_id | run_id | version_key)
  ```
+
  数据库有 UNIQUE 约束，重复插入直接忽略。
 
 ### 6.2 运行级别幂等
 
  每个摄入运行有一个 **run_key**（SHA-256 哈希）：
+
  ```
  run_key = sha256(source_id | page_id | content_hash | llm_prompt_version |
                   chunker_version | embedding_model | pipeline_version)
  ```
+
  同样的来源、同样的内容、同样的管道版本 → 同样的 run_key。
  如果发现已存在的 run_key，不是直接跳过，而是**检查运行状态并恢复**（resume 逻辑）。
 
 ### 6.3 Chunk 级别幂等
 
  每个 Chunk 有一个 **chunk_hash**（SHA-256 哈希）：
+
  ```
  chunk_hash = sha256(version_key | chunk_type | chunk_index | content | chunker_version)
  ```
+
  同样的 chunk_hash 不会重复插入。
 
 ### 6.4 状态机级别幂等
 
  状态转换函数 `can_transition_run()` 明确包含一条规则：
+
  ```
  if from_status == to_status && from_stage == to_stage → true（幂等）
  ```
+
  到达同一状态不视为错误。
 
  运行表的阶段推进不是“先查再改”，而是单条 SQL CAS：
+
  ```sql
  UPDATE knowledge_ingestion_runs
  SET status = ?, stage = ?
@@ -512,36 +557,41 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
  网页抓取是一个高风险操作，代码实现了多层防护：
 
 ### 7.1 协议限制
- - 只允许 `http://` 和 `https://`
- - 不允许带用户信息（`user:password@`）
+
+- 只允许 `http://` 和 `https://`
+- 不允许带用户信息（`user:password@`）
 
 ### 7.2 IP 黑名单（SSRF 防护）
+
  抓取前先 DNS 解析，然后检查 IP 地址：
 
- | 禁止的 IP 范围 | 原因 |
- |---|---|
- | 127.0.0.0/8 | 本机回环 |
- | 10.0.0.0/8 | 内网 |
- | 172.16.0.0/12 | 内网 |
- | 192.168.0.0/16 | 内网 |
- | 169.254.x.x | 云元数据 API（如 AWS 的 169.254.169.254）|
- | 224.0.0.0~239.0.0.0 | 组播 |
- | 240.0.0.0+ | 保留 |
- | IPv6 loopback/link-local | 同上 |
+| 禁止的 IP 范围           | 原因                                      |
+| ------------------------ | ----------------------------------------- |
+| 127.0.0.0/8              | 本机回环                                  |
+| 10.0.0.0/8               | 内网                                      |
+| 172.16.0.0/12            | 内网                                      |
+| 192.168.0.0/16           | 内网                                      |
+| 169.254.x.x              | 云元数据 API（如 AWS 的 169.254.169.254） |
+| 224.0.0.0~239.0.0.0      | 组播                                      |
+| 240.0.0.0+               | 保留                                      |
+| IPv6 loopback/link-local | 同上                                      |
 
 ### 7.3 域名白名单
+
  每个来源可以配置 `allowed_domains`，只允许抓取指定域名的 URL。
  白名单使用后缀匹配：`sub.example.com` 匹配 `.example.com`。
 
 ### 7.4 请求限速
- - 每个域名有最小请求间隔（默认 2 秒）
- - 增加随机抖动（默认 ±1 秒）
- - 429/503 状态码自动等待 Retry-After
+
+- 每个域名有最小请求间隔（默认 2 秒）
+- 增加随机抖动（默认 ±1 秒）
+- 429/503 状态码自动等待 Retry-After
 
 ### 7.5 内容限制
- - 只允许 HTML/XML/纯文本的 Content-Type
- - 有最大 body 大小限制
- - 最多跟随 5 次重定向
+
+- 只允许 HTML/XML/纯文本的 Content-Type
+- 有最大 body 大小限制
+- 最多跟随 5 次重定向
 
 ---
 
@@ -637,12 +687,12 @@ Dispatcher 领取 outbox 事件时不是简单 `ORDER BY priority LIMIT N`。当
 
 当前脚本集中在 `scripts/web_ingestion/`：
 
-| 脚本 | 作用 |
-|---|---|
-| `1.create-tasks.ps1` | 批量创建中文维基百科多主题采集任务：调用 `2.fetch-urls.ps1` 导出 URL，再调用 `3.import-urls.ps1` 导入数据库 |
-| `2.fetch-urls.ps1` | 按 Wikipedia category 拉取页面 URL，支持 `-MaxPages`、`-MaxDepth`、`-ProxyUrl`、`-DelayMs` |
-| `3.import-urls.ps1` | 创建/更新 `web_sources`，批量导入 `web_source_urls` |
-| `publish-reviewed-web-knowledge.ps1` | 给已审核的 `knowledge_publish_records.id` 写入发布事件，由 ServerRS 正常发布 |
+| 脚本                                 | 作用                                                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `1.create-tasks.ps1`                 | 批量创建中文维基百科多主题采集任务：调用 `2.fetch-urls.ps1` 导出 URL，再调用 `3.import-urls.ps1` 导入数据库 |
+| `2.fetch-urls.ps1`                   | 按 Wikipedia category 拉取页面 URL，支持 `-MaxPages`、`-MaxDepth`、`-ProxyUrl`、`-DelayMs`                  |
+| `3.import-urls.ps1`                  | 创建/更新 `web_sources`，批量导入 `web_source_urls`                                                         |
+| `publish-reviewed-web-knowledge.ps1` | 给已审核的 `knowledge_publish_records.id` 写入发布事件，由 ServerRS 正常发布                                |
 
 常用命令：
 
@@ -718,14 +768,15 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
 ### 10.4 审核显示字段
 
  审核页显示每个条目的：
- - 来源名称
- - 来源 URL
- - 标题
- - 当前发布状态（staged / published / superseded）
- - 质量评分
- - AI 生成的 should_publish 建议
- - 风险标记
- - 创建时间 / 更新时间
+
+- 来源名称
+- 来源 URL
+- 标题
+- 当前发布状态（staged / published / superseded）
+- 质量评分
+- AI 生成的 should_publish 建议
+- 风险标记
+- 创建时间 / 更新时间
 
 ---
 
@@ -807,17 +858,19 @@ pwsh -File .\scripts\web_ingestion\3.import-urls.ps1 `
 
  因为每个阶段耗时不同（抓取 3 秒 vs AI 蒸馏 30 秒 vs 分块 0.1 秒）。
  同步执行会让快的阶段等慢的阶段，浪费资源。事件驱动允许：
- - 不同的 URL 处于不同阶段，并行处理
- - 失败后自动重试，不影响其他 URL
- - 断开后可以从断点继续（resume 逻辑）
+
+- 不同的 URL 处于不同阶段，并行处理
+- 失败后自动重试，不影响其他 URL
+- 断开后可以从断点继续（resume 逻辑）
 
 ### 12.2 Outbox 模式（事件发件箱）是什么？
 
  保证"操作数据库"和"发事件"是**原子**的。流程：
+
  1. Handler 先写入业务数据（如创建 ingestion_run）
  2. 然后写入一条 outbox 事件（在同一数据库事务中）
-3. Dispatcher 从 outbox 按阶段配额领取事件，分发处理
-4. 处理成功 → 标记 outbox 事件为 published
+ 3. Dispatcher 从 outbox 按阶段配额领取事件，分发处理
+ 4. 处理成功 → 标记 outbox 事件为 published
 
 Dispatcher 领取事件时会按流水线深度排序：越接近发布的事件优先级越高，其次才是 `PageFetched`、`UrlDiscovered` 和 `CrawlJobCreated`，避免大规模种子导入时只抓新 URL、不推进已抓页面。
 
@@ -837,16 +890,18 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
 ### 12.3 为什么要有 Qdrant 同步？DB 不是也有数据吗？
 
  DB 是权威数据源（source of truth），Qdrant 是加速索引。
- - RetrievalService 检索时**先查 DB 确认 status=1**
- - 再从 Qdrant 做语义相似度搜索
- - 即使 Qdrant 数据过期，DB 的 status 也能兜底
+
+- RetrievalService 检索时**先查 DB 确认 status=1**
+- 再从 Qdrant 做语义相似度搜索
+- 即使 Qdrant 数据过期，DB 的 status 也能兜底
 
 ### 12.4 run_key 到底有什么作用？
 
  run_key 是**内容 + 管道版本**的哈希。它保证：
- - 同一篇内容，用同样的管道版本处理 → 只处理一次（幂等）
- - 更新了管道版本（如换了更好的分块器）→ 重新处理所有内容
- - 内容更新了 → 自动触发新版本的摄入运行
+
+- 同一篇内容，用同样的管道版本处理 → 只处理一次（幂等）
+- 更新了管道版本（如换了更好的分块器）→ 重新处理所有内容
+- 内容更新了 → 自动触发新版本的摄入运行
 
 ---
 
@@ -855,6 +910,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
 ### 13.1 来源管理（3 张表）
 
  **web_sources** —— 要爬取的网站配置
+
  ```sql
  id BIGINT PRIMARY KEY,
  name VARCHAR(100),            -- 来源名称
@@ -870,6 +926,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
  ```
 
  **web_source_urls** —— 从来源发现的待爬 URL
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,              -- 关联 web_sources
@@ -884,6 +941,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
  ```
 
  **web_pages** —— 抓取到的网页实体
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,
@@ -898,6 +956,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
 ### 13.2 运行与文档（4 张表）
 
  **knowledge_ingestion_runs** —— 一次摄入运行的完整追踪
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,
@@ -923,6 +982,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
  ```
 
  **knowledge_documents** —— 处理后的文档
+
  ```sql
  document_id BIGINT PRIMARY KEY,
  source_type VARCHAR(32),        -- 'web_ingestion'（vs 传统 RAG）
@@ -934,6 +994,7 @@ ChunksEmbedded 领取上限 = handler_parallelism.chunks_embedded
  ```
 
 **knowledge_chunks** —— 文档被切成的文本块
+
 ```sql
 chunk_id BIGINT PRIMARY KEY,
 document_id BIGINT,
@@ -949,6 +1010,7 @@ status TINYINT,                 -- 0=暂存, 1=已发布
 ```
 
 **knowledge_embeddings** —— Chunk 的 embedding JSON
+
 ```sql
 embedding_id BIGINT PRIMARY KEY,
 chunk_id BIGINT,
@@ -961,6 +1023,7 @@ embedding_json JSON,
 ### 13.3 发布与版本（3 张表）
 
  **knowledge_publish_records** —— 版本发布记录
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,
@@ -979,6 +1042,7 @@ embedding_json JSON,
  ```
 
  **knowledge_chunk_manifests** —— 发布版本→Chunk 的映射
+
  ```sql
  id BIGINT PRIMARY KEY,
  publish_record_id BIGINT,
@@ -993,6 +1057,7 @@ embedding_json JSON,
  ```
 
  **knowledge_vector_manifests** —— Chunk→Qdrant 向量的映射
+
  ```sql
  id BIGINT PRIMARY KEY,
  publish_record_id BIGINT,
@@ -1011,6 +1076,7 @@ embedding_json JSON,
 ### 13.4 事件与审计（2 张表）
 
  **domain_event_outbox** —— 异步事件驱动核心
+
  ```sql
  id BIGINT PRIMARY KEY,
  event_key CHAR(64) UNIQUE,      -- ★ 幂等键
@@ -1029,6 +1095,7 @@ embedding_json JSON,
  ```
 
  **web_ingestion_audit_logs** —— 审计日志
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,
@@ -1046,6 +1113,7 @@ embedding_json JSON,
 ### 13.5 其他（2 张表）
 
  **web_crawl_jobs** —— 爬取任务
+
  ```sql
  id BIGINT PRIMARY KEY,
  source_id BIGINT,
@@ -1066,6 +1134,7 @@ embedding_json JSON,
 ### 新增一个数据源
 
  在 MySQL 中插入一条记录：
+
  ```sql
  INSERT INTO web_sources (name, source_type, seed_urls, allowed_domains,
                           approval_status, trust_level, auto_publish, enabled)
@@ -1149,6 +1218,7 @@ page_cleaned = 2
  [web_ingestion]
  pipeline_version = "20260615-new"  # 改这个值就行
  ```
+
  修改 `pipeline_version` 会改变所有内容的 run_key，导致所有内容被重新处理一次。
 
 ---
