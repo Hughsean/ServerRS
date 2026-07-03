@@ -11,7 +11,7 @@ use crate::domain::rag::RAGRepoT;
 use crate::domain::vector_store::VectorStoreT;
 use crate::domain::web_ingestion::distiller::KnowledgeDistiller;
 use crate::domain::web_ingestion::fetcher::WebContentFetcher;
-use crate::domain::web_ingestion::repository::*;
+use crate::domain::web_ingestion::repo::*;
 use crate::shared::config::{EmbeddingConfig, WebIngestionConfig};
 
 /// All dependencies a handler may need. Cheap to clone (everything is `Arc`).

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{NewOutboxEvent, OutboxRepoT};
+use crate::domain::web_ingestion::repo::{NewOutboxEvent, OutboxRepoT};
 
 /// Emit an `IngestionRejected` terminal event for a run.
 pub async fn emit_rejected(

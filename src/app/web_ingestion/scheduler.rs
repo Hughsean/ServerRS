@@ -9,7 +9,7 @@ use chrono::Utc;
 
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
-use crate::domain::web_ingestion::repository::{
+use crate::domain::web_ingestion::repo::{
     NewOutboxEvent, NewWebCrawlJob, OutboxRepoT, WebCrawlJobRepoT, WebSourceRepoT,
 };
 use crate::shared::error::AppError;

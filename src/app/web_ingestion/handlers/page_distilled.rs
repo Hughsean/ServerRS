@@ -11,7 +11,7 @@ use crate::app::web_ingestion::quality_gate::{self, QualityGateDecision};
 use crate::app::web_ingestion::services::{quality_result::QualityResult, terminal_events};
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::DomainEvent;
+use crate::domain::web_ingestion::repo::DomainEvent;
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 
 pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), WebIngestionError> {

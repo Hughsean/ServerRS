@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::domain::rag::RAGRepoT;
 use crate::domain::vector_store::{VectorDistance, VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{
+use crate::domain::web_ingestion::repo::{
     IngestionRunRepoT, KnowledgePublishRecord, KnowledgeVectorManifest, PublishRecordRepoT,
     VectorManifestRepoT,
 };
@@ -134,7 +134,7 @@ fn build_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::web_ingestion::repository::KnowledgePublishRecord;
+    use crate::domain::web_ingestion::repo::KnowledgePublishRecord;
     use chrono::Utc;
 
     fn manifest() -> KnowledgeVectorManifest {

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::IngestionRunRepoT;
+use crate::domain::web_ingestion::repo::IngestionRunRepoT;
 
 /// Outcome of an attempted transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

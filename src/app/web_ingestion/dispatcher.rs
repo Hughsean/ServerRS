@@ -13,7 +13,7 @@ use crate::app::web_ingestion::handlers;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{DomainEvent, OutboxClaimQuota, OutboxRepoT};
+use crate::domain::web_ingestion::repo::{DomainEvent, OutboxClaimQuota, OutboxRepoT};
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 use crate::shared::config::WebIngestionHandlerParallelismConfig;
 use crate::shared::error::AppError;

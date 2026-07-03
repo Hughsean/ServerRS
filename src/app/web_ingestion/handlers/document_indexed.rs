@@ -15,7 +15,7 @@ use crate::app::web_ingestion::services::terminal_events;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::vector_store::{VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{
+use crate::domain::web_ingestion::repo::{
     DomainEvent, KnowledgeChunkManifest, NewAuditLog, NewVectorManifest,
 };
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
@@ -242,7 +242,7 @@ async fn upsert_points(
     collection: &str,
     dimension: usize,
     run_id: u64,
-    run: &crate::domain::web_ingestion::repository::KnowledgeIngestionRun,
+    run: &crate::domain::web_ingestion::repo::KnowledgeIngestionRun,
     document_id: u64,
     chunk_manifests: &[KnowledgeChunkManifest],
     vector_manifests: &[NewVectorManifest],

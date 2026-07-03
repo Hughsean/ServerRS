@@ -11,7 +11,7 @@ use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::services::quality_result::QualityResult;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{DomainEvent, NewAuditLog, NewOutboxEvent};
+use crate::domain::web_ingestion::repo::{DomainEvent, NewAuditLog, NewOutboxEvent};
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 
 pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), WebIngestionError> {
@@ -176,7 +176,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
 fn should_request_auto_publish(
     global_auto_publish: bool,
-    run: &crate::domain::web_ingestion::repository::KnowledgeIngestionRun,
+    run: &crate::domain::web_ingestion::repo::KnowledgeIngestionRun,
 ) -> bool {
     global_auto_publish
         && run
@@ -194,8 +194,8 @@ mod tests {
 
     fn run_with_decision(
         value: &str,
-    ) -> crate::domain::web_ingestion::repository::KnowledgeIngestionRun {
-        crate::domain::web_ingestion::repository::KnowledgeIngestionRun {
+    ) -> crate::domain::web_ingestion::repo::KnowledgeIngestionRun {
+        crate::domain::web_ingestion::repo::KnowledgeIngestionRun {
             id: 1,
             source_id: 1,
             source_url_id: Some(1),

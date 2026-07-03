@@ -5,7 +5,7 @@
 //! a branch and require no further work. They are no-op + marked published.
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::DomainEvent;
+use crate::domain::web_ingestion::repo::DomainEvent;
 
 pub async fn handle(event: &DomainEvent) -> Result<(), WebIngestionError> {
     tracing::info!(

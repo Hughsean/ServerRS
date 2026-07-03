@@ -17,7 +17,7 @@ use crate::app::web_ingestion::services::terminal_events;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::rag::{NewChunk, NewDocument};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{
+use crate::domain::web_ingestion::repo::{
     DomainEvent, KnowledgeIngestionRun, NewAuditLog, NewChunkManifest, NewPublishRecord,
 };
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};

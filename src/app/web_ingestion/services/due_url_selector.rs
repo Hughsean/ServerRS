@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::domain::web_ingestion::repository::WebSourceUrl;
+use crate::domain::web_ingestion::repo::WebSourceUrl;
 
 /// Whether `url` is due for crawling at `now`.
 pub fn is_due(url: &WebSourceUrl, now: DateTime<Utc>) -> bool {

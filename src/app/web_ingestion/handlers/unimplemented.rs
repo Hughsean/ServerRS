@@ -5,7 +5,7 @@
 //! progress is silently lost. These are replaced as each phase lands.
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::DomainEvent;
+use crate::domain::web_ingestion::repo::DomainEvent;
 
 pub async fn not_implemented(event: &DomainEvent, stage: &str) -> Result<(), WebIngestionError> {
     Err(WebIngestionError::Internal(format!(

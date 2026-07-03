@@ -18,7 +18,7 @@ use crate::app::web_ingestion::services::{
 };
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{
+use crate::domain::web_ingestion::repo::{
     DomainEvent, NewAuditLog, NewIngestionRun, NewOutboxEvent, NewWebPage,
 };
 use crate::domain::web_ingestion::status::{audit_action, run_stage, run_status};
@@ -350,7 +350,7 @@ enum ResumeOutcome {
 
 async fn resume_existing_run(
     ctx: &PipelineContext,
-    existing: &crate::domain::web_ingestion::repository::KnowledgeIngestionRun,
+    existing: &crate::domain::web_ingestion::repo::KnowledgeIngestionRun,
     content_hash: &str,
     body_text: &str,
 ) -> Result<ResumeOutcome, WebIngestionError> {

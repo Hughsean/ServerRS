@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::IngestionRunRepoT;
+use crate::domain::web_ingestion::repo::IngestionRunRepoT;
 
 /// Persist the raw fetched body for a run.
 pub async fn save_fetched_body(

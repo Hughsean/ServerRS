@@ -20,7 +20,7 @@ use crate::domain::vector_store::VectorStoreT;
 use crate::infra::web_ingestion::distiller::OpenAiKnowledgeDistiller;
 use crate::infra::web_ingestion::fetcher::WebFetcher;
 use crate::infra::web_ingestion::repo::*;
-use crate::infra::web_ingestion::review_repository::SeaOrmKnowledgeReviewRepository;
+use crate::infra::web_ingestion::review_repository::KnowledgeReviewRepo;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 
@@ -35,7 +35,7 @@ pub async fn init_web_ingestion(
 ) -> Result<(Arc<KnowledgeReviewService>, Option<JoinHandle<()>>), AppError> {
     let wc = &config.web_ingestion;
     let review_service = Arc::new(KnowledgeReviewService::new(
-        Arc::new(SeaOrmKnowledgeReviewRepository::new(db.clone())),
+        Arc::new(KnowledgeReviewRepo::new(db.clone())),
         wc.enabled && wc.dispatcher_enabled,
     ));
 
@@ -63,15 +63,15 @@ pub async fn init_web_ingestion(
 
     let ctx = PipelineContext {
         source_repo: Arc::new(WebSourceRepo::new(db.clone())),
-        source_url_repo: Arc::new(SeaOrmWebSourceUrlRepository::new(db.clone())),
-        crawl_job_repo: Arc::new(SeaOrmWebCrawlJobRepository::new(db.clone())),
-        page_repo: Arc::new(SeaOrmWebPageRepository::new(db.clone())),
-        run_repo: Arc::new(SeaOrmIngestionRunRepository::new(db.clone())),
-        publish_repo: Arc::new(SeaOrmPublishRecordRepository::new(db.clone())),
-        chunk_manifest_repo: Arc::new(SeaOrmChunkManifestRepository::new(db.clone())),
-        vector_manifest_repo: Arc::new(SeaOrmVectorManifestRepository::new(db.clone())),
-        outbox_repo: Arc::new(SeaOrmOutboxRepository::new(db.clone())),
-        audit_repo: Arc::new(SeaOrmAuditLogRepository::new(db.clone())),
+        source_url_repo: Arc::new(WebSourceUrlRepo::new(db.clone())),
+        crawl_job_repo: Arc::new(WebCrawlJobRepo::new(db.clone())),
+        page_repo: Arc::new(WebPageRepo::new(db.clone())),
+        run_repo: Arc::new(IngestionRunRepo::new(db.clone())),
+        publish_repo: Arc::new(PublishRecordRepo::new(db.clone())),
+        chunk_manifest_repo: Arc::new(ChunkManifestRepo::new(db.clone())),
+        vector_manifest_repo: Arc::new(VectorManifestRepo::new(db.clone())),
+        outbox_repo: Arc::new(OutboxRepo::new(db.clone())),
+        audit_repo: Arc::new(AuditLogRepo::new(db.clone())),
         rag_repo: Arc::clone(rag_repo),
         fetcher,
         distiller,

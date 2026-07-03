@@ -12,7 +12,7 @@ use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::services::qdrant_activation_service;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{DomainEvent, NewAuditLog, NewOutboxEvent};
+use crate::domain::web_ingestion::repo::{DomainEvent, NewAuditLog, NewOutboxEvent};
 use crate::domain::web_ingestion::status::{audit_action, publish_status, run_stage, run_status};
 
 pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), WebIngestionError> {

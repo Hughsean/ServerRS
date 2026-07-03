@@ -9,12 +9,12 @@ use crate::app::web_ingestion::hash;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
 use crate::app::web_ingestion::services::due_url_selector;
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::NewOutboxEvent;
+use crate::domain::web_ingestion::repo::NewOutboxEvent;
 use crate::domain::web_ingestion::status::{source_approval, source_trust};
 use chrono::Utc;
 
 pub async fn handle(
-    event: &crate::domain::web_ingestion::repository::DomainEvent,
+    event: &crate::domain::web_ingestion::repo::DomainEvent,
     ctx: &PipelineContext,
 ) -> Result<(), WebIngestionError> {
     let job_id = event.aggregate_id;

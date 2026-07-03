@@ -10,7 +10,7 @@ use sea_orm::{
 use serde_json::Value as JsonValue;
 
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::*;
+use crate::domain::web_ingestion::repo::*;
 use crate::domain::web_ingestion::status::publish_status;
 use crate::infra::repo::entities::*;
 
@@ -116,18 +116,18 @@ fn model_to_web_source(m: web_sources::Model) -> WebSource {
 // WebSourceUrlRepository
 // ============================================================================
 
-pub struct SeaOrmWebSourceUrlRepository {
+pub struct WebSourceUrlRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmWebSourceUrlRepository {
+impl WebSourceUrlRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl WebSourceUrlRepoT for SeaOrmWebSourceUrlRepository {
+impl WebSourceUrlRepoT for WebSourceUrlRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebSourceUrl>, WebIngestionError> {
         let row = web_source_urls::Entity::find_by_id(id)
             .one(&self.db)
@@ -260,18 +260,18 @@ fn row_to_ws_url_active(row: WebSourceUrl) -> web_source_urls::ActiveModel {
 // WebCrawlJobRepository
 // ============================================================================
 
-pub struct SeaOrmWebCrawlJobRepository {
+pub struct WebCrawlJobRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmWebCrawlJobRepository {
+impl WebCrawlJobRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl WebCrawlJobRepoT for SeaOrmWebCrawlJobRepository {
+impl WebCrawlJobRepoT for WebCrawlJobRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebCrawlJob>, WebIngestionError> {
         let row = web_crawl_jobs::Entity::find_by_id(id)
             .one(&self.db)
@@ -359,18 +359,18 @@ fn model_to_crawl_job(m: web_crawl_jobs::Model) -> WebCrawlJob {
 // WebPageRepository
 // ============================================================================
 
-pub struct SeaOrmWebPageRepository {
+pub struct WebPageRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmWebPageRepository {
+impl WebPageRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl WebPageRepoT for SeaOrmWebPageRepository {
+impl WebPageRepoT for WebPageRepo {
     async fn find_by_id(&self, id: u64) -> Result<Option<WebPage>, WebIngestionError> {
         let row = web_pages::Entity::find_by_id(id)
             .one(&self.db)
@@ -477,18 +477,18 @@ fn row_to_web_page_active(row: WebPage) -> web_pages::ActiveModel {
 // IngestionRunRepository
 // ============================================================================
 
-pub struct SeaOrmIngestionRunRepository {
+pub struct IngestionRunRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmIngestionRunRepository {
+impl IngestionRunRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl IngestionRunRepoT for SeaOrmIngestionRunRepository {
+impl IngestionRunRepoT for IngestionRunRepo {
     async fn find_by_id(
         &self,
         id: u64,
@@ -764,18 +764,18 @@ fn model_to_run(m: knowledge_ingestion_runs::Model) -> KnowledgeIngestionRun {
 // PublishRecordRepository
 // ============================================================================
 
-pub struct SeaOrmPublishRecordRepository {
+pub struct PublishRecordRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmPublishRecordRepository {
+impl PublishRecordRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl PublishRecordRepoT for SeaOrmPublishRecordRepository {
+impl PublishRecordRepoT for PublishRecordRepo {
     async fn find_by_id(
         &self,
         id: u64,
@@ -1146,18 +1146,18 @@ fn model_to_pr(m: knowledge_publish_records::Model) -> KnowledgePublishRecord {
 // ChunkManifestRepository
 // ============================================================================
 
-pub struct SeaOrmChunkManifestRepository {
+pub struct ChunkManifestRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmChunkManifestRepository {
+impl ChunkManifestRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl ChunkManifestRepoT for SeaOrmChunkManifestRepository {
+impl ChunkManifestRepoT for ChunkManifestRepo {
     async fn find_by_version_and_hash(
         &self,
         version_key: &str,
@@ -1257,18 +1257,18 @@ fn model_to_cm(m: knowledge_chunk_manifests::Model) -> KnowledgeChunkManifest {
 // VectorManifestRepository
 // ============================================================================
 
-pub struct SeaOrmVectorManifestRepository {
+pub struct VectorManifestRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmVectorManifestRepository {
+impl VectorManifestRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl VectorManifestRepoT for SeaOrmVectorManifestRepository {
+impl VectorManifestRepoT for VectorManifestRepo {
     async fn find_by_collection_and_point(
         &self,
         collection: &str,
@@ -1374,18 +1374,18 @@ fn model_to_vm(m: knowledge_vector_manifests::Model) -> KnowledgeVectorManifest 
 // OutboxRepository
 // ============================================================================
 
-pub struct SeaOrmOutboxRepository {
+pub struct OutboxRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmOutboxRepository {
+impl OutboxRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl OutboxRepoT for SeaOrmOutboxRepository {
+impl OutboxRepoT for OutboxRepo {
     async fn insert_event(&self, event: NewOutboxEvent) -> Result<DomainEvent, WebIngestionError> {
         // Idempotent: INSERT … ON DUPLICATE KEY UPDATE (no-op) using parameterized query.
         let payload_str = serde_json::to_string(&event.payload).unwrap_or_default();
@@ -1746,18 +1746,18 @@ fn model_to_event(m: domain_event_outbox::Model) -> DomainEvent {
 // AuditLogRepository
 // ============================================================================
 
-pub struct SeaOrmAuditLogRepository {
+pub struct AuditLogRepo {
     db: DatabaseConnection,
 }
 
-impl SeaOrmAuditLogRepository {
+impl AuditLogRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl AuditLogRepoT for SeaOrmAuditLogRepository {
+impl AuditLogRepoT for AuditLogRepo {
     async fn insert(&self, log: NewAuditLog) -> Result<AuditLog, WebIngestionError> {
         let active = web_ingestion_audit_logs::ActiveModel {
             source_id: Set(log.source_id),

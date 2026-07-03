@@ -8,11 +8,11 @@ use server_rs::bootstrap::infra::InfraContext;
 use server_rs::bootstrap::repos::build_repos;
 use server_rs::bootstrap::vector::VectorContext;
 use server_rs::domain::rag::RAGRepoT;
-use server_rs::domain::web_ingestion::repository::{
+use server_rs::domain::web_ingestion::repo::{
     IngestionRunRepoT, PublishRecordRepoT, VectorManifestRepoT,
 };
 use server_rs::infra::web_ingestion::repo::{
-    SeaOrmIngestionRunRepository, SeaOrmPublishRecordRepository, SeaOrmVectorManifestRepository,
+    IngestionRunRepo, PublishRecordRepo, VectorManifestRepo,
 };
 use server_rs::shared::config::AppConfig;
 use tracing::{error, info};
@@ -57,11 +57,11 @@ async fn main() -> Result<(), DynError> {
     }
 
     let vector_manifest_repo: Arc<dyn VectorManifestRepoT> =
-        Arc::new(SeaOrmVectorManifestRepository::new(infra.db.clone()));
+        Arc::new(VectorManifestRepo::new(infra.db.clone()));
     let publish_record_repo: Arc<dyn PublishRecordRepoT> =
-        Arc::new(SeaOrmPublishRecordRepository::new(infra.db.clone()));
+        Arc::new(PublishRecordRepo::new(infra.db.clone()));
     let run_repo: Arc<dyn IngestionRunRepoT> =
-        Arc::new(SeaOrmIngestionRunRepository::new(infra.db.clone()));
+        Arc::new(IngestionRunRepo::new(infra.db.clone()));
 
     let active_ids = load_active_ids(&infra.db, &args).await?;
 

@@ -12,7 +12,7 @@ use crate::app::web_ingestion::services::terminal_events;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::rag::{KnowledgeChunk, NewEmbedding};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{DomainEvent, NewAuditLog};
+use crate::domain::web_ingestion::repo::{DomainEvent, NewAuditLog};
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 
 pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), WebIngestionError> {

@@ -16,10 +16,10 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::HashMap;
-pub struct SeaOrmKnowledgeReviewRepository {
+pub struct KnowledgeReviewRepo {
     db: DatabaseConnection,
 }
-impl SeaOrmKnowledgeReviewRepository {
+impl KnowledgeReviewRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -125,7 +125,7 @@ impl SeaOrmKnowledgeReviewRepository {
     }
 }
 #[async_trait]
-impl KnowledgeReviewRepoT for SeaOrmKnowledgeReviewRepository {
+impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
     async fn list(
         &self,
         filter: KnowledgeReviewFilter,
