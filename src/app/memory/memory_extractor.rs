@@ -234,10 +234,10 @@ impl MemoryExtractor {
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: "Classify how a proposed user memory relates to existing memories. \
-                              Return only JSON: {\"decision\":\"same|related|new_evidence|contradiction|new\",\
-                              \"candidate_memory_id\":number|null}. Use a candidate id only for \
-                              same, new_evidence, or contradiction. Do not infer diagnoses or risk labels."
+                    content: "判断一条待新增的用户记忆与已有记忆之间的关系。\
+                              只返回 JSON 对象：{{\"decision\":\"same|related|new_evidence|contradiction|new\",\
+                              \"candidate_memory_id\":number|null}}。仅当 decision 为 same、new_evidence 或 \
+                              contradiction 时才需提供 candidate_memory_id。不要推断诊断或风险标签。"
                         .into(),
                     tool_calls: None,
                     tool_call_id: None,
@@ -322,24 +322,24 @@ impl MemoryExtractor {
             .collect();
 
         let prompt = format!(
-            r#"Proposed new memories (JSON array, each has an "index" field):
+	            r#"待新增的记忆列表（JSON 数组，每条有 "index" 字段）：
 {}
 
-Existing candidate memories:
+已有候选记忆：
 {}
 
-For each proposed memory, decide how it relates to the candidates.
-Return a JSON array of objects — one per proposed memory in index order:
+对每条待新增记忆，判断它与候选记忆之间的关系。
+按 index 顺序输出 JSON 数组，每条对象格式：
 [{{"index":0,"decision":"new|related|same|new_evidence|contradiction","candidate_memory_id":null|number}}]
 
-Rules:
-- "same": exact duplicate of a candidate → provide its memory_id
-- "related": similar but distinct → save as new independent memory, candidate_memory_id=null
-- "new_evidence": reinforces an existing candidate → provide its memory_id
-- "contradiction": contradicts a specific candidate → provide its memory_id
-- "new": no meaningful relation → candidate_memory_id=null
-- "same" / "new_evidence" / "contradiction" MUST include a valid candidate_memory_id
-- Prefer "new" over forcing an inaccurate relationship"#,
+规则：
+- "same": 与某条候选记忆完全重复 → 提供对应的 memory_id
+- "related": 相关但不相同 → 作为新独立记忆保存，candidate_memory_id=null
+- "new_evidence": 强化了某条已有记忆 → 提供对应的 memory_id
+- "contradiction": 与某条候选记忆矛盾 → 提供对应的 memory_id
+- "new": 无有意义关联 → candidate_memory_id=null
+- "same" / "new_evidence" / "contradiction" 必须提供有效的 candidate_memory_id
+- 不确定时优先选 "new"，不要强行建立不准确的关联"#,
             serde_json::to_string_pretty(&proposed_json).unwrap_or_default(),
             serde_json::to_string_pretty(&candidates_json).unwrap_or_default(),
         );
@@ -348,8 +348,8 @@ Rules:
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: "You classify how proposed user memories relate to \
-                              existing memories. Return only a raw JSON array, no markdown."
+                    content: "你判断多条待新增用户记忆与已有记忆之间的关系。\
+                              只返回原始 JSON 数组，不要 markdown。"
                         .into(),
                     tool_calls: None,
                     tool_call_id: None,
