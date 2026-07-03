@@ -20,6 +20,18 @@ use crate::shared::error::AppError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
+/// Result of one claim-and-spawn attempt within the main loop.
+enum ClaimLoopResult {
+    /// Successfully claimed an event and spawned a handler task.
+    Spawned,
+    /// Scanned all quotas; none had runnable events.
+    NoRunnableEvent,
+    /// Claim query returned an error.
+    ClaimError(AppError),
+    /// A semaphore was closed; dispatcher is shutting down.
+    ShuttingDown,
+}
+
 /// Run one dispatcher tick: claim a batch and process each event.
 pub async fn run_tick(ctx: &PipelineContext) -> Result<(), AppError> {
     let tick_started = Instant::now();
@@ -206,6 +218,19 @@ impl HandlerLimiters {
             | ev::KNOWLEDGE_SUPERSEDED
             | ev::KNOWLEDGE_ROLLED_BACK => Arc::clone(&self.terminal),
             _ => Arc::clone(&self.default),
+        }
+    }
+
+    /// Return the Semaphore for a given quota.
+    ///
+    /// A quota's `event_types` may contain multiple entries (e.g. the terminal
+    /// quota groups several terminal events), but they all share one Semaphore.
+    /// For the default quota (empty `event_types`), returns the `default` Semaphore.
+    fn semaphore_for_quota(&self, quota: &OutboxClaimQuota) -> Arc<Semaphore> {
+        if quota.event_types.is_empty() {
+            Arc::clone(&self.default)
+        } else {
+            self.limiter_for(&quota.event_types[0])
         }
     }
 }
