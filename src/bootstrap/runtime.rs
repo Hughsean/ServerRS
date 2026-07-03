@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::api::router;
@@ -16,6 +17,7 @@ use crate::shared::config::AppConfig;
 /// 顶层启动编排。按 6 阶段顺序执行：
 ///   基础设施 → 仓库 → 任务系统 → 向量/RAG → 业务服务 → HTTP 服务
 pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
+    let shutdown_token = CancellationToken::new();
     // 阶段 1: 基础设施
     let infra = InfraContext::new(&config).await?;
     // 阶段 2: 仓库
@@ -42,19 +44,29 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     let vector = VectorContext::new(&config, &infra, &repos).await?;
     vector.ensure_collections().await?;
     // 阶段 5: 业务服务
-    let services =
-        ServiceGraph::build(&config, &infra, &repos, &vector, &mut tasks, &auth_graph).await?;
+    let services = ServiceGraph::build(
+        &config,
+        &infra,
+        &repos,
+        &vector,
+        &mut tasks,
+        &auth_graph,
+        shutdown_token.clone(),
+    )
+    .await?;
     // 阶段 6: HTTP 服务
-    serve(&config, services, tasks, infra).await
+    serve(&config, services, tasks, infra, shutdown_token).await
 }
 
 /// HTTP 服务启动 + 优雅关闭 + 资源回收。
 async fn serve(
     config: &AppConfig,
-    services: ServiceGraph,
+    mut services: ServiceGraph,
     tasks: TaskContext,
     infra: InfraContext,
+    shutdown_token: CancellationToken,
 ) -> Result<(), std::io::Error> {
+    let dispatcher_handle = services.dispatcher_handle.take();
     let state = build_state(&services);
 
     #[cfg(feature = "qq_bot")]
@@ -77,8 +89,20 @@ async fn serve(
         .with_graceful_shutdown(shutdown_signal())
         .await;
 
+    // 1. Notify all background tasks to stop
+    shutdown_token.cancel();
+
+    // 2. Wait for dispatcher graceful drain (has internal grace timeout + abort_all fallback)
+    if let Some(handle) = dispatcher_handle {
+        if let Err(e) = handle.await {
+            tracing::error!(error = %e, "dispatcher task join error");
+        }
+    }
+
+    // 3. Abort remaining generic background tasks (periodic cleanup, etc.)
     tasks.background.abort_all();
 
+    // 4. Shut down SSH tunnels
     if let Some(manager) = infra._ssh_manager {
         manager.shutdown().await;
     }
