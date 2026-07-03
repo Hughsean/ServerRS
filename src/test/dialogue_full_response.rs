@@ -42,7 +42,6 @@ mod full_response {
         FreshEnabled,
         MemoryPositive,
         RagPositive,
-        CurrentTaskSignal,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -203,8 +202,7 @@ mod full_response {
 
     #[tokio::test]
     #[ignore = "需要 config.toml、test/123123123 用户、数据库、Qdrant、embedding、LLM、工具配置和上下文路由；手动运行: cargo test dialogue_full_response --lib -- --ignored --nocapture"]
-    async fn multi_turn_dialogue()
-     {
+    async fn multi_turn_dialogue() {
         logging::init();
 
         let config = config::load();
@@ -314,7 +312,7 @@ mod full_response {
                 "current-task-reference",
                 "继续按刚才那个方案细化第二步。",
                 RequestStyle::Natural,
-                RouteExpectation::CurrentTaskSignal,
+                RouteExpectation::Any,
                 ToolExpectation::NotRequired,
                 true,
             ),
@@ -578,19 +576,6 @@ mod full_response {
                     decision.rag.reason, "rag_negative",
                     "场景 {} 不应命中 rag_negative，实际决策: {:?}",
                     scenario.name, decision
-                );
-            }
-            RouteExpectation::CurrentTaskSignal => {
-                let has_current_task_label = decision
-                    .diagnostics
-                    .top_labels
-                    .iter()
-                    .any(|(label, score)| label == "context.current_task.positive" && *score > 0.0);
-                assert!(
-                    decision.rag.reason == "current_task_positive" || has_current_task_label,
-                    "场景 {} 应有当前任务信号（rag.reason=current_task_positive 或 diagnostics.top_labels 包含 context.current_task.positive 且分数 > 0），实际决策: {:?}",
-                    scenario.name,
-                    decision
                 );
             }
         }

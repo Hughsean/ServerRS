@@ -42,8 +42,6 @@ pub struct RagRouteConfig {
     pub negative_threshold: f64,
     #[serde(default = "default_rag_low_confidence_top_k")]
     pub low_confidence_top_k: u32,
-    #[serde(default)]
-    pub current_task_top_k: u32,
 }
 
 impl Default for ContextRoutingConfig {
@@ -84,7 +82,6 @@ impl Default for RagRouteConfig {
             positive_threshold: default_rag_positive_threshold(),
             negative_threshold: default_retrieval_negative_threshold(),
             low_confidence_top_k: default_rag_low_confidence_top_k(),
-            current_task_top_k: 0,
         }
     }
 }
@@ -168,7 +165,6 @@ mod tests {
         let config = ContextRoutingConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.taxonomy, "context_routing");
-        assert_eq!(config.rag.current_task_top_k, 0);
     }
 
     #[test]

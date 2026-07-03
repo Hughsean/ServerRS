@@ -15,7 +15,6 @@ const MEMORY_POSITIVE: &str = "context.memory.positive";
 const MEMORY_NEGATIVE: &str = "context.memory.negative";
 const RAG_POSITIVE: &str = "context.rag.positive";
 const RAG_NEGATIVE: &str = "context.rag.negative";
-const CURRENT_TASK_POSITIVE: &str = "context.current_task.positive";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextRouteDecision {
@@ -96,7 +95,6 @@ impl ContextRoutingService {
             &self.config.rag,
             set.score_for(RAG_POSITIVE),
             set.score_for(RAG_NEGATIVE),
-            set.score_for(CURRENT_TASK_POSITIVE),
             self.config.margin,
             max_rag_chunks,
         );
@@ -192,7 +190,6 @@ fn route_rag(
     config: &RagRouteConfig,
     positive: f64,
     negative: f64,
-    current_task: f64,
     margin: f64,
     max_top_k: u64,
 ) -> RetrievalBudgetRoute {
@@ -204,13 +201,6 @@ fn route_rag(
             reason: "rag_negative".into(),
         };
     }
-    if current_task >= config.positive_threshold && current_task >= positive {
-        return RetrievalBudgetRoute {
-            top_k: config.current_task_top_k.min(max_top_k),
-            confidence: current_task,
-            reason: "current_task_positive".into(),
-        };
-    }
     if positive >= config.positive_threshold && positive >= negative + margin {
         return RetrievalBudgetRoute {
             top_k: max_top_k,
@@ -220,7 +210,7 @@ fn route_rag(
     }
     RetrievalBudgetRoute {
         top_k: config.low_confidence_top_k.min(max_top_k),
-        confidence: positive.max(negative).max(current_task),
+        confidence: positive.max(negative),
         reason: "rag_low_confidence".into(),
     }
 }
@@ -434,5 +424,23 @@ mod tests {
 
         assert_eq!(input.primary_text, "继续");
         assert_eq!(input.auxiliary_texts, vec!["帮我设计语义路由"]);
+    }
+
+    #[tokio::test]
+    async fn rag_positive_not_suppressed_by_former_current_task_signal() {
+        // 移除 current_task 抑制后，只要 rag_positive 过阈值就应保留 RAG 预算
+        let classifier = Arc::new(FixedClassifier {
+            set: Some(set(&[
+                ("context.rag.positive", 0.75),
+                ("context.rag.negative", 0.10),
+            ])),
+            error: None,
+        });
+        let service = ContextRoutingService::new(classifier, config());
+
+        let decision = service.route(SemanticInput::new("请查知识库"), 10, 5).await;
+
+        assert_eq!(decision.rag.reason, "rag_positive");
+        assert_eq!(decision.rag.top_k, 5);
     }
 }

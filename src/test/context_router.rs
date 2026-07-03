@@ -42,18 +42,18 @@ async fn context_router() {
     println!("个人偏好/记忆问题决策: {:#?}", memory_decision);
     assert_eq!(memory_decision.memory.reason, "memory_positive");
 
-    let current_task_decision = route_with_config(&router, &config, "继续按刚才方案实现").await;
-    assert_eq!(
-        current_task_decision.rag.top_k, 0,
-        "继续当前任务的问题不应拉取 RAG，实际决策: {:?}",
-        current_task_decision
+    let continuation_decision = route_with_config(&router, &config, "继续按刚才方案实现").await;
+    assert_ne!(
+        continuation_decision.rag.reason, "rag_positive",
+        "继续当前对话的问题不应命中 rag_positive，实际决策: {:?}",
+        continuation_decision
     );
 
     assert_eq!(
         latest_decision.diagnostics.taxonomy,
         config.context_routing.taxonomy
     );
-    println!("继续当前任务决策: {:#?}", current_task_decision);
+    println!("继续当前对话决策: {:#?}", continuation_decision);
 
     if let Some(manager) = tunnel_manager {
         manager.shutdown().await;

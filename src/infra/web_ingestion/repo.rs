@@ -844,9 +844,14 @@ impl PublishRecordRepoT for SeaOrmPublishRecordRepository {
                 entity: "knowledge_publish_record".into(),
                 id,
             })?;
+        let active_page_key = if active {
+            Some(format!("{}:{}", row.source_id, row.page_id))
+        } else {
+            None
+        };
         let mut am: knowledge_publish_records::ActiveModel = row.into();
         am.active = Set(if active { 1 } else { 0 });
-        // active_page_key is managed by DB triggers — do NOT set it here
+        am.active_page_key = Set(active_page_key);
         am.publish_status = Set(publish_status.to_string());
         if active {
             am.activated_at = Set(Some(Utc::now().naive_utc()));
@@ -1045,6 +1050,7 @@ async fn deactivate_record_in<C: ConnectionTrait>(
     am.active = Set(0);
     am.publish_status = Set(new_status.to_string());
     am.superseded_at = Set(Some(Utc::now().naive_utc()));
+    am.active_page_key = Set(None);
     am.update(txn).await.map_err(map_db_err)?;
 
     set_document_status_in(txn, record.document_id, 0).await?;
@@ -1061,7 +1067,7 @@ async fn activate_record_in<C: ConnectionTrait>(
     am.active = Set(1);
     am.publish_status = Set(publish_status::PUBLISHED.to_string());
     am.activated_at = Set(Some(Utc::now().naive_utc()));
-    // active_page_key is maintained by DB triggers from active — do NOT set it.
+    am.active_page_key = Set(Some(format!("{}:{}", record.source_id, record.page_id)));
     am.update(txn).await.map_err(map_db_err)?;
 
     set_document_status_in(txn, record.document_id, 1).await?;
