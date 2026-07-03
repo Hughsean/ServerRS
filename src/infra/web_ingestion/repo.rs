@@ -1519,6 +1519,70 @@ impl OutboxRepoT for SeaOrmOutboxRepository {
         txn.commit().await.map_err(map_db_err)?;
         Ok(rows.into_iter().map(model_to_event).collect())
     }
+    async fn claim_one_by_quota(
+        &self,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+        quota: &OutboxClaimQuota,
+    ) -> Result<Option<DomainEvent>, WebIngestionError> {
+        let priority_sql = outbox_event_priority_sql();
+        let txn = self.db.begin().await.map_err(map_db_err)?;
+
+        // Reuse append_event_type_scope for event-type filtering
+        let mut event_scope_sql = String::new();
+        let mut values = Vec::new();
+        append_event_type_scope(&mut event_scope_sql, &mut values, quota);
+
+        let select_sql = format!(
+            "SELECT id FROM domain_event_outbox \
+             WHERE (status IN ('pending','failed') \
+                    OR (status = 'processing' AND locked_until < NOW())) \
+               AND (next_retry_at IS NULL OR next_retry_at <= NOW()) \
+               {event_scope_sql} \
+             ORDER BY {priority_sql}, created_at ASC \
+             LIMIT 1 \
+             FOR UPDATE SKIP LOCKED"
+        );
+        let select_stmt =
+            Statement::from_sql_and_values(DatabaseBackend::MySql, select_sql, values);
+        let selected = txn.query_one_raw(select_stmt).await.map_err(map_db_err)?;
+
+        let Some(row) = selected else {
+            txn.commit().await.map_err(map_db_err)?;
+            return Ok(None);
+        };
+        let id: u64 = row
+            .try_get("", "id")
+            .map_err(|e| WebIngestionError::Internal(e.to_string()))?;
+
+        let update_sql = format!(
+            "UPDATE domain_event_outbox \
+             SET status = 'processing', locked_by = ?, \
+                 locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() \
+             WHERE id = ?"
+        );
+        let update_stmt = Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            update_sql,
+            vec![
+                Value::String(Some(claim_token.into())),
+                Value::Unsigned(Some(lock_ttl_secs)),
+                Value::BigUnsigned(Some(id)),
+            ],
+        );
+        txn.execute_raw(update_stmt).await.map_err(map_db_err)?;
+
+        let row = domain_event_outbox::Entity::find()
+            .filter(domain_event_outbox::Column::Id.eq(id))
+            .filter(domain_event_outbox::Column::LockedBy.eq(claim_token))
+            .filter(domain_event_outbox::Column::Status.eq("processing"))
+            .one(&txn)
+            .await
+            .map_err(map_db_err)?;
+
+        txn.commit().await.map_err(map_db_err)?;
+        Ok(row.map(model_to_event))
+    }
     async fn renew_lock(
         &self,
         id: u64,
