@@ -123,8 +123,9 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
                          | processing       |
                          +--------+---------+
                                   |
-                                  | Dispatcher polls every 5 sec
-                                  | claims by priority/capacity
+                                  | Dispatcher claims continuously
+                                  | try_acquire per-type permit
+                                  | then claim 1 event by priority
                                   v
                   +--------------------------------------+
                   | Dispatcher                           |
@@ -156,8 +157,14 @@ knowledge_embeddings        向量嵌入 JSON（DB 持久化，Qdrant 索引的�
 
   - 每个事件都会持久化写入 MySQL 的 domain_event_outbox 表。
 
-  - Dispatcher 按固定间隔轮询，根据 Handler 容量和阶段优先级领取事件，
-    然后并发路由到对应的 Handler。
+  - Dispatcher 采用事件驱动的持续 claim 循环模型：
+      - 不再定时轮询（去掉了 dispatcher_interval_secs）。
+      - 主循环用 tokio::select! 同时处理 shutdown、completed task drain、global permit acquisition。
+      - 拿到全局 permit 后按 quota 优先级 try_acquire per-type permit，确认有执行容量后才从 DB claim 1 个事件。
+      - claim 返回 None 时只跳过当前 quota，继续扫描低优先级 quota，不会饥饿。
+      - dispatcher_parallelism 是真正的全局 Semaphore（限制同时在跑的任务总数）。
+      - handler_parallelism 控制 per-type 并发（DB claim quota + 进程内 Semaphore 双重执行）。
+      - shutdown 后先停止 claim，等 in-flight task 自然完成（grace timeout），超时才 abort。
 
   - Handler 完成处理后，会向 Outbox 写入新的事件，
     推动工作流进入下一个阶段。
@@ -642,9 +649,9 @@ chunk_target_max = 1000          # 目标最大分块大小（字符）
 
 # 调度/分发
 scheduler_interval_secs = 300    # 代码默认 5 分钟；批量导入后可临时调小
-dispatcher_interval_secs = 5
-outbox_batch_size = 20           # 每轮最多领取的 outbox 事件总数上限
-dispatcher_parallelism = 8       # 每轮并发上限；总领取数 <= min(outbox_batch_size, dispatcher_parallelism)
+# dispatcher_interval_secs = 5  # deprecated: 事件驱动循环，不再轮询
+# outbox_batch_size = 20        # deprecated: 单条 claim，不再批量取
+dispatcher_parallelism = 8       # 全局并发上限（Semaphore permits）
 outbox_lock_ttl_secs = 300       # 事件锁 TTL；处理期间会自动续租
 retry_base_delay_secs = 30
 retry_max_delay_secs = 1800
@@ -652,20 +659,22 @@ embedding_batch_size = 32
 qdrant_collection = "web_ingestion"
 
 [web_ingestion.handler_parallelism]
+# 这些字段名对应 handler 消费的输入 outbox 事件。
 default = 1
-crawl_job_created = 1
-url_discovered = 4               # 抓取阶段；同 host 仍受 min_request_interval_ms 限速
-page_fetched = 6                 # HTML 清洗，CPU/内存轻中等
-page_cleaned = 2                 # LLM 蒸馏，建议保守
-page_distilled = 4
-quality_checked = 4
-document_chunked = 2
-chunks_embedded = 2              # embedding provider 压力较大，建议保守
-document_indexed = 2
-knowledge_staged = 2
-knowledge_publish_requested = 1  # 发布/激活建议单 worker
-knowledge_rollback_requested = 1
-terminal = 8
+url_discovered = 4               # I/O 密集：HTTP 抓取
+page_distilled = 4               # LLM 蒸馏调用
+chunks_embedded = 4              # embedding API 调用
+terminal = 8                     # 终态事件（轻量）
+# 以下使用 default = 1（串行）：
+# crawl_job_created = 1
+# page_fetched = 6
+# page_cleaned = 4
+# quality_checked = 4
+# document_chunked = 4
+# document_indexed = 4
+# knowledge_staged = 2
+# knowledge_publish_requested = 1
+# knowledge_rollback_requested = 1
 
 # LLM 蒸馏配置（独立于聊天 LLM）
 [web_ingestion.distill_llm]
