@@ -21,15 +21,17 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
-/// Result of one claim-and-spawn attempt within the main loop.
+/// 主循环中一次 claim-and-spawn 尝试的结果。
 enum ClaimLoopResult {
-    /// Successfully claimed an event and spawned a handler task.
+    /// 成功 claim 事件并启动 handler task。
     Spawned,
-    /// Scanned all quotas; none had runnable events.
+    /// 已扫描所有 quota，数据库里没有可运行事件。
     NoRunnableEvent,
-    /// Claim query returned an error.
+    /// 有 quota 因 in-flight task 占满 permit 暂时无法继续 claim。
+    PermitBusy,
+    /// claim 查询失败。
     ClaimError(AppError),
-    /// A semaphore was closed; dispatcher is shutting down.
+    /// semaphore 已关闭，dispatcher 正在停止。
     ShuttingDown,
 }
 
@@ -202,6 +204,11 @@ pub async fn run(ctx: PipelineContext, shutdown: CancellationToken) {
                             _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                         }
                     }
+                    ClaimLoopResult::PermitBusy => {
+                        if !wait_after_permit_busy(&shutdown, &mut join_set).await {
+                            break;
+                        }
+                    }
                     ClaimLoopResult::ClaimError(e) => {
                         tracing::warn!(
                             error = %e,
@@ -221,7 +228,8 @@ pub async fn run(ctx: PipelineContext, shutdown: CancellationToken) {
     graceful_drain_or_abort(
         &mut join_set,
         ctx.config.dispatcher_shutdown_grace_secs.max(1),
-    ).await;
+    )
+    .await;
 }
 
 /// Try to claim and spawn exactly one event.
@@ -241,12 +249,16 @@ async fn claim_and_spawn_one(
     global_permit: OwnedSemaphorePermit,
 ) -> ClaimLoopResult {
     let lock_ttl_secs = ctx.config.outbox_lock_ttl_secs.max(1);
+    let mut permit_busy = false;
 
     for quota in quotas {
         let sem = limiters.semaphore_for_quota(quota);
         let type_permit = match sem.try_acquire_owned() {
             Ok(permit) => permit,
-            Err(TryAcquireError::NoPermits) => continue,
+            Err(TryAcquireError::NoPermits) => {
+                permit_busy = true;
+                continue;
+            }
             Err(TryAcquireError::Closed) => {
                 drop(global_permit);
                 return ClaimLoopResult::ShuttingDown;
@@ -287,7 +299,34 @@ async fn claim_and_spawn_one(
     }
 
     drop(global_permit);
-    ClaimLoopResult::NoRunnableEvent
+    if permit_busy {
+        ClaimLoopResult::PermitBusy
+    } else {
+        ClaimLoopResult::NoRunnableEvent
+    }
+}
+
+async fn wait_after_permit_busy(shutdown: &CancellationToken, join_set: &mut JoinSet<()>) -> bool {
+    // permit 忙说明容量会随着 in-flight task 完成而恢复，优先等任务完成，避免固定睡眠 500ms。
+    if join_set.is_empty() {
+        tokio::select! {
+            _ = shutdown.cancelled() => false,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => true,
+        }
+    } else {
+        tokio::select! {
+            _ = shutdown.cancelled() => false,
+            joined = join_set.join_next() => {
+                if let Some(Err(e)) = joined {
+                    tracing::error!(
+                        error = %e,
+                        "web ingestion dispatcher task panicked or was cancelled"
+                    );
+                }
+                true
+            }
+        }
+    }
 }
 
 /// Process a single claimed event. Holds global + type permits until done.
@@ -669,5 +708,24 @@ mod tests {
                 .exclude_event_types
                 .contains(&ev::CRAWL_JOB_CREATED.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn permit_busy_wait_wakes_when_in_flight_task_finishes() {
+        let shutdown = CancellationToken::new();
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        });
+
+        let started = Instant::now();
+        let should_continue = wait_after_permit_busy(&shutdown, &mut join_set).await;
+
+        assert!(should_continue);
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "permit 忙时应该在任务完成后唤醒，而不是固定等待 500ms"
+        );
+        assert!(join_set.is_empty());
     }
 }

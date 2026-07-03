@@ -9,7 +9,7 @@ use crate::bootstrap::auth::build_auth;
 use crate::bootstrap::infra::InfraContext;
 use crate::bootstrap::repos::build_repos;
 use crate::bootstrap::state::{ServiceGraph, build_state};
-use crate::bootstrap::tasks::TaskContext;
+use crate::bootstrap::tasks::{BackgroundTasks, TaskContext};
 use crate::bootstrap::vector::VectorContext;
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::shared::config::AppConfig;
@@ -67,6 +67,8 @@ async fn serve(
     shutdown_token: CancellationToken,
 ) -> Result<(), std::io::Error> {
     let dispatcher_handle = services.dispatcher_handle.take();
+    let mut task_guard =
+        RuntimeTaskGuard::new(shutdown_token.clone(), dispatcher_handle, tasks.background);
     let state = build_state(&services);
 
     #[cfg(feature = "qq_bot")]
@@ -85,29 +87,98 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("服务器正在监听 http://{addr}");
 
+    let shutdown_watcher = tokio::spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            shutdown_signal().await;
+            shutdown_token.cancel();
+        }
+    });
+    let server_shutdown = {
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            shutdown_token.cancelled().await;
+        }
+    };
+
     let r = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(server_shutdown)
         .await;
 
-    // 1. Notify all background tasks to stop
+    shutdown_watcher.abort();
+
+    // 1. 通知所有监听 shutdown token 的后台任务停止；如果 server 因错误返回，也确保 token 被取消。
     shutdown_token.cancel();
 
-    // 2. Wait for dispatcher graceful drain (has internal grace timeout + abort_all fallback)
-    if let Some(handle) = dispatcher_handle {
+    // 2. 等待 dispatcher 自身执行优雅 drain。
+    if let Some(handle) = task_guard.take_dispatcher_handle() {
         if let Err(e) = handle.await {
             tracing::error!(error = %e, "dispatcher task join error");
         }
     }
 
-    // 3. Abort remaining generic background tasks (periodic cleanup, etc.)
-    tasks.background.abort_all();
+    // 3. 通用后台任务没有统一取消协议，直接 abort。
+    task_guard.abort_background();
+    task_guard.disarm();
 
-    // 4. Shut down SSH tunnels
+    // 4. 关闭 SSH 隧道。
     if let Some(manager) = infra._ssh_manager {
         manager.shutdown().await;
     }
 
     r
+}
+
+struct RuntimeTaskGuard {
+    shutdown_token: CancellationToken,
+    dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
+    background: Option<BackgroundTasks>,
+    armed: bool,
+}
+
+impl RuntimeTaskGuard {
+    fn new(
+        shutdown_token: CancellationToken,
+        dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
+        background: BackgroundTasks,
+    ) -> Self {
+        Self {
+            shutdown_token,
+            dispatcher_handle,
+            background: Some(background),
+            armed: true,
+        }
+    }
+
+    fn take_dispatcher_handle(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.dispatcher_handle.take()
+    }
+
+    fn abort_background(&mut self) {
+        if let Some(background) = self.background.take() {
+            background.abort_all();
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RuntimeTaskGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        self.shutdown_token.cancel();
+        if let Some(handle) = self.dispatcher_handle.take() {
+            handle.abort();
+        }
+        if let Some(background) = self.background.take() {
+            background.abort_all();
+        }
+    }
 }
 
 /// 定期清理过期的 JWT refresh token。
@@ -145,4 +216,63 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let term = std::future::pending::<()>();
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::bootstrap::tasks::BackgroundTasks;
+
+    struct AbortNotify(Option<oneshot::Sender<()>>);
+
+    impl AbortNotify {
+        fn new(tx: oneshot::Sender<()>) -> Self {
+            Self(Some(tx))
+        }
+    }
+
+    impl Drop for AbortNotify {
+        fn drop(&mut self) {
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_task_guard_aborts_background_and_dispatcher_on_drop() {
+        let shutdown_token = CancellationToken::new();
+        let (dispatcher_tx, dispatcher_rx) = oneshot::channel();
+        let dispatcher_handle = tokio::spawn(async move {
+            let _notify = AbortNotify::new(dispatcher_tx);
+            future::pending::<()>().await;
+        });
+
+        let (background_tx, background_rx) = oneshot::channel();
+        let mut background = BackgroundTasks::new();
+        background.spawn(tokio::spawn(async move {
+            let _notify = AbortNotify::new(background_tx);
+            future::pending::<()>().await;
+        }));
+        tokio::task::yield_now().await;
+
+        let guard =
+            RuntimeTaskGuard::new(shutdown_token.clone(), Some(dispatcher_handle), background);
+        drop(guard);
+
+        assert!(shutdown_token.is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), dispatcher_rx)
+            .await
+            .expect("dispatcher task 应该被 abort")
+            .expect("dispatcher abort 通知应该送达");
+        tokio::time::timeout(Duration::from_secs(1), background_rx)
+            .await
+            .expect("background task 应该被 abort")
+            .expect("background abort 通知应该送达");
+    }
 }
