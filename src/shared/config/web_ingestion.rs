@@ -121,6 +121,10 @@ pub struct WebIngestionConfig {
     pub retry_base_delay_secs: u64,
     #[serde(default = "default_web_ingestion_retry_max_delay_secs")]
     pub retry_max_delay_secs: u64,
+    /// Dispatcher 优雅关闭时等待 in-flight task 完成的超时秒数。
+    /// 超时后强制 abort 剩余 task，未 finalize 的事件靠 outbox lock TTL 兜底恢复。
+    #[serde(default = "default_web_ingestion_dispatcher_shutdown_grace_secs")]
+    pub dispatcher_shutdown_grace_secs: u64,
     #[serde(default)]
     pub handler_parallelism: WebIngestionHandlerParallelismConfig,
     #[serde(default)]
@@ -215,6 +219,7 @@ impl Default for WebIngestionConfig {
             outbox_lock_ttl_secs: default_web_ingestion_outbox_lock_ttl_secs(),
             retry_base_delay_secs: default_web_ingestion_retry_base_delay_secs(),
             retry_max_delay_secs: default_web_ingestion_retry_max_delay_secs(),
+            dispatcher_shutdown_grace_secs: default_web_ingestion_dispatcher_shutdown_grace_secs(),
             handler_parallelism: WebIngestionHandlerParallelismConfig::default(),
             distill_llm: DistillLlmConfig::default(),
         }
@@ -296,6 +301,9 @@ fn default_web_ingestion_retry_base_delay_secs() -> u64 {
 fn default_web_ingestion_retry_max_delay_secs() -> u64 {
     1800
 }
+fn default_web_ingestion_dispatcher_shutdown_grace_secs() -> u64 {
+    30
+}
 
 fn default_web_ingestion_handler_default_parallelism() -> usize {
     1
@@ -343,6 +351,7 @@ fn default_web_ingestion_handler_terminal_parallelism() -> usize {
 #[cfg(test)]
 mod tests {
     use super::super::AppConfig;
+    use super::WebIngestionConfig;
 
     #[test]
     fn parses_handler_parallelism_with_distill_table_declared_first() {
@@ -372,5 +381,11 @@ mod tests {
         assert_eq!(config.web_ingestion.handler_parallelism.page_cleaned, 2);
         assert_eq!(config.web_ingestion.handler_parallelism.chunks_embedded, 2);
         assert_eq!(config.web_ingestion.handler_parallelism.terminal, 8);
+    }
+
+    #[test]
+    fn dispatcher_shutdown_grace_secs_defaults_to_30() {
+        let config = WebIngestionConfig::default();
+        assert_eq!(config.dispatcher_shutdown_grace_secs, 30);
     }
 }
