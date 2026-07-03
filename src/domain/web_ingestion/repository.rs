@@ -583,6 +583,18 @@ pub trait OutboxRepoT: Send + Sync {
         quotas: &[OutboxClaimQuota],
         max_total: u64,
     ) -> Result<Vec<DomainEvent>, WebIngestionError>;
+    /// Atomically claim a single pending/failed/timed-out event matching the
+    /// given quota's event-type scope. Returns None if no matching event exists.
+    ///
+    /// Uses `SELECT ... LIMIT 1 FOR UPDATE SKIP LOCKED` within a transaction,
+    /// then marks the row as processing. Same lock semantics as
+    /// `claim_batch_by_quotas` but for single-event claims.
+    async fn claim_one_by_quota(
+        &self,
+        claim_token: &str,
+        lock_ttl_secs: u32,
+        quota: &OutboxClaimQuota,
+    ) -> Result<Option<DomainEvent>, WebIngestionError>;
     /// Mark a claimed event as published (success).
     async fn mark_published(&self, id: u64, claim_token: &str) -> Result<bool, WebIngestionError>;
     /// Extend the lock for a claimed event while a long handler is still alive.
