@@ -19,6 +19,7 @@ use crate::shared::config::WebIngestionHandlerParallelismConfig;
 use crate::shared::error::AppError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
 
 /// Result of one claim-and-spawn attempt within the main loop.
 enum ClaimLoopResult {
@@ -233,6 +234,120 @@ impl HandlerLimiters {
             self.limiter_for(&quota.event_types[0])
         }
     }
+}
+
+/// Gracefully drain in-flight tasks after shutdown.
+///
+/// Waits for all spawned tasks to complete naturally (finalize + heartbeat.stop
+/// + permit drop). If the timeout expires, aborts remaining tasks — those events
+/// will be recovered by the outbox lock TTL expiring.
+async fn graceful_drain_or_abort(join_set: &mut JoinSet<()>, timeout_secs: u64) {
+    let drain = async {
+        while let Some(joined) = join_set.join_next().await {
+            if let Err(e) = joined {
+                tracing::error!(
+                    error = %e,
+                    "web ingestion dispatcher task panicked or was cancelled"
+                );
+            }
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), drain).await {
+        Ok(_) => {
+            tracing::info!("web ingestion dispatcher drained all in-flight tasks");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs,
+                "web ingestion dispatcher graceful drain timed out; aborting remaining tasks"
+            );
+            join_set.abort_all();
+            while let Some(joined) = join_set.join_next().await {
+                if let Err(e) = joined {
+                    tracing::debug!(
+                        error = %e,
+                        "web ingestion dispatcher task aborted"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Run the event-driven dispatcher loop.
+///
+/// Replaces the old `run_tick` polling model. Continuously claims and processes
+/// events without waiting for a tick or for a batch to complete. Uses a global
+/// Semaphore (`dispatcher_parallelism`) and per-type Semaphores (`handler_parallelism`)
+/// to bound concurrency.
+///
+/// Shutdown: when `shutdown` is cancelled, stops claiming and calls
+/// `graceful_drain_or_abort` to wait for in-flight tasks.
+pub async fn run(ctx: PipelineContext, shutdown: CancellationToken) {
+    let global_sem = Arc::new(Semaphore::new(ctx.config.dispatcher_parallelism.max(1)));
+    let limiters = HandlerLimiters::new(&ctx);
+    let quotas = build_claim_quotas(&ctx.config.handler_parallelism);
+    let mut join_set = JoinSet::new();
+
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                tracing::info!("web ingestion dispatcher shutdown requested");
+                break;
+            }
+
+            // Continuously drain completed tasks without blocking claim
+            joined = join_set.join_next(), if !join_set.is_empty() => {
+                if let Some(Err(e)) = joined {
+                    tracing::error!(
+                        error = %e,
+                        "web ingestion dispatcher task panicked or was cancelled"
+                    );
+                }
+                continue;
+            }
+
+            global_permit = global_sem.clone().acquire_owned() => {
+                let global_permit = match global_permit {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+
+                match claim_and_spawn_one(
+                    &ctx,
+                    &limiters,
+                    &quotas,
+                    &mut join_set,
+                    global_permit,
+                ).await {
+                    ClaimLoopResult::Spawned => {}
+                    ClaimLoopResult::NoRunnableEvent => {
+                        tokio::select! {
+                            _ = shutdown.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                        }
+                    }
+                    ClaimLoopResult::ClaimError(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "web ingestion dispatcher claim error"
+                        );
+                        tokio::select! {
+                            _ = shutdown.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                        }
+                    }
+                    ClaimLoopResult::ShuttingDown => break,
+                }
+            }
+        }
+    }
+
+    graceful_drain_or_abort(
+        &mut join_set,
+        ctx.config.dispatcher_shutdown_grace_secs.max(1),
+    ).await;
 }
 
 /// Try to claim and spawn exactly one event.
