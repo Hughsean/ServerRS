@@ -3,16 +3,16 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::domain::llm::LlmProvider;
-use crate::infra::repo::connection::init_db;
 use crate::infra::llm::ollama_provider::OllamaProvider;
+use crate::infra::repo::connection::init_db;
 use crate::infra::ssh_tunnel::SshTunnelManager;
 use crate::shared::config::AppConfig;
 
 /// SSH 隧道、数据库连接、LLM Provider。
 pub struct InfraContext {
-    pub _ssh_manager: Option<SshTunnelManager>,
     pub db: DatabaseConnection,
     pub ollama_provider: Arc<dyn LlmProvider>,
+    pub _ssh_manager: Option<SshTunnelManager>,
 }
 
 impl InfraContext {
@@ -31,9 +31,9 @@ impl InfraContext {
         ));
 
         Ok(Self {
-            _ssh_manager,
             db,
             ollama_provider,
+            _ssh_manager,
         })
     }
 }

@@ -13,19 +13,25 @@ use std::sync::Arc;
 use crate::domain::rag::RAGRepoT;
 use crate::domain::vector_store::{VectorDistance, VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
-use crate::domain::web_ingestion::repository::{KnowledgeVectorManifest, VectorManifestRepoT};
+use crate::domain::web_ingestion::repository::{
+    IngestionRunRepoT, KnowledgePublishRecord, KnowledgeVectorManifest, PublishRecordRepoT,
+    VectorManifestRepoT,
+};
+use crate::domain::web_ingestion::status::publish_status;
 
-/// Re-upsert all Qdrant points of a publish record with `active=<active>` in
-/// their payload. Requires the embeddings still exist in the DB (they do —
-/// embeddings are never deleted on supersede, only deactivated).
+/// Re-upsert all Qdrant points of a publish record with payload lifecycle
+/// fields derived from the current DB publish/run state. Requires the
+/// embeddings still exist in the DB (they do — embeddings are never deleted on
+/// supersede, only deactivated).
 #[allow(clippy::too_many_arguments)]
 pub async fn sync_active(
     vector_store: &Option<Arc<dyn VectorStoreT>>,
     vector_manifest_repo: &Arc<dyn VectorManifestRepoT>,
+    publish_record_repo: &Arc<dyn PublishRecordRepoT>,
+    run_repo: &Arc<dyn IngestionRunRepoT>,
     rag_repo: &Arc<dyn RAGRepoT>,
     publish_record_id: u64,
     dimension: usize,
-    active: bool,
 ) -> Result<(), WebIngestionError> {
     let Some(vs) = vector_store.as_ref() else {
         tracing::warn!(
@@ -42,6 +48,22 @@ pub async fn sync_active(
         return Ok(());
     }
 
+    let record = publish_record_repo
+        .find_by_id(publish_record_id)
+        .await?
+        .ok_or_else(|| WebIngestionError::NotFound {
+            entity: "knowledge_publish_record".into(),
+            id: publish_record_id,
+        })?;
+    let run =
+        run_repo
+            .find_by_id(record.run_id)
+            .await?
+            .ok_or_else(|| WebIngestionError::NotFound {
+                entity: "knowledge_ingestion_run".into(),
+                id: record.run_id,
+            })?;
+
     // All points in one collection (a publish record uses a single collection).
     let collection = manifests[0].qdrant_collection.clone();
     vs.ensure_collection(&collection, dimension, VectorDistance::Cosine)
@@ -54,7 +76,7 @@ pub async fn sync_active(
         points.push(VectorPoint {
             id: m.qdrant_point_id.clone(),
             vector,
-            payload: build_payload(m, active),
+            payload: build_payload(m, &record, run.source_url_id),
         });
     }
 
@@ -87,14 +109,89 @@ async fn load_vector(
     Ok(vector)
 }
 
-fn build_payload(m: &KnowledgeVectorManifest, active: bool) -> serde_json::Value {
+fn build_payload(
+    m: &KnowledgeVectorManifest,
+    record: &KnowledgePublishRecord,
+    source_url_id: Option<u64>,
+) -> serde_json::Value {
+    let active = record.active && record.publish_status == publish_status::PUBLISHED;
+
     serde_json::json!({
         "source": "web_ingestion",
-        "run_id": m.run_id,
-        "document_id": m.document_id,
-        "version_key": null,
+        "run_id": record.run_id,
+        "source_id": record.source_id,
+        "source_url_id": source_url_id,
+        "page_id": record.page_id,
+        "document_id": record.document_id,
+        "version_key": record.version_key,
+        "content_hash": record.content_hash,
         "active": active,
-        "status": if active { "published" } else { "superseded" },
+        "status": record.publish_status,
         "chunk_id": m.chunk_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::web_ingestion::repository::KnowledgePublishRecord;
+    use chrono::Utc;
+
+    fn manifest() -> KnowledgeVectorManifest {
+        let now = Utc::now();
+        KnowledgeVectorManifest {
+            id: 10,
+            publish_record_id: 20,
+            run_id: 30,
+            document_id: 40,
+            chunk_id: 50,
+            chunk_hash: "chunk-hash".into(),
+            qdrant_collection: "web_chunks".into(),
+            qdrant_point_id: "point-id".into(),
+            embedding_provider: "ollama".into(),
+            embedding_model: "embedding-model".into(),
+            embedding_dimension: 2560,
+            active: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn publish_record(status: &str, active: bool) -> KnowledgePublishRecord {
+        let now = Utc::now();
+        KnowledgePublishRecord {
+            id: 20,
+            source_id: 3,
+            page_id: 4,
+            run_id: 30,
+            document_id: 40,
+            version_key: "version-key".into(),
+            content_hash: "content-hash".into(),
+            publish_status: status.into(),
+            active,
+            active_page_key: None,
+            activated_at: None,
+            superseded_at: None,
+            superseded_by_record_id: None,
+            rolled_back_from_record_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn payload_reflects_publish_record_status_not_requested_active_label() {
+        let payload = build_payload(&manifest(), &publish_record("staged", false), Some(70));
+
+        assert_eq!(payload["active"], false);
+        assert_eq!(payload["status"], "staged");
+        assert_eq!(payload["version_key"], "version-key");
+        assert_eq!(payload["content_hash"], "content-hash");
+        assert_eq!(payload["source_id"], 3);
+        assert_eq!(payload["source_url_id"], 70);
+        assert_eq!(payload["page_id"], 4);
+        assert_eq!(payload["run_id"], 30);
+        assert_eq!(payload["document_id"], 40);
+        assert_eq!(payload["chunk_id"], 50);
+    }
 }

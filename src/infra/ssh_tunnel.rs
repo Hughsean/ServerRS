@@ -96,6 +96,24 @@ impl SshTunnel {
             info!("SSH 隧道 '{}' 已停止", self.name);
         }
     }
+
+    fn stop_on_drop(&self) {
+        let Ok(mut guard) = self.child.try_lock() else {
+            return;
+        };
+
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            info!("SSH 隧道 '{}' 已停止", self.name);
+        }
+    }
+}
+
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        self.stop_on_drop();
+    }
 }
 
 /// 管理所有 SSH 隧道的生命周期。
@@ -131,6 +149,7 @@ impl SshTunnelManager {
 mod tests {
     use super::*;
     use crate::shared::config::TunnelDirection;
+    use std::time::Duration;
 
     fn make_config(
         local_port: u16,
@@ -170,5 +189,96 @@ mod tests {
     fn test_remote_forward_with_bind() {
         let cfg = make_config(8080, 9090, TunnelDirection::Remote, Some("0.0.0.0"));
         assert_eq!(build_forward_spec(&cfg), "0.0.0.0:9090:127.0.0.1:8080");
+    }
+
+    #[test]
+    fn dropping_tunnel_kills_child_process() {
+        let child = spawn_sleep_child();
+        let pid = child.id();
+        let tunnel = SshTunnel {
+            name: "test".to_string(),
+            _config: make_config(8080, 3306, TunnelDirection::Local, None),
+            child: Arc::new(Mutex::new(Some(child))),
+        };
+
+        drop(tunnel);
+        std::thread::sleep(Duration::from_millis(250));
+
+        let still_running = process_is_running(pid);
+        if still_running {
+            kill_process(pid);
+        }
+
+        assert!(
+            !still_running,
+            "dropping a tunnel should stop its child process"
+        );
+    }
+
+    #[cfg(windows)]
+    fn spawn_sleep_child() -> Child {
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep child")
+    }
+
+    #[cfg(unix)]
+    fn spawn_sleep_child() -> Child {
+        Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep child")
+    }
+
+    #[cfg(windows)]
+    fn process_is_running(pid: u32) -> bool {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "if (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}",
+                    pid
+                ),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn process_is_running(pid: u32) -> bool {
+        Command::new("sh")
+            .args(["-c", &format!("kill -0 {}", pid)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    fn kill_process(pid: u32) {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(unix)]
+    fn kill_process(pid: u32) {
+        let _ = Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }

@@ -119,10 +119,11 @@ async fn sync_qdrant(
     if let Err(e) = qdrant_activation_service::sync_active(
         &ctx.vector_store,
         &ctx.vector_manifest_repo,
+        &ctx.publish_repo,
+        &ctx.run_repo,
         &ctx.rag_repo,
         publish_record_id,
         dimension,
-        active,
     )
     .await
     {
