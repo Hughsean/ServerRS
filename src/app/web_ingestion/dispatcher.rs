@@ -17,7 +17,7 @@ use crate::domain::web_ingestion::repository::{DomainEvent, OutboxClaimQuota, Ou
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 use crate::shared::config::WebIngestionHandlerParallelismConfig;
 use crate::shared::error::AppError;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::task::{JoinHandle, JoinSet};
 
 /// Result of one claim-and-spawn attempt within the main loop.
@@ -233,6 +233,100 @@ impl HandlerLimiters {
             self.limiter_for(&quota.event_types[0])
         }
     }
+}
+
+/// Try to claim and spawn exactly one event.
+///
+/// Iterates quotas in priority order. For each quota:
+/// 1. `try_acquire_owned` on the per-type Semaphore (non-blocking).
+/// 2. If permit acquired, `claim_one_by_quota` from the DB.
+/// 3. If event claimed, spawn a handler task and return `Spawned`.
+/// 4. If no event for this quota, drop the permit and `continue` to the next quota.
+///
+/// Only returns `NoRunnableEvent` after scanning ALL quotas without finding an event.
+async fn claim_and_spawn_one(
+    ctx: &PipelineContext,
+    limiters: &HandlerLimiters,
+    quotas: &[OutboxClaimQuota],
+    join_set: &mut JoinSet<()>,
+    global_permit: OwnedSemaphorePermit,
+) -> ClaimLoopResult {
+    let lock_ttl_secs = ctx.config.outbox_lock_ttl_secs.max(1);
+
+    for quota in quotas {
+        let sem = limiters.semaphore_for_quota(quota);
+        let type_permit = match sem.try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => continue,
+            Err(TryAcquireError::Closed) => {
+                drop(global_permit);
+                return ClaimLoopResult::ShuttingDown;
+            }
+        };
+
+        let claim_token = new_claim_token();
+
+        match ctx
+            .outbox_repo
+            .claim_one_by_quota(&claim_token, lock_ttl_secs, quota)
+            .await
+        {
+            Ok(Some(event)) => {
+                let task_ctx = ctx.clone();
+                join_set.spawn(async move {
+                    process_claimed_event_with_permits(
+                        task_ctx,
+                        event,
+                        claim_token,
+                        global_permit,
+                        type_permit,
+                    )
+                    .await;
+                });
+                return ClaimLoopResult::Spawned;
+            }
+            Ok(None) => {
+                drop(type_permit);
+                continue;
+            }
+            Err(err) => {
+                drop(type_permit);
+                drop(global_permit);
+                return ClaimLoopResult::ClaimError(AppError::internal(err.to_string()));
+            }
+        }
+    }
+
+    drop(global_permit);
+    ClaimLoopResult::NoRunnableEvent
+}
+
+/// Process a single claimed event. Holds global + type permits until done.
+///
+/// Compared to the old `process_claimed_event`, the per-type permit is acquired
+/// BEFORE claiming (in `claim_and_spawn_one`), so this function does not wait
+/// for a limiter — it starts heartbeat and dispatches immediately.
+async fn process_claimed_event_with_permits(
+    ctx: PipelineContext,
+    event: DomainEvent,
+    claim_token: String,
+    global_permit: OwnedSemaphorePermit,
+    type_permit: OwnedSemaphorePermit,
+) {
+    let heartbeat = EventLockHeartbeat::start(
+        Arc::clone(&ctx.outbox_repo),
+        event.id,
+        claim_token.clone(),
+        ctx.config.outbox_lock_ttl_secs.max(1),
+    );
+
+    let started = Instant::now();
+    let result = dispatch(&event, &ctx).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    finalize(&ctx, &event, &claim_token, result, elapsed_ms).await;
+    heartbeat.stop().await;
+
+    // drop(global_permit) + drop(type_permit) — automatic on function return
 }
 
 fn semaphore(workers: usize) -> Arc<Semaphore> {
