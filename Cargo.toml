@@ -2,6 +2,7 @@
 name = "server-rs"
 version = "1.0.0"
 edition = "2024"
+autobins = false
 
 [dependencies]
 # Async
@@ -91,3 +92,8 @@ path = "src/main.rs"
 name = "qq_bot_init"
 path = "src/bin/qq_bot_init.rs"
 required-features = ["qq_bot"]
+
+[[bin]]
+name = "repair_qdrant_activation"
+path = "src/bin/repair.rs"
+required-features = ["qdrant"]
