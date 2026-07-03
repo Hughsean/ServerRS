@@ -5,6 +5,8 @@ use sea_orm::DatabaseConnection;
 use crate::app::agent::agent_context::AgentContextBuilder;
 use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings, AgentTool};
 use crate::app::agent::tools::get_time_tool::GetTimeTool;
+use crate::app::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
+use crate::app::agent::tools::memory_search_tool::MemorySearchTool;
 use crate::app::context_routing::ContextRoutingService;
 use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_extractor::MemoryExtractor;
@@ -131,6 +133,89 @@ pub async fn chat_service_with_time_tool(
     }
 }
 
+pub async fn chat_service_with_core_test_tools(
+    config: &AppConfig,
+    db: &DatabaseConnection,
+    repos: &RepoGraph,
+    embedding_provider: Arc<dyn EmbeddingProvider>,
+    llm_provider: Arc<dyn LlmProvider>,
+    vector_store: Arc<dyn VectorStoreT>,
+    context_routing_service: Arc<ContextRoutingService>,
+) -> DialogueHarness {
+    let memory_service = memory_service(
+        config,
+        repos,
+        Arc::clone(&embedding_provider),
+        Arc::clone(&llm_provider),
+        Arc::clone(&vector_store),
+    );
+    let retrieval_service = retrieval_service(
+        config,
+        repos,
+        Arc::clone(&embedding_provider),
+        Arc::clone(&vector_store),
+    );
+    let context_builder = Arc::new(
+        AgentContextBuilder::new(
+            Arc::clone(&memory_service),
+            Arc::clone(&retrieval_service),
+            Arc::new(SummaryService::new(Arc::clone(&repos.summary_repo), None)),
+            fresh_retrieval_service(config, db, embedding_provider, vector_store),
+            Arc::clone(&repos.conv_repo),
+            Arc::clone(&repos.profile_repo),
+        )
+        .with_context_routing_service(Some(context_routing_service)),
+    );
+
+    let tools: Vec<Arc<dyn AgentTool>> = vec![
+        Arc::new(KnowledgeSearchTool::new(Arc::clone(&retrieval_service))),
+        Arc::new(MemorySearchTool::new(Arc::clone(&memory_service))),
+        Arc::new(GetTimeTool::new()),
+    ];
+    let settings = AgentRuntimeSettings {
+        agent_enabled: config.agent.enabled,
+        memory_enabled: config.agent.memory_enabled,
+        rag_enabled: config.agent.rag_enabled,
+        summary_enabled: config.agent.summary_enabled,
+        max_context_messages: 6,
+        max_memory_items: config.agent.max_memory_items,
+        max_rag_chunks: u64::from(config.agent.max_rag_chunks),
+        memory_extraction_async: false,
+        max_tool_depth: config.llm.max_tool_depth as usize,
+        temperature: 0.0,
+        top_p: 1.0,
+        enable_reasoning: false,
+    };
+
+    let agent_runtime = AgentRuntime::new(
+        llm_provider,
+        Arc::clone(&memory_service),
+        Arc::clone(&repos.agent_event_repo),
+        Arc::clone(&repos.conv_repo),
+        Arc::clone(&repos.profile_repo),
+        Arc::clone(&repos.context_version_repo),
+        context_builder,
+        tools,
+        settings,
+    );
+
+    let task_publisher = Arc::new(RecordingTaskPublisher::default());
+    let task_publisher_dyn: Arc<dyn TaskPublisher> = task_publisher.clone();
+    let chat_service = ChatService::new(
+        task_publisher_dyn,
+        Arc::clone(&repos.conv_repo),
+        Arc::new(agent_runtime),
+        Arc::clone(&memory_service),
+        Arc::clone(&repos.context_control_repo),
+        None,
+    );
+
+    DialogueHarness {
+        chat_service,
+        task_publisher,
+    }
+}
+
 fn retrieval_service(
     config: &AppConfig,
     repos: &RepoGraph,
@@ -180,9 +265,8 @@ fn fresh_retrieval_service(
         return None;
     }
 
-    let fresh_repo: Arc<dyn FreshContextRepoT> = Arc::new(
-        crate::infra::repo::seaorm_impl::fresh_context::FreshContextRepo::new(db.clone()),
-    );
+    let fresh_repo: Arc<dyn FreshContextRepoT> =
+        Arc::new(crate::infra::repo::seaorm_impl::fresh_context::FreshContextRepo::new(db.clone()));
     Some(Arc::new(FreshRetrievalService::new(
         fresh_repo,
         vector_store,
