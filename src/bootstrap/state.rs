@@ -34,7 +34,6 @@ use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::config::AppConfig;
 
-#[derive(Clone)]
 pub struct ServiceGraph {
     pub auth: Arc<AuthService>,
     pub user: Arc<UserService>,
@@ -54,6 +53,7 @@ pub struct ServiceGraph {
     pub chat_conv_repo: Arc<dyn ConversationRepoT>,
     pub token_service: Arc<dyn TokenServiceT>,
     pub risk_repo: Arc<dyn RiskRepoT>,
+    pub dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ServiceGraph {
@@ -66,6 +66,7 @@ impl ServiceGraph {
         vector: &VectorContext,
         tasks: &mut TaskContext,
         auth_graph: &AuthGraph,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Result<Self, std::io::Error> {
         let ctx = BootstrapContext {
             config,
@@ -113,8 +114,10 @@ impl ServiceGraph {
         let domain = build_domain_services(&ctx);
 
         // ── 集成子系统 ──
-        let integrations = build_integration_services(&ctx, &mut tasks.background).await?;
+        let integrations =
+            build_integration_services(&ctx, &mut tasks.background, shutdown_token).await?;
         let knowledge_review = integrations.knowledge_review;
+        let dispatcher_handle = integrations.dispatcher_handle;
 
         Ok(Self {
             auth: identity.auth,
@@ -135,6 +138,7 @@ impl ServiceGraph {
             chat_conv_repo: session.conv_repo,
             token_service: identity.token_service,
             risk_repo: Arc::clone(&repos.risk_repo),
+            dispatcher_handle,
         })
     }
 }

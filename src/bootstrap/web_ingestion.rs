@@ -6,6 +6,8 @@
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
@@ -29,7 +31,8 @@ pub async fn init_web_ingestion(
     embedding_provider: &Arc<dyn EmbeddingProvider>,
     rag_repo: &Arc<dyn RAGRepoT>,
     background: &mut BackgroundTasks,
-) -> Result<Arc<KnowledgeReviewService>, AppError> {
+    shutdown_token: CancellationToken,
+) -> Result<(Arc<KnowledgeReviewService>, Option<JoinHandle<()>>), AppError> {
     let wc = &config.web_ingestion;
     let review_service = Arc::new(KnowledgeReviewService::new(
         Arc::new(SeaOrmKnowledgeReviewRepository::new(db.clone())),
@@ -46,7 +49,7 @@ pub async fn init_web_ingestion(
             enabled = wc.enabled,
             "网页知识摄取：没有要启动的 Worker（主开关关闭或两个 Worker 均禁用）"
         );
-        return Ok(review_service);
+        return Ok((review_service, None));
     }
 
     let fetcher = Arc::new(
@@ -121,23 +124,18 @@ pub async fn init_web_ingestion(
     }
 
     // ── Dispatcher loop ──────────────────────────────────────────────────────
-    if gate.dispatcher {
+    let dispatcher_handle = if gate.dispatcher {
         let ctx = ctx.clone();
-        let disp_interval = wc.dispatcher_interval_secs.max(1);
-        background.spawn(tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(disp_interval));
-            loop {
-                interval.tick().await;
-                if let Err(e) = dispatcher::run_tick(&ctx).await {
-                    tracing::warn!(error = %e, "网页知识摄取分发器周期执行失败");
-                }
-            }
-        }));
+        let handle = tokio::spawn(async move {
+            dispatcher::run(ctx, shutdown_token).await;
+        });
         info!("web ingestion outbox dispatcher started");
-    }
+        Some(handle)
+    } else {
+        None
+    };
 
-    Ok(review_service)
+    Ok((review_service, dispatcher_handle))
 }
 
 /// Resolved decision of which workers may start, after applying the master
