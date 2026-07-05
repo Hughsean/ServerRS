@@ -2,20 +2,20 @@
 
 ## Source
 
-- Tool: local SeaORM information_schema probe
-- Connection: mysql://root:******@127.0.0.1:3306/digital_companion
+- Tool: dbx connection `DQL`, cross-checked with a local privileged SeaORM information_schema probe
+- Connection: dbx `DQL` / mysql://root:******@127.0.0.1:3306/digital_companion
 - Database: digital_companion
 - Access mode: read-only inspection
 
 ## Summary
 
 - Tables: 57
-- Indexes: 281
+- Indexes: 282
 - Foreign keys: 91
 - Triggers: 2
 - Generated columns: 1
 - Text/blob/json columns: 107
-- dbx note: dbx MCP returned `fetch failed`; the local SeaORM probe was used against the same MySQL endpoint.
+- dbx validation note: dbx recheck on 2026-07-06 returned 57 tables, 282 indexes, 91 foreign keys, 1 generated column, and 107 text/blob/json columns. dbx `DQL` currently reports 0 visible triggers; the privileged local probe captured the 2 `knowledge_publish_records` triggers listed below.
 
 ## Tables
 
@@ -219,6 +219,7 @@
 - conversation_summaries.idx_vector_id | unique=no | type=BTREE | columns=vector_id
 - conversation_summaries.PRIMARY | unique=yes | type=BTREE | columns=summary_id
 - conversation_summaries.supersedes_id | unique=no | type=BTREE | columns=supersedes_id
+- conversation_summaries.uk_active_rolling_general | unique=yes | type=BTREE | columns=<expression/hidden>
 - conversations.PRIMARY | unique=yes | type=BTREE | columns=id
 - conversations.uk_conversations_user_id | unique=yes | type=BTREE | columns=user_id
 - depression_assessments.idx_scale | unique=no | type=BTREE | columns=scale_id
