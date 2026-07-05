@@ -1,0 +1,1013 @@
+# digital_companion Schema Audit - 2026-07-05
+
+## Source
+
+- Tool: local SeaORM information_schema probe
+- Connection: mysql://root:******@127.0.0.1:3306/digital_companion
+- Database: digital_companion
+- Access mode: read-only inspection
+
+## Summary
+
+- Tables: 57
+- Indexes: 281
+- Foreign keys: 91
+- Triggers: 2
+- Generated columns: 1
+- Text/blob/json columns: 107
+- dbx note: dbx MCP returned `fetch failed`; the local SeaORM probe was used against the same MySQL endpoint.
+
+## Tables
+
+- agent_events | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=36
+- community_comments | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- community_post_media | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- community_posts | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- content_likes | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- conversation_messages | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=2
+- conversation_summaries | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- conversations | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=1
+- depression_assessments | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- depression_scales | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- domain_event_outbox | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=99844
+- fresh_chunks | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- fresh_items | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- fresh_sources | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- fresh_topic_evidence | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- fresh_topics | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- knowledge_chunk_manifests | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=29645
+- knowledge_chunks | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=27569
+- knowledge_documents | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=5520
+- knowledge_embeddings | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=29199
+- knowledge_ingestion_runs | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=4237
+- knowledge_publish_records | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=5490
+- knowledge_vector_manifests | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=29526
+- music | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- post_conversation_risk_audits | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- psychology_articles | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- psychology_categories | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- psychology_qna | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- psychology_resources | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_agent_turns | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_bot_accounts | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_external_users | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_group_members | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_group_memories | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_group_messages | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_group_summaries | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_groups | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_message_outbox | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_relationships | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- qq_user_profiles | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- refresh_tokens | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- stored_objects | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- user_context_versions | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=1
+- user_diaries | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- user_knowledge_favorites | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- user_memories | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=11
+- user_memory_evidence | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=16
+- user_persona_snapshots | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=2
+- user_profiles | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- users | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=3
+- vector_index_jobs | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=13
+- vector_index_records | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=0
+- web_crawl_jobs | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=35907
+- web_ingestion_audit_logs | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=32714
+- web_pages | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=5080
+- web_source_urls | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=7092
+- web_sources | BASE TABLE | InnoDB | utf8mb4_unicode_ci | rows=24
+
+## Columns
+
+- agent_events.payload | json | nullable=NO | default=NULL | extra=
+- community_comments.content | text | nullable=NO | default=NULL | extra=
+- community_comments.attachments | json | nullable=YES | default=NULL | extra=
+- community_post_media.media_data | longblob | nullable=NO | default=NULL | extra=
+- community_posts.content | text | nullable=NO | default=NULL | extra=
+- community_posts.extra_metadata | json | nullable=YES | default=NULL | extra=
+- conversation_messages.content | json | nullable=NO | default=NULL | extra=
+- conversation_summaries.content | text | nullable=NO | default=NULL | extra=
+- depression_assessments.answers | json | nullable=NO | default=NULL | extra=
+- depression_assessments.notes | text | nullable=YES | default=NULL | extra=
+- depression_scales.scale_description | text | nullable=YES | default=NULL | extra=
+- depression_scales.severity_ranges | json | nullable=NO | default=NULL | extra=
+- depression_scales.questions | json | nullable=NO | default=NULL | extra=
+- domain_event_outbox.payload | json | nullable=NO | default=NULL | extra=
+- domain_event_outbox.last_error | text | nullable=YES | default=NULL | extra=
+- fresh_chunks.content | text | nullable=NO | default=NULL | extra=
+- fresh_chunks.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_items.url | text | nullable=YES | default=NULL | extra=
+- fresh_items.canonical_url | text | nullable=YES | default=NULL | extra=
+- fresh_items.raw_text | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.clean_text | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.summary | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.risk_flags | json | nullable=YES | default=NULL | extra=
+- fresh_items.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_sources.base_url | text | nullable=YES | default=NULL | extra=
+- fresh_sources.allowed_domains | json | nullable=YES | default=NULL | extra=
+- fresh_sources.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_topics.summary | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_topics.entities | json | nullable=YES | default=NULL | extra=
+- fresh_topics.risk_flags | json | nullable=YES | default=NULL | extra=
+- fresh_topics.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_chunks.content | text | nullable=NO | default=NULL | extra=
+- knowledge_chunks.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_documents.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_embeddings.embedding_json | json | nullable=NO | default=NULL | extra=
+- knowledge_ingestion_runs.quality_result | json | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.risk_flags | json | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.last_error | text | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.fetched_body_text | mediumtext | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.clean_text | mediumtext | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.distilled_json | json | nullable=YES | default=NULL | extra=
+- music.description | text | nullable=YES | default=NULL | extra=
+- music.file_data | longblob | nullable=NO | default=NULL | extra=
+- music.cover_image | blob | nullable=YES | default=NULL | extra=
+- music.lyrics | text | nullable=YES | default=NULL | extra=
+- music.tags | json | nullable=YES | default=NULL | extra=
+- music.mood_tags | json | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.risk_categories | json | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.error_message | text | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.metadata | json | nullable=YES | default=NULL | extra=
+- psychology_articles.summary | text | nullable=YES | default=NULL | extra=
+- psychology_articles.content | longtext | nullable=NO | default=NULL | extra=
+- psychology_articles.tags | json | nullable=YES | default=NULL | extra=
+- psychology_articles.cover_image | blob | nullable=YES | default=NULL | extra=
+- psychology_categories.description | text | nullable=YES | default=NULL | extra=
+- psychology_qna.question | text | nullable=NO | default=NULL | extra=
+- psychology_qna.answer | longtext | nullable=NO | default=NULL | extra=
+- psychology_qna.tags | json | nullable=YES | default=NULL | extra=
+- psychology_resources.description | text | nullable=YES | default=NULL | extra=
+- psychology_resources.file_data | longblob | nullable=YES | default=NULL | extra=
+- psychology_resources.thumbnail | blob | nullable=YES | default=NULL | extra=
+- psychology_resources.tags | json | nullable=YES | default=NULL | extra=
+- qq_agent_turns.error_message | text | nullable=YES | default=NULL | extra=
+- qq_bot_accounts.config | json | nullable=YES | default=NULL | extra=
+- qq_group_memories.content | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.raw_text | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.normalized_text | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.segments | json | nullable=NO | default=NULL | extra=
+- qq_group_summaries.content | text | nullable=NO | default=NULL | extra=
+- qq_groups.keywords | json | nullable=YES | default=NULL | extra=
+- qq_message_outbox.payload | json | nullable=NO | default=NULL | extra=
+- qq_message_outbox.last_error | text | nullable=YES | default=NULL | extra=
+- qq_relationships.known_interests | json | nullable=YES | default=NULL | extra=
+- qq_relationships.known_avoid_topics | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.interest_tags | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.active_hours | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.topic_frequency | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.raw_profile | text | nullable=YES | default=NULL | extra=
+- stored_objects.public_url | text | nullable=YES | default=NULL | extra=
+- user_diaries.content | text | nullable=NO | default=NULL | extra=
+- user_memories.canonical_form | text | nullable=YES | default=NULL | extra=
+- user_memories.content | text | nullable=NO | default=NULL | extra=
+- user_memories.merge_reason | text | nullable=YES | default=NULL | extra=
+- user_memories.metadata | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.snapshot_data | json | nullable=NO | default=NULL | extra=
+- user_persona_snapshots.source_memory_ids | json | nullable=NO | default=NULL | extra=
+- user_persona_snapshots.source_summary_ids | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.source_recent_message_ids | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.error_message | text | nullable=YES | default=NULL | extra=
+- user_profiles.interests | json | nullable=YES | default=NULL | extra=
+- user_profiles.personality_traits | json | nullable=YES | default=NULL | extra=
+- user_profiles.interaction_preferences | json | nullable=YES | default=NULL | extra=
+- user_profiles.emotional_tendency | json | nullable=YES | default=NULL | extra=
+- user_profiles.learning_records | json | nullable=YES | default=NULL | extra=
+- users.avatar | blob | nullable=YES | default=NULL | extra=
+- vector_index_jobs.last_error | text | nullable=YES | default=NULL | extra=
+- vector_index_records.payload | json | nullable=NO | default=NULL | extra=
+- vector_index_records.error_message | text | nullable=YES | default=NULL | extra=
+- web_crawl_jobs.last_error | text | nullable=YES | default=NULL | extra=
+- web_ingestion_audit_logs.message | text | nullable=NO | default=NULL | extra=
+- web_ingestion_audit_logs.metadata | json | nullable=YES | default=NULL | extra=
+- web_pages.url | text | nullable=NO | default=NULL | extra=
+- web_pages.canonical_url | text | nullable=YES | default=NULL | extra=
+- web_source_urls.url | text | nullable=NO | default=NULL | extra=
+- web_source_urls.canonical_url | text | nullable=YES | default=NULL | extra=
+- web_sources.description | text | nullable=YES | default=NULL | extra=
+- web_sources.allowed_domains | json | nullable=YES | default=NULL | extra=
+
+## Indexes
+
+- agent_events.idx_agent_events_conversation | unique=no | type=BTREE | columns=conversation_id
+- agent_events.idx_agent_events_trace | unique=no | type=BTREE | columns=trace_id
+- agent_events.idx_agent_events_turn | unique=no | type=BTREE | columns=turn_id
+- agent_events.idx_agent_events_type_time | unique=no | type=BTREE | columns=event_type,created_at
+- agent_events.idx_agent_events_user_time | unique=no | type=BTREE | columns=user_id,created_at
+- agent_events.PRIMARY | unique=yes | type=BTREE | columns=event_id
+- community_comments.idx_created_at | unique=no | type=BTREE | columns=created_at
+- community_comments.idx_parent_id | unique=no | type=BTREE | columns=parent_comment_id
+- community_comments.idx_post_id | unique=no | type=BTREE | columns=post_id
+- community_comments.PRIMARY | unique=yes | type=BTREE | columns=comment_id
+- community_comments.user_id | unique=no | type=BTREE | columns=user_id
+- community_post_media.idx_media_type | unique=no | type=BTREE | columns=media_type
+- community_post_media.idx_post_id | unique=no | type=BTREE | columns=post_id
+- community_post_media.PRIMARY | unique=yes | type=BTREE | columns=media_id
+- community_posts.idx_created_at | unique=no | type=BTREE | columns=created_at
+- community_posts.idx_status | unique=no | type=BTREE | columns=status
+- community_posts.idx_user_id | unique=no | type=BTREE | columns=user_id
+- community_posts.PRIMARY | unique=yes | type=BTREE | columns=post_id
+- content_likes.idx_content_likes_content | unique=no | type=BTREE | columns=content_type,content_id
+- content_likes.idx_content_likes_user_id | unique=no | type=BTREE | columns=user_id
+- content_likes.PRIMARY | unique=yes | type=BTREE | columns=like_id
+- content_likes.uk_content_likes_user_content | unique=yes | type=BTREE | columns=user_id,content_type,content_id
+- conversation_messages.idx_conv_created | unique=no | type=BTREE | columns=conversation_id,created_at
+- conversation_messages.idx_conv_id | unique=no | type=BTREE | columns=conversation_id,id
+- conversation_messages.PRIMARY | unique=yes | type=BTREE | columns=id
+- conversation_summaries.idx_conv_type_status_end | unique=no | type=BTREE | columns=conversation_id,summary_type,status,message_end_id
+- conversation_summaries.idx_user_status | unique=no | type=BTREE | columns=user_id,status
+- conversation_summaries.idx_vector_id | unique=no | type=BTREE | columns=vector_id
+- conversation_summaries.PRIMARY | unique=yes | type=BTREE | columns=summary_id
+- conversation_summaries.supersedes_id | unique=no | type=BTREE | columns=supersedes_id
+- conversations.PRIMARY | unique=yes | type=BTREE | columns=id
+- conversations.uk_conversations_user_id | unique=yes | type=BTREE | columns=user_id
+- depression_assessments.idx_scale | unique=no | type=BTREE | columns=scale_id
+- depression_assessments.idx_user_assessment | unique=no | type=BTREE | columns=user_id,assessment_date
+- depression_assessments.PRIMARY | unique=yes | type=BTREE | columns=assessment_id
+- depression_scales.PRIMARY | unique=yes | type=BTREE | columns=scale_id
+- depression_scales.scale_name | unique=yes | type=BTREE | columns=scale_name
+- domain_event_outbox.idx_outbox_aggregate | unique=no | type=BTREE | columns=aggregate_type,aggregate_id
+- domain_event_outbox.idx_outbox_claim | unique=no | type=BTREE | columns=status,next_retry_at,created_at
+- domain_event_outbox.idx_outbox_created | unique=no | type=BTREE | columns=created_at
+- domain_event_outbox.idx_outbox_event_type | unique=no | type=BTREE | columns=event_type
+- domain_event_outbox.idx_outbox_locked_by | unique=no | type=BTREE | columns=locked_by
+- domain_event_outbox.PRIMARY | unique=yes | type=BTREE | columns=id
+- domain_event_outbox.uk_outbox_event_key | unique=yes | type=BTREE | columns=event_key
+- fresh_chunks.idx_fresh_chunks_active_expires | unique=no | type=BTREE | columns=active,expires_at
+- fresh_chunks.idx_fresh_chunks_indexable | unique=no | type=BTREE | columns=active,vector_id,expires_at
+- fresh_chunks.idx_fresh_chunks_topic | unique=no | type=BTREE | columns=topic_id
+- fresh_chunks.PRIMARY | unique=yes | type=BTREE | columns=id
+- fresh_chunks.uk_fresh_chunks_item_idx | unique=yes | type=BTREE | columns=item_id,chunk_index
+- fresh_chunks.uk_fresh_chunks_vector_id | unique=yes | type=BTREE | columns=vector_id
+- fresh_items.idx_fresh_items_deleted | unique=no | type=BTREE | columns=deleted_at
+- fresh_items.idx_fresh_items_fetched_at | unique=no | type=BTREE | columns=fetched_at
+- fresh_items.idx_fresh_items_published_at | unique=no | type=BTREE | columns=published_at
+- fresh_items.idx_fresh_items_rumor | unique=no | type=BTREE | columns=rumor_level
+- fresh_items.idx_fresh_items_source_status | unique=no | type=BTREE | columns=source_id,status
+- fresh_items.idx_fresh_items_status_expires | unique=no | type=BTREE | columns=status,expires_at
+- fresh_items.PRIMARY | unique=yes | type=BTREE | columns=id
+- fresh_items.uk_fresh_items_source_content | unique=yes | type=BTREE | columns=source_id,content_hash
+- fresh_items.uk_fresh_items_source_url_hash | unique=yes | type=BTREE | columns=source_id,url_hash
+- fresh_sources.idx_fresh_sources_deleted | unique=no | type=BTREE | columns=deleted_at
+- fresh_sources.idx_fresh_sources_enabled | unique=no | type=BTREE | columns=enabled
+- fresh_sources.idx_fresh_sources_kind_enabled | unique=no | type=BTREE | columns=source_kind,enabled
+- fresh_sources.PRIMARY | unique=yes | type=BTREE | columns=id
+- fresh_sources.uk_fresh_sources_name | unique=yes | type=BTREE | columns=name
+- fresh_topic_evidence.idx_fresh_topic_evidence_item | unique=no | type=BTREE | columns=item_id
+- fresh_topic_evidence.idx_fresh_topic_evidence_stance | unique=no | type=BTREE | columns=stance
+- fresh_topic_evidence.PRIMARY | unique=yes | type=BTREE | columns=id
+- fresh_topic_evidence.uk_fresh_topic_evidence_pair | unique=yes | type=BTREE | columns=topic_id,item_id
+- fresh_topics.idx_fresh_topics_deleted | unique=no | type=BTREE | columns=deleted_at
+- fresh_topics.idx_fresh_topics_heat | unique=no | type=BTREE | columns=heat_score
+- fresh_topics.idx_fresh_topics_last_seen | unique=no | type=BTREE | columns=last_seen_at
+- fresh_topics.idx_fresh_topics_status_expires | unique=no | type=BTREE | columns=status,expires_at
+- fresh_topics.PRIMARY | unique=yes | type=BTREE | columns=id
+- fresh_topics.uk_fresh_topics_key | unique=yes | type=BTREE | columns=topic_key
+- knowledge_chunk_manifests.idx_chunk_manifests_active | unique=no | type=BTREE | columns=active
+- knowledge_chunk_manifests.idx_chunk_manifests_document | unique=no | type=BTREE | columns=document_id
+- knowledge_chunk_manifests.idx_chunk_manifests_publish_record | unique=no | type=BTREE | columns=publish_record_id
+- knowledge_chunk_manifests.idx_chunk_manifests_run | unique=no | type=BTREE | columns=run_id
+- knowledge_chunk_manifests.PRIMARY | unique=yes | type=BTREE | columns=id
+- knowledge_chunk_manifests.uk_chunk_manifests_chunk_id | unique=yes | type=BTREE | columns=chunk_id
+- knowledge_chunk_manifests.uk_chunk_manifests_version_hash | unique=yes | type=BTREE | columns=version_key,chunk_hash
+- knowledge_chunks.ft_knowledge_chunks_content | unique=no | type=FULLTEXT | columns=content
+- knowledge_chunks.idx_knowledge_chunks_document_status | unique=no | type=BTREE | columns=document_id,status
+- knowledge_chunks.idx_knowledge_chunks_vector_id | unique=no | type=BTREE | columns=vector_id
+- knowledge_chunks.PRIMARY | unique=yes | type=BTREE | columns=chunk_id
+- knowledge_chunks.uk_knowledge_chunks_doc_idx | unique=yes | type=BTREE | columns=document_id,chunk_index
+- knowledge_chunks.uk_knowledge_chunks_vector_id | unique=yes | type=BTREE | columns=vector_id
+- knowledge_documents.idx_knowledge_documents_owner_status | unique=no | type=BTREE | columns=owner_user_id,status
+- knowledge_documents.idx_knowledge_documents_status | unique=no | type=BTREE | columns=status
+- knowledge_documents.idx_knowledge_documents_visibility_status | unique=no | type=BTREE | columns=visibility,status
+- knowledge_documents.PRIMARY | unique=yes | type=BTREE | columns=document_id
+- knowledge_documents.uk_knowledge_documents_source | unique=yes | type=BTREE | columns=source_type,source_id
+- knowledge_embeddings.PRIMARY | unique=yes | type=BTREE | columns=embedding_id
+- knowledge_embeddings.uk_knowledge_embeddings_chunk_model | unique=yes | type=BTREE | columns=chunk_id,provider,model
+- knowledge_ingestion_runs.idx_ingestion_runs_content_key | unique=no | type=BTREE | columns=content_key
+- knowledge_ingestion_runs.idx_ingestion_runs_crawl_job | unique=no | type=BTREE | columns=crawl_job_id
+- knowledge_ingestion_runs.idx_ingestion_runs_created | unique=no | type=BTREE | columns=created_at
+- knowledge_ingestion_runs.idx_ingestion_runs_page | unique=no | type=BTREE | columns=page_id
+- knowledge_ingestion_runs.idx_ingestion_runs_source | unique=no | type=BTREE | columns=source_id
+- knowledge_ingestion_runs.idx_ingestion_runs_source_url | unique=no | type=BTREE | columns=source_url_id
+- knowledge_ingestion_runs.idx_ingestion_runs_status_stage | unique=no | type=BTREE | columns=status,stage
+- knowledge_ingestion_runs.PRIMARY | unique=yes | type=BTREE | columns=id
+- knowledge_ingestion_runs.uk_ingestion_runs_run_key | unique=yes | type=BTREE | columns=run_key
+- knowledge_ingestion_runs.uk_ingestion_runs_version_key | unique=yes | type=BTREE | columns=version_key
+- knowledge_publish_records.idx_publish_records_document | unique=no | type=BTREE | columns=document_id
+- knowledge_publish_records.idx_publish_records_page | unique=no | type=BTREE | columns=source_id,page_id
+- knowledge_publish_records.idx_publish_records_run | unique=no | type=BTREE | columns=run_id
+- knowledge_publish_records.idx_publish_records_status | unique=no | type=BTREE | columns=publish_status
+- knowledge_publish_records.idx_publish_records_version_key | unique=no | type=BTREE | columns=version_key
+- knowledge_publish_records.page_id | unique=no | type=BTREE | columns=page_id
+- knowledge_publish_records.PRIMARY | unique=yes | type=BTREE | columns=id
+- knowledge_publish_records.uk_publish_records_one_active_page | unique=yes | type=BTREE | columns=active_page_key
+- knowledge_vector_manifests.idx_vector_manifests_active | unique=no | type=BTREE | columns=active
+- knowledge_vector_manifests.idx_vector_manifests_document | unique=no | type=BTREE | columns=document_id
+- knowledge_vector_manifests.idx_vector_manifests_publish_record | unique=no | type=BTREE | columns=publish_record_id
+- knowledge_vector_manifests.idx_vector_manifests_run | unique=no | type=BTREE | columns=run_id
+- knowledge_vector_manifests.PRIMARY | unique=yes | type=BTREE | columns=id
+- knowledge_vector_manifests.uk_vector_manifests_chunk_model | unique=yes | type=BTREE | columns=chunk_id,embedding_model
+- knowledge_vector_manifests.uk_vector_manifests_qdrant_point | unique=yes | type=BTREE | columns=qdrant_collection,qdrant_point_id
+- music.ft_title_artist | unique=no | type=FULLTEXT | columns=title,artist
+- music.idx_artist | unique=no | type=BTREE | columns=artist
+- music.idx_category | unique=no | type=BTREE | columns=category
+- music.idx_created_at | unique=no | type=BTREE | columns=created_at
+- music.idx_status | unique=no | type=BTREE | columns=status
+- music.PRIMARY | unique=yes | type=BTREE | columns=music_id
+- post_conversation_risk_audits.assistant_message_id | unique=no | type=BTREE | columns=assistant_message_id
+- post_conversation_risk_audits.idx_conv_created | unique=no | type=BTREE | columns=conversation_id,created_at
+- post_conversation_risk_audits.idx_risk_level | unique=no | type=BTREE | columns=risk_level
+- post_conversation_risk_audits.idx_source_deleted | unique=no | type=BTREE | columns=source_deleted
+- post_conversation_risk_audits.idx_status | unique=no | type=BTREE | columns=status
+- post_conversation_risk_audits.idx_user_status | unique=no | type=BTREE | columns=user_id,status
+- post_conversation_risk_audits.PRIMARY | unique=yes | type=BTREE | columns=audit_id
+- post_conversation_risk_audits.user_message_id | unique=no | type=BTREE | columns=user_message_id
+- psychology_articles.ft_title_content | unique=no | type=FULLTEXT | columns=title,content
+- psychology_articles.idx_category | unique=no | type=BTREE | columns=category_id
+- psychology_articles.idx_is_featured | unique=no | type=BTREE | columns=is_featured
+- psychology_articles.idx_is_published | unique=no | type=BTREE | columns=is_published
+- psychology_articles.idx_publish_date | unique=no | type=BTREE | columns=publish_date
+- psychology_articles.PRIMARY | unique=yes | type=BTREE | columns=article_id
+- psychology_categories.category_name | unique=yes | type=BTREE | columns=category_name
+- psychology_categories.idx_parent_id | unique=no | type=BTREE | columns=parent_id
+- psychology_categories.idx_status | unique=no | type=BTREE | columns=status
+- psychology_categories.PRIMARY | unique=yes | type=BTREE | columns=category_id
+- psychology_qna.ft_question_answer | unique=no | type=FULLTEXT | columns=question,answer
+- psychology_qna.idx_category | unique=no | type=BTREE | columns=category_id
+- psychology_qna.idx_is_verified | unique=no | type=BTREE | columns=is_verified
+- psychology_qna.idx_status | unique=no | type=BTREE | columns=status
+- psychology_qna.PRIMARY | unique=yes | type=BTREE | columns=qna_id
+- psychology_resources.idx_category | unique=no | type=BTREE | columns=category_id
+- psychology_resources.idx_resource_type | unique=no | type=BTREE | columns=resource_type
+- psychology_resources.idx_status | unique=no | type=BTREE | columns=status
+- psychology_resources.PRIMARY | unique=yes | type=BTREE | columns=resource_id
+- qq_agent_turns.bot_account_id | unique=no | type=BTREE | columns=bot_account_id
+- qq_agent_turns.idx_created_at | unique=no | type=BTREE | columns=created_at
+- qq_agent_turns.idx_qq_group_id | unique=no | type=BTREE | columns=qq_group_id
+- qq_agent_turns.idx_qq_user_id | unique=no | type=BTREE | columns=qq_user_id
+- qq_agent_turns.idx_status | unique=no | type=BTREE | columns=status
+- qq_agent_turns.internal_user_id | unique=no | type=BTREE | columns=internal_user_id
+- qq_agent_turns.PRIMARY | unique=yes | type=BTREE | columns=turn_id
+- qq_agent_turns.response_message_id | unique=no | type=BTREE | columns=response_message_id
+- qq_agent_turns.trace_id | unique=yes | type=BTREE | columns=trace_id
+- qq_agent_turns.trigger_message_id | unique=no | type=BTREE | columns=trigger_message_id
+- qq_bot_accounts.idx_enabled | unique=no | type=BTREE | columns=enabled
+- qq_bot_accounts.idx_self_qq_id | unique=no | type=BTREE | columns=self_qq_id
+- qq_bot_accounts.PRIMARY | unique=yes | type=BTREE | columns=bot_account_id
+- qq_bot_accounts.self_qq_id | unique=yes | type=BTREE | columns=self_qq_id
+- qq_external_users.idx_internal_user_id | unique=no | type=BTREE | columns=internal_user_id
+- qq_external_users.idx_last_seen_at | unique=no | type=BTREE | columns=last_seen_at
+- qq_external_users.PRIMARY | unique=yes | type=BTREE | columns=qq_user_id
+- qq_group_members.idx_qq_user_id | unique=no | type=BTREE | columns=qq_user_id
+- qq_group_members.idx_role | unique=no | type=BTREE | columns=role
+- qq_group_members.idx_status | unique=no | type=BTREE | columns=status
+- qq_group_members.PRIMARY | unique=yes | type=BTREE | columns=qq_group_id,qq_user_id
+- qq_group_memories.idx_memory_type | unique=no | type=BTREE | columns=memory_type
+- qq_group_memories.idx_qq_group_id | unique=no | type=BTREE | columns=qq_group_id
+- qq_group_memories.idx_salience | unique=no | type=BTREE | columns=salience
+- qq_group_memories.idx_status | unique=no | type=BTREE | columns=status
+- qq_group_memories.PRIMARY | unique=yes | type=BTREE | columns=group_memory_id
+- qq_group_memories.source_message_id | unique=no | type=BTREE | columns=source_message_id
+- qq_group_messages.idx_qq_group_id | unique=no | type=BTREE | columns=qq_group_id
+- qq_group_messages.idx_qq_user_id | unique=no | type=BTREE | columns=qq_user_id
+- qq_group_messages.idx_sent_at | unique=no | type=BTREE | columns=sent_at
+- qq_group_messages.idx_status | unique=no | type=BTREE | columns=status
+- qq_group_messages.PRIMARY | unique=yes | type=BTREE | columns=id
+- qq_group_messages.uk_platform_message | unique=yes | type=BTREE | columns=bot_account_id,platform_message_id
+- qq_group_summaries.idx_qq_group_id | unique=no | type=BTREE | columns=qq_group_id
+- qq_group_summaries.idx_status | unique=no | type=BTREE | columns=status
+- qq_group_summaries.PRIMARY | unique=yes | type=BTREE | columns=summary_id
+- qq_group_summaries.supersedes_id | unique=no | type=BTREE | columns=supersedes_id
+- qq_groups.idx_bot_account_id | unique=no | type=BTREE | columns=bot_account_id
+- qq_groups.idx_enabled | unique=no | type=BTREE | columns=enabled
+- qq_groups.PRIMARY | unique=yes | type=BTREE | columns=qq_group_id
+- qq_message_outbox.bot_account_id | unique=no | type=BTREE | columns=bot_account_id
+- qq_message_outbox.idx_related_turn_id | unique=no | type=BTREE | columns=related_turn_id
+- qq_message_outbox.idx_status_next_run | unique=no | type=BTREE | columns=status,next_run_at
+- qq_message_outbox.PRIMARY | unique=yes | type=BTREE | columns=outbox_id
+- qq_relationships.PRIMARY | unique=yes | type=BTREE | columns=id
+- qq_relationships.qq_user_id | unique=no | type=BTREE | columns=qq_user_id
+- qq_relationships.uk_group_user | unique=yes | type=BTREE | columns=qq_group_id,qq_user_id
+- qq_user_profiles.PRIMARY | unique=yes | type=BTREE | columns=qq_user_id
+- refresh_tokens.idx_refresh_tokens_expires_at | unique=no | type=BTREE | columns=expires_at
+- refresh_tokens.idx_refresh_tokens_user_id | unique=no | type=BTREE | columns=user_id
+- refresh_tokens.PRIMARY | unique=yes | type=BTREE | columns=refresh_token_id
+- refresh_tokens.uk_refresh_tokens_token_hash | unique=yes | type=BTREE | columns=token_hash
+- refresh_tokens.uk_refresh_tokens_token_id | unique=yes | type=BTREE | columns=token_id
+- stored_objects.idx_stored_objects_created_by | unique=no | type=BTREE | columns=created_by
+- stored_objects.idx_stored_objects_sha256 | unique=no | type=BTREE | columns=sha256
+- stored_objects.PRIMARY | unique=yes | type=BTREE | columns=object_id
+- stored_objects.uk_stored_objects_bucket_key | unique=yes | type=BTREE | columns=bucket,object_key
+- user_context_versions.PRIMARY | unique=yes | type=BTREE | columns=user_id
+- user_diaries.idx_created_at | unique=no | type=BTREE | columns=created_at
+- user_diaries.idx_user_id | unique=no | type=BTREE | columns=user_id
+- user_diaries.PRIMARY | unique=yes | type=BTREE | columns=id
+- user_knowledge_favorites.idx_content | unique=no | type=BTREE | columns=content_type,content_id
+- user_knowledge_favorites.idx_user_id | unique=no | type=BTREE | columns=user_id
+- user_knowledge_favorites.PRIMARY | unique=yes | type=BTREE | columns=favorite_id
+- user_knowledge_favorites.uk_user_content | unique=yes | type=BTREE | columns=user_id,content_type,content_id
+- user_memories.ft_memory_content | unique=no | type=FULLTEXT | columns=content
+- user_memories.idx_user_status_salience | unique=no | type=BTREE | columns=user_id,status,salience
+- user_memories.PRIMARY | unique=yes | type=BTREE | columns=memory_id
+- user_memories.source_conversation_id | unique=no | type=BTREE | columns=source_conversation_id
+- user_memories.source_message_id | unique=no | type=BTREE | columns=source_message_id
+- user_memories.superseded_by | unique=no | type=BTREE | columns=superseded_by
+- user_memories.uk_memory_vector_id | unique=yes | type=BTREE | columns=vector_id
+- user_memories.uk_user_memory_key | unique=yes | type=BTREE | columns=user_id,memory_key
+- user_memory_evidence.idx_memory_id | unique=no | type=BTREE | columns=memory_id
+- user_memory_evidence.idx_message_id | unique=no | type=BTREE | columns=message_id
+- user_memory_evidence.idx_summary_id | unique=no | type=BTREE | columns=summary_id
+- user_memory_evidence.PRIMARY | unique=yes | type=BTREE | columns=evidence_id
+- user_memory_evidence.uk_memory_source_type | unique=yes | type=BTREE | columns=memory_id,source_type,source_ref_id,evidence_type
+- user_persona_snapshots.idx_input_hash | unique=no | type=BTREE | columns=input_hash
+- user_persona_snapshots.idx_persona_supersedes_id | unique=no | type=BTREE | columns=supersedes_id
+- user_persona_snapshots.idx_user_status_created | unique=no | type=BTREE | columns=user_id,status,created_at
+- user_persona_snapshots.PRIMARY | unique=yes | type=BTREE | columns=snapshot_id
+- user_persona_snapshots.uk_active_persona_user | unique=yes | type=BTREE | columns=user_id,active_marker
+- user_profiles.idx_user_id | unique=no | type=BTREE | columns=user_id
+- user_profiles.PRIMARY | unique=yes | type=BTREE | columns=id
+- user_profiles.user_id | unique=yes | type=BTREE | columns=user_id
+- users.email | unique=yes | type=BTREE | columns=email
+- users.idx_email | unique=no | type=BTREE | columns=email
+- users.idx_phone | unique=no | type=BTREE | columns=phone
+- users.idx_role | unique=no | type=BTREE | columns=role
+- users.idx_username | unique=no | type=BTREE | columns=username
+- users.phone | unique=yes | type=BTREE | columns=phone
+- users.PRIMARY | unique=yes | type=BTREE | columns=id
+- users.username | unique=yes | type=BTREE | columns=username
+- vector_index_jobs.idx_vector_index_jobs_object | unique=no | type=BTREE | columns=object_type,object_id
+- vector_index_jobs.idx_vector_index_jobs_status_next | unique=no | type=BTREE | columns=status,next_run_at,priority
+- vector_index_jobs.idx_vector_index_jobs_vector_id | unique=no | type=BTREE | columns=vector_id
+- vector_index_jobs.PRIMARY | unique=yes | type=BTREE | columns=job_id
+- vector_index_records.idx_vector_index_records_collection_status | unique=no | type=BTREE | columns=collection_name,index_status
+- vector_index_records.idx_vector_index_records_object | unique=no | type=BTREE | columns=object_type,object_id
+- vector_index_records.idx_vector_index_records_owner_type | unique=no | type=BTREE | columns=owner_user_id,object_type
+- vector_index_records.PRIMARY | unique=yes | type=BTREE | columns=record_id
+- vector_index_records.uk_vector_index_records_vector_id | unique=yes | type=BTREE | columns=vector_id
+- web_crawl_jobs.idx_web_crawl_jobs_created | unique=no | type=BTREE | columns=created_at
+- web_crawl_jobs.idx_web_crawl_jobs_source | unique=no | type=BTREE | columns=source_id
+- web_crawl_jobs.idx_web_crawl_jobs_status_scheduled | unique=no | type=BTREE | columns=status,scheduled_at
+- web_crawl_jobs.PRIMARY | unique=yes | type=BTREE | columns=id
+- web_ingestion_audit_logs.idx_audit_action | unique=no | type=BTREE | columns=action
+- web_ingestion_audit_logs.idx_audit_created | unique=no | type=BTREE | columns=created_at
+- web_ingestion_audit_logs.idx_audit_page | unique=no | type=BTREE | columns=page_id
+- web_ingestion_audit_logs.idx_audit_publish_record | unique=no | type=BTREE | columns=publish_record_id
+- web_ingestion_audit_logs.idx_audit_run | unique=no | type=BTREE | columns=run_id
+- web_ingestion_audit_logs.idx_audit_source | unique=no | type=BTREE | columns=source_id
+- web_ingestion_audit_logs.idx_audit_source_url | unique=no | type=BTREE | columns=source_url_id
+- web_ingestion_audit_logs.PRIMARY | unique=yes | type=BTREE | columns=id
+- web_pages.idx_web_pages_latest_run | unique=no | type=BTREE | columns=latest_success_run_id
+- web_pages.idx_web_pages_source | unique=no | type=BTREE | columns=source_id
+- web_pages.idx_web_pages_source_url | unique=no | type=BTREE | columns=source_url_id
+- web_pages.PRIMARY | unique=yes | type=BTREE | columns=id
+- web_pages.uk_web_pages_source_hash | unique=yes | type=BTREE | columns=source_id,url_hash
+- web_source_urls.idx_web_source_urls_enabled | unique=no | type=BTREE | columns=enabled
+- web_source_urls.idx_web_source_urls_last_crawled | unique=no | type=BTREE | columns=last_crawled_at
+- web_source_urls.idx_web_source_urls_source | unique=no | type=BTREE | columns=source_id
+- web_source_urls.PRIMARY | unique=yes | type=BTREE | columns=id
+- web_source_urls.uk_web_source_urls_source_hash | unique=yes | type=BTREE | columns=source_id,url_hash
+- web_sources.idx_web_sources_approval | unique=no | type=BTREE | columns=approval_status
+- web_sources.idx_web_sources_enabled | unique=no | type=BTREE | columns=enabled
+- web_sources.idx_web_sources_trust | unique=no | type=BTREE | columns=trust_level
+- web_sources.PRIMARY | unique=yes | type=BTREE | columns=id
+
+## Foreign Keys
+
+- agent_events.agent_events_ibfk_1 | user_id -> users(id)
+- agent_events.agent_events_ibfk_2 | conversation_id -> conversations(id)
+- community_comments.community_comments_ibfk_1 | post_id -> community_posts(post_id)
+- community_comments.community_comments_ibfk_2 | user_id -> users(id)
+- community_comments.community_comments_ibfk_3 | parent_comment_id -> community_comments(comment_id)
+- community_post_media.community_post_media_ibfk_1 | post_id -> community_posts(post_id)
+- community_posts.community_posts_ibfk_1 | user_id -> users(id)
+- content_likes.content_likes_ibfk_1 | user_id -> users(id)
+- conversation_messages.conversation_messages_ibfk_1 | conversation_id -> conversations(id)
+- conversation_summaries.conversation_summaries_ibfk_1 | conversation_id -> conversations(id)
+- conversation_summaries.conversation_summaries_ibfk_2 | user_id -> users(id)
+- conversation_summaries.conversation_summaries_ibfk_3 | supersedes_id -> conversation_summaries(summary_id)
+- conversations.fk_conversations_user | user_id -> users(id)
+- depression_assessments.depression_assessments_ibfk_1 | user_id -> users(id)
+- depression_assessments.depression_assessments_ibfk_2 | scale_id -> depression_scales(scale_id)
+- fresh_chunks.fk_fresh_chunks_item | item_id -> fresh_items(id)
+- fresh_chunks.fk_fresh_chunks_topic | topic_id -> fresh_topics(id)
+- fresh_items.fk_fresh_items_source | source_id -> fresh_sources(id)
+- fresh_topic_evidence.fk_fresh_topic_evidence_item | item_id -> fresh_items(id)
+- fresh_topic_evidence.fk_fresh_topic_evidence_topic | topic_id -> fresh_topics(id)
+- knowledge_chunk_manifests.knowledge_chunk_manifests_ibfk_1 | publish_record_id -> knowledge_publish_records(id)
+- knowledge_chunk_manifests.knowledge_chunk_manifests_ibfk_2 | run_id -> knowledge_ingestion_runs(id)
+- knowledge_chunk_manifests.knowledge_chunk_manifests_ibfk_3 | document_id -> knowledge_documents(document_id)
+- knowledge_chunk_manifests.knowledge_chunk_manifests_ibfk_4 | chunk_id -> knowledge_chunks(chunk_id)
+- knowledge_chunks.knowledge_chunks_ibfk_1 | document_id -> knowledge_documents(document_id)
+- knowledge_documents.knowledge_documents_ibfk_1 | owner_user_id -> users(id)
+- knowledge_embeddings.knowledge_embeddings_ibfk_1 | chunk_id -> knowledge_chunks(chunk_id)
+- knowledge_ingestion_runs.knowledge_ingestion_runs_ibfk_1 | source_id -> web_sources(id)
+- knowledge_ingestion_runs.knowledge_ingestion_runs_ibfk_2 | source_url_id -> web_source_urls(id)
+- knowledge_ingestion_runs.knowledge_ingestion_runs_ibfk_3 | crawl_job_id -> web_crawl_jobs(id)
+- knowledge_ingestion_runs.knowledge_ingestion_runs_ibfk_4 | page_id -> web_pages(id)
+- knowledge_publish_records.knowledge_publish_records_ibfk_1 | source_id -> web_sources(id)
+- knowledge_publish_records.knowledge_publish_records_ibfk_2 | page_id -> web_pages(id)
+- knowledge_publish_records.knowledge_publish_records_ibfk_3 | run_id -> knowledge_ingestion_runs(id)
+- knowledge_publish_records.knowledge_publish_records_ibfk_4 | document_id -> knowledge_documents(document_id)
+- knowledge_vector_manifests.knowledge_vector_manifests_ibfk_1 | publish_record_id -> knowledge_publish_records(id)
+- knowledge_vector_manifests.knowledge_vector_manifests_ibfk_2 | run_id -> knowledge_ingestion_runs(id)
+- knowledge_vector_manifests.knowledge_vector_manifests_ibfk_3 | document_id -> knowledge_documents(document_id)
+- knowledge_vector_manifests.knowledge_vector_manifests_ibfk_4 | chunk_id -> knowledge_chunks(chunk_id)
+- post_conversation_risk_audits.post_conversation_risk_audits_ibfk_1 | user_id -> users(id)
+- post_conversation_risk_audits.post_conversation_risk_audits_ibfk_2 | conversation_id -> conversations(id)
+- post_conversation_risk_audits.post_conversation_risk_audits_ibfk_3 | user_message_id -> conversation_messages(id)
+- post_conversation_risk_audits.post_conversation_risk_audits_ibfk_4 | assistant_message_id -> conversation_messages(id)
+- psychology_articles.psychology_articles_ibfk_1 | category_id -> psychology_categories(category_id)
+- psychology_categories.psychology_categories_ibfk_1 | parent_id -> psychology_categories(category_id)
+- psychology_qna.psychology_qna_ibfk_1 | category_id -> psychology_categories(category_id)
+- psychology_resources.psychology_resources_ibfk_1 | category_id -> psychology_categories(category_id)
+- qq_agent_turns.qq_agent_turns_ibfk_1 | bot_account_id -> qq_bot_accounts(bot_account_id)
+- qq_agent_turns.qq_agent_turns_ibfk_2 | trigger_message_id -> qq_group_messages(id)
+- qq_agent_turns.qq_agent_turns_ibfk_3 | response_message_id -> qq_group_messages(id)
+- qq_agent_turns.qq_agent_turns_ibfk_4 | internal_user_id -> users(id)
+- qq_external_users.qq_external_users_ibfk_1 | internal_user_id -> users(id)
+- qq_group_members.qq_group_members_ibfk_1 | qq_group_id -> qq_groups(qq_group_id)
+- qq_group_members.qq_group_members_ibfk_2 | qq_user_id -> qq_external_users(qq_user_id)
+- qq_group_memories.qq_group_memories_ibfk_1 | qq_group_id -> qq_groups(qq_group_id)
+- qq_group_memories.qq_group_memories_ibfk_2 | source_message_id -> qq_group_messages(id)
+- qq_group_messages.qq_group_messages_ibfk_1 | bot_account_id -> qq_bot_accounts(bot_account_id)
+- qq_group_messages.qq_group_messages_ibfk_2 | qq_group_id -> qq_groups(qq_group_id)
+- qq_group_messages.qq_group_messages_ibfk_3 | qq_user_id -> qq_external_users(qq_user_id)
+- qq_group_summaries.qq_group_summaries_ibfk_1 | qq_group_id -> qq_groups(qq_group_id)
+- qq_group_summaries.qq_group_summaries_ibfk_2 | supersedes_id -> qq_group_summaries(summary_id)
+- qq_groups.qq_groups_ibfk_1 | bot_account_id -> qq_bot_accounts(bot_account_id)
+- qq_message_outbox.qq_message_outbox_ibfk_1 | bot_account_id -> qq_bot_accounts(bot_account_id)
+- qq_message_outbox.qq_message_outbox_ibfk_2 | related_turn_id -> qq_agent_turns(turn_id)
+- qq_relationships.qq_relationships_ibfk_1 | qq_user_id -> qq_external_users(qq_user_id)
+- qq_user_profiles.qq_user_profiles_ibfk_1 | qq_user_id -> qq_external_users(qq_user_id)
+- refresh_tokens.refresh_tokens_ibfk_1 | user_id -> users(id)
+- stored_objects.stored_objects_ibfk_1 | created_by -> users(id)
+- user_context_versions.fk_user_context_versions_user | user_id -> users(id)
+- user_diaries.user_diaries_ibfk_1 | user_id -> users(id)
+- user_knowledge_favorites.user_knowledge_favorites_ibfk_1 | user_id -> users(id)
+- user_memories.user_memories_ibfk_1 | user_id -> users(id)
+- user_memories.user_memories_ibfk_2 | source_conversation_id -> conversations(id)
+- user_memories.user_memories_ibfk_3 | source_message_id -> conversation_messages(id)
+- user_memories.user_memories_ibfk_4 | superseded_by -> user_memories(memory_id)
+- user_memory_evidence.user_memory_evidence_ibfk_1 | memory_id -> user_memories(memory_id)
+- user_memory_evidence.user_memory_evidence_ibfk_2 | message_id -> conversation_messages(id)
+- user_memory_evidence.user_memory_evidence_ibfk_3 | summary_id -> conversation_summaries(summary_id)
+- user_persona_snapshots.fk_user_persona_snapshots_supersedes | supersedes_id -> user_persona_snapshots(snapshot_id)
+- user_persona_snapshots.fk_user_persona_snapshots_user | user_id -> users(id)
+- user_profiles.user_profiles_ibfk_1 | user_id -> users(id)
+- vector_index_records.vector_index_records_ibfk_1 | owner_user_id -> users(id)
+- web_crawl_jobs.web_crawl_jobs_ibfk_1 | source_id -> web_sources(id)
+- web_ingestion_audit_logs.web_ingestion_audit_logs_ibfk_1 | source_id -> web_sources(id)
+- web_ingestion_audit_logs.web_ingestion_audit_logs_ibfk_2 | source_url_id -> web_source_urls(id)
+- web_ingestion_audit_logs.web_ingestion_audit_logs_ibfk_3 | page_id -> web_pages(id)
+- web_ingestion_audit_logs.web_ingestion_audit_logs_ibfk_4 | run_id -> knowledge_ingestion_runs(id)
+- web_ingestion_audit_logs.web_ingestion_audit_logs_ibfk_5 | publish_record_id -> knowledge_publish_records(id)
+- web_pages.web_pages_ibfk_1 | source_id -> web_sources(id)
+- web_pages.web_pages_ibfk_2 | source_url_id -> web_source_urls(id)
+- web_source_urls.web_source_urls_ibfk_1 | source_id -> web_sources(id)
+
+## Triggers
+
+- trg_kpr_active_page_key_bi | BEFORE INSERT ON knowledge_publish_records | SET NEW.active_page_key = IF(
+      NEW.active = 1,
+      CONCAT(NEW.source_id, ':', NEW.page_id),
+      NULL
+  )
+- trg_kpr_active_page_key_bu | BEFORE UPDATE ON knowledge_publish_records | SET NEW.active_page_key = IF(
+      NEW.active = 1,
+      CONCAT(NEW.source_id, ':', NEW.page_id),
+      NULL
+  )
+
+## Text Blob Json Columns
+
+- agent_events.payload | json | nullable=NO | default=NULL | extra=
+- community_comments.content | text | nullable=NO | default=NULL | extra=
+- community_comments.attachments | json | nullable=YES | default=NULL | extra=
+- community_post_media.media_data | longblob | nullable=NO | default=NULL | extra=
+- community_posts.content | text | nullable=NO | default=NULL | extra=
+- community_posts.extra_metadata | json | nullable=YES | default=NULL | extra=
+- conversation_messages.content | json | nullable=NO | default=NULL | extra=
+- conversation_summaries.content | text | nullable=NO | default=NULL | extra=
+- depression_assessments.answers | json | nullable=NO | default=NULL | extra=
+- depression_assessments.notes | text | nullable=YES | default=NULL | extra=
+- depression_scales.scale_description | text | nullable=YES | default=NULL | extra=
+- depression_scales.severity_ranges | json | nullable=NO | default=NULL | extra=
+- depression_scales.questions | json | nullable=NO | default=NULL | extra=
+- domain_event_outbox.payload | json | nullable=NO | default=NULL | extra=
+- domain_event_outbox.last_error | text | nullable=YES | default=NULL | extra=
+- fresh_chunks.content | text | nullable=NO | default=NULL | extra=
+- fresh_chunks.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_items.url | text | nullable=YES | default=NULL | extra=
+- fresh_items.canonical_url | text | nullable=YES | default=NULL | extra=
+- fresh_items.raw_text | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.clean_text | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.summary | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_items.risk_flags | json | nullable=YES | default=NULL | extra=
+- fresh_items.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_sources.base_url | text | nullable=YES | default=NULL | extra=
+- fresh_sources.allowed_domains | json | nullable=YES | default=NULL | extra=
+- fresh_sources.metadata | json | nullable=YES | default=NULL | extra=
+- fresh_topics.summary | mediumtext | nullable=YES | default=NULL | extra=
+- fresh_topics.entities | json | nullable=YES | default=NULL | extra=
+- fresh_topics.risk_flags | json | nullable=YES | default=NULL | extra=
+- fresh_topics.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_chunks.content | text | nullable=NO | default=NULL | extra=
+- knowledge_chunks.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_documents.metadata | json | nullable=YES | default=NULL | extra=
+- knowledge_embeddings.embedding_json | json | nullable=NO | default=NULL | extra=
+- knowledge_ingestion_runs.quality_result | json | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.risk_flags | json | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.last_error | text | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.fetched_body_text | mediumtext | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.clean_text | mediumtext | nullable=YES | default=NULL | extra=
+- knowledge_ingestion_runs.distilled_json | json | nullable=YES | default=NULL | extra=
+- music.description | text | nullable=YES | default=NULL | extra=
+- music.file_data | longblob | nullable=NO | default=NULL | extra=
+- music.cover_image | blob | nullable=YES | default=NULL | extra=
+- music.lyrics | text | nullable=YES | default=NULL | extra=
+- music.tags | json | nullable=YES | default=NULL | extra=
+- music.mood_tags | json | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.risk_categories | json | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.error_message | text | nullable=YES | default=NULL | extra=
+- post_conversation_risk_audits.metadata | json | nullable=YES | default=NULL | extra=
+- psychology_articles.summary | text | nullable=YES | default=NULL | extra=
+- psychology_articles.content | longtext | nullable=NO | default=NULL | extra=
+- psychology_articles.tags | json | nullable=YES | default=NULL | extra=
+- psychology_articles.cover_image | blob | nullable=YES | default=NULL | extra=
+- psychology_categories.description | text | nullable=YES | default=NULL | extra=
+- psychology_qna.question | text | nullable=NO | default=NULL | extra=
+- psychology_qna.answer | longtext | nullable=NO | default=NULL | extra=
+- psychology_qna.tags | json | nullable=YES | default=NULL | extra=
+- psychology_resources.description | text | nullable=YES | default=NULL | extra=
+- psychology_resources.file_data | longblob | nullable=YES | default=NULL | extra=
+- psychology_resources.thumbnail | blob | nullable=YES | default=NULL | extra=
+- psychology_resources.tags | json | nullable=YES | default=NULL | extra=
+- qq_agent_turns.error_message | text | nullable=YES | default=NULL | extra=
+- qq_bot_accounts.config | json | nullable=YES | default=NULL | extra=
+- qq_group_memories.content | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.raw_text | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.normalized_text | text | nullable=NO | default=NULL | extra=
+- qq_group_messages.segments | json | nullable=NO | default=NULL | extra=
+- qq_group_summaries.content | text | nullable=NO | default=NULL | extra=
+- qq_groups.keywords | json | nullable=YES | default=NULL | extra=
+- qq_message_outbox.payload | json | nullable=NO | default=NULL | extra=
+- qq_message_outbox.last_error | text | nullable=YES | default=NULL | extra=
+- qq_relationships.known_interests | json | nullable=YES | default=NULL | extra=
+- qq_relationships.known_avoid_topics | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.interest_tags | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.active_hours | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.topic_frequency | json | nullable=YES | default=NULL | extra=
+- qq_user_profiles.raw_profile | text | nullable=YES | default=NULL | extra=
+- stored_objects.public_url | text | nullable=YES | default=NULL | extra=
+- user_diaries.content | text | nullable=NO | default=NULL | extra=
+- user_memories.canonical_form | text | nullable=YES | default=NULL | extra=
+- user_memories.content | text | nullable=NO | default=NULL | extra=
+- user_memories.merge_reason | text | nullable=YES | default=NULL | extra=
+- user_memories.metadata | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.snapshot_data | json | nullable=NO | default=NULL | extra=
+- user_persona_snapshots.source_memory_ids | json | nullable=NO | default=NULL | extra=
+- user_persona_snapshots.source_summary_ids | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.source_recent_message_ids | json | nullable=YES | default=NULL | extra=
+- user_persona_snapshots.error_message | text | nullable=YES | default=NULL | extra=
+- user_profiles.interests | json | nullable=YES | default=NULL | extra=
+- user_profiles.personality_traits | json | nullable=YES | default=NULL | extra=
+- user_profiles.interaction_preferences | json | nullable=YES | default=NULL | extra=
+- user_profiles.emotional_tendency | json | nullable=YES | default=NULL | extra=
+- user_profiles.learning_records | json | nullable=YES | default=NULL | extra=
+- users.avatar | blob | nullable=YES | default=NULL | extra=
+- vector_index_jobs.last_error | text | nullable=YES | default=NULL | extra=
+- vector_index_records.payload | json | nullable=NO | default=NULL | extra=
+- vector_index_records.error_message | text | nullable=YES | default=NULL | extra=
+- web_crawl_jobs.last_error | text | nullable=YES | default=NULL | extra=
+- web_ingestion_audit_logs.message | text | nullable=NO | default=NULL | extra=
+- web_ingestion_audit_logs.metadata | json | nullable=YES | default=NULL | extra=
+- web_pages.url | text | nullable=NO | default=NULL | extra=
+- web_pages.canonical_url | text | nullable=YES | default=NULL | extra=
+- web_source_urls.url | text | nullable=NO | default=NULL | extra=
+- web_source_urls.canonical_url | text | nullable=YES | default=NULL | extra=
+- web_sources.description | text | nullable=YES | default=NULL | extra=
+- web_sources.allowed_domains | json | nullable=YES | default=NULL | extra=
+
+## Generated Columns And Defaults
+
+- Generated columns:
+- user_persona_snapshots.active_marker | tinyint | expression=(case when (`status` = _utf8mb4\'active\') then 1 else NULL end)
+- Non-null expression/default columns:
+- agent_events.severity | varchar(32) | default=info | extra=
+- agent_events.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- community_comments.likes_count | int unsigned | default=0 | extra=
+- community_comments.status | tinyint | default=1 | extra=
+- community_comments.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- community_comments.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- community_post_media.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- community_posts.title | varchar(150) | default=无标题 | extra=
+- community_posts.likes_count | int unsigned | default=0 | extra=
+- community_posts.comments_count | int unsigned | default=0 | extra=
+- community_posts.status | tinyint | default=1 | extra=
+- community_posts.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- community_posts.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- content_likes.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- conversation_messages.message_type | varchar(32) | default=text | extra=
+- conversation_messages.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- conversation_summaries.status | tinyint | default=1 | extra=
+- conversation_summaries.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- conversation_summaries.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- conversations.message_count | bigint unsigned | default=0 | extra=
+- conversations.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- conversations.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- depression_assessments.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- depression_assessments.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- depression_scales.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- depression_scales.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- domain_event_outbox.status | varchar(32) | default=pending | extra=
+- domain_event_outbox.retry_count | int unsigned | default=0 | extra=
+- domain_event_outbox.max_retries | int unsigned | default=5 | extra=
+- domain_event_outbox.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- domain_event_outbox.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- fresh_chunks.active | tinyint(1) | default=1 | extra=
+- fresh_chunks.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_chunks.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- fresh_items.fetched_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_items.status | varchar(32) | default=fetched | extra=
+- fresh_items.reliability_score | double | default=0.5 | extra=
+- fresh_items.freshness_score | double | default=0.5 | extra=
+- fresh_items.heat_score | double | default=0 | extra=
+- fresh_items.rumor_level | varchar(32) | default=reported | extra=
+- fresh_items.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_items.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- fresh_sources.trust_level | varchar(32) | default=normal | extra=
+- fresh_sources.reliability_score | double | default=0.5 | extra=
+- fresh_sources.crawl_interval_secs | int unsigned | default=1800 | extra=
+- fresh_sources.default_ttl_secs | int unsigned | default=86400 | extra=
+- fresh_sources.risk_policy | varchar(32) | default=normal | extra=
+- fresh_sources.enabled | tinyint(1) | default=0 | extra=
+- fresh_sources.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_sources.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- fresh_topic_evidence.stance | varchar(32) | default=supports | extra=
+- fresh_topic_evidence.confidence | double | default=0.5 | extra=
+- fresh_topic_evidence.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_topics.heat_score | double | default=0 | extra=
+- fresh_topics.freshness_score | double | default=0.5 | extra=
+- fresh_topics.status | varchar(32) | default=published | extra=
+- fresh_topics.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- fresh_topics.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- knowledge_chunk_manifests.chunk_type | varchar(32) | default=atomic | extra=
+- knowledge_chunk_manifests.active | tinyint(1) | default=0 | extra=
+- knowledge_chunk_manifests.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_chunk_manifests.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- knowledge_chunks.status | tinyint | default=1 | extra=
+- knowledge_chunks.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_documents.visibility | varchar(32) | default=public | extra=
+- knowledge_documents.status | tinyint | default=1 | extra=
+- knowledge_documents.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_documents.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- knowledge_embeddings.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_ingestion_runs.status | varchar(32) | default=pending | extra=
+- knowledge_ingestion_runs.stage | varchar(32) | default=pending | extra=
+- knowledge_ingestion_runs.retry_count | int unsigned | default=0 | extra=
+- knowledge_ingestion_runs.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_ingestion_runs.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- knowledge_publish_records.publish_status | varchar(32) | default=staged | extra=
+- knowledge_publish_records.active | tinyint(1) | default=0 | extra=
+- knowledge_publish_records.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_publish_records.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- knowledge_vector_manifests.active | tinyint(1) | default=0 | extra=
+- knowledge_vector_manifests.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- knowledge_vector_manifests.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- music.status | tinyint | default=1 | extra=
+- music.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- music.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- post_conversation_risk_audits.status | varchar(32) | default=pending | extra=
+- post_conversation_risk_audits.source_deleted | tinyint(1) | default=0 | extra=
+- post_conversation_risk_audits.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- post_conversation_risk_audits.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- psychology_articles.view_count | int unsigned | default=0 | extra=
+- psychology_articles.like_count | int unsigned | default=0 | extra=
+- psychology_articles.is_featured | tinyint(1) | default=0 | extra=
+- psychology_articles.is_published | tinyint(1) | default=1 | extra=
+- psychology_articles.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- psychology_articles.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- psychology_categories.sort_order | int | default=0 | extra=
+- psychology_categories.status | tinyint | default=1 | extra=
+- psychology_categories.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- psychology_categories.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- psychology_qna.view_count | int unsigned | default=0 | extra=
+- psychology_qna.like_count | int unsigned | default=0 | extra=
+- psychology_qna.is_verified | tinyint(1) | default=0 | extra=
+- psychology_qna.status | tinyint | default=1 | extra=
+- psychology_qna.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- psychology_qna.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- psychology_resources.view_count | int unsigned | default=0 | extra=
+- psychology_resources.like_count | int unsigned | default=0 | extra=
+- psychology_resources.status | tinyint | default=1 | extra=
+- psychology_resources.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- psychology_resources.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_agent_turns.status | varchar(15) | default=created | extra=
+- qq_agent_turns.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_agent_turns.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_bot_accounts.platform | varchar(32) | default=qq | extra=
+- qq_bot_accounts.adapter | varchar(64) | default=napcat | extra=
+- qq_bot_accounts.connection_mode | varchar(32) | default=websocket | extra=
+- qq_bot_accounts.enabled | tinyint(1) | default=1 | extra=
+- qq_bot_accounts.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_bot_accounts.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_external_users.memory_enabled | tinyint(1) | default=0 | extra=
+- qq_external_users.persona_enabled | tinyint(1) | default=0 | extra=
+- qq_external_users.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_external_users.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_group_members.status | varchar(10) | default=active | extra=
+- qq_group_members.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_group_members.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_group_memories.confidence | double | default=0 | extra=
+- qq_group_memories.salience | double | default=0 | extra=
+- qq_group_memories.reinforce_count | int unsigned | default=0 | extra=
+- qq_group_memories.status | tinyint | default=1 | extra=
+- qq_group_memories.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_group_memories.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_group_messages.at_bot | tinyint(1) | default=0 | extra=
+- qq_group_messages.status | varchar(15) | default=pending | extra=
+- qq_group_messages.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_group_summaries.status | tinyint(1) | default=1 | extra=
+- qq_group_summaries.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_groups.enabled | tinyint(1) | default=1 | extra=
+- qq_groups.trigger_policy | varchar(20) | default=mention | extra=
+- qq_groups.cooldown_secs | bigint unsigned | default=30 | extra=
+- qq_groups.max_segments | int unsigned | default=5 | extra=
+- qq_groups.max_chars_per_segment | int unsigned | default=80 | extra=
+- qq_groups.allow_proactive | tinyint(1) | default=0 | extra=
+- qq_groups.memory_policy | varchar(15) | default=off | extra=
+- qq_groups.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_groups.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_message_outbox.target_type | varchar(10) | default=group | extra=
+- qq_message_outbox.status | varchar(15) | default=pending | extra=
+- qq_message_outbox.attempts | int unsigned | default=0 | extra=
+- qq_message_outbox.max_attempts | int unsigned | default=3 | extra=
+- qq_message_outbox.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_message_outbox.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_relationships.familiarity | float | default=0.1 | extra=
+- qq_relationships.interaction_count | int unsigned | default=0 | extra=
+- qq_relationships.rapport | varchar(32) | default=neutral | extra=
+- qq_relationships.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_relationships.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- qq_user_profiles.total_messages | int unsigned | default=0 | extra=
+- qq_user_profiles.avg_message_length | double | default=0 | extra=
+- qq_user_profiles.emoji_usage_rate | double | default=0 | extra=
+- qq_user_profiles.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- qq_user_profiles.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- refresh_tokens.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- refresh_tokens.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- stored_objects.storage_backend | varchar(32) | default=LOCAL | extra=
+- stored_objects.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_context_versions.version | bigint unsigned | default=1 | extra=
+- user_context_versions.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- user_diaries.title | varchar(100) | default=无标题 | extra=
+- user_diaries.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_diaries.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- user_knowledge_favorites.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_memories.source_confidence | decimal(3,2) | default=0.50 | extra=
+- user_memories.confidence | double | default=0.7 | extra=
+- user_memories.salience | double | default=0.5 | extra=
+- user_memories.reinforce_count | int unsigned | default=0 | extra=
+- user_memories.status | tinyint | default=1 | extra=
+- user_memories.access_count | int unsigned | default=0 | extra=
+- user_memories.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_memories.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- user_memory_evidence.source_deleted | tinyint(1) | default=0 | extra=
+- user_memory_evidence.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_persona_snapshots.status | varchar(32) | default=active | extra=
+- user_persona_snapshots.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_profiles.personalization_enabled | tinyint(1) | default=1 | extra=
+- user_profiles.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- user_profiles.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- users.password | varchar(255) | default=__QQ_AUTO_REGISTERED__ | extra=
+- users.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- users.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- users.status | tinyint | default=1 | extra=
+- users.role | varchar(32) | default=USER | extra=
+- vector_index_jobs.priority | int | default=100 | extra=
+- vector_index_jobs.status | varchar(32) | default=pending | extra=
+- vector_index_jobs.attempts | int unsigned | default=0 | extra=
+- vector_index_jobs.max_attempts | int unsigned | default=5 | extra=
+- vector_index_jobs.next_run_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- vector_index_jobs.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- vector_index_jobs.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- vector_index_records.index_status | varchar(32) | default=indexed | extra=
+- vector_index_records.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- vector_index_records.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- web_crawl_jobs.status | varchar(32) | default=pending | extra=
+- web_crawl_jobs.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- web_crawl_jobs.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- web_ingestion_audit_logs.status | varchar(32) | default=info | extra=
+- web_ingestion_audit_logs.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- web_pages.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- web_pages.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- web_source_urls.enabled | tinyint(1) | default=1 | extra=
+- web_source_urls.crawl_interval_secs | int unsigned | default=86400 | extra=
+- web_source_urls.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- web_source_urls.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+- web_sources.approval_status | varchar(32) | default=pending | extra=
+- web_sources.trust_level | varchar(32) | default=normal | extra=
+- web_sources.auto_publish | tinyint(1) | default=0 | extra=
+- web_sources.default_language | varchar(16) | default=zh | extra=
+- web_sources.enabled | tinyint(1) | default=0 | extra=
+- web_sources.created_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED
+- web_sources.updated_at | datetime(6) | default=CURRENT_TIMESTAMP(6) | extra=DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+
+## Domain Classification
+
+### AI Core
+
+- `agent_events`
+- `conversation_messages`
+- `conversation_summaries`
+- `conversations`
+- `domain_event_outbox`
+- `knowledge_chunk_manifests`
+- `knowledge_chunks`
+- `knowledge_documents`
+- `knowledge_ingestion_runs`
+- `knowledge_publish_records`
+- `post_conversation_risk_audits`
+- `refresh_tokens`
+- `stored_objects`
+- `user_context_versions`
+- `user_diaries`
+- `user_memories`
+- `user_memory_evidence`
+- `user_persona_snapshots`
+- `user_profiles`
+- `users`
+- `web_crawl_jobs`
+- `web_ingestion_audit_logs`
+- `web_pages`
+- `web_source_urls`
+- `web_sources`
+
+### Vector Projection
+
+- `knowledge_embeddings`
+- `knowledge_vector_manifests`
+- `vector_index_jobs`
+- `vector_index_records`
+
+### QQ Bot
+
+- `qq_agent_turns`
+- `qq_bot_accounts`
+- `qq_external_users`
+- `qq_group_members`
+- `qq_group_memories`
+- `qq_group_messages`
+- `qq_group_summaries`
+- `qq_groups`
+- `qq_message_outbox`
+- `qq_relationships`
+- `qq_user_profiles`
+
+### Fresh Context
+
+- `fresh_chunks`
+- `fresh_items`
+- `fresh_sources`
+- `fresh_topic_evidence`
+- `fresh_topics`
+
+### Non-AI Content
+
+- `community_comments`
+- `community_post_media`
+- `community_posts`
+- `content_likes`
+- `depression_assessments`
+- `depression_scales`
+- `music`
+- `psychology_articles`
+- `psychology_categories`
+- `psychology_qna`
+- `psychology_resources`
+- `user_knowledge_favorites`
+
+### Migration/Internal
+
+- None
+
+## Entity Comparison Inputs
+
+- `sea-orm-cli generate entity` against this endpoint succeeded and discovered the same table set.
+- Generated output remains audit input only; it is not the schema authority.
+- The existing entity artifacts that used `#[sea_orm(ignore)]` for real text/blob columns must stay corrected or be replaced by semantic entity definitions in the next plan.
+
+## Baseline Risks
+
+- MySQL text/blob width is a migration-layer physical mapping decision.
+- `knowledge_embeddings`, `knowledge_vector_manifests`, `vector_index_jobs`, and `vector_index_records` are vector projection state and should be rebuilt, not copied as durable facts.
+- `fresh_*` tables are Fresh Context and should remain outside default AI Core ETL.
+- `qq_*` tables are QQ Bot state and should remain outside default ETL.
+- Community, music, psychology, and depression content are non-AI content by default.
+
+## Follow-Up Decisions
+
+- Build the baseline migration from entities plus the physical requirements captured here.
+- Decide whether `community_post_media.media_data` stays string-encoded media or becomes `Vec<u8>` with API/domain changes.
+- Define the ETL ID mapping table in the baseline or ETL plan before moving relational data.
+- Rebuild Qdrant and vector projection tables after relational ETL validation.
