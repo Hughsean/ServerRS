@@ -11,7 +11,7 @@ pub struct Model {
     pub category_id: u16,
     #[sea_orm(column_type = "Text")]
     pub question: String,
-    #[sea_orm(ignore, column_type = "custom(\"LONGTEXT\")", select_as = "text")]
+    #[sea_orm(column_type = "custom(\"LONGTEXT\")")]
     pub answer: String,
     pub expert_name: Option<String>,
     pub expert_title: Option<String>,

@@ -11,7 +11,7 @@ pub struct Model {
     pub post_id: u64,
     pub media_type: String,
     pub mime_type: String,
-    #[sea_orm(ignore, column_type = "custom(\"longblob\")", select_as = "text")]
+    #[sea_orm(column_type = "custom(\"longblob\")")]
     pub media_data: String,
     pub created_at: DateTime,
     #[sea_orm(

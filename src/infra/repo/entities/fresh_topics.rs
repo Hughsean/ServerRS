@@ -11,12 +11,7 @@ pub struct Model {
     #[sea_orm(unique)]
     pub topic_key: String,
     pub title: String,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub summary: Option<String>,
     pub entities: Option<Json>,
     pub first_seen_at: DateTime,

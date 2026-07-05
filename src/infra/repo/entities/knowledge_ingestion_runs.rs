@@ -41,19 +41,9 @@ pub struct Model {
     pub finished_at: Option<DateTime>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub fetched_body_text: Option<String>,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub clean_text: Option<String>,
     pub distilled_json: Option<Json>,
     #[sea_orm(has_many)]

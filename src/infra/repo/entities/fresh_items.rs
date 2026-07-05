@@ -17,26 +17,11 @@ pub struct Model {
     #[sea_orm(unique_key = "uk_fresh_items_source_url_hash")]
     pub url_hash: Option<String>,
     pub title: Option<String>,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub raw_text: Option<String>,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub clean_text: Option<String>,
-    #[sea_orm(
-        ignore,
-        column_type = "custom(\"MEDIUMTEXT\")",
-        select_as = "text",
-        nullable
-    )]
+    #[sea_orm(column_type = "custom(\"MEDIUMTEXT\")", nullable)]
     pub summary: Option<String>,
     pub published_at: Option<DateTime>,
     pub fetched_at: DateTime,

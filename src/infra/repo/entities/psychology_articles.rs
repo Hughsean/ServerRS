@@ -12,7 +12,7 @@ pub struct Model {
     pub title: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub summary: Option<String>,
-    #[sea_orm(ignore, column_type = "custom(\"LONGTEXT\")", select_as = "text")]
+    #[sea_orm(column_type = "custom(\"LONGTEXT\")")]
     pub content: String,
     pub author: Option<String>,
     pub source: Option<String>,
