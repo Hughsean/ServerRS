@@ -4,7 +4,7 @@ local_port = 3306
 remote_port = 3306
 
 [database]
-url = "mysql://root:passwd@{ip}:{port}/digital_companion"
+url = "mysql://root:passwd@{ip}:{port}/server_rs"
 max_connections = 10
 tunnel = "mysql"
 ################################

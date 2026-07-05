@@ -33,8 +33,8 @@ D:\WorkSpace\ServerRS/
 │
 ├── database/
 │   └── sql/
-│       ├── init.sql      # ★ 数据库建表语句（所有表结构）
-│       └── mock.sql      # 模拟数据（开发测试用）
+│       ├── init.sql      # 历史 SQL 参考；新 schema 由 migration/ 管理
+│       └── mock.sql      # 历史模拟数据参考
 │
 ├── web/
 │   ├── admin/            # ★ 管理后台前端（Vue 3 + TypeScript）
@@ -672,7 +672,8 @@ src/shared/
 
 ## 五、数据库表全解（52 张表）
 
-> 建表语句在：`database/sql/init.sql`
+> 当前持久化策略是混合架构：SeaORM entities 是 Rust 逻辑契约，migration/ 是 MySQL 物理 schema 历史，ETL 负责从旧 digital_companion 选择性迁移数据，Qdrant/向量投影从新 MySQL 事实重建。database/sql/*.sql 只作为历史参考和审计输入。
+> 新 schema 迁移在：`migration/`
 > 每个表的 Rust 实体在：`src/infra/repo/entities/`
 
 ### 5.1 用户与账号（5 张表）
@@ -1020,7 +1021,13 @@ web/sdk/src/
 
 ### 启动步骤
 
-1.  **初始化数据库**：`mysql -u root -p < database/sql/init.sql`
+1.  **应用数据库迁移**：
+
+```powershell
+    $env:DATABASE_URL = "mysql://user:password@127.0.0.1:3306/server_rs"
+    cargo run --manifest-path migration/Cargo.toml -- up
+```
+
 2.  **启动 Ollama**：`ollama serve`，然后按配置拉取模型，例如 `ollama pull qwen2.5:14b` 和 `ollama pull nomic-embed-text`
 3.  **启动 Qdrant**（如果配置了 qdrant.enabled=true）
 4.  **启动后端**：
@@ -1039,7 +1046,7 @@ web/sdk/src/
 | 分层依赖 | api → app → domain ← infra                 |
 | 接口隔离 | domain 定义 trait，infra 实现，app 使用    |
 | 配置先行 | 新增功能先加 config.toml 配置项            |
-| 建表先写 | 新增业务先写 init.sql 再加 Rust 实体       |
+| Schema 变更 | 先更新实体表达逻辑契约，再写 sea-orm-migration 表达 MySQL 物理 schema 和迁移历史 |
 | 测试覆盖 | Service 层写单元测试，Handler 层写集成测试 |
 
 ---
