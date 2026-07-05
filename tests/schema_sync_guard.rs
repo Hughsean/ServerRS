@@ -25,8 +25,8 @@ fn rejects_entity_driven_schema_sync_in_runtime_sources() {
          }\n",
     );
 
-    let report =
-        check_workspace(workspace.path()).expect_err("schema sync APIs in runtime sources must fail");
+    let report = check_workspace(workspace.path())
+        .expect_err("schema sync APIs in runtime sources must fail");
     let report = report.to_string();
 
     assert!(report.contains("create_table_from_entity"));

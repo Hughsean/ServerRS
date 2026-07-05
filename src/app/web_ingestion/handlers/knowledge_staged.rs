@@ -192,9 +192,7 @@ mod tests {
     use crate::app::web_ingestion::services::quality_result::decision;
     use chrono::Utc;
 
-    fn run_with_decision(
-        value: &str,
-    ) -> crate::domain::web_ingestion::repo::KnowledgeIngestionRun {
+    fn run_with_decision(value: &str) -> crate::domain::web_ingestion::repo::KnowledgeIngestionRun {
         crate::domain::web_ingestion::repo::KnowledgeIngestionRun {
             id: 1,
             source_id: 1,

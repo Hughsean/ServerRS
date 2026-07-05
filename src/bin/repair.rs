@@ -60,8 +60,7 @@ async fn main() -> Result<(), DynError> {
         Arc::new(VectorManifestRepo::new(infra.db.clone()));
     let publish_record_repo: Arc<dyn PublishRecordRepoT> =
         Arc::new(PublishRecordRepo::new(infra.db.clone()));
-    let run_repo: Arc<dyn IngestionRunRepoT> =
-        Arc::new(IngestionRunRepo::new(infra.db.clone()));
+    let run_repo: Arc<dyn IngestionRunRepoT> = Arc::new(IngestionRunRepo::new(infra.db.clone()));
 
     let active_ids = load_active_ids(&infra.db, &args).await?;
 

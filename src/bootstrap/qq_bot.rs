@@ -31,9 +31,8 @@ use crate::domain::qq_bot::persona::BotPersona;
 use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::domain::qq_bot::repository::{
-    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
-    GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummaryRepoT,
-    OutboxRepoT,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT, GroupMemoryRepoT,
+    GroupMessageRepoT, GroupRepoT, GroupSummaryRepoT, OutboxRepoT,
 };
 use crate::domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler};
 use crate::domain::tts::TtsProvider;

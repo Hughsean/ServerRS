@@ -32,9 +32,9 @@ pub use relationship::{RapportLevel, RelationshipState};
 pub use relationship_repo::RelationshipRepoT;
 pub use reply::{BotReply, EmotionChange, RelationshipHints, ReplySegment, TimingHint};
 pub use repository::{
-    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
-    GroupMemory, GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary,
-    GroupSummaryRepoT, OutboxEntry, OutboxRepoT, OutboxStatus,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT, GroupMemory,
+    GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary, GroupSummaryRepoT, OutboxEntry,
+    OutboxRepoT, OutboxStatus,
 };
 pub use topic_state::{TopicInfo, TopicState};
 pub use turn::{AgentTurn, TriggerType, TurnStatus};

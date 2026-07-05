@@ -18,9 +18,9 @@ use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::fresh_context::FreshContextRepoT;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_store::VectorStoreT;
-use crate::infra::repo::seaorm_impl::fresh_context::FreshContextRepo;
 use crate::infra::fresh_context::distiller::OpenAiFreshContextDistiller;
 use crate::infra::fresh_context::fetcher::FreshContextWebFetcher;
+use crate::infra::repo::seaorm_impl::fresh_context::FreshContextRepo;
 use crate::shared::config::{AppConfig, FreshContextConfig};
 use crate::shared::error::AppError;
 
