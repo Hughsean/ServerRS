@@ -1,0 +1,9 @@
+[package]
+name = "migration"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+sea-orm-migration = { version = "2.0.0-rc.42", features = ["runtime-tokio", "sqlx-mysql", "with-chrono", "with-json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
