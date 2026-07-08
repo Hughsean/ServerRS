@@ -10,9 +10,9 @@ use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::relationship::RelationshipState;
 use crate::domain::qq_bot::relationship_repo::RelationshipRepoT;
 use crate::domain::qq_bot::repository::{
-    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT,
-    GroupMemory, GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary,
-    GroupSummaryRepoT, OutboxEntry, OutboxRepoT, OutboxStatus,
+    AgentTurnRepoT, BotAccountRepoT, ExternalUserRepoT, GroupMemberRepoT, GroupMemory,
+    GroupMemoryRepoT, GroupMessageRepoT, GroupRepoT, GroupSummary, GroupSummaryRepoT, OutboxEntry,
+    OutboxRepoT, OutboxStatus,
 };
 use crate::domain::qq_bot::turn::{AgentTurn, TurnStatus};
 use crate::domain::qq_bot::user_profile::UserProfile;

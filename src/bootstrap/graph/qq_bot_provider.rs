@@ -11,10 +11,10 @@ pub async fn init_qq_bot_integration(ctx: &BootstrapContext<'_>, background: &mu
     use crate::infra::qq_bot::repo::seaorm_impl::agent_turn::AgentTurnRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::bot_account::BotAccountRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::external_user::ExternalUserRepo;
+    use crate::infra::qq_bot::repo::seaorm_impl::group::GroupRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::group_member::GroupMemberRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::group_memory::GroupMemoryRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::group_message::GroupMessageRepo;
-    use crate::infra::qq_bot::repo::seaorm_impl::group::GroupRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::group_summary::GroupSummaryRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::outbox::OutboxRepo;
     use crate::infra::qq_bot::repo::seaorm_impl::relationship::RelationshipRepo;
@@ -27,24 +27,20 @@ pub async fn init_qq_bot_integration(ctx: &BootstrapContext<'_>, background: &mu
         as Arc<dyn crate::domain::qq_bot::repository::GroupRepoT>;
     let qq_bot_group_member_repo = Arc::new(GroupMemberRepo::new(ctx.infra.db.clone()))
         as Arc<dyn crate::domain::qq_bot::repository::GroupMemberRepoT>;
-    let qq_bot_group_message_repo =
-        Arc::new(GroupMessageRepo::new(ctx.infra.db.clone()))
-            as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepoT>;
-    let qq_bot_group_summary_repo =
-        Arc::new(GroupSummaryRepo::new(ctx.infra.db.clone()))
-            as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepoT>;
+    let qq_bot_group_message_repo = Arc::new(GroupMessageRepo::new(ctx.infra.db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupMessageRepoT>;
+    let qq_bot_group_summary_repo = Arc::new(GroupSummaryRepo::new(ctx.infra.db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::GroupSummaryRepoT>;
     let qq_bot_group_memory_repo = Arc::new(GroupMemoryRepo::new(ctx.infra.db.clone()))
         as Arc<dyn crate::domain::qq_bot::repository::GroupMemoryRepoT>;
     let qq_bot_agent_turn_repo = Arc::new(AgentTurnRepo::new(ctx.infra.db.clone()))
         as Arc<dyn crate::domain::qq_bot::repository::AgentTurnRepoT>;
     let qq_bot_outbox_repo = Arc::new(OutboxRepo::new(ctx.infra.db.clone()))
         as Arc<dyn crate::domain::qq_bot::repository::OutboxRepoT>;
-    let qq_bot_external_user_repo =
-        Arc::new(ExternalUserRepo::new(ctx.infra.db.clone()))
-            as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepoT>;
-    let qq_bot_user_profile_repo =
-        Arc::new(QqUserProfileRepo::new(ctx.infra.db.clone()))
-            as Arc<dyn crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT>;
+    let qq_bot_external_user_repo = Arc::new(ExternalUserRepo::new(ctx.infra.db.clone()))
+        as Arc<dyn crate::domain::qq_bot::repository::ExternalUserRepoT>;
+    let qq_bot_user_profile_repo = Arc::new(QqUserProfileRepo::new(ctx.infra.db.clone()))
+        as Arc<dyn crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT>;
     let qq_bot_relationship_repo = Arc::new(RelationshipRepo::new(ctx.infra.db.clone()))
         as Arc<dyn crate::domain::qq_bot::relationship_repo::RelationshipRepoT>;
 

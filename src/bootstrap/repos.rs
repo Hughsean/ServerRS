@@ -30,10 +30,10 @@ use crate::infra::repo::seaorm_impl::psychology::PsychologyRepo;
 use crate::infra::repo::seaorm_impl::rag::RAGRepo;
 use crate::infra::repo::seaorm_impl::risk::RiskRepo;
 use crate::infra::repo::seaorm_impl::stored_object::StoredObjectRepo;
+use crate::infra::repo::seaorm_impl::user::UserRepo;
 use crate::infra::repo::seaorm_impl::user_context_control::UserContextControlRepo;
 use crate::infra::repo::seaorm_impl::user_context_version::UserContextVersionRepo;
 use crate::infra::repo::seaorm_impl::user_profile::UserProfileRepo;
-use crate::infra::repo::seaorm_impl::user::UserRepo;
 
 pub struct RepoGraph {
     pub user_repo: Arc<dyn UserRepoT>,

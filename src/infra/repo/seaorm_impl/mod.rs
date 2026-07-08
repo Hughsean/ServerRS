@@ -15,8 +15,8 @@ pub mod risk;
 pub mod stored_object;
 #[cfg(test)]
 pub mod stub;
+pub mod user;
 pub mod user_context_control;
 pub mod user_context_version;
 pub mod user_profile;
-pub mod user;
 pub mod vector_index;

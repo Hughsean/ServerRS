@@ -1,11 +1,11 @@
 pub mod auth;
-pub mod repo;
 pub mod detector;
 pub mod fresh_context;
 pub mod http;
 pub mod llm;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
+pub mod repo;
 pub mod semantic_classification;
 pub mod ssh_tunnel;
 pub mod storage;

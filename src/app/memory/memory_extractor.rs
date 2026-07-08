@@ -322,7 +322,7 @@ impl MemoryExtractor {
             .collect();
 
         let prompt = format!(
-	            r#"待新增的记忆列表（JSON 数组，每条有 "index" 字段）：
+            r#"待新增的记忆列表（JSON 数组，每条有 "index" 字段）：
 {}
 
 已有候选记忆：
