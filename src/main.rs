@@ -18,7 +18,13 @@ pub fn init_tracing(configured_level: &str) -> WorkerGuard {
     );
 
     // logs/app.log.YYYY-MM-DD
-    let file_appender = tracing_appender::rolling::daily("logs", "app.log");
+    // let file_appender = tracing_appender::rolling::daily("logs", "app.log");
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .filename_prefix("app")
+        .filename_suffix("log")
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .build("logs")
+        .expect("日志文件初始化失败");
 
     // 非阻塞文件写入
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
