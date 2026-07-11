@@ -11,25 +11,46 @@
 use serde::Deserialize;
 
 // ── Auth ──
+//
+// 注意:后端 auth_handler.rs 重新定义了 LoginResponse/RefreshResponse
+// (非 auth_dto.rs 的版本),且带 #[serde(rename_all = "camelCase")],
+// 故实际 JSON 字段为 camelCase: accessToken / refreshToken / expiresIn / tokenType。
+// /auth/me 返回 UserInfo {id, username, role}(无 rename_all,字段名原样)。
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
-    pub user_id: u64,
     pub access_token: String,
     pub refresh_token: String,
+    #[serde(default)]
+    pub expires_in: u64,
+    #[serde(default)]
+    pub token_type: String,
+    pub user: LoginUser,
 }
 
 #[derive(Debug, Deserialize)]
+pub struct LoginUser {
+    pub id: u64,
+    pub username: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub access_token: String,
     pub refresh_token: String,
+    #[serde(default)]
+    pub expires_in: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AuthUser {
     pub id: u64,
     pub username: String,
-    // 后端 AuthUser 其余字段按需忽略,只取必要部分
+    // 后端 UserInfo 其余字段(role)按需忽略,只取必要部分
 }
 
 // ── Chat ──
@@ -176,10 +197,21 @@ mod tests {
 
     #[test]
     fn login_response_deserializes() {
-        let json = r#"{"user_id":1,"access_token":"a","refresh_token":"r"}"#;
+        // 后端实际返回 camelCase + 嵌套 user 对象
+        let json = r#"{"accessToken":"a","refreshToken":"r","expiresIn":86400,"tokenType":"Bearer","user":{"id":1,"username":"alice","role":"user"}}"#;
         let r: LoginResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(r.user_id, 1);
         assert_eq!(r.access_token, "a");
+        assert_eq!(r.refresh_token, "r");
+        assert_eq!(r.user.id, 1);
+        assert_eq!(r.user.username, "alice");
+    }
+
+    #[test]
+    fn refresh_response_deserializes_camelCase() {
+        let json = r#"{"accessToken":"na","refreshToken":"nr","expiresIn":86400}"#;
+        let r: RefreshResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(r.access_token, "na");
+        assert_eq!(r.refresh_token, "nr");
     }
 
     #[test]

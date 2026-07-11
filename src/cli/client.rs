@@ -336,12 +336,12 @@ mod tests {
 
     #[tokio::test]
     async fn request_retries_after_401_with_successful_refresh() {
-        // 第一次 me 返回 401,refresh 成功,重试 me 返回 200
+        // 第一次 me 返回 401,refresh 成功(camelCase),重试 me 返回 200
         let mock = Arc::new(MockBackend::new(vec![
             (StatusCode::UNAUTHORIZED, r#"{"error":"expired"}"#.into()),
             (
                 StatusCode::OK,
-                r#"{"access_token":"new","refresh_token":"newr"}"#.into(),
+                r#"{"accessToken":"new","refreshToken":"newr","expiresIn":86400}"#.into(),
             ),
             (StatusCode::OK, r#"{"id":1,"username":"alice"}"#.into()),
         ]));
@@ -383,7 +383,7 @@ mod tests {
     async fn login_success_sets_token() {
         let mock = Arc::new(MockBackend::new(vec![(
             StatusCode::OK,
-            r#"{"user_id":1,"access_token":"a","refresh_token":"r"}"#.into(),
+            r#"{"accessToken":"a","refreshToken":"r","expiresIn":86400,"tokenType":"Bearer","user":{"id":1,"username":"alice","role":"user"}}"#.into(),
         )]));
         let client = ApiClient::new(&cfg(), mock, None);
         let cache = client.login("alice", "pw").await.unwrap();
