@@ -23,7 +23,9 @@ pub enum Command {
     Text(String),
     Help,
     Quit,
-    History { limit: u64 },
+    History {
+        limit: u64,
+    },
     Clear,
     Reopen,
     Forget,
@@ -85,7 +87,11 @@ pub async fn handle_command<W: Write>(
             }
             let resp = session.client.chat_send(&text).await?;
             session.conversation_id = Some(resp.conversation_id);
-            writeln!(out, "{}", render::assistant_reply(&resp.reply, &resp.tool_calls))?;
+            writeln!(
+                out,
+                "{}",
+                render::assistant_reply(&resp.reply, &resp.tool_calls)
+            )?;
         }
         Command::Help => {
             writeln!(out, "{}", render::help())?;

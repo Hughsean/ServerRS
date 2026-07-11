@@ -90,7 +90,11 @@ impl ApiClient {
     }
 
     fn current_access(&self) -> Option<String> {
-        self.token.lock().ok()?.as_ref().map(|t| t.access_token.clone())
+        self.token
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|t| t.access_token.clone())
     }
 
     fn current_refresh(&self) -> Option<String> {
@@ -135,10 +139,7 @@ impl ApiClient {
             // 尝试 refresh
             if self.try_refresh().await? {
                 let auth_header = self.current_access().map(|t| format!("Bearer {t}"));
-                let (status2, text2) = self
-                    .backend
-                    .execute(method, url, auth_header, body)
-                    .await?;
+                let (status2, text2) = self.backend.execute(method, url, auth_header, body).await?;
                 return Self::parse(status2, text2);
             }
             return Err(CliError::Auth("登录已过期,需要重新登录".into()));
@@ -164,7 +165,10 @@ impl ApiClient {
                     .map(String::from)
             })
             .unwrap_or(text);
-        Err(CliError::Api { status: status.as_u16(), msg })
+        Err(CliError::Api {
+            status: status.as_u16(),
+            msg,
+        })
     }
 
     /// 用 refresh_token 刷新,成功则更新内存 token 并返回 true。

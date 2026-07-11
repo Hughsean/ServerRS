@@ -22,10 +22,6 @@ pub enum CliError {
     #[error("IO 错误: {0}")]
     Io(#[from] std::io::Error),
 
-    /// 命令参数解析失败。
-    #[error("参数解析失败: {0}")]
-    Parse(String),
-
     /// JSON 序列化/反序列化失败。
     #[error("JSON 错误: {0}")]
     Serde(#[from] serde_json::Error),
@@ -59,7 +55,7 @@ mod tests {
 
     #[test]
     fn non_auth_error_not_detected() {
-        let err = CliError::Parse("缺参数".into());
+        let err = CliError::Io(std::io::Error::other("x"));
         assert!(!err.is_relogin_required());
     }
 }

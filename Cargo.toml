@@ -79,6 +79,7 @@ tracing-appender = "0.2"
 
 # CLI 行编辑(方向键/历史)
 rustyline = "15"
+rpassword = "7"
 
 [features]
 default = ["qdrant"]

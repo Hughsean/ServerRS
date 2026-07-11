@@ -2,6 +2,11 @@
 //!
 //! 字段名严格匹配后端 serde 默认的 snake_case 序列化
 //! (auth/chat/user_dto 均未设 rename_all)。
+//!
+//! 字段需完整反映后端响应,即使当前未读取(反序列化需要),
+//! 故整个模块允许 dead_code。
+
+#![allow(dead_code)]
 
 use serde::Deserialize;
 
