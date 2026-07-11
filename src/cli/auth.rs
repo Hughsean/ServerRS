@@ -76,8 +76,7 @@ pub fn load_token_cache(config: &CliConfig) -> Result<Option<TokenCache>, CliErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::config::CliConfig;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     fn temp_config(dir: &Path) -> CliConfig {
         CliConfig {
