@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_response_deserializes_camelCase() {
+    fn refresh_response_deserializes_camel_case() {
         let json = r#"{"accessToken":"na","refreshToken":"nr","expiresIn":86400}"#;
         let r: RefreshResponse = serde_json::from_str(json).unwrap();
         assert_eq!(r.access_token, "na");
