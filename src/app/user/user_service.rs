@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::user::user::{User, UserRole, UserStatus, UserUpdate};
+use crate::domain::user::user::{User, UserListItem, UserRole, UserStatus, UserUpdate};
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile};
 use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::domain::user::user_repository::UserRepoT;
@@ -30,8 +30,16 @@ impl UserService {
             .ok_or(AppError::NotFound("user not found".into()))
     }
 
-    pub async fn list_users(&self) -> Result<Vec<User>, AppError> {
-        self.user_repo.find_all().await
+    pub async fn list_users(
+        &self,
+        page: u64,
+        page_size: u64,
+    ) -> Result<(Vec<UserListItem>, u64), AppError> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        self.user_repo
+            .find_all_paginated(page_size, (page - 1) * page_size)
+            .await
     }
 
     pub async fn count_all(&self) -> Result<u64, AppError> {

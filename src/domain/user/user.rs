@@ -144,6 +144,21 @@ pub struct User {
     pub last_login_at: Option<DateTime<Utc>>,
 }
 
+/// 管理员用户列表的轻量投影；刻意不包含密码哈希和头像二进制数据。
+#[derive(Debug, Clone)]
+pub struct UserListItem {
+    pub id: u64,
+    pub username: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub nickname: Option<String>,
+    pub status: UserStatus,
+    pub role: UserRole,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_login_at: Option<DateTime<Utc>>,
+}
+
 impl User {
     pub fn is_active(&self) -> bool {
         matches!(self.status, UserStatus::Active)

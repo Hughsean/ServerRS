@@ -137,13 +137,9 @@ pub async fn list_users(
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
 
-    let all = state.user.list_users().await?;
-    let total = all.len() as u64;
-    let offset = ((page - 1) * page_size) as usize;
-    let items = all
+    let (users, total) = state.user.list_users(page, page_size).await?;
+    let items = users
         .into_iter()
-        .skip(offset)
-        .take(page_size as usize)
         .map(|u| UserDto {
             id: u.id,
             username: u.username,

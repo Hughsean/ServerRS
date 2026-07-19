@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, Set, Statement, Value,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DerivePartialModel,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 
 use crate::domain::user::user::{
-    NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserStatus, UserUpdate,
+    NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserListItem, UserStatus, UserUpdate,
 };
 use crate::domain::user::user_repository::UserRepoT;
 use crate::shared::error::AppError;
@@ -42,6 +42,37 @@ fn model_to_domain(m: users::Model) -> User {
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
         last_login_at: m.last_login_at.map(|v| v.and_utc()),
+    }
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "users::Entity")]
+struct UserListRow {
+    id: u64,
+    username: String,
+    email: Option<String>,
+    phone: Option<String>,
+    nickname: Option<String>,
+    status: i8,
+    role: String,
+    created_at: chrono::NaiveDateTime,
+    updated_at: chrono::NaiveDateTime,
+    last_login_at: Option<chrono::NaiveDateTime>,
+}
+
+fn list_row_to_domain(row: UserListRow) -> UserListItem {
+    UserListItem {
+        id: row.id,
+        username: row.username,
+        email: row.email,
+        phone: row.phone,
+        nickname: row.nickname,
+        status: UserStatus::from_i32(row.status as i32).unwrap_or(UserStatus::Disabled),
+        role: crate::domain::user::user::UserRole::from_str(&row.role)
+            .unwrap_or(crate::domain::user::user::UserRole::User),
+        created_at: row.created_at.and_utc(),
+        updated_at: row.updated_at.and_utc(),
+        last_login_at: row.last_login_at.map(|value| value.and_utc()),
     }
 }
 
@@ -101,12 +132,21 @@ impl UserRepoT for UserRepo {
             .map(|opt| opt.map(model_to_domain))
     }
 
-    async fn find_all(&self) -> Result<Vec<User>, AppError> {
-        users::Entity::find()
-            .all(&self.db)
+    async fn find_all_paginated(
+        &self,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<UserListItem>, u64), AppError> {
+        let paginator = users::Entity::find()
+            .order_by_desc(users::Column::CreatedAt)
+            .into_partial_model::<UserListRow>()
+            .paginate(&self.db, limit);
+        let total = paginator.num_items().await.map_err(map_db_err)?;
+        let rows = paginator
+            .fetch_page(offset / limit)
             .await
-            .map_err(map_db_err)
-            .map(|rows| rows.into_iter().map(model_to_domain).collect())
+            .map_err(map_db_err)?;
+        Ok((rows.into_iter().map(list_row_to_domain).collect(), total))
     }
 
     async fn save(&self, new_user: NewUser) -> Result<User, AppError> {
