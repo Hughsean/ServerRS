@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::app::agent::agent_runtime::AgentRuntime;
 use crate::app::memory::memory_service::MemoryService;
+use crate::app::session::chat_query_service::ChatQueryService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::tasks::task_publisher::TaskPublisher;
 
 use super::BootstrapContext;
@@ -12,7 +12,7 @@ use super::BootstrapContext;
 pub struct SessionServices {
     pub query: Arc<SessionService>,
     pub chat: Arc<ChatService>,
-    pub conv_repo: Arc<dyn ConversationRepoT>,
+    pub history: Arc<ChatQueryService>,
 }
 
 pub fn build_session_services(
@@ -34,10 +34,11 @@ pub fn build_session_services(
         Arc::clone(&ctx.repos.context_control_repo),
         ctx.vector.vector_index.clone(),
     ));
+    let history = Arc::new(ChatQueryService::new(Arc::clone(&conv_repo)));
 
     SessionServices {
         query,
         chat,
-        conv_repo,
+        history,
     }
 }

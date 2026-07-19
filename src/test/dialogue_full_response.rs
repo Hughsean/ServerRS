@@ -94,14 +94,14 @@ mod full_response {
         let config = config::load();
         config::require_agent(&config, "完整 response 测试");
         config::require_tools(&config, "完整 response 测试");
-        config::require_qdrant(&config, "完整 response 测试");
+        config::require_vector_store(&config, "完整 response 测试");
         config::require_context_routing(&config, "完整 response 测试");
 
         let tunnel_manager = tunnels::ensure(
             &config,
             &[
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Database),
-                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Qdrant),
+                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::VectorStore),
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Embedding),
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Llm),
             ],
@@ -208,14 +208,14 @@ mod full_response {
         let config = config::load();
         config::require_agent(&config, "多轮完整 response 上下文路由测试");
         config::require_tools(&config, "多轮完整 response 上下文路由测试");
-        config::require_qdrant(&config, "多轮完整 response 上下文路由测试");
+        config::require_vector_store(&config, "多轮完整 response 上下文路由测试");
         config::require_context_routing(&config, "多轮完整 response 上下文路由测试");
 
         let tunnel_manager = tunnels::ensure(
             &config,
             &[
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Database),
-                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Qdrant),
+                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::VectorStore),
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Embedding),
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Llm),
             ],

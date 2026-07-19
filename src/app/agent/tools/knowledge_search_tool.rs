@@ -9,7 +9,7 @@ use crate::domain::agent::AgentContext;
 use crate::shared::error::AppError;
 
 /// Searches the knowledge base for relevant chunks via `RetrievalService`
-/// (which prefers Qdrant when configured).
+/// （配置后会优先使用向量检索）。
 pub struct KnowledgeSearchTool {
     retrieval_service: Arc<RetrievalService>,
 }

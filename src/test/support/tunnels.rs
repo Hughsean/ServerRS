@@ -9,7 +9,7 @@ use crate::shared::config::{AppConfig, SshTunnelConfig, TunnelDirection};
 #[derive(Clone, Copy)]
 pub enum ServiceTunnel {
     Database,
-    Qdrant,
+    VectorStore,
     Embedding,
     Llm,
 }
@@ -82,7 +82,7 @@ fn insert_tunnel(
 fn tunnel_name(config: &AppConfig, service: ServiceTunnel) -> Option<&str> {
     match service {
         ServiceTunnel::Database => config.database.tunnel.as_deref(),
-        ServiceTunnel::Qdrant => config.qdrant.tunnel.as_deref(),
+        ServiceTunnel::VectorStore => config.vector_store.tunnel.as_deref(),
         ServiceTunnel::Embedding => config.embedding.tunnel.as_deref(),
         ServiceTunnel::Llm => config.llm.tunnel.as_deref(),
     }
@@ -94,7 +94,7 @@ impl ServiceTunnel {
     fn config_key(self) -> &'static str {
         match self {
             ServiceTunnel::Database => "database",
-            ServiceTunnel::Qdrant => "qdrant",
+            ServiceTunnel::VectorStore => "vector_store",
             ServiceTunnel::Embedding => "embedding",
             ServiceTunnel::Llm => "llm",
         }

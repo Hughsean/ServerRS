@@ -3,7 +3,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, Value};
-use server_rs::app::web_ingestion::services::qdrant_activation_service;
+use server_rs::app::web_ingestion::services::vector_activation_service;
 use server_rs::bootstrap::infra::InfraContext;
 use server_rs::bootstrap::repos::build_repos;
 use server_rs::bootstrap::vector::VectorContext;
@@ -36,24 +36,26 @@ async fn main() -> Result<(), DynError> {
     init_tracing(&config.logging.level);
 
     let args = Args::parse()?;
-    info!(?args, "repair_qdrant_activation started");
+    info!(?args, "repair_vector_activation started");
 
-    if !config.qdrant.enabled {
-        return Err("qdrant.enabled is false".into());
+    if !config.vector_store.enabled {
+        return Err("vector_store.enabled is false".into());
     }
 
     let infra = InfraContext::new(&config).await?;
 
     let repos = build_repos(
         &infra.db,
-        &config.qdrant.memory_collection,
-        &config.qdrant.summary_collection,
+        &config.vector_store.memory_index_name,
+        &config.vector_store.summary_index_name,
     );
 
     let vector = VectorContext::new(&config, &infra, &repos).await?;
 
     if vector.vector_store.is_none() {
-        return Err("vector_store is none; check qdrant.enabled and qdrant feature".into());
+        return Err(
+            "vector_store is unavailable; check vector_store.enabled and the qdrant feature".into(),
+        );
     }
 
     let vector_manifest_repo: Arc<dyn VectorManifestRepoT> =
@@ -74,7 +76,7 @@ async fn main() -> Result<(), DynError> {
     println!("active=false records: {}", inactive_ids.len());
 
     if args.dry_run {
-        println!("dry run only; qdrant is not modified");
+        println!("dry run only; vector store is not modified");
         print_preview("active=true", &active_ids);
         print_preview("active=false", &inactive_ids);
         return Ok(());
@@ -99,7 +101,7 @@ async fn main() -> Result<(), DynError> {
         {
             Ok(()) => {
                 active_ok += 1;
-                info!(publish_record_id, active = true, "qdrant sync ok");
+                info!(publish_record_id, active = true, "vector sync ok");
             }
             Err(err) => {
                 active_failed += 1;
@@ -107,7 +109,7 @@ async fn main() -> Result<(), DynError> {
                     publish_record_id,
                     active = true,
                     error = %err,
-                    "qdrant sync failed"
+                    "vector sync failed"
                 );
             }
         }
@@ -130,7 +132,7 @@ async fn main() -> Result<(), DynError> {
         {
             Ok(()) => {
                 inactive_ok += 1;
-                info!(publish_record_id, active = false, "qdrant sync ok");
+                info!(publish_record_id, active = false, "vector sync ok");
             }
             Err(err) => {
                 inactive_failed += 1;
@@ -138,7 +140,7 @@ async fn main() -> Result<(), DynError> {
                     publish_record_id,
                     active = false,
                     error = %err,
-                    "qdrant sync failed"
+                    "vector sync failed"
                 );
             }
         }
@@ -151,7 +153,7 @@ async fn main() -> Result<(), DynError> {
     println!("active=false failed: {}", inactive_failed);
 
     if active_failed > 0 || inactive_failed > 0 {
-        return Err("some qdrant sync jobs failed; check logs".into());
+        return Err("some vector sync jobs failed; check logs".into());
     }
 
     Ok(())
@@ -166,7 +168,7 @@ async fn sync_record(
     publish_record_id: u64,
     dimension: usize,
 ) -> Result<(), DynError> {
-    qdrant_activation_service::sync_active(
+    vector_activation_service::sync_active(
         &vector.vector_store,
         vector_manifest_repo,
         publish_record_repo,
@@ -364,14 +366,14 @@ fn parse_ids(raw: &str) -> Result<Vec<u64>, DynError> {
 }
 
 fn print_help() {
-    println!("repair_qdrant_activation");
+    println!("repair_vector_activation");
     println!();
     println!("Usage:");
-    println!("  cargo run --bin repair_qdrant_activation --release -- [options]");
+    println!("  cargo run --bin repair_vector_activation --release -- [options]");
     println!();
     println!("Options:");
     println!("  --dry-run");
-    println!("      Print records only. Do not write qdrant.");
+    println!("      Print records only. Do not write the vector store.");
     println!();
     println!("  --ids 3848,5345,5346");
     println!("      Only sync selected publish_record_id values.");
@@ -383,9 +385,9 @@ fn print_help() {
     println!("      Also sync non active-published records to active=false.");
     println!();
     println!("Examples:");
-    println!("  cargo run --bin repair_qdrant_activation --release -- --dry-run");
-    println!("  cargo run --bin repair_qdrant_activation --release -- --ids 3848,5345");
-    println!("  cargo run --bin repair_qdrant_activation --release -- --include-inactive");
+    println!("  cargo run --bin repair_vector_activation --release -- --dry-run");
+    println!("  cargo run --bin repair_vector_activation --release -- --ids 3848,5345");
+    println!("  cargo run --bin repair_vector_activation --release -- --include-inactive");
 }
 
 fn init_tracing(configured_level: &str) {

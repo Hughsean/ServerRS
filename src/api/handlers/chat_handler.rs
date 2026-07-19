@@ -66,26 +66,13 @@ pub async fn chat_history(
             "history limit must be between 1 and 100".into(),
         ));
     }
-    let Some(conv) = state
-        .conv_repo
-        .find_single_by_user_id(auth_user.user_id)
-        .await?
-    else {
-        return Ok(Json(ChatHistoryResponse {
-            messages: Vec::new(),
-            next_before_id: None,
-        }));
-    };
-
-    let messages = state
-        .conv_repo
-        .find_messages_before(conv.id, query.before_id, limit)
+    let page = state
+        .history
+        .history(auth_user.user_id, query.before_id, limit)
         .await?;
-    let next_before_id = (messages.len() == limit as usize)
-        .then(|| messages.first().map(|message| message.id))
-        .flatten();
 
-    let items: Vec<ChatMessageItem> = messages
+    let items: Vec<ChatMessageItem> = page
+        .messages
         .into_iter()
         .map(|m| ChatMessageItem {
             id: m.id,
@@ -99,7 +86,7 @@ pub async fn chat_history(
 
     Ok(Json(ChatHistoryResponse {
         messages: items,
-        next_before_id,
+        next_before_id: page.next_before_id,
     }))
 }
 

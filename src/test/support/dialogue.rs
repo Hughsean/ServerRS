@@ -8,6 +8,7 @@ use crate::app::agent::tools::get_time_tool::GetTimeTool;
 use crate::app::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
 use crate::app::agent::tools::memory_search_tool::MemorySearchTool;
 use crate::app::context_routing::ContextRoutingService;
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_extractor::MemoryExtractor;
 use crate::app::memory::memory_service::MemoryService;
@@ -227,10 +228,10 @@ fn retrieval_service(
             config.rag.hybrid_vector_weight,
             config.rag.hybrid_keyword_weight,
         )
-        .with_vector_store(vector_store, config.qdrant.rag_collection.clone());
+        .with_vector_store(vector_store, config.vector_store.rag_index_name.clone());
 
     if config.web_ingestion.enabled {
-        service = service.with_web_collection(config.web_ingestion.qdrant_collection.clone());
+        service = service.with_web_collection(config.web_ingestion.vector_index_name.clone());
     }
     Arc::new(service)
 }
@@ -250,7 +251,7 @@ fn memory_service(
             .with_vector_search(
                 vector_store,
                 embedding_provider,
-                config.qdrant.memory_collection.clone(),
+                config.vector_store.memory_index_name.clone(),
             ),
     )
 }
@@ -271,6 +272,7 @@ fn fresh_retrieval_service(
         fresh_repo,
         vector_store,
         embedding_provider,
-        config.fresh_context.clone(),
+        FreshContextUseCaseConfig::from(&config.fresh_context),
+        config.fresh_context.vector_index_name.clone(),
     )))
 }

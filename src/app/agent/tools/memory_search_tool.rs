@@ -8,7 +8,7 @@ use crate::app::memory::memory_service::MemoryService;
 use crate::domain::agent::AgentContext;
 use crate::shared::error::AppError;
 
-/// Searches user memories via `MemoryService` (which prefers Qdrant when configured).
+/// 通过 `MemoryService` 搜索用户记忆（配置后会优先使用向量检索）。
 pub struct MemorySearchTool {
     memory_service: Arc<MemoryService>,
 }

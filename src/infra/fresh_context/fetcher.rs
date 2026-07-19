@@ -2,8 +2,9 @@ use async_trait::async_trait;
 
 use crate::domain::fresh_context::{FreshContentFetcher, FreshFetchResult};
 use crate::domain::web_ingestion::fetcher::WebContentFetcher;
+use crate::infra::fresh_context::config::FreshContextAdapterConfig;
 use crate::infra::web_ingestion::fetcher::WebFetcher;
-use crate::shared::config::{FreshContextConfig, WebIngestionConfig};
+use crate::shared::config::WebIngestionConfig;
 use crate::shared::error::AppError;
 
 pub struct FreshContextWebFetcher {
@@ -11,7 +12,7 @@ pub struct FreshContextWebFetcher {
 }
 
 impl FreshContextWebFetcher {
-    pub fn new(config: &FreshContextConfig) -> Result<Self, AppError> {
+    pub fn new(config: &FreshContextAdapterConfig) -> Result<Self, AppError> {
         let web_config = WebIngestionConfig {
             max_body_bytes: 2 * 1024 * 1024,
             fetch_timeout_secs: config.fetch_timeout_secs,
@@ -53,10 +54,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_fetcher_from_fresh_config() {
-        let config = FreshContextConfig {
+    fn builds_fetcher_from_adapter_config() {
+        let config = FreshContextAdapterConfig {
+            vector_index_name: "fresh-test".into(),
+            fetch_timeout_secs: 20,
+            fetch_user_agent: "ServerRSFreshBot/0.1".into(),
             fetch_proxy_url: String::new(),
-            ..FreshContextConfig::default()
+            distill_llm: crate::shared::config::DistillLlmConfig::default(),
         };
         assert!(FreshContextWebFetcher::new(&config).is_ok());
     }

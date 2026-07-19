@@ -16,7 +16,7 @@ mod readonly_context {
         logging::init();
 
         let config = config::load();
-        config::require_qdrant(&config, "app 层上下文测试");
+        config::require_vector_store(&config, "app 层上下文测试");
         config::require_context_routing(&config, "app 层上下文测试");
         config::require_memory(&config, "app 层上下文测试");
 
@@ -24,7 +24,7 @@ mod readonly_context {
             &config,
             &[
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Database),
-                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Qdrant),
+                tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::VectorStore),
                 tunnels::TunnelRequirement::Optional(tunnels::ServiceTunnel::Embedding),
             ],
             "app 层上下文测试",
@@ -45,7 +45,7 @@ mod readonly_context {
         test_vector_store::assert_searchable(
             &vector_store,
             &embedding_provider,
-            &config.qdrant.memory_collection,
+            &config.vector_store.memory_index_name,
         )
         .await;
         let search_count_before = counted_vector_store.search_count();

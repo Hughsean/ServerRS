@@ -87,6 +87,12 @@ qq_bot = []
 qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
+
+[build-dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
 
 [[bin]]
 name = "server-rs"
@@ -98,7 +104,7 @@ path = "src/bin/qq_bot_init.rs"
 required-features = ["qq_bot"]
 
 [[bin]]
-name = "repair_qdrant_activation"
+name = "repair_vector_activation"
 path = "src/bin/repair.rs"
 required-features = ["qdrant"]
 

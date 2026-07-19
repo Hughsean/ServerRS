@@ -11,7 +11,7 @@ use super::vector_index_service::payload_chunk_id;
 
 /// Visibility-based read permission check.
 ///
-/// Trusts MySQL data only — Qdrant payloads must NOT substitute this.
+/// 只信任 MySQL 数据——向量载荷不得替代此校验。
 fn can_read_document(document: &KnowledgeDocument, user_id: u64) -> bool {
     if document.status != 1 {
         return false;
@@ -30,14 +30,14 @@ fn can_read_document(document: &KnowledgeDocument, user_id: u64) -> bool {
 /// Hybrid retrieval service.
 ///
 /// Strategy:
-/// 1. Qdrant vector search  →  MySQL second validation  →  permission filter.
+/// 1. 向量检索  →  MySQL 二次校验  →  权限过滤。
 /// 2. MySQL keyword search  →  the same permission and lifecycle validation.
 /// 3. Normalize and merge both result sets using configured hybrid weights.
 ///
-/// Web-ingestion content lives in a SEPARATE Qdrant collection and is only
+/// 网页摄取内容位于独立向量索引中，且只会在以下条件下
 /// surfaced when its publish version is active. Two layers enforce this
 /// (task-book §13):
-///   - The Qdrant query against the web collection carries an `active=true`
+///   - 针对网页索引的向量查询带有 `active=true`
 ///     payload filter, so staged/superseded points are not returned.
 ///   - The shared MySQL re-validation requires `knowledge_documents.status==1`;
 ///     publish flips a web document to status=1, supersede/rollback back to 0.
@@ -82,7 +82,7 @@ impl RetrievalService {
         self
     }
 
-    /// Enable retrieval of published web-ingestion content from its own Qdrant
+    /// 启用从独立向量索引检索已发布的网页摄取内容；
     /// collection (task-book §13). Only points with payload `active=true` are
     /// returned, and they are still MySQL-revalidated.
     pub fn with_web_collection(mut self, collection: String) -> Self {
@@ -92,7 +92,7 @@ impl RetrievalService {
 
     /// Retrieve top-k relevant chunks, scoped to `user_id`.
     ///
-    /// Qdrant and keyword results are merged when vector search is available.
+    /// 向量结果与关键词结果会在向量检索可用时合并。
     /// Either side can fail independently without discarding valid results.
     pub async fn retrieve(
         &self,
@@ -101,7 +101,7 @@ impl RetrievalService {
         top_k: u64,
     ) -> Result<Vec<(KnowledgeChunk, f64)>, AppError> {
         if let (Some(vs), Some(ep)) = (&self.vector_store, &self.embedding) {
-            let vector_results = self.qdrant_retrieve(vs, ep, query, user_id, top_k).await;
+            let vector_results = self.vector_retrieve(vs, ep, query, user_id, top_k).await;
             let keyword_results = self
                 .keyword_retrieve_with_validation(query, user_id, top_k)
                 .await;
@@ -120,7 +120,7 @@ impl RetrievalService {
                     Ok(vector)
                 }
                 (Err(e), Ok(keyword)) => {
-                    warn!(error = %e, "Qdrant retrieval failed; using keyword results");
+                    warn!(error = %e, "vector retrieval failed; using keyword results");
                     Ok(keyword)
                 }
                 (Ok(_), Err(e)) => Err(e),
@@ -134,9 +134,9 @@ impl RetrievalService {
             .await
     }
 
-    // ── Qdrant path ────────────────────────────────────────────────
+    // ── 向量检索路径 ─────────────────────────────────────────────────
 
-    async fn qdrant_retrieve(
+    async fn vector_retrieve(
         &self,
         vs: &Arc<dyn VectorStoreT>,
         ep: &Arc<dyn EmbeddingProvider>,
@@ -162,7 +162,7 @@ impl RetrievalService {
                 top_k as usize,
             )
             .await
-            .map_err(|e| AppError::internal(format!("Qdrant search failed: {e}")))?;
+            .map_err(|e| AppError::internal(format!("vector search failed: {e}")))?;
 
         // Web-ingestion collection — ONLY active points (task-book §13). A
         // failure here must not break legacy retrieval, so it is logged and
@@ -177,7 +177,7 @@ impl RetrievalService {
                 .await
             {
                 Ok(web_hits) => hits.extend(web_hits),
-                Err(e) => warn!(error = %e, "web-ingestion Qdrant search failed; skipping"),
+                Err(e) => warn!(error = %e, "web-ingestion vector search failed; skipping"),
             }
         }
 
@@ -239,7 +239,7 @@ impl RetrievalService {
             let chunk_id = match payload_chunk_id(&hit.payload) {
                 Some(id) => id,
                 None => {
-                    warn!(hit_id = %hit.id, "Qdrant hit missing chunk_id; skipping");
+                    warn!(hit_id = %hit.id, "vector hit missing chunk_id; skipping");
                     continue;
                 }
             };

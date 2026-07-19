@@ -169,6 +169,74 @@ fn rejects_business_layer_http_client_adapter_crates() {
 }
 
 #[test]
+fn rejects_api_repository_ports_in_imports_and_state_types() {
+    let workspace = TestWorkspace::new("rejects_api_repository_ports_in_imports_and_state_types");
+    workspace.write(
+        "src/api/state.rs",
+        "use std::sync::Arc;\nuse crate::domain::risk::RiskRepoT;\npub struct AdminState { risk: Arc<dyn RiskRepoT> }\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("API repository ports must be rejected");
+
+    assert_contains(
+        &report.to_string(),
+        "api layer must not import repository ports",
+    );
+    assert_contains(
+        &report.to_string(),
+        "api layer must not hold repository ports",
+    );
+}
+
+#[test]
+fn rejects_adapter_vocabulary_outside_infrastructure() {
+    let workspace = TestWorkspace::new("rejects_adapter_vocabulary_outside_infrastructure");
+    workspace.write("src/domain/vector.rs", "pub struct QdrantLocation;\n");
+    workspace.write(
+        "src/app/qdrant_activation_service.rs",
+        "pub struct QdrantActivationService;\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("adapter vocabulary must be rejected outside infrastructure");
+
+    assert_contains(
+        &report.to_string(),
+        "domain layer must not expose adapter-specific names",
+    );
+    assert_contains(
+        &report.to_string(),
+        "app filenames must not expose adapter-specific names",
+    );
+    assert_contains(
+        &report.to_string(),
+        "app public APIs must not expose adapter-specific names",
+    );
+}
+
+#[test]
+fn classifies_cli_as_an_explicit_client_adapter() {
+    let workspace = TestWorkspace::new("classifies_cli_as_an_explicit_client_adapter");
+    workspace.write(
+        "src/cli/client.rs",
+        "use reqwest::Client;\npub struct ApiClient(Client);\n",
+    );
+    workspace.write(
+        "src/bin/cli.rs",
+        "use crate::app::chat_service::ChatService;\n",
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("CLI must not bypass backend layers");
+
+    assert_contains(
+        &report.to_string(),
+        "client_adapter layer must not depend on app",
+    );
+}
+
+#[test]
 fn rejects_inline_business_layer_infra_only_external_crate_references() {
     let workspace =
         TestWorkspace::new("rejects_inline_business_layer_infra_only_external_crate_references");

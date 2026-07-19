@@ -54,16 +54,16 @@ pub async fn stats_reviews(
 pub async fn stats_risks(
     State(state): State<AdminState>,
 ) -> Result<Json<RiskStatsResponse>, AppError> {
-    let total = state.risk.count_all().await?;
-    let trend = state.risk.count_trend(7).await?;
-    let distribution = state.risk.count_by_risk_level().await?;
+    let summary = state.risk_stats.summary(7).await?;
     Ok(Json(RiskStatsResponse {
-        total,
-        trend: trend
+        total: summary.total,
+        trend: summary
+            .trend
             .into_iter()
             .map(|(label, count)| StringCount { label, count })
             .collect(),
-        distribution: distribution
+        distribution: summary
+            .distribution
             .into_iter()
             .map(|(label, count)| StringCount { label, count })
             .collect(),

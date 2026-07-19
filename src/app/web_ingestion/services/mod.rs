@@ -12,8 +12,8 @@
 pub mod artifact_service;
 pub mod due_url_selector;
 pub mod html_cleaner;
-pub mod qdrant_activation_service;
 pub mod quality_result;
 pub mod run_key_builder;
 pub mod run_profile;
 pub mod terminal_events;
+pub mod vector_activation_service;

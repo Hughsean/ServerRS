@@ -2,13 +2,13 @@
 //!
 //! Transactionally rolls the active version back to a previous one
 //! (`rollback_in_tx`: deactivate current, reactivate target, in ONE tx with a
-//! page lock). Then re-syncs Qdrant `active` payloads. Emits KnowledgeRolledBack.
+//! page lock). Then re-syncs vector `active` payloads. Emits KnowledgeRolledBack.
 //! Idempotent.
 
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
-use crate::app::web_ingestion::services::qdrant_activation_service;
+use crate::app::web_ingestion::services::vector_activation_service;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repo::{DomainEvent, NewAuditLog, NewOutboxEvent};
 use crate::domain::web_ingestion::status::audit_action;
@@ -64,11 +64,11 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 
     let dimension = ctx.embedding_dimension();
 
-    // Deactivate current in Qdrant, reactivate target.
+    // 停用当前版本的向量点，再激活目标版本。
     if let Some(deactivated) = outcome.deactivated_record_id {
-        sync_qdrant(ctx, deactivated, dimension, false, "rollback_deactivate").await;
+        sync_vector_activation(ctx, deactivated, dimension, false, "rollback_deactivate").await;
     }
-    sync_qdrant(
+    sync_vector_activation(
         ctx,
         outcome.activated_record_id,
         dimension,
@@ -109,14 +109,14 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
     Ok(())
 }
 
-async fn sync_qdrant(
+async fn sync_vector_activation(
     ctx: &PipelineContext,
     publish_record_id: u64,
     dimension: usize,
     active: bool,
     phase: &str,
 ) {
-    if let Err(e) = qdrant_activation_service::sync_active(
+    if let Err(e) = vector_activation_service::sync_active(
         &ctx.vector_store,
         &ctx.vector_manifest_repo,
         &ctx.publish_repo,
@@ -129,7 +129,7 @@ async fn sync_qdrant(
     {
         tracing::error!(
             publish_record_id, phase, error = %e,
-            "qdrant rollback re-sync failed — DB is authoritative; will need reconciliation"
+            "vector rollback re-sync failed — DB is authoritative; will need reconciliation"
         );
         let _ = ctx
             .audit_repo
@@ -139,9 +139,9 @@ async fn sync_qdrant(
                 run_id: None,
                 publish_record_id: Some(publish_record_id),
                 source_url_id: None,
-                action: audit_action::QDRANT_CLEANUP_FAILED.into(),
+                action: audit_action::VECTOR_SYNC_FAILED.into(),
                 status: "error".into(),
-                message: format!("qdrant {phase} active={active} sync failed: {e}"),
+                message: format!("vector {phase} active={active} sync failed: {e}"),
                 metadata: None,
             })
             .await;

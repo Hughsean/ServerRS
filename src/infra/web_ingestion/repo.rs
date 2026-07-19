@@ -1275,8 +1275,8 @@ impl VectorManifestRepoT for VectorManifestRepo {
         point_id: &str,
     ) -> Result<Option<KnowledgeVectorManifest>, WebIngestionError> {
         let row = knowledge_vector_manifests::Entity::find()
-            .filter(knowledge_vector_manifests::Column::QdrantCollection.eq(collection))
-            .filter(knowledge_vector_manifests::Column::QdrantPointId.eq(point_id))
+            .filter(knowledge_vector_manifests::Column::VectorIndexName.eq(collection))
+            .filter(knowledge_vector_manifests::Column::VectorPointId.eq(point_id))
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -1307,8 +1307,8 @@ impl VectorManifestRepoT for VectorManifestRepo {
                 document_id: Set(m.document_id),
                 chunk_id: Set(m.chunk_id),
                 chunk_hash: Set(m.chunk_hash.clone()),
-                qdrant_collection: Set(m.qdrant_collection.clone()),
-                qdrant_point_id: Set(m.qdrant_point_id.clone()),
+                vector_index_name: Set(m.location.index_name.clone()),
+                vector_point_id: Set(m.location.point_id.clone()),
                 embedding_provider: Set(m.embedding_provider.clone()),
                 embedding_model: Set(m.embedding_model.clone()),
                 embedding_dimension: Set(m.embedding_dimension),
@@ -1359,14 +1359,47 @@ fn model_to_vm(m: knowledge_vector_manifests::Model) -> KnowledgeVectorManifest 
         document_id: m.document_id,
         chunk_id: m.chunk_id,
         chunk_hash: m.chunk_hash,
-        qdrant_collection: m.qdrant_collection,
-        qdrant_point_id: m.qdrant_point_id,
+        location: crate::domain::web_ingestion::repo::VectorLocation {
+            index_name: m.vector_index_name,
+            point_id: m.vector_point_id,
+        },
         embedding_provider: m.embedding_provider,
         embedding_model: m.embedding_model,
         embedding_dimension: m.embedding_dimension,
         active: m.active != 0,
         created_at: to_utc(m.created_at),
         updated_at: to_utc(m.updated_at),
+    }
+}
+
+#[cfg(test)]
+mod vector_manifest_tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    #[test]
+    fn maps_vector_manifest_location() {
+        let now = Utc::now().naive_utc();
+        let manifest = model_to_vm(knowledge_vector_manifests::Model {
+            id: 1,
+            publish_record_id: 2,
+            run_id: 3,
+            document_id: 4,
+            chunk_id: 5,
+            chunk_hash: "chunk-hash".into(),
+            vector_index_name: "web_ingestion".into(),
+            vector_point_id: "chunk:42".into(),
+            embedding_provider: "ollama".into(),
+            embedding_model: "embedding-model".into(),
+            embedding_dimension: 2560,
+            active: 1,
+            created_at: now,
+            updated_at: now,
+        });
+
+        assert_eq!(manifest.location.index_name, "web_ingestion");
+        assert_eq!(manifest.location.point_id, "chunk:42");
     }
 }
 

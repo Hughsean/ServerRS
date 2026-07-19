@@ -1,7 +1,7 @@
 //! 网页知识摄取领域的仓库接口。
 //!
 //! Each trait corresponds to one aggregate / table. They live in the domain
-//! layer and are implemented by SeaORM repositories in the infrastructure layer.
+//! 层，并由基础设施层的适配器实现。
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -373,7 +373,7 @@ pub trait PublishRecordRepoT: Send + Sync {
     ///      its knowledge_documents.status→1, its manifests active=1)
     ///
     /// Returns the publish outcome (which record was superseded, if any).
-    /// DB state is authoritative; the caller re-syncs Qdrant afterwards.
+    /// 数据库状态是权威来源；调用方会在事务后重新同步向量索引。
     async fn publish_in_tx(
         &self,
         publish_record_id: u64,
@@ -463,6 +463,12 @@ pub trait ChunkManifestRepoT: Send + Sync {
 // ── knowledge_vector_manifests ───────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+pub struct VectorLocation {
+    pub index_name: String,
+    pub point_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct KnowledgeVectorManifest {
     pub id: u64,
     pub publish_record_id: u64,
@@ -470,8 +476,7 @@ pub struct KnowledgeVectorManifest {
     pub document_id: u64,
     pub chunk_id: u64,
     pub chunk_hash: String,
-    pub qdrant_collection: String,
-    pub qdrant_point_id: String,
+    pub location: VectorLocation,
     pub embedding_provider: String,
     pub embedding_model: String,
     pub embedding_dimension: u32,
@@ -487,8 +492,7 @@ pub struct NewVectorManifest {
     pub document_id: u64,
     pub chunk_id: u64,
     pub chunk_hash: String,
-    pub qdrant_collection: String,
-    pub qdrant_point_id: String,
+    pub location: VectorLocation,
     pub embedding_provider: String,
     pub embedding_model: String,
     pub embedding_dimension: u32,

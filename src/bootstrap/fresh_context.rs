@@ -9,6 +9,7 @@ use tokio::time::{Duration, interval};
 use tracing::{debug, info, warn};
 
 use crate::app::fresh_context::collector::FreshCollectorService;
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::indexer::{FreshIndexStats, FreshIndexerService};
 use crate::app::fresh_context::pipeline::{FreshPipelineService, FreshPipelineStats};
 use crate::app::fresh_context::topic_clusterer::{
@@ -18,6 +19,7 @@ use crate::bootstrap::tasks::BackgroundTasks;
 use crate::domain::fresh_context::FreshContextRepoT;
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_store::VectorStoreT;
+use crate::infra::fresh_context::config::FreshContextAdapterConfig;
 use crate::infra::fresh_context::distiller::OpenAiFreshContextDistiller;
 use crate::infra::fresh_context::fetcher::FreshContextWebFetcher;
 use crate::infra::repo::seaorm_impl::fresh_context::FreshContextRepo;
@@ -32,6 +34,8 @@ pub async fn init_fresh_context(
     background: &mut BackgroundTasks,
 ) -> Result<(), AppError> {
     let fc = &config.fresh_context;
+    let use_case_config = FreshContextUseCaseConfig::from(fc);
+    let adapter_config = FreshContextAdapterConfig::from(fc);
     let gate = WorkerGate::from_config(fc);
     if !gate.any() {
         info!(
@@ -53,7 +57,7 @@ pub async fn init_fresh_context(
         max_items_per_source = fc.max_items_per_source,
         max_pipeline_items_per_tick = fc.max_pipeline_items_per_tick,
         max_indexable_chunks_per_tick = fc.max_indexable_chunks_per_tick,
-        collection = %fc.qdrant_collection,
+        vector_index_name = %adapter_config.vector_index_name,
         proxy_enabled = !fc.fetch_proxy_url.trim().is_empty(),
         "Fresh Context 基础设施初始化完成"
     );
@@ -61,8 +65,8 @@ pub async fn init_fresh_context(
     if gate.scheduler {
         let collector = Arc::new(FreshCollectorService::new(
             Arc::clone(&repo),
-            Arc::new(FreshContextWebFetcher::new(fc)?),
-            fc.clone(),
+            Arc::new(FreshContextWebFetcher::new(&adapter_config)?),
+            use_case_config.clone(),
         ));
         let sched_interval = fc.scheduler_interval_secs.max(1);
         background.spawn(tokio::spawn(async move {
@@ -100,8 +104,10 @@ pub async fn init_fresh_context(
     if gate.dispatcher {
         let pipeline = Arc::new(FreshPipelineService::new(
             Arc::clone(&repo),
-            Arc::new(OpenAiFreshContextDistiller::new(fc.distill_llm.clone())?),
-            fc.clone(),
+            Arc::new(OpenAiFreshContextDistiller::new(
+                adapter_config.distill_llm.clone(),
+            )?),
+            use_case_config.clone(),
         ));
         let disp_interval = fc.dispatcher_interval_secs.max(1);
         background.spawn(tokio::spawn(async move {
@@ -118,7 +124,7 @@ pub async fn init_fresh_context(
 
         let topic_clusterer = Arc::new(FreshTopicClustererService::new(
             Arc::clone(&repo),
-            fc.clone(),
+            use_case_config.clone(),
         ));
         let topic_interval = fc.dispatcher_interval_secs.max(1);
         background.spawn(tokio::spawn(async move {
@@ -138,7 +144,8 @@ pub async fn init_fresh_context(
                 Arc::clone(&repo),
                 Arc::clone(vector_store),
                 Arc::clone(embedding_provider),
-                fc.clone(),
+                use_case_config,
+                adapter_config.vector_index_name,
                 config.embedding.provider.clone(),
                 config.embedding.model.clone(),
             ));
@@ -159,7 +166,7 @@ pub async fn init_fresh_context(
             info!("Fresh Context vector indexer 已启动");
         } else {
             warn!(
-                "Fresh Context dispatcher 已启用，但 Qdrant/vector_store 未启用，fresh_chunks 不会写入向量库"
+                "Fresh Context dispatcher 已启用，但 vector_store 未启用，fresh_chunks 不会写入向量库"
             );
         }
     }

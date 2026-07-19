@@ -1,12 +1,12 @@
-//! Qdrant activation service (task-book §4 services, §12.9-10).
+//! Vector activation service (task-book §4 services, §12.9-10).
 //!
-//! Re-syncs the `active` flag in Qdrant point payloads to match the
+//! Re-syncs the `active` flag in vector point payloads to match the
 //! authoritative DB state after a publish / rollback. The DB is authoritative:
-//! `RetrievalService` re-validates every Qdrant hit against
-//! `knowledge_documents.status`, so a Qdrant payload that is briefly stale can
-//! never surface superseded content. This makes a Qdrant failure recoverable
+//! `RetrievalService` re-validates every vector hit against
+//! `knowledge_documents.status`, so a vector payload that is briefly stale can
+//! never surface superseded content. This makes a vector failure recoverable
 //! (retry) rather than a correctness hazard, and prevents the unobservable
-//! "DB active / Qdrant inactive" divergence (§12.10).
+//! "DB active / vector inactive" divergence (§12.10).
 
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use crate::domain::web_ingestion::repo::{
 };
 use crate::domain::web_ingestion::status::publish_status;
 
-/// Re-upsert all Qdrant points of a publish record with payload lifecycle
+/// Re-upsert all vector points of a publish record with payload lifecycle
 /// fields derived from the current DB publish/run state. Requires the
 /// embeddings still exist in the DB (they do — embeddings are never deleted on
 /// supersede, only deactivated).
@@ -36,7 +36,7 @@ pub async fn sync_active(
     let Some(vs) = vector_store.as_ref() else {
         tracing::warn!(
             publish_record_id,
-            "qdrant disabled — skipping active sync (DB status is authoritative)"
+            "vector store disabled — skipping active sync (DB status is authoritative)"
         );
         return Ok(());
     };
@@ -65,8 +65,8 @@ pub async fn sync_active(
             })?;
 
     // All points in one collection (a publish record uses a single collection).
-    let collection = manifests[0].qdrant_collection.clone();
-    vs.ensure_collection(&collection, dimension, VectorDistance::Cosine)
+    let index_name = manifests[0].location.index_name.clone();
+    vs.ensure_collection(&index_name, dimension, VectorDistance::Cosine)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("ensure_collection: {e}")))?;
 
@@ -74,15 +74,15 @@ pub async fn sync_active(
     for m in &manifests {
         let vector = load_vector(rag_repo, m, dimension).await?;
         points.push(VectorPoint {
-            id: m.qdrant_point_id.clone(),
+            id: m.location.point_id.clone(),
             vector,
             payload: build_payload(m, &record, run.source_url_id),
         });
     }
 
-    vs.upsert_points(&collection, points)
+    vs.upsert_points(&index_name, points)
         .await
-        .map_err(|e| WebIngestionError::Internal(format!("qdrant active re-sync: {e}")))?;
+        .map_err(|e| WebIngestionError::Internal(format!("vector active re-sync: {e}")))?;
     Ok(())
 }
 
@@ -146,8 +146,10 @@ mod tests {
             document_id: 40,
             chunk_id: 50,
             chunk_hash: "chunk-hash".into(),
-            qdrant_collection: "web_chunks".into(),
-            qdrant_point_id: "point-id".into(),
+            location: crate::domain::web_ingestion::repo::VectorLocation {
+                index_name: "web_chunks".into(),
+                point_id: "point-id".into(),
+            },
             embedding_provider: "ollama".into(),
             embedding_model: "embedding-model".into(),
             embedding_dimension: 2560,

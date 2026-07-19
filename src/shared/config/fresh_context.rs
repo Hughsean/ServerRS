@@ -10,8 +10,8 @@ pub struct FreshContextConfig {
     pub scheduler_enabled: bool,
     #[serde(default)]
     pub dispatcher_enabled: bool,
-    #[serde(default = "default_collection")]
-    pub qdrant_collection: String,
+    #[serde(default = "default_vector_index_name")]
+    pub vector_index_name: String,
     #[serde(default = "default_scheduler_interval_secs")]
     pub scheduler_interval_secs: u64,
     #[serde(default = "default_dispatcher_interval_secs")]
@@ -68,7 +68,7 @@ impl Default for FreshContextConfig {
             enabled: false,
             scheduler_enabled: false,
             dispatcher_enabled: false,
-            qdrant_collection: default_collection(),
+            vector_index_name: default_vector_index_name(),
             scheduler_interval_secs: default_scheduler_interval_secs(),
             dispatcher_interval_secs: default_dispatcher_interval_secs(),
             max_sources_per_tick: default_max_sources_per_tick(),
@@ -97,7 +97,7 @@ impl Default for FreshContextConfig {
     }
 }
 
-fn default_collection() -> String {
+fn default_vector_index_name() -> String {
     "fresh_chunks_2560".into()
 }
 fn default_scheduler_interval_secs() -> u64 {
@@ -172,9 +172,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_collection_matches_example_config() {
+    fn default_vector_index_name_matches_example_config() {
         let config = FreshContextConfig::default();
-        assert_eq!(config.qdrant_collection, "fresh_chunks_2560");
+        assert_eq!(config.vector_index_name, "fresh_chunks_2560");
         assert_eq!(config.dispatcher_interval_secs, 30);
         assert_eq!(config.max_pipeline_items_per_tick, 50);
         assert_eq!(config.chunk_size, 900);

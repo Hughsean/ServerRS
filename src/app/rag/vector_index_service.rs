@@ -46,7 +46,7 @@ impl Default for VectorIndexConfig {
 /// - Upsert / delete points in the vector store.
 /// - Rebuild entire collections from MySQL.
 ///
-/// This service does NOT depend on Qdrant SDK types — only the `VectorStore`
+/// 此服务只依赖 `VectorStore` 端口，不依赖具体向量数据库 SDK 类型。
 /// trait.  It does NOT make authorization decisions.
 pub struct VectorIndexService {
     rag_repo: Arc<dyn RAGRepoT>,
@@ -175,7 +175,7 @@ impl VectorIndexService {
             "visibility": document.and_then(|d| Some(d.visibility.as_str())).unwrap_or("public"),
         });
 
-        // 1. Upsert Qdrant
+        // 1. 写入向量索引。
         if let Err(e) = self
             .vector_store
             .upsert_points(
@@ -188,7 +188,7 @@ impl VectorIndexService {
             )
             .await
         {
-            let msg = format!("Qdrant upsert failed for chunk {}: {e}", chunk.chunk_id);
+            let msg = format!("vector upsert failed for chunk {}: {e}", chunk.chunk_id);
             let _ = self
                 .vector_index_repo
                 .mark_failed(&vector_id, msg.clone())
@@ -244,7 +244,7 @@ impl VectorIndexService {
 
     pub async fn delete_knowledge_chunk_index(&self, chunk_id: u64) -> Result<(), AppError> {
         let id = chunk_vector_id(chunk_id);
-        // Delete from Qdrant (ignore errors on missing points)
+        // 从向量索引删除（忽略不存在的点）。
         let _ = self
             .vector_store
             .delete_points(&self.config.rag_collection, vec![id.clone()])
@@ -324,7 +324,7 @@ impl VectorIndexService {
             )
             .await
         {
-            let msg = format!("Qdrant upsert memory {}: {e}", memory.memory_id);
+            let msg = format!("vector upsert memory {}: {e}", memory.memory_id);
             let _ = self
                 .vector_index_repo
                 .mark_failed(&vector_id, msg.clone())

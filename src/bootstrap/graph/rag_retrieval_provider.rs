@@ -17,12 +17,12 @@ pub(crate) fn build_rag_retrieval_service(ctx: &BootstrapContext<'_>) -> Arc<Ret
     if let Some(vector_store) = &ctx.vector.vector_store {
         retrieval = retrieval.with_vector_store(
             Arc::clone(vector_store),
-            ctx.config.qdrant.rag_collection.clone(),
+            ctx.config.vector_store.rag_index_name.clone(),
         );
     }
     if ctx.config.web_ingestion.enabled {
         retrieval =
-            retrieval.with_web_collection(ctx.config.web_ingestion.qdrant_collection.clone());
+            retrieval.with_web_collection(ctx.config.web_ingestion.vector_index_name.clone());
     }
 
     Arc::new(retrieval)

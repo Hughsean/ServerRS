@@ -15,10 +15,10 @@ pub fn require_agent(config: &AppConfig, scenario: &str) {
     );
 }
 
-pub fn require_qdrant(config: &AppConfig, scenario: &str) {
+pub fn require_vector_store(config: &AppConfig, scenario: &str) {
     assert!(
-        config.qdrant.enabled,
-        "{scenario} 需要配置 qdrant.enabled = true"
+        config.vector_store.enabled,
+        "{scenario} 需要配置 vector_store.enabled = true"
     );
 }
 
