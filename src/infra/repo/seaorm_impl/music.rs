@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DerivePartialModel,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 
-use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::music::{
+    MusicRepoT, MusicTrack, MusicTrackListItem, MusicTrackUpdate, NewMusicTrack,
+};
 use crate::shared::error::AppError;
 
 use super::super::entities::music;
@@ -28,6 +30,42 @@ fn map(m: music::Model) -> MusicTrack {
         status: m.status,
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.and_utc(),
+    }
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "music::Entity")]
+struct MusicTrackListRow {
+    music_id: u64,
+    title: String,
+    artist: Option<String>,
+    album: Option<String>,
+    category: Option<String>,
+    description: Option<String>,
+    duration: Option<u32>,
+    file_size: u64,
+    mime_type: String,
+    lyrics: Option<String>,
+    tags: Option<sea_orm::prelude::Json>,
+    mood_tags: Option<sea_orm::prelude::Json>,
+    status: i8,
+}
+
+fn map_list_row(row: MusicTrackListRow) -> MusicTrackListItem {
+    MusicTrackListItem {
+        music_id: row.music_id,
+        title: row.title,
+        artist: row.artist,
+        album: row.album,
+        category: row.category,
+        description: row.description,
+        duration: row.duration,
+        file_size: row.file_size,
+        mime_type: row.mime_type,
+        lyrics: row.lyrics,
+        tags: row.tags.map(Into::into),
+        mood_tags: row.mood_tags.map(Into::into),
+        status: row.status,
     }
 }
 
@@ -107,7 +145,7 @@ impl MusicRepoT for MusicRepo {
         search: Option<String>,
         limit: u64,
         offset: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         let mut query = music::Entity::find().filter(music::Column::Status.eq(1_i8));
         if let Some(cat) = category {
             query = query.filter(music::Column::Category.eq(cat));
@@ -122,11 +160,13 @@ impl MusicRepoT for MusicRepo {
             );
         }
         query = query.order_by_desc(music::Column::CreatedAt);
-        let paginator = query.paginate(&self.db, limit);
+        let paginator = query
+            .into_partial_model::<MusicTrackListRow>()
+            .paginate(&self.db, limit);
         let count = paginator.num_items().await.map_err(map_err)?;
         let page_num = offset / limit;
         let items = paginator.fetch_page(page_num).await.map_err(map_err)?;
-        Ok((items.into_iter().map(map).collect(), count))
+        Ok((items.into_iter().map(map_list_row).collect(), count))
     }
 
     async fn find_all_admin(
@@ -136,7 +176,7 @@ impl MusicRepoT for MusicRepo {
         status: Option<i8>,
         limit: u64,
         offset: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         let mut query = music::Entity::find();
         if let Some(category) = category {
             query = query.filter(music::Column::Category.eq(category));
@@ -155,13 +195,14 @@ impl MusicRepoT for MusicRepo {
         }
         let paginator = query
             .order_by_desc(music::Column::CreatedAt)
+            .into_partial_model::<MusicTrackListRow>()
             .paginate(&self.db, limit);
         let count = paginator.num_items().await.map_err(map_err)?;
         let items = paginator
             .fetch_page(offset / limit)
             .await
             .map_err(map_err)?;
-        Ok((items.into_iter().map(map).collect(), count))
+        Ok((items.into_iter().map(map_list_row).collect(), count))
     }
 
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError> {

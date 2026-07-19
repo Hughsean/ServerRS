@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DerivePartialModel,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 
 use crate::domain::psychology::{
@@ -103,6 +103,45 @@ fn map_resource(m: psychology_resources::Model) -> PsychologyResource {
         like_count: m.like_count as i64,
         is_published: m.status != 0,
         created_at: m.created_at.and_utc(),
+    }
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "psychology_resources::Entity")]
+struct PsychologyResourceListRow {
+    resource_id: u64,
+    category_id: u16,
+    resource_type: String,
+    title: String,
+    description: Option<String>,
+    external_url: Option<String>,
+    file_size: Option<u64>,
+    mime_type: Option<String>,
+    duration: Option<u32>,
+    tags: Option<sea_orm::prelude::Json>,
+    view_count: u32,
+    like_count: u32,
+    status: i8,
+    created_at: chrono::NaiveDateTime,
+}
+
+fn map_resource_list_row(row: PsychologyResourceListRow) -> PsychologyResource {
+    PsychologyResource {
+        id: row.resource_id,
+        category_id: Some(row.category_id as u64),
+        title: row.title,
+        description: row.description,
+        resource_type: row.resource_type,
+        object_id: None,
+        external_url: row.external_url,
+        file_size: row.file_size,
+        mime_type: row.mime_type,
+        duration: row.duration,
+        tags: tags_to_string(row.tags),
+        view_count: row.view_count as i64,
+        like_count: row.like_count as i64,
+        is_published: row.status != 0,
+        created_at: row.created_at.and_utc(),
     }
 }
 
@@ -628,6 +667,7 @@ impl PsychologyRepoT for PsychologyRepo {
 
         let paginator = base
             .order_by_desc(psychology_resources::Column::CreatedAt)
+            .into_partial_model::<PsychologyResourceListRow>()
             .paginate(&self.db, page_size);
 
         let total = paginator.num_items().await.map_err(map_err)?;
@@ -636,7 +676,10 @@ impl PsychologyRepoT for PsychologyRepo {
             .await
             .map_err(map_err)?;
 
-        Ok((models.into_iter().map(map_resource).collect(), total))
+        Ok((
+            models.into_iter().map(map_resource_list_row).collect(),
+            total,
+        ))
     }
 
     async fn find_resource_by_id(&self, id: u64) -> Result<Option<PsychologyResource>, AppError> {
@@ -698,13 +741,17 @@ impl PsychologyRepoT for PsychologyRepo {
         }
         let paginator = base
             .order_by_desc(psychology_resources::Column::CreatedAt)
+            .into_partial_model::<PsychologyResourceListRow>()
             .paginate(&self.db, page_size);
         let total = paginator.num_items().await.map_err(map_err)?;
         let models = paginator
             .fetch_page(page.max(1) - 1)
             .await
             .map_err(map_err)?;
-        Ok((models.into_iter().map(map_resource).collect(), total))
+        Ok((
+            models.into_iter().map(map_resource_list_row).collect(),
+            total,
+        ))
     }
 
     async fn create_resource(

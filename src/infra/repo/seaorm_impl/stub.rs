@@ -5,7 +5,9 @@ use crate::domain::depression::{
     DepressionAssessment, DepressionRepoT, DepressionScale, NewDepressionAssessment,
 };
 use crate::domain::diary::{DiaryRepoT, NewUserDiary, UserDiary, UserDiaryUpdate};
-use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::music::{
+    MusicRepoT, MusicTrack, MusicTrackListItem, MusicTrackUpdate, NewMusicTrack,
+};
 use crate::domain::psychology::{
     KnowledgeFavorite, NewContentLike, NewKnowledgeFavorite, NewPsychologyArticle,
     NewPsychologyCategory, NewPsychologyQna, NewPsychologyResource, PsychologyArticle,
@@ -107,7 +109,7 @@ impl MusicRepoT for StubMusicRepo {
         _: Option<String>,
         _: u64,
         _: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         Ok((vec![], 0))
     }
     async fn find_all_admin(
@@ -117,7 +119,7 @@ impl MusicRepoT for StubMusicRepo {
         _: Option<i8>,
         _: u64,
         _: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         Ok((vec![], 0))
     }
     async fn update(&self, _: u64, _: MusicTrackUpdate) -> Result<MusicTrack, AppError> {

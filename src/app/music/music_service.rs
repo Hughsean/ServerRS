@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use base64::Engine;
 
-use crate::domain::music::{MusicRepoT, MusicTrack, MusicTrackUpdate, NewMusicTrack};
+use crate::domain::music::{
+    MusicRepoT, MusicTrack, MusicTrackListItem, MusicTrackUpdate, NewMusicTrack,
+};
 use crate::shared::error::AppError;
 
 /// Music service — no longer uses ObjectStorage/object_id.
@@ -22,7 +24,7 @@ impl MusicService {
         search: Option<String>,
         page: u64,
         size: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         let offset = page.saturating_sub(1) * size;
         self.repo.find_all(category, search, size, offset).await
     }
@@ -69,7 +71,7 @@ impl MusicService {
         status: Option<i8>,
         page: u64,
         size: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError> {
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError> {
         if status.is_some_and(|value| value != 0 && value != 1) {
             return Err(AppError::Validation("music status must be 0 or 1".into()));
         }

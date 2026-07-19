@@ -28,6 +28,24 @@ pub struct MusicTrack {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 音乐列表投影；不携带音频内容或封面二进制数据。
+#[derive(Debug, Clone, Serialize)]
+pub struct MusicTrackListItem {
+    pub music_id: u64,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub duration: Option<u32>,
+    pub file_size: u64,
+    pub mime_type: String,
+    pub lyrics: Option<String>,
+    pub tags: Option<serde_json::Value>,
+    pub mood_tags: Option<serde_json::Value>,
+    pub status: i8,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewMusicTrack {
     pub title: String,
@@ -69,7 +87,7 @@ pub trait MusicRepoT: Send + Sync {
         search: Option<String>,
         limit: u64,
         offset: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError>;
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError>;
     async fn find_all_admin(
         &self,
         category: Option<String>,
@@ -77,7 +95,7 @@ pub trait MusicRepoT: Send + Sync {
         status: Option<i8>,
         limit: u64,
         offset: u64,
-    ) -> Result<(Vec<MusicTrack>, u64), AppError>;
+    ) -> Result<(Vec<MusicTrackListItem>, u64), AppError>;
     async fn update(&self, id: u64, update: MusicTrackUpdate) -> Result<MusicTrack, AppError>;
     async fn delete_by_id(&self, id: u64) -> Result<bool, AppError>;
 

@@ -67,24 +67,7 @@ pub async fn list_tracks(
         .list_tracks(params.category, params.search, page, page_size)
         .await?;
 
-    let items: Vec<TrackDto> = tracks
-        .into_iter()
-        .map(|t| TrackDto {
-            music_id: t.music_id,
-            title: t.title,
-            artist: t.artist,
-            album: t.album,
-            category: t.category,
-            description: t.description,
-            duration: t.duration,
-            file_size: t.file_size,
-            mime_type: t.mime_type,
-            lyrics: t.lyrics,
-            tags: t.tags,
-            mood_tags: t.mood_tags,
-            status: t.status,
-        })
-        .collect();
+    let items: Vec<TrackDto> = tracks.into_iter().map(track_list_item_to_dto).collect();
 
     Ok(Json(json!({
         "items": items,
@@ -133,7 +116,7 @@ pub async fn admin_list_tracks(
             page_size,
         )
         .await?;
-    let items: Vec<TrackDto> = tracks.into_iter().map(track_to_dto).collect();
+    let items: Vec<TrackDto> = tracks.into_iter().map(track_list_item_to_dto).collect();
     Ok(Json(json!({
         "items": items,
         "total": total,
@@ -231,6 +214,24 @@ fn decode_base64(value: &str, field: &str) -> Result<Vec<u8>, AppError> {
 }
 
 fn track_to_dto(track: crate::domain::music::MusicTrack) -> TrackDto {
+    TrackDto {
+        music_id: track.music_id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        category: track.category,
+        description: track.description,
+        duration: track.duration,
+        file_size: track.file_size,
+        mime_type: track.mime_type,
+        lyrics: track.lyrics,
+        tags: track.tags,
+        mood_tags: track.mood_tags,
+        status: track.status,
+    }
+}
+
+fn track_list_item_to_dto(track: crate::domain::music::MusicTrackListItem) -> TrackDto {
     TrackDto {
         music_id: track.music_id,
         title: track.title,
