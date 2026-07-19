@@ -1,3 +1,63 @@
 {
-    "rust-analyzer.checkOnSave": true
+    "rust-analyzer.checkOnSave": true,
+    // 必须保持为 false，否则代码补全和提交消息生成都会被关闭
+    "chat.disableAIFeatures": false,
+    // 保留普通 Copilot 行内代码补全
+    "editor.inlineSuggest.enabled": true,
+    "github.copilot.enable": {
+        "*": true,
+        "plaintext": false,
+        "markdown": false,
+        "scminput": false
+    },
+    // 关闭“下一编辑建议”，不影响普通灰色代码补全
+    "github.copilot.nextEditSuggestions.enabled": false,
+    "github.copilot.nextEditSuggestions.fixes": false,
+    // 关闭编辑器中的 Copilot 操作
+    "github.copilot.editor.enableCodeActions": false,
+    "github.copilot.renameSuggestions.triggerAutomatically": false,
+    "github.copilot.chat.reviewSelection.enabled": false,
+    // 关闭 Agent 和聊天入口
+    "chat.agent.enabled": false,
+    "chat.commandCenter.enabled": false,
+    "chat.viewSessions.enabled": false,
+    "chat.agentsControl.enabled": false,
+    "chat.unifiedAgentsBar.enabled": false,
+    // 关闭聊天会话相关功能
+    "chat.detectParticipant.enabled": false,
+    "chat.checkpoints.enabled": false,
+    "github.copilot.chat.localIndex.enabled": false,
+    "chat.sessionSync.enabled": false,
+    // 尽量隐藏和阻止行内聊天
+    "inlineChat.affordance": "off",
+    "inlineChat.lineEmptyHint": false,
+    "inlineChat.lineNaturalLanguageHint": false,
+    "inlineChat.holdToSpeech": false,
+    // 关闭 Agent 外部工具和远程能力
+    "chat.mcp.access": false,
+    "chat.mcp.discovery.enabled": {
+        "claude-desktop": false,
+        "windsurf": false,
+        "cursor-global": false,
+        "cursor-workspace": false
+    },
+    "chat.mcp.apps.enabled": false,
+    "workbench.browser.enableChatTools": false,
+    "github.copilot.chat.claudeAgent.enabled": false,
+    "github.copilot.chat.agent.autoFix": false,
+    "github.copilot.chat.cli.remote.enabled": false,
+    "chat.useAgentSkills": false,
+    "github.copilot.chat.organizationCustomAgents.enabled": false,
+    // 关闭其他 AI 入口
+    "workbench.settings.showAISearchToggle": false,
+    "search.searchView.semanticSearchBehavior": "manual",
+    "search.searchView.keywordSuggestions": false,
+    // 关闭调试、测试和 Notebook AI 功能
+    "github.copilot.chat.startDebugging.enabled": false,
+    "github.copilot.chat.copilotDebugCommand.enabled": false,
+    "github.copilot.chat.generateTests.codeLens": false,
+    "github.copilot.chat.setupTests.enabled": false,
+    "notebook.experimental.generate": false,
+    // 不在 Git 提交中自动加入 AI Co-authored-by 标记
+    "git.addAICoAuthor": "off"
 }
