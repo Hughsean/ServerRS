@@ -14,6 +14,8 @@ use crate::app::music::music_service::MusicService;
 use crate::app::psychology::psychology_service::PsychologyService;
 use crate::app::rag::ingestion_service::IngestionService;
 use crate::app::rag::retrieval_service::RetrievalService;
+use crate::app::risk::risk_stats_service::RiskStatsService;
+use crate::app::session::chat_query_service::ChatQueryService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
@@ -30,8 +32,6 @@ use crate::bootstrap::repos::RepoGraph;
 use crate::bootstrap::tasks::TaskContext;
 use crate::bootstrap::vector::VectorContext;
 use crate::domain::auth::token_service::TokenServiceT;
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
-use crate::domain::risk::risk_repository::RiskRepoT;
 use crate::shared::config::AppConfig;
 
 pub struct ServiceGraph {
@@ -50,9 +50,9 @@ pub struct ServiceGraph {
     pub agent_runtime: Arc<AgentRuntime>,
     pub knowledge_review: Arc<KnowledgeReviewService>,
     pub chat: Arc<ChatService>,
-    pub chat_conv_repo: Arc<dyn ConversationRepoT>,
+    pub chat_history: Arc<ChatQueryService>,
     pub token_service: Arc<dyn TokenServiceT>,
-    pub risk_repo: Arc<dyn RiskRepoT>,
+    pub risk_stats: Arc<RiskStatsService>,
     pub dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -135,9 +135,9 @@ impl ServiceGraph {
             agent_runtime,
             knowledge_review,
             chat: session.chat,
-            chat_conv_repo: session.conv_repo,
+            chat_history: session.history,
             token_service: identity.token_service,
-            risk_repo: Arc::clone(&repos.risk_repo),
+            risk_stats: risk.stats,
             dispatcher_handle,
         })
     }
@@ -153,7 +153,7 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
         },
         chat: ChatState {
             chat: Arc::clone(&services.chat),
-            conv_repo: Arc::clone(&services.chat_conv_repo),
+            history: Arc::clone(&services.chat_history),
         },
         object: ObjectState {
             objects: Arc::clone(&services.objects),
@@ -178,7 +178,7 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
             query: Arc::clone(&services.query),
             knowledge_review: Arc::clone(&services.knowledge_review),
             music: Arc::clone(&services.music),
-            risk: Arc::clone(&services.risk_repo),
+            risk_stats: Arc::clone(&services.risk_stats),
         },
         internal: InternalState {
             retrieval: Arc::clone(&services.retrieval),

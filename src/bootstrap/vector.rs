@@ -10,7 +10,7 @@ use crate::infra::llm::ollama_embedding_provider::OllamaEmbeddingProvider;
 use crate::infra::repo::seaorm_impl::vector_index::VectorIndexRepo;
 use crate::shared::config::AppConfig;
 
-/// Embedding Provider、Qdrant 向量存储、VectorIndex。
+/// Embedding Provider、向量存储、VectorIndex。
 pub struct VectorContext {
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
     pub vector_store: Option<Arc<dyn VectorStoreT>>,
@@ -18,7 +18,7 @@ pub struct VectorContext {
 }
 
 impl VectorContext {
-    /// 构造 EmbeddingProvider → Qdrant → VectorIndex（含集合初始化）。
+    /// 构造 EmbeddingProvider → 向量存储 → VectorIndex（含索引初始化）。
     pub async fn new(
         config: &AppConfig,
         infra: &InfraContext,
@@ -33,20 +33,20 @@ impl VectorContext {
                 config.embedding.timeout_secs,
             ));
 
-        // ── Qdrant 向量存储（可选，通过配置启用）──
-        let vector_store: Option<Arc<dyn VectorStoreT>> = if config.qdrant.enabled {
+        // ── 向量存储（可选，通过配置启用）──
+        let vector_store: Option<Arc<dyn VectorStoreT>> = if config.vector_store.enabled {
             #[cfg(feature = "qdrant")]
             {
                 let qdrant =
                     crate::infra::vector_store::qdrant_vector_store::QdrantVectorStore::new(
-                        &config.qdrant.url,
-                        config.qdrant.api_key.as_deref(),
+                        &config.vector_store.url,
+                        config.vector_store.api_key.as_deref(),
                     )
                     .await
                     .map_err(|e| {
                         std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("Qdrant init failed: {e}"),
+                            format!("vector store init failed: {e}"),
                         )
                     })?;
                 Some(Arc::new(qdrant) as Arc<dyn VectorStoreT>)
@@ -55,7 +55,7 @@ impl VectorContext {
             {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    "qdrant.enabled=true but binary built without --features qdrant",
+                    "vector_store.enabled=true but binary built without --features qdrant",
                 ));
             }
         } else {
@@ -75,9 +75,9 @@ impl VectorContext {
                 Arc::clone(vs),
                 Arc::clone(&embedding_provider),
                 VectorIndexConfig {
-                    rag_collection: config.qdrant.rag_collection.clone(),
-                    memory_collection: config.qdrant.memory_collection.clone(),
-                    summary_collection: config.qdrant.summary_collection.clone(),
+                    rag_collection: config.vector_store.rag_index_name.clone(),
+                    memory_collection: config.vector_store.memory_index_name.clone(),
+                    summary_collection: config.vector_store.summary_index_name.clone(),
                     ..Default::default()
                 },
             ))
@@ -90,8 +90,8 @@ impl VectorContext {
         })
     }
 
-    /// 确保 Qdrant 集合已存在（在构造后调用）。
-    pub async fn ensure_collections(&self) -> Result<(), std::io::Error> {
+    /// 确保向量索引已存在（在构造后调用）。
+    pub async fn ensure_indexes(&self) -> Result<(), std::io::Error> {
         if let Some(ref vi) = self.vector_index {
             vi.ensure_collections()
                 .await

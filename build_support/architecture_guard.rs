@@ -3,6 +3,13 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use syn::spanned::Spanned;
+use syn::visit::Visit;
+use syn::{
+    Attribute, ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType,
+    UseTree, Visibility,
+};
+
 #[derive(Debug, Clone, Default)]
 pub struct FeatureSet {
     declared_features: BTreeSet<String>,
@@ -241,8 +248,18 @@ pub fn check_workspace(
         };
         let sanitized_lines = sanitized_source_lines(&source);
 
-        check_layer_dependencies(&relative_path, &sanitized_lines, &mut violations);
-        check_business_infrastructure_boundaries(&relative_path, &sanitized_lines, &mut violations);
+        match syn::parse_file(&source) {
+            Ok(file) => check_ast_boundaries(&relative_path, &file, &mut violations),
+            Err(_) => {
+                // 解析失败时保留旧检查路径，让架构保护在开发中的不完整源码上仍能工作。
+                check_layer_dependencies(&relative_path, &sanitized_lines, &mut violations);
+                check_business_infrastructure_boundaries(
+                    &relative_path,
+                    &sanitized_lines,
+                    &mut violations,
+                );
+            }
+        }
         check_api_state_boundaries(&relative_path, &sanitized_lines, &mut violations);
         check_bootstrap_boundaries(&relative_path, &sanitized_lines, &mut violations);
         check_global_container_patterns(&relative_path, &sanitized_lines, &mut violations);
@@ -253,6 +270,274 @@ pub fn check_workspace(
     } else {
         Err(ArchitectureReport { violations })
     }
+}
+
+fn check_ast_boundaries(
+    relative_path: &str,
+    file: &syn::File,
+    violations: &mut Vec<ArchitectureViolation>,
+) {
+    if relative_path.starts_with("src/app/") && relative_path.contains("qdrant") {
+        violations.push(ArchitectureViolation {
+            path: relative_path.to_string(),
+            line: 1,
+            rule: "app filenames must not expose adapter-specific names".into(),
+            detail: relative_path.to_string(),
+        });
+    }
+
+    let mut visitor = AstBoundaryVisitor {
+        relative_path,
+        violations,
+    };
+    visitor.visit_file(file);
+}
+
+struct AstBoundaryVisitor<'a> {
+    relative_path: &'a str,
+    violations: &'a mut Vec<ArchitectureViolation>,
+}
+
+impl AstBoundaryVisitor<'_> {
+    fn layer(&self) -> Option<&'static str> {
+        layer_for_path(self.relative_path)
+    }
+
+    fn push(
+        &mut self,
+        span: proc_macro2::Span,
+        rule: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        self.violations.push(ArchitectureViolation {
+            path: self.relative_path.to_string(),
+            line: span.start().line.max(1),
+            rule: rule.into(),
+            detail: detail.into(),
+        });
+    }
+
+    fn check_path(&mut self, segments: &[String], span: proc_macro2::Span) {
+        let Some(layer) = self.layer() else {
+            return;
+        };
+        let Some(first) = segments.first().map(String::as_str) else {
+            return;
+        };
+
+        let referenced_layer = match first {
+            "crate" | "server_rs" => segments.get(1).map(String::as_str),
+            _ => None,
+        };
+        if let Some(referenced_layer) = referenced_layer {
+            if forbidden_layers(layer).contains(&referenced_layer) {
+                self.push(
+                    span,
+                    format!("{layer} layer must not depend on {referenced_layer}"),
+                    segments.join("::"),
+                );
+            }
+        }
+
+        if matches!(layer, "api" | "app" | "domain" | "shared") {
+            if let Some(reason) = BUSINESS_LAYER_FORBIDDEN_EXTERNAL_CRATES
+                .iter()
+                .find(|external| external.path == first)
+                .map(|external| external.reason)
+            {
+                self.push(
+                    span,
+                    "business layers must not import infrastructure-only crates",
+                    format!("{} [{reason}]", segments.join("::")),
+                );
+            }
+            if segments
+                .iter()
+                .any(|segment| segment == "DatabaseConnection")
+            {
+                self.push(
+                    span,
+                    "business layers must not import infrastructure-only crates",
+                    format!("{} [database infrastructure]", segments.join("::")),
+                );
+            }
+        }
+    }
+
+    fn check_public_adapter_name(&mut self, visibility: &Visibility, ident: &syn::Ident) {
+        if self.layer() == Some("app")
+            && is_public(visibility)
+            && is_adapter_name(&ident.to_string())
+        {
+            self.push(
+                ident.span(),
+                "app public APIs must not expose adapter-specific names",
+                ident.to_string(),
+            );
+        }
+    }
+
+    fn check_domain_identifier(&mut self, ident: &syn::Ident) {
+        if self.layer() == Some("domain") && is_adapter_name(&ident.to_string()) {
+            self.push(
+                ident.span(),
+                "domain layer must not expose adapter-specific names",
+                ident.to_string(),
+            );
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for AstBoundaryVisitor<'_> {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        for segments in use_tree_paths(&node.tree) {
+            self.check_path(&segments, node.span());
+            if self.layer() == Some("api")
+                && segments.iter().any(|segment| is_repository_name(segment))
+            {
+                self.push(
+                    node.span(),
+                    "api layer must not import repository ports",
+                    segments.join("::"),
+                );
+            }
+        }
+        syn::visit::visit_item_use(self, node);
+    }
+
+    fn visit_path(&mut self, node: &'ast syn::Path) {
+        let segments = node
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        self.check_path(&segments, node.span());
+        if self.layer() == Some("api") && segments.iter().any(|segment| is_repository_name(segment))
+        {
+            self.push(
+                node.span(),
+                "api layer must not hold repository ports",
+                quote_path(node),
+            );
+        }
+        syn::visit::visit_path(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_struct(self, node);
+    }
+
+    fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_enum(self, node);
+    }
+
+    fn visit_item_trait(&mut self, node: &'ast ItemTrait) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_trait(self, node);
+    }
+
+    fn visit_item_type(&mut self, node: &'ast ItemType) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_type(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        self.check_public_adapter_name(&node.vis, &node.sig.ident);
+        syn::visit::visit_item_fn(self, node);
+    }
+
+    fn visit_item_const(&mut self, node: &'ast ItemConst) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_const(self, node);
+    }
+
+    fn visit_item_static(&mut self, node: &'ast ItemStatic) {
+        self.check_public_adapter_name(&node.vis, &node.ident);
+        syn::visit::visit_item_static(self, node);
+    }
+
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        self.check_domain_identifier(ident);
+        syn::visit::visit_ident(self, ident);
+    }
+}
+
+fn has_cfg_test(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg")
+            && attribute.meta.require_list().is_ok_and(|list| {
+                list.tokens
+                    .to_string()
+                    .split_whitespace()
+                    .collect::<String>()
+                    == "test"
+            })
+    })
+}
+
+fn use_tree_paths(tree: &UseTree) -> Vec<Vec<String>> {
+    fn collect(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Vec<String>>) {
+        match tree {
+            UseTree::Path(node) => {
+                prefix.push(node.ident.to_string());
+                collect(&node.tree, prefix, paths);
+                prefix.pop();
+            }
+            UseTree::Name(node) => {
+                let mut path = prefix.clone();
+                path.push(node.ident.to_string());
+                paths.push(path);
+            }
+            UseTree::Rename(node) => {
+                let mut path = prefix.clone();
+                path.push(node.ident.to_string());
+                paths.push(path);
+            }
+            UseTree::Glob(_) => paths.push(prefix.clone()),
+            UseTree::Group(node) => {
+                for tree in &node.items {
+                    collect(tree, prefix, paths);
+                }
+            }
+        }
+    }
+
+    let mut paths = Vec::new();
+    collect(tree, &mut Vec::new(), &mut paths);
+    paths
+}
+
+fn quote_path(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn is_public(visibility: &Visibility) -> bool {
+    matches!(visibility, Visibility::Public(_))
+}
+
+fn is_repository_name(name: &str) -> bool {
+    name.ends_with("RepoT") || name.ends_with("Repository")
+}
+
+fn is_adapter_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["qdrant", "seaorm", "sqlx", "redis"]
+        .iter()
+        .any(|adapter| lower.contains(adapter))
 }
 
 fn rust_source_files(manifest_dir: &Path) -> Vec<PathBuf> {
@@ -747,6 +1032,8 @@ fn layer_for_path(relative_path: &str) -> Option<&'static str> {
         Some("shared")
     } else if relative_path.starts_with("src/bootstrap/") {
         Some("bootstrap")
+    } else if relative_path.starts_with("src/cli/") || relative_path == "src/bin/cli.rs" {
+        Some("client_adapter")
     } else {
         None
     }
@@ -759,6 +1046,7 @@ fn forbidden_layers(layer: &str) -> &'static [&'static str] {
         "app" => &["api", "bootstrap", "infra"],
         "infra" => &["api", "app", "bootstrap"],
         "api" => &["bootstrap", "infra"],
+        "client_adapter" => &["api", "app", "bootstrap", "domain", "infra", "shared"],
         "bootstrap" => &[],
         _ => &[],
     }

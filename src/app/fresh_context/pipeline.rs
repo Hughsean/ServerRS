@@ -4,11 +4,11 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use tracing::warn;
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::domain::fresh_context::{
     FreshContextDistiller, FreshContextRepoT, FreshDistillInput, FreshDistilledItem, FreshItem,
     FreshItemDistillUpdate, FreshSource, fresh_status, risk_policy,
 };
-use crate::shared::config::FreshContextConfig;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -25,14 +25,14 @@ pub struct FreshPipelineStats {
 pub struct FreshPipelineService {
     repo: Arc<dyn FreshContextRepoT>,
     distiller: Arc<dyn FreshContextDistiller>,
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
 }
 
 impl FreshPipelineService {
     pub fn new(
         repo: Arc<dyn FreshContextRepoT>,
         distiller: Arc<dyn FreshContextDistiller>,
-        config: FreshContextConfig,
+        config: FreshContextUseCaseConfig,
     ) -> Self {
         Self {
             repo,
@@ -341,8 +341,11 @@ mod tests {
             test_source(),
         ));
         let distiller = Arc::new(MockDistiller::new(accepted_distilled_item()));
-        let pipeline =
-            FreshPipelineService::new(repo.clone(), distiller, FreshContextConfig::default());
+        let pipeline = FreshPipelineService::new(
+            repo.clone(),
+            distiller,
+            FreshContextUseCaseConfig::default(),
+        );
 
         let stats = pipeline.run_tick().await.unwrap();
         assert_eq!(stats.fetched_seen, 1);
@@ -361,8 +364,11 @@ mod tests {
             test_source(),
         ));
         let distiller = Arc::new(MockDistiller::new(rejected));
-        let pipeline =
-            FreshPipelineService::new(repo.clone(), distiller, FreshContextConfig::default());
+        let pipeline = FreshPipelineService::new(
+            repo.clone(),
+            distiller,
+            FreshContextUseCaseConfig::default(),
+        );
 
         let stats = pipeline.run_tick().await.unwrap();
         assert_eq!(stats.rejected, 1);

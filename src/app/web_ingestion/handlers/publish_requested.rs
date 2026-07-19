@@ -2,14 +2,14 @@
 //!
 //! Transactionally publishes a staged record: supersede the current active
 //! version and activate the target, all in ONE DB transaction with a page lock
-//! (`publish_in_tx`). Then re-syncs Qdrant `active` payloads (DB is
-//! authoritative; Qdrant is best-effort + retryable). Emits KnowledgePublished
+//! (`publish_in_tx`). Then re-syncs vector `active` payloads (DB is
+//! authoritative; the vector store is best-effort + retryable). Emits KnowledgePublished
 //! (+ KnowledgeSuperseded if a prior version was replaced). Idempotent.
 
 use crate::app::web_ingestion::event_types::{aggregate, event as ev};
 use crate::app::web_ingestion::hash;
 use crate::app::web_ingestion::pipeline_context::PipelineContext;
-use crate::app::web_ingestion::services::qdrant_activation_service;
+use crate::app::web_ingestion::services::vector_activation_service;
 use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repo::{DomainEvent, NewAuditLog, NewOutboxEvent};
@@ -144,15 +144,15 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         publish_record_id,
         dimension,
         deactivated_record_id = ?outcome.deactivated_record_id,
-        "publish: qdrant activation sync starting"
+        "publish: vector activation sync starting"
     );
 
-    // ── Qdrant re-sync: deactivate old, activate new ───────────────────────
-    // DB is already committed & authoritative. A Qdrant failure here is logged
+    // ── 向量索引重同步：停用旧版、激活新版 ───────────────────────────────────
+    // DB 已提交且仍为权威来源。向量索引同步失败只记录日志，
     // and audited but does NOT roll back the DB (RetrievalService re-validates
-    // against DB status, so stale Qdrant active flags cannot leak content).
+    // 检索仍会按 DB 状态复核，因此陈旧的 active 标志不会泄漏内容。
     if let Some(old_record_id) = outcome.deactivated_record_id {
-        sync_qdrant(ctx, old_record_id, dimension, false, "supersede").await;
+        sync_vector_activation(ctx, old_record_id, dimension, false, "supersede").await;
         // Emit KnowledgeSuperseded for the old record.
         let event_key = hash::event_key(
             ev::KNOWLEDGE_SUPERSEDED,
@@ -177,10 +177,10 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             })
             .await?;
     }
-    sync_qdrant(ctx, record.id, dimension, true, "publish").await;
+    sync_vector_activation(ctx, record.id, dimension, true, "publish").await;
     tracing::trace!(
         publish_record_id,
-        "publish: qdrant activation sync requested"
+        "publish: vector activation sync requested"
     );
 
     reconcile_published_run(ctx, record.run_id).await?;
@@ -277,17 +277,17 @@ async fn reconcile_published_run(
     ctx.run_repo.mark_finished(run_id).await
 }
 
-/// Re-sync a publish record's Qdrant points to `active`. Failures are audited
-/// (status=qdrant_cleanup_failed) but do not fail the publish — the DB is
+/// 将发布记录的向量点重新同步为指定的 `active` 状态。失败会审计记录
+/// （status=vector_sync_failed），但不会让发布失败；DB 仍是
 /// authoritative and retrieval re-validates against it.
-async fn sync_qdrant(
+async fn sync_vector_activation(
     ctx: &PipelineContext,
     publish_record_id: u64,
     dimension: usize,
     active: bool,
     phase: &str,
 ) {
-    if let Err(e) = qdrant_activation_service::sync_active(
+    if let Err(e) = vector_activation_service::sync_active(
         &ctx.vector_store,
         &ctx.vector_manifest_repo,
         &ctx.publish_repo,
@@ -300,7 +300,7 @@ async fn sync_qdrant(
     {
         tracing::error!(
             publish_record_id, phase, error = %e,
-            "qdrant active re-sync failed — DB is authoritative; will need reconciliation"
+            "vector active re-sync failed — DB is authoritative; will need reconciliation"
         );
         let _ = ctx
             .audit_repo
@@ -310,9 +310,9 @@ async fn sync_qdrant(
                 run_id: None,
                 publish_record_id: Some(publish_record_id),
                 source_url_id: None,
-                action: audit_action::QDRANT_CLEANUP_FAILED.into(),
+                action: audit_action::VECTOR_SYNC_FAILED.into(),
                 status: "error".into(),
-                message: format!("qdrant {phase} active={active} sync failed: {e}"),
+                message: format!("vector {phase} active={active} sync failed: {e}"),
                 metadata: None,
             })
             .await;

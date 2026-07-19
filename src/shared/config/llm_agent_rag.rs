@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::qdrant::default_qdrant_rag_collection;
+use super::vector_store::default_rag_index_name;
 
 // ── LlmConfig ──
 
@@ -198,8 +198,8 @@ pub struct EmbeddingConfig {
     pub batch_size: usize,
     #[serde(default = "default_embedding_timeout_secs")]
     pub timeout_secs: u64,
-    #[serde(default = "default_qdrant_rag_collection")]
-    pub qdrant_collection: String,
+    #[serde(default = "default_rag_index_name")]
+    pub vector_index_name: String,
     #[serde(default)]
     pub tunnel: Option<String>,
 }
@@ -214,7 +214,7 @@ impl Default for EmbeddingConfig {
             dimension: default_embedding_dimension(),
             batch_size: default_embedding_batch_size(),
             timeout_secs: default_embedding_timeout_secs(),
-            qdrant_collection: default_qdrant_rag_collection(),
+            vector_index_name: default_rag_index_name(),
             tunnel: None,
         }
     }

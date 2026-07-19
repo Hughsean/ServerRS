@@ -26,8 +26,8 @@ pub async fn connect_db(config: &AppConfig) -> DatabaseConnection {
 pub fn repos(db: &DatabaseConnection, config: &AppConfig) -> RepoGraph {
     build_repos(
         db,
-        &config.qdrant.memory_collection,
-        &config.qdrant.summary_collection,
+        &config.vector_store.memory_index_name,
+        &config.vector_store.summary_index_name,
     )
 }
 
@@ -52,9 +52,12 @@ pub fn llm_provider(config: &AppConfig) -> Arc<dyn LlmProvider> {
 #[cfg(feature = "qdrant")]
 pub async fn vector_store(config: &AppConfig) -> Arc<dyn VectorStoreT> {
     Arc::new(
-        QdrantVectorStore::new(&config.qdrant.url, config.qdrant.api_key.as_deref())
-            .await
-            .unwrap_or_else(|error| panic!("初始化测试 Qdrant 客户端失败: {error}")),
+        QdrantVectorStore::new(
+            &config.vector_store.url,
+            config.vector_store.api_key.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("初始化测试 Qdrant 客户端失败: {error}")),
     )
 }
 

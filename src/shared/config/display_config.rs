@@ -82,11 +82,11 @@ impl fmt::Display for AppConfig {
 
         writeln!(
             f,
-            "qdrant   → url={}",
-            if self.qdrant.api_key.is_some() {
-                format!("{} (api-key set)", self.qdrant.url)
+            "vector   → url={}",
+            if self.vector_store.api_key.is_some() {
+                format!("{} (api-key set)", self.vector_store.url)
             } else {
-                self.qdrant.url.clone()
+                self.vector_store.url.clone()
             }
         )?;
 
@@ -115,7 +115,7 @@ impl fmt::Display for AppConfig {
             self.fresh_context.dispatcher_enabled,
             self.fresh_context.scheduler_interval_secs,
             self.fresh_context.dispatcher_interval_secs,
-            self.fresh_context.qdrant_collection,
+            self.fresh_context.vector_index_name,
             self.fresh_context.max_topic_items_per_tick,
             self.fresh_context.max_expired_vectors_per_tick,
             self.fresh_context.max_retrieval_chunks,

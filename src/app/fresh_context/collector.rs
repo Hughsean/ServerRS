@@ -8,13 +8,13 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::warn;
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::policy::FreshContextPolicy;
 use crate::app::web_ingestion::services::html_cleaner;
 use crate::domain::fresh_context::{
     FreshContentFetcher, FreshContextRepoT, FreshFetchResult, FreshSource, NewFreshItem,
     fresh_status, rumor_level, source_kind,
 };
-use crate::shared::config::FreshContextConfig;
 use crate::shared::error::AppError;
 
 const MIN_FRESH_CLEAN_CHARS: usize = 12;
@@ -46,7 +46,7 @@ pub struct FreshCollectorService {
     repo: Arc<dyn FreshContextRepoT>,
     fetcher: Arc<dyn FreshContentFetcher>,
     policy: FreshContextPolicy,
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
     last_attempted_at: Mutex<HashMap<u64, DateTime<Utc>>>,
 }
 
@@ -54,7 +54,7 @@ impl FreshCollectorService {
     pub fn new(
         repo: Arc<dyn FreshContextRepoT>,
         fetcher: Arc<dyn FreshContentFetcher>,
-        config: FreshContextConfig,
+        config: FreshContextUseCaseConfig,
     ) -> Self {
         Self {
             repo,
@@ -939,7 +939,7 @@ mod tests {
             },
         )])));
         let collector =
-            FreshCollectorService::new(repo.clone(), fetcher, FreshContextConfig::default());
+            FreshCollectorService::new(repo.clone(), fetcher, FreshContextUseCaseConfig::default());
 
         let stats = collector.collect_tick().await.unwrap();
         assert_eq!(stats.items_seen, 1);
@@ -968,7 +968,7 @@ mod tests {
             },
         )])));
         let collector =
-            FreshCollectorService::new(repo.clone(), fetcher, FreshContextConfig::default());
+            FreshCollectorService::new(repo.clone(), fetcher, FreshContextUseCaseConfig::default());
 
         let first = collector.collect_tick().await.unwrap();
         let second = collector.collect_tick().await.unwrap();

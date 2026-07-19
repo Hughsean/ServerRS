@@ -115,7 +115,7 @@ pub mod audit_action {
     pub const ROLLBACK_STARTED: &str = "rollback_started";
     pub const ROLLBACK_SUCCEEDED: &str = "rollback_succeeded";
     pub const ROLLBACK_FAILED: &str = "rollback_failed";
-    pub const QDRANT_CLEANUP_FAILED: &str = "qdrant_cleanup_failed";
+    pub const VECTOR_SYNC_FAILED: &str = "vector_sync_failed";
 }
 
 // ── Known terminal (final) statuses ──────────────────────────────────────────

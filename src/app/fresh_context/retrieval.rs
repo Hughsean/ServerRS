@@ -3,13 +3,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tracing::{trace, warn};
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::policy::FreshContextPolicy;
 use crate::domain::fresh_context::{
     FreshChunk, FreshContextRepoT, FreshItem, FreshSource, fresh_status,
 };
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_store::{VectorCondition, VectorFilter, VectorStoreT};
-use crate::shared::config::FreshContextConfig;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone)]
@@ -28,7 +28,8 @@ pub struct FreshRetrievalService {
     vector_store: Arc<dyn VectorStoreT>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
     policy: FreshContextPolicy,
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
+    vector_index_name: String,
 }
 
 impl FreshRetrievalService {
@@ -36,7 +37,8 @@ impl FreshRetrievalService {
         repo: Arc<dyn FreshContextRepoT>,
         vector_store: Arc<dyn VectorStoreT>,
         embedding_provider: Arc<dyn EmbeddingProvider>,
-        config: FreshContextConfig,
+        config: FreshContextUseCaseConfig,
+        vector_index_name: String,
     ) -> Self {
         Self {
             repo,
@@ -44,6 +46,7 @@ impl FreshRetrievalService {
             embedding_provider,
             policy: FreshContextPolicy::new(config.clone()),
             config,
+            vector_index_name,
         }
     }
 
@@ -87,14 +90,14 @@ impl FreshRetrievalService {
 
         let hits = self
             .vector_store
-            .search(&self.config.qdrant_collection, query_vector, filter, limit)
+            .search(&self.vector_index_name, query_vector, filter, limit)
             .await
             .map_err(|e| AppError::internal(format!("Fresh Context 向量检索失败: {e}")))?;
 
         let mut contexts = Vec::new();
         for hit in hits {
             let Some(chunk_id) = fresh_chunk_id_from_payload(&hit.payload) else {
-                warn!(hit_id = %hit.id, "Fresh Context Qdrant 命中缺少 fresh_chunk_id");
+                warn!(hit_id = %hit.id, "Fresh Context vector hit 缺少 fresh_chunk_id");
                 continue;
             };
             match self.validate_hit(chunk_id, hit.score as f64, now).await {
@@ -312,11 +315,11 @@ mod tests {
             repo,
             vector_store,
             Arc::new(MockEmbeddingProvider::new(8)),
-            FreshContextConfig {
-                qdrant_collection: "fresh_test".into(),
+            FreshContextUseCaseConfig {
                 max_retrieval_chunks: 3,
-                ..FreshContextConfig::default()
+                ..FreshContextUseCaseConfig::default()
             },
+            "fresh_test".into(),
         );
 
         let results = service.retrieve_for_query("最近有什么新闻").await.unwrap();
@@ -362,11 +365,11 @@ mod tests {
             repo,
             vector_store,
             Arc::new(MockEmbeddingProvider::new(8)),
-            FreshContextConfig {
-                qdrant_collection: "fresh_test".into(),
+            FreshContextUseCaseConfig {
                 max_retrieval_chunks: 3,
-                ..FreshContextConfig::default()
+                ..FreshContextUseCaseConfig::default()
             },
+            "fresh_test".into(),
         );
 
         let results = service

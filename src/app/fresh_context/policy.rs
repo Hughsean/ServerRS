@@ -1,12 +1,12 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::domain::fresh_context::{FreshChunk, FreshItem, FreshSource, FreshTopic, source_kind};
-use crate::shared::config::FreshContextConfig;
 
 #[derive(Debug, Clone)]
 pub struct FreshContextPolicy {
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ pub struct FreshChunkPayload {
 }
 
 impl FreshContextPolicy {
-    pub fn new(config: FreshContextConfig) -> Self {
+    pub fn new(config: FreshContextUseCaseConfig) -> Self {
         Self { config }
     }
 
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn ttl_uses_short_lived_gossip_policy() {
-        let policy = FreshContextPolicy::new(FreshContextConfig::default());
+        let policy = FreshContextPolicy::new(FreshContextUseCaseConfig::default());
         assert_eq!(
             policy.ttl_for_source_kind(source_kind::GOSSIP),
             Duration::seconds(3 * 24 * 60 * 60)
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn rank_score_normalizes_weights() {
-        let policy = FreshContextPolicy::new(FreshContextConfig::default());
+        let policy = FreshContextPolicy::new(FreshContextUseCaseConfig::default());
         let score = policy.rank_score(1.0, 0.0, 0.0, 0.0);
         assert!((score - 0.55).abs() < 0.0001);
     }

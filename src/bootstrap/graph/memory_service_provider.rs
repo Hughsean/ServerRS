@@ -17,7 +17,7 @@ pub(crate) fn build_configured_memory_service(
         memory = memory.with_vector_search(
             Arc::clone(vector_store),
             Arc::clone(&ctx.vector.embedding_provider),
-            ctx.config.qdrant.memory_collection.clone(),
+            ctx.config.vector_store.memory_index_name.clone(),
         );
     }
     if let Some(vector_index) = &ctx.vector.vector_index {

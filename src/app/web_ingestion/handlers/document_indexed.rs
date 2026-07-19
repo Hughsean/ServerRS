@@ -1,10 +1,10 @@
 //! `DocumentIndexed` handler (task-book §10).
 //!
-//! Upserts the staged chunks' vectors into the web-ingestion Qdrant collection
+//! Upserts the staged chunks' vectors into the web-ingestion vector index
 //! with payload `active=false` / `status=staged` (so retrieval cannot surface
-//! them), records the vector manifest, and emits `KnowledgeStaged`. Qdrant point
+//! them), records the vector manifest, and emits `KnowledgeStaged`. Vector point
 //! ids are deterministic (sha256(collection|chunk_hash|embedding_model)) so
-//! upserts are idempotent. If Qdrant is disabled, indexing is skipped but the
+//! upserts are idempotent. If the vector store is disabled, indexing is skipped but the
 //! manifest still records intent. Idempotent + resumable per §5.8.
 
 use crate::app::web_ingestion::event_types::event as ev;
@@ -16,7 +16,7 @@ use crate::app::web_ingestion::state_machine_adapter as sm;
 use crate::domain::vector_store::{VectorPoint, VectorStoreT};
 use crate::domain::web_ingestion::error::WebIngestionError;
 use crate::domain::web_ingestion::repo::{
-    DomainEvent, KnowledgeChunkManifest, NewAuditLog, NewVectorManifest,
+    DomainEvent, KnowledgeChunkManifest, NewAuditLog, NewVectorManifest, VectorLocation,
 };
 use crate::domain::web_ingestion::status::{is_terminal_run_status, run_stage, run_status};
 use std::sync::Arc;
@@ -94,7 +94,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         return Ok(());
     }
 
-    let collection = ctx.config.qdrant_collection.clone();
+    let index_name = ctx.config.vector_index_name.clone();
     let embedding_model = ctx.embedding_model().to_string();
     let embedding_provider = ctx.embedding_provider_name().to_string();
     let dimension = ctx.embedding_dimension();
@@ -106,25 +106,27 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         document_id = document.document_id,
         publish_record_id = publish_record.id,
         chunk_manifest_count = manifests.len(),
-        collection = %collection,
+        index_name = %index_name,
         embedding_provider = %embedding_provider,
         embedding_model = %embedding_model,
         dimension,
         "DocumentIndexed: preparing vector manifest"
     );
 
-    // ── Build vector manifest rows + upsert to Qdrant (active=false) ───────
+    // ── Build vector manifest rows + upsert to vector index (active=false) ──
     let mut new_manifests = Vec::with_capacity(manifests.len());
     for m in &manifests {
-        let point_id = hash::qdrant_point_id(&collection, &m.chunk_hash, &embedding_model);
+        let point_id = hash::vector_point_id(&index_name, &m.chunk_hash, &embedding_model);
         new_manifests.push(NewVectorManifest {
             publish_record_id: publish_record.id,
             run_id,
             document_id: document.document_id,
             chunk_id: m.chunk_id,
             chunk_hash: m.chunk_hash.clone(),
-            qdrant_collection: collection.clone(),
-            qdrant_point_id: point_id,
+            location: VectorLocation {
+                index_name: index_name.clone(),
+                point_id,
+            },
             embedding_provider: embedding_provider.clone(),
             embedding_model: embedding_model.clone(),
             embedding_dimension: dimension as u32,
@@ -135,7 +137,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         document_id = document.document_id,
         publish_record_id = publish_record.id,
         point_count = new_manifests.len(),
-        collection = %collection,
+        index_name = %index_name,
         "DocumentIndexed: vector manifest built"
     );
 
@@ -143,7 +145,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
         upsert_points(
             ctx,
             vs,
-            &collection,
+            &index_name,
             dimension,
             run_id,
             &run,
@@ -198,10 +200,10 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
             message: format!(
                 "indexed {} points to '{}' (active=false)",
                 new_manifests.len(),
-                collection
+                index_name
             ),
             metadata: Some(serde_json::json!({
-                "qdrant_collection": collection,
+                "vector_index_name": index_name,
                 "point_count": new_manifests.len(),
                 "active": false,
             })),
@@ -239,7 +241,7 @@ pub async fn handle(event: &DomainEvent, ctx: &PipelineContext) -> Result<(), We
 async fn upsert_points(
     ctx: &PipelineContext,
     vs: &Arc<dyn VectorStoreT>,
-    collection: &str,
+    index_name: &str,
     dimension: usize,
     run_id: u64,
     run: &crate::domain::web_ingestion::repo::KnowledgeIngestionRun,
@@ -249,16 +251,16 @@ async fn upsert_points(
 ) -> Result<(), WebIngestionError> {
     use crate::domain::vector_store::VectorDistance;
 
-    // Ensure the web-ingestion collection exists (separate from legacy RAG).
-    vs.ensure_collection(collection, dimension, VectorDistance::Cosine)
+    // Ensure the web-ingestion index exists (separate from legacy RAG).
+    vs.ensure_collection(index_name, dimension, VectorDistance::Cosine)
         .await
         .map_err(|e| WebIngestionError::Internal(format!("ensure_collection: {e}")))?;
     tracing::trace!(
         run_id,
-        collection,
+        index_name,
         dimension,
         point_count = vector_manifests.len(),
-        "DocumentIndexed: qdrant collection ready"
+        "DocumentIndexed: vector index ready"
     );
 
     let mut points = Vec::with_capacity(vector_manifests.len());
@@ -297,7 +299,7 @@ async fn upsert_points(
             "document_id": document_id,
         });
         points.push(VectorPoint {
-            id: vm.qdrant_point_id.clone(),
+            id: vm.location.point_id.clone(),
             vector,
             payload,
         });
@@ -306,19 +308,19 @@ async fn upsert_points(
     let point_count = points.len();
     tracing::trace!(
         run_id,
-        collection,
+        index_name,
         point_count,
         dimension,
-        "DocumentIndexed: qdrant upsert started"
+        "DocumentIndexed: vector upsert started"
     );
-    vs.upsert_points(collection, points)
+    vs.upsert_points(index_name, points)
         .await
-        .map_err(|e| WebIngestionError::Internal(format!("qdrant upsert: {e}")))?;
+        .map_err(|e| WebIngestionError::Internal(format!("vector upsert: {e}")))?;
     tracing::trace!(
         run_id,
-        collection,
+        index_name,
         point_count,
-        "DocumentIndexed: qdrant upsert completed"
+        "DocumentIndexed: vector upsert completed"
     );
     Ok(())
 }

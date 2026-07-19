@@ -32,7 +32,7 @@ model = "qwen3-embedding:4b"
 dimension = 2560
 batch_size = 32
 timeout_secs = 120
-qdrant_collection = "rag_chunks_2560"
+vector_index_name = "rag_chunks_2560"
 tunnel = "hp"
 
 [llm]
@@ -55,22 +55,22 @@ temperature = 0.1
 top_p = 0.9
 timeout_secs = 180
 ################################
-[ssh_tunnels.qdrant]
+[ssh_tunnels.vector_store]
 host = "HP"
 local_port = 6334
 remote_port = 6334
 
-# ── Qdrant VectorStore ────────────────────────────────────────────────────────
-# Qdrant is an optional vector index for RAG / Memory / Summary search.
+# ── 向量存储 ───────────────────────────────────────────────────────────────────
+# 向量存储为 RAG / 记忆 / 摘要搜索提供可选索引。
 # When disabled (default), vector search falls back to MySQL keyword search.
-[qdrant]
+[vector_store]
 enabled = true
 url = "http://{ip}:{port}"
 # api_key = ""
-rag_collection = "rag_chunks_2560"
-memory_collection = "user_memories_2560"
-summary_collection = "conversation_summaries_2560"
-tunnel = "qdrant"
+rag_index_name = "rag_chunks_2560"
+memory_index_name = "user_memories_2560"
+summary_index_name = "conversation_summaries_2560"
+tunnel = "vector_store"
 ################################
 
 [ssh_tunnels.public]

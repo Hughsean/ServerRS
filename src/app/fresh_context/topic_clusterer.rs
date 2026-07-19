@@ -5,10 +5,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::domain::fresh_context::{
     FreshContextRepoT, FreshItem, NewFreshTopic, NewFreshTopicEvidence, fresh_status,
 };
-use crate::shared::config::FreshContextConfig;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -23,11 +23,11 @@ pub struct FreshTopicClusterStats {
 
 pub struct FreshTopicClustererService {
     repo: Arc<dyn FreshContextRepoT>,
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
 }
 
 impl FreshTopicClustererService {
-    pub fn new(repo: Arc<dyn FreshContextRepoT>, config: FreshContextConfig) -> Self {
+    pub fn new(repo: Arc<dyn FreshContextRepoT>, config: FreshContextUseCaseConfig) -> Self {
         Self { repo, config }
     }
 
@@ -223,7 +223,7 @@ mod tests {
         let item = test_item(1, "shared-topic");
         let repo = Arc::new(MockFreshRepo::new(vec![item]));
         let clusterer =
-            FreshTopicClustererService::new(repo.clone(), FreshContextConfig::default());
+            FreshTopicClustererService::new(repo.clone(), FreshContextUseCaseConfig::default());
 
         let stats = clusterer.run_tick().await.unwrap();
 

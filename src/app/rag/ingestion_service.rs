@@ -119,7 +119,7 @@ impl IngestionService {
             }
         }
 
-        // 6. index chunks via VectorIndexService (Qdrant + records + metadata)
+        // 6. 通过 VectorIndexService 索引分块并保存记录和元数据。
         if let Some(ref vi) = self.vector_index {
             for chunk in &saved_chunks {
                 if let Err(e) = vi.index_knowledge_chunk(chunk, Some(&doc)).await {

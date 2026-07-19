@@ -19,7 +19,7 @@ use super::memory_extractor::{MemoryExtractor, MemoryMergeDecision};
 /// and lifecycle management.
 ///
 /// When a `VectorStore` + `EmbeddingProvider` are configured, `recall` /
-/// `search` prefer Qdrant vector search with `user_id` payload filtering.
+/// `search` 会优先使用带 `user_id` 载荷过滤的向量检索。
 /// Results are always verified against MySQL.
 pub struct MemoryService {
     repo: Arc<dyn MemoryRepoT>,
@@ -493,7 +493,7 @@ impl MemoryService {
 
     /// Recall with explicit top_k.
     ///
-    /// Strategy: Qdrant-first with MySQL verification.
+    /// 策略：向量检索优先，再由 MySQL 复核。
     /// Falls back to `repo.search_by_user` when vector store is unavailable.
     pub async fn recall(
         &self,
@@ -506,21 +506,21 @@ impl MemoryService {
             return Ok(Vec::new());
         }
 
-        // Try Qdrant path
+        // 优先尝试向量检索路径。
         if let (Some(vs), Some(ep)) = (&self.vector_store, &self.embedding) {
             match self
-                .qdrant_recall(vs, ep, user_id, query, top_k, &policy)
+                .vector_recall(vs, ep, user_id, query, top_k, &policy)
                 .await
             {
                 Ok(results) if !results.is_empty() => {
-                    debug!(count = results.len(), "Qdrant memory recall succeeded");
+                    debug!(count = results.len(), "vector memory recall succeeded");
                     return Ok(results);
                 }
                 Ok(_) => {
-                    debug!("Qdrant returned empty results; falling back to repo");
+                    debug!("vector search returned empty results; falling back to repo");
                 }
                 Err(e) => {
-                    warn!(error = %e, "Qdrant memory recall failed; falling back to repo");
+                    warn!(error = %e, "vector memory recall failed; falling back to repo");
                 }
             }
         }
@@ -533,7 +533,7 @@ impl MemoryService {
             .collect())
     }
 
-    async fn qdrant_recall(
+    async fn vector_recall(
         &self,
         vs: &Arc<dyn VectorStoreT>,
         ep: &Arc<dyn EmbeddingProvider>,
@@ -553,7 +553,7 @@ impl MemoryService {
             .next()
             .ok_or_else(|| AppError::Internal("embedding returned empty vector".to_string()))?;
 
-        // 2. Filter by user_id in Qdrant payload
+        // 2. 按向量载荷中的 user_id 过滤。
         let filter = VectorFilter::default().with_condition(
             crate::domain::vector_store::VectorCondition::MatchU64 {
                 key: "user_id".into(),
@@ -561,11 +561,11 @@ impl MemoryService {
             },
         );
 
-        // 3. Search Qdrant
+        // 3. 检索向量索引。
         let hits = vs
             .search(&self.memory_collection, query_vec, filter, top_k as usize)
             .await
-            .map_err(|e| AppError::internal(format!("Qdrant memory search failed: {e}")))?;
+            .map_err(|e| AppError::internal(format!("vector memory search failed: {e}")))?;
 
         // 4. Re-load from MySQL and verify
         let mut results = Vec::new();
@@ -573,7 +573,7 @@ impl MemoryService {
             let memory_id = match hit.payload.get("memory_id").and_then(|v| v.as_u64()) {
                 Some(id) => id,
                 None => {
-                    warn!(hit_id = %hit.id, "Qdrant hit missing memory_id; skipping");
+                    warn!(hit_id = %hit.id, "vector hit missing memory_id; skipping");
                     continue;
                 }
             };
@@ -584,7 +584,7 @@ impl MemoryService {
                     if mem.user_id != user_id {
                         warn!(
                             memory_id,
-                            qdrant_user = mem.user_id,
+                            vector_user = mem.user_id,
                             expected = user_id,
                             "memory user_id mismatch — skipping"
                         );
@@ -661,7 +661,7 @@ impl MemoryService {
 
         self.repo.delete_memory(id).await?;
 
-        // Sync delete from Qdrant index (non-fatal)
+        // 从向量索引同步删除（非致命）。
         if let Some(ref vi) = self.vector_index {
             if let Err(e) = vi.delete_memory_index(id).await {
                 tracing::warn!(memory_id = id, error = %e, "failed to delete memory index during delete");
@@ -1056,8 +1056,7 @@ mod tests {
 
         // The recall should find memory for user 42
         let result = svc.recall(42, "hiking", 5).await;
-        // It should succeed (falls through to repo after Qdrant returns a result
-        // that passes ownership check)
+        // 向量命中会继续通过仓库的所有权校验，因此本次调用应成功。
         assert!(result.is_ok());
     }
 

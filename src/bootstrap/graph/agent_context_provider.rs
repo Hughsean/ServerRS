@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::app::agent::agent_context::AgentContextBuilder;
 use crate::app::context_routing::ContextRoutingService;
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
@@ -44,7 +45,8 @@ fn build_fresh_retrieval_service(ctx: &BootstrapContext<'_>) -> Option<Arc<Fresh
             fresh_repo,
             Arc::clone(vector_store),
             Arc::clone(&ctx.vector.embedding_provider),
-            ctx.config.fresh_context.clone(),
+            FreshContextUseCaseConfig::from(&ctx.config.fresh_context),
+            ctx.config.fresh_context.vector_index_name.clone(),
         ))
     })
 }

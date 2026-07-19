@@ -81,8 +81,8 @@ pub struct WebIngestionConfig {
     pub chunker_version: String,
     #[serde(default = "default_web_ingestion_embedding_batch_size")]
     pub embedding_batch_size: usize,
-    #[serde(default = "default_web_ingestion_qdrant_collection")]
-    pub qdrant_collection: String,
+    #[serde(default = "default_web_ingestion_vector_index_name")]
+    pub vector_index_name: String,
     #[serde(default = "default_web_ingestion_max_body_bytes")]
     pub max_body_bytes: u64,
     #[serde(default = "default_web_ingestion_fetch_timeout_secs")]
@@ -199,7 +199,7 @@ impl Default for WebIngestionConfig {
             llm_prompt_version: default_web_ingestion_llm_prompt_version(),
             chunker_version: default_web_ingestion_chunker_version(),
             embedding_batch_size: default_web_ingestion_embedding_batch_size(),
-            qdrant_collection: default_web_ingestion_qdrant_collection(),
+            vector_index_name: default_web_ingestion_vector_index_name(),
             max_body_bytes: default_web_ingestion_max_body_bytes(),
             fetch_timeout_secs: default_web_ingestion_fetch_timeout_secs(),
             fetch_user_agent: default_web_ingestion_fetch_user_agent(),
@@ -244,7 +244,7 @@ fn default_web_ingestion_chunker_version() -> String {
 fn default_web_ingestion_embedding_batch_size() -> usize {
     32
 }
-fn default_web_ingestion_qdrant_collection() -> String {
+fn default_web_ingestion_vector_index_name() -> String {
     "web_ingestion".into()
 }
 fn default_web_ingestion_max_body_bytes() -> u64 {

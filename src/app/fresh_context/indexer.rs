@@ -5,13 +5,13 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
+use crate::app::fresh_context::config::FreshContextUseCaseConfig;
 use crate::app::fresh_context::policy::FreshContextPolicy;
 use crate::domain::fresh_context::{
     FreshChunk, FreshContextRepoT, FreshItem, FreshSource, NewFreshChunk, fresh_status,
 };
 use crate::domain::llm::EmbeddingProvider;
 use crate::domain::vector_store::{VectorDistance, VectorPoint, VectorStoreT};
-use crate::shared::config::FreshContextConfig;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -31,7 +31,8 @@ pub struct FreshIndexerService {
     vector_store: Arc<dyn VectorStoreT>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
     policy: FreshContextPolicy,
-    config: FreshContextConfig,
+    config: FreshContextUseCaseConfig,
+    vector_index_name: String,
     embedding_provider_name: String,
     embedding_model: String,
 }
@@ -41,7 +42,8 @@ impl FreshIndexerService {
         repo: Arc<dyn FreshContextRepoT>,
         vector_store: Arc<dyn VectorStoreT>,
         embedding_provider: Arc<dyn EmbeddingProvider>,
-        config: FreshContextConfig,
+        config: FreshContextUseCaseConfig,
+        vector_index_name: String,
         embedding_provider_name: String,
         embedding_model: String,
     ) -> Self {
@@ -51,6 +53,7 @@ impl FreshIndexerService {
             embedding_provider,
             policy: FreshContextPolicy::new(config.clone()),
             config,
+            vector_index_name,
             embedding_provider_name,
             embedding_model,
         }
@@ -59,16 +62,12 @@ impl FreshIndexerService {
     pub async fn ensure_collection(&self) -> Result<(), AppError> {
         let dimension = self.probe_dimension().await?;
         self.vector_store
-            .ensure_collection(
-                &self.config.qdrant_collection,
-                dimension,
-                VectorDistance::Cosine,
-            )
+            .ensure_collection(&self.vector_index_name, dimension, VectorDistance::Cosine)
             .await
             .map_err(|e| {
                 AppError::internal(format!(
                     "failed to ensure fresh context collection '{}': {e}",
-                    self.config.qdrant_collection
+                    self.vector_index_name
                 ))
             })
     }
@@ -143,7 +142,7 @@ impl FreshIndexerService {
             .filter_map(|chunk| chunk.vector_id.clone())
             .collect::<Vec<_>>();
         self.vector_store
-            .delete_points(&self.config.qdrant_collection, vector_ids)
+            .delete_points(&self.vector_index_name, vector_ids)
             .await
             .map_err(|e| AppError::internal(format!("fresh expired vector delete failed: {e}")))?;
 
@@ -236,7 +235,7 @@ impl FreshIndexerService {
 
         self.vector_store
             .upsert_points(
-                &self.config.qdrant_collection,
+                &self.vector_index_name,
                 vec![VectorPoint {
                     id: vector_id.clone(),
                     vector,
@@ -405,19 +404,19 @@ mod tests {
         let repo = Arc::new(MockFreshRepo::new(vec![item], source));
         let vector_store = Arc::new(MockVectorStore::new());
         let embedding_provider = Arc::new(MockEmbeddingProvider::new(8));
-        let config = FreshContextConfig {
-            qdrant_collection: "fresh_test".into(),
+        let config = FreshContextUseCaseConfig {
             chunk_size: 16,
             chunk_overlap: 4,
             max_pipeline_items_per_tick: 10,
             max_indexable_chunks_per_tick: 10,
-            ..FreshContextConfig::default()
+            ..FreshContextUseCaseConfig::default()
         };
         let indexer = FreshIndexerService::new(
             repo.clone(),
             vector_store.clone(),
             embedding_provider,
             config,
+            "fresh_test".into(),
             "mock".into(),
             "mock-embedding".into(),
         );
@@ -479,16 +478,16 @@ mod tests {
             .await
             .unwrap();
         let embedding_provider = Arc::new(MockEmbeddingProvider::new(8));
-        let config = FreshContextConfig {
-            qdrant_collection: "fresh_test".into(),
+        let config = FreshContextUseCaseConfig {
             max_expired_vectors_per_tick: 10,
-            ..FreshContextConfig::default()
+            ..FreshContextUseCaseConfig::default()
         };
         let indexer = FreshIndexerService::new(
             repo.clone(),
             vector_store.clone(),
             embedding_provider,
             config,
+            "fresh_test".into(),
             "mock".into(),
             "mock-embedding".into(),
         );

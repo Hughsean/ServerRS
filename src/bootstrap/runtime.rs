@@ -23,8 +23,8 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     // 阶段 2: 仓库
     let repos = build_repos(
         &infra.db,
-        &config.qdrant.memory_collection,
-        &config.qdrant.summary_collection,
+        &config.vector_store.memory_index_name,
+        &config.vector_store.summary_index_name,
     );
     // 阶段 3: 任务系统
     let mut tasks = TaskContext::new(Arc::clone(&repos.user_repo));
@@ -42,7 +42,7 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
     });
     // 阶段 4: 向量/RAG
     let vector = VectorContext::new(&config, &infra, &repos).await?;
-    vector.ensure_collections().await?;
+    vector.ensure_indexes().await?;
     // 阶段 5: 业务服务
     let services = ServiceGraph::build(
         &config,

@@ -33,7 +33,7 @@ pub struct PipelineContext {
     pub distiller: Arc<dyn KnowledgeDistiller>,
     /// Embedding provider — MUST be separate from the distill chat LLM.
     pub embedding_provider: Arc<dyn EmbeddingProvider>,
-    /// Optional Qdrant-backed vector store. None → Qdrant disabled.
+    /// 可选向量存储。None 表示向量检索未启用。
     pub vector_store: Option<Arc<dyn VectorStoreT>>,
     pub config: WebIngestionConfig,
     /// Real embedding config — source of truth for embedding model / dimension

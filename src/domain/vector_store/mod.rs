@@ -5,10 +5,10 @@ use async_trait::async_trait;
 use crate::shared::error::AppError;
 pub use types::*;
 
-/// 向量相似性搜索后端的抽象 (Qdrant, in-memory mock, etc.).
+/// 向量相似性搜索后端的抽象。
 ///
-/// This trait lives in the domain layer — no Qdrant-specific types leak through.
-/// Implementations map Qdrant / mock internals to these domain types.
+/// 此端口位于领域层，不暴露任何具体适配器类型。
+/// 基础设施实现负责把内部表示映射为这些领域类型。
 #[async_trait]
 pub trait VectorStoreT: Send + Sync {
     /// 确保指定名称的集合存在，具有给定的维度和距离度量。

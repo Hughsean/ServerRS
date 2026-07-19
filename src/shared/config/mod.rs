@@ -13,7 +13,7 @@
 //! | `llm_agent_rag.rs` | `LlmConfig`, `AgentConfig`, `RagConfig`, `EmbeddingConfig` |
 //! | `web_ingestion.rs` | `WebIngestionConfig`, `DistillLlmConfig` |
 //! | `tts.rs` | `TtsConfig` |
-//! | `qdrant.rs` | `QdrantConfig` |
+//! | `vector_store.rs` | `VectorStoreConfig` |
 //! | `display_config.rs` | `Display for AppConfig` impl |
 
 pub mod auth_storage;
@@ -22,13 +22,13 @@ pub mod fresh_context;
 pub mod llm_agent_rag;
 pub mod mail_cors_log;
 pub mod plugins;
-pub mod qdrant;
 #[cfg(feature = "qq_bot")]
 pub mod qq_bot;
 pub mod semantic_classification;
 pub mod server;
 pub mod ssh;
 pub mod tts;
+pub mod vector_store;
 pub mod web_ingestion;
 
 /// 多个子模块共享的默认值辅助函数。
@@ -51,7 +51,6 @@ pub use self::plugins::{
     BaiduBaikePluginConfig, FetchWebContentPluginConfig, NewsPluginConfig, PluginsConfig,
     WeatherPluginConfig, WebSearchPluginConfig,
 };
-pub use self::qdrant::QdrantConfig;
 #[cfg(feature = "qq_bot")]
 pub use self::qq_bot::QqBotConfig;
 pub use self::semantic_classification::{
@@ -60,6 +59,7 @@ pub use self::semantic_classification::{
 pub use self::server::{DatabaseConfig, ServerConfig, SessionConfig};
 pub use self::ssh::{SshTunnelConfig, TunnelDirection};
 pub use self::tts::TtsConfig;
+pub use self::vector_store::VectorStoreConfig;
 pub use self::web_ingestion::{
     DistillLlmConfig, WebIngestionConfig, WebIngestionHandlerParallelismConfig,
 };
@@ -67,6 +67,7 @@ pub use self::web_ingestion::{
 // ── AppConfig ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
@@ -99,7 +100,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub rag: RagConfig,
     #[serde(default)]
-    pub qdrant: QdrantConfig,
+    pub vector_store: VectorStoreConfig,
     #[serde(default)]
     pub embedding: EmbeddingConfig,
     #[serde(default)]
@@ -137,7 +138,7 @@ impl Default for AppConfig {
             llm: Default::default(),
             agent: Default::default(),
             rag: Default::default(),
-            qdrant: Default::default(),
+            vector_store: Default::default(),
             embedding: Default::default(),
             web_ingestion: Default::default(),
             fresh_context: Default::default(),
@@ -231,8 +232,8 @@ impl AppConfig {
                 ));
             }
         }
-        if self.qdrant.enabled {
-            validate_required_url(&self.qdrant.url, "qdrant.url")?;
+        if self.vector_store.enabled {
+            validate_required_url(&self.vector_store.url, "vector_store.url")?;
         }
         if self.web_ingestion.enabled
             && (self.web_ingestion.scheduler_enabled || self.web_ingestion.dispatcher_enabled)
@@ -313,14 +314,14 @@ impl AppConfig {
 
     /// 返回所有被业务配置引用的 SSH 隧道名称。
     ///
-    /// 启动层只需要关心这个集合，不需要逐个扫描 database/llm/qdrant 等配置段。
+    /// 启动层只需要关心这个集合，不需要逐个扫描 database/llm/vector_store 等配置段。
     pub fn referenced_ssh_tunnel_names(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
         push_tunnel_name(&mut names, self.database.tunnel.as_deref());
         push_tunnel_name(&mut names, self.ollama.tunnel.as_deref());
         push_tunnel_name(&mut names, self.llm.tunnel.as_deref());
         push_tunnel_name(&mut names, self.embedding.tunnel.as_deref());
-        push_tunnel_name(&mut names, self.qdrant.tunnel.as_deref());
+        push_tunnel_name(&mut names, self.vector_store.tunnel.as_deref());
         push_tunnel_name(&mut names, self.web_ingestion.distill_llm.tunnel.as_deref());
         push_tunnel_name(&mut names, self.fresh_context.distill_llm.tunnel.as_deref());
         names
@@ -391,12 +392,12 @@ impl AppConfig {
         }
 
         if let Some(url) = render_tunnel_template(
-            "qdrant.url",
+            "vector_store.url",
             &self.ssh_tunnels,
-            self.qdrant.tunnel.as_deref(),
-            &self.qdrant.url,
+            self.vector_store.tunnel.as_deref(),
+            &self.vector_store.url,
         )? {
-            self.qdrant.url = url;
+            self.vector_store.url = url;
         }
 
         if let Some(url) = render_tunnel_template(
@@ -440,9 +441,9 @@ impl AppConfig {
                 self.plugins.weather.api_key = val;
             }
         }
-        if let Ok(val) = std::env::var("QDRANT_API_KEY") {
+        if let Ok(val) = std::env::var("VECTOR_STORE_API_KEY") {
             if !val.is_empty() {
-                self.qdrant.api_key = Some(val);
+                self.vector_store.api_key = Some(val);
             }
         }
         if let Ok(val) = std::env::var("LLM_BASE_URL") {
@@ -490,9 +491,9 @@ impl AppConfig {
                 self.embedding.timeout_secs = n;
             }
         }
-        if let Ok(val) = std::env::var("QDRANT_COLLECTION") {
+        if let Ok(val) = std::env::var("VECTOR_INDEX_NAME") {
             if !val.is_empty() {
-                self.embedding.qdrant_collection = val;
+                self.embedding.vector_index_name = val;
             }
         }
 
@@ -585,9 +586,9 @@ impl AppConfig {
                 self.web_ingestion.embedding_batch_size = n;
             }
         }
-        if let Ok(val) = std::env::var("WEB_INGESTION_QDRANT_COLLECTION") {
+        if let Ok(val) = std::env::var("WEB_INGESTION_VECTOR_INDEX_NAME") {
             if !val.is_empty() {
-                self.web_ingestion.qdrant_collection = val;
+                self.web_ingestion.vector_index_name = val;
             }
         }
         if let Ok(val) = std::env::var("WEB_INGESTION_SCHEDULER_INTERVAL_SECS") {
@@ -705,6 +706,11 @@ impl AppConfig {
                 self.fresh_context.distill_llm.timeout_secs = n;
             }
         }
+        if let Ok(val) = std::env::var("FRESH_CONTEXT_VECTOR_INDEX_NAME") {
+            if !val.is_empty() {
+                self.fresh_context.vector_index_name = val;
+            }
+        }
         // ── Embedding (separate from distill_llm) ──
         if let Ok(val) = std::env::var("EMBEDDING_PROVIDER") {
             if !val.is_empty() {
@@ -716,9 +722,9 @@ impl AppConfig {
                 self.embedding.timeout_secs = n;
             }
         }
-        if let Ok(val) = std::env::var("QDRANT_COLLECTION") {
+        if let Ok(val) = std::env::var("VECTOR_INDEX_NAME") {
             if !val.is_empty() {
-                self.embedding.qdrant_collection = val;
+                self.embedding.vector_index_name = val;
             }
         }
         // ── TTS ──
@@ -872,7 +878,7 @@ mod tests {
         assert!(config.ollama.base_url.is_empty());
         assert!(config.llm.base_url.is_empty());
         assert!(config.embedding.base_url.is_empty());
-        assert!(config.qdrant.url.is_empty());
+        assert!(config.vector_store.url.is_empty());
         assert!(config.web_ingestion.distill_llm.base_url.is_empty());
         assert!(config.fresh_context.distill_llm.base_url.is_empty());
     }
@@ -959,14 +965,14 @@ mod tests {
     }
 
     #[test]
-    fn renders_embedding_distill_and_qdrant_templates_from_tunnels() {
+    fn renders_embedding_distill_and_vector_store_templates_from_tunnels() {
         let raw = r#"
             [ssh_tunnels.ollama]
             host = "host-a"
             local_port = 11111
             remote_port = 11434
 
-            [ssh_tunnels.qdrant]
+            [ssh_tunnels.vector_store]
             host = "host-b"
             local_port = 6334
             remote_port = 6333
@@ -983,9 +989,9 @@ mod tests {
             base_url = "http://{ip}:{port}/v1"
             tunnel = "ollama"
 
-            [qdrant]
+            [vector_store]
             url = "http://{ip}:{port}"
-            tunnel = "qdrant"
+            tunnel = "vector_store"
         "#;
         let mut config: AppConfig = toml::from_str(raw).unwrap();
 
@@ -1000,7 +1006,7 @@ mod tests {
             config.fresh_context.distill_llm.base_url,
             "http://127.0.0.1:11111/v1"
         );
-        assert_eq!(config.qdrant.url, "http://127.0.0.1:6334");
+        assert_eq!(config.vector_store.url, "http://127.0.0.1:6334");
     }
 
     #[test]
@@ -1045,7 +1051,7 @@ mod tests {
             local_port = 11111
             remote_port = 11434
 
-            [ssh_tunnels.qdrant]
+            [ssh_tunnels.vector_store]
             host = "host-b"
             local_port = 6334
             remote_port = 6333
@@ -1058,10 +1064,10 @@ mod tests {
             base_url = "http://{ip}:{port}/v1"
             tunnel = "ollama"
 
-            [qdrant]
+            [vector_store]
             enabled = true
             url = "http://{ip}:{port}"
-            tunnel = "qdrant"
+            tunnel = "vector_store"
         "#;
         let mut config: AppConfig = toml::from_str(raw).unwrap();
 

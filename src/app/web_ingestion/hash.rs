@@ -77,9 +77,9 @@ pub fn chunk_hash(
     ))
 }
 
-/// `qdrant_point_id`: sha256(qdrant_collection + chunk_hash + embedding_model)
-pub fn qdrant_point_id(collection: &str, chunk_hash: &str, embedding_model: &str) -> String {
-    sha256_hex(&format!("{collection}|{chunk_hash}|{embedding_model}"))
+/// `vector_point_id`: sha256(index_name + chunk_hash + embedding_model)
+pub fn vector_point_id(index_name: &str, chunk_hash: &str, embedding_model: &str) -> String {
+    sha256_hex(&format!("{index_name}|{chunk_hash}|{embedding_model}"))
 }
 
 /// Simple SHA-256 of raw content (used for dedup detection).
