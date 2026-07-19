@@ -12,10 +12,64 @@ use crate::infra::repo::entities::{
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DerivePartialModel,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
-use std::collections::HashMap;
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "knowledge_ingestion_runs::Entity")]
+struct KnowledgeReviewRunRow {
+    status: String,
+    stage: String,
+    quality_score: Option<f64>,
+    quality_result: Option<sea_orm::prelude::Json>,
+    risk_flags: Option<sea_orm::prelude::Json>,
+    should_publish: Option<i8>,
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "knowledge_documents::Entity")]
+struct KnowledgeReviewDocumentRow {
+    title: Option<String>,
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "web_pages::Entity")]
+struct KnowledgeReviewPageRow {
+    url: String,
+    canonical_url: Option<String>,
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "web_sources::Entity")]
+struct KnowledgeReviewSourceRow {
+    name: String,
+}
+
+#[derive(DerivePartialModel)]
+#[sea_orm(entity = "knowledge_publish_records::Entity")]
+struct KnowledgeReviewRow {
+    #[sea_orm(from_col = "id")]
+    publish_record_id: u64,
+    source_id: u64,
+    page_id: u64,
+    run_id: u64,
+    document_id: u64,
+    version_key: String,
+    publish_status: String,
+    active: i8,
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
+    #[sea_orm(nested)]
+    run: Option<KnowledgeReviewRunRow>,
+    #[sea_orm(nested)]
+    document: Option<KnowledgeReviewDocumentRow>,
+    #[sea_orm(nested)]
+    page: Option<KnowledgeReviewPageRow>,
+    #[sea_orm(nested)]
+    source: Option<KnowledgeReviewSourceRow>,
+}
+
 pub struct KnowledgeReviewRepo {
     db: DatabaseConnection,
 }
@@ -23,106 +77,55 @@ impl KnowledgeReviewRepo {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
-    async fn hydrate(
-        &self,
-        records: Vec<knowledge_publish_records::Model>,
-    ) -> Result<Vec<KnowledgeReviewItem>, WebIngestionError> {
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
-        let run_ids = records.iter().map(|row| row.run_id).collect::<Vec<_>>();
-        let document_ids = records
-            .iter()
-            .map(|row| row.document_id)
-            .collect::<Vec<_>>();
-        let page_ids = records.iter().map(|row| row.page_id).collect::<Vec<_>>();
-        let source_ids = records.iter().map(|row| row.source_id).collect::<Vec<_>>();
-        let runs = knowledge_ingestion_runs::Entity::find()
-            .filter(knowledge_ingestion_runs::Column::Id.is_in(run_ids))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(|row| (row.id, row))
-            .collect::<HashMap<_, _>>();
-        let documents = knowledge_documents::Entity::find()
-            .filter(knowledge_documents::Column::DocumentId.is_in(document_ids))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(|row| (row.document_id, row))
-            .collect::<HashMap<_, _>>();
-        let pages = web_pages::Entity::find()
-            .filter(web_pages::Column::Id.is_in(page_ids))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(|row| (row.id, row))
-            .collect::<HashMap<_, _>>();
-        let sources = web_sources::Entity::find()
-            .filter(web_sources::Column::Id.is_in(source_ids))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(|row| (row.id, row))
-            .collect::<HashMap<_, _>>();
-        records
-            .into_iter()
-            .map(|record| {
-                let run = runs.get(&record.run_id).ok_or_else(|| {
-                    WebIngestionError::Internal(format!(
-                        "review record {} references missing run {}",
-                        record.id, record.run_id
-                    ))
-                })?;
-                let document = documents.get(&record.document_id).ok_or_else(|| {
-                    WebIngestionError::Internal(format!(
-                        "review record {} references missing document {}",
-                        record.id, record.document_id
-                    ))
-                })?;
-                let page = pages.get(&record.page_id).ok_or_else(|| {
-                    WebIngestionError::Internal(format!(
-                        "review record {} references missing page {}",
-                        record.id, record.page_id
-                    ))
-                })?;
-                let source = sources.get(&record.source_id).ok_or_else(|| {
-                    WebIngestionError::Internal(format!(
-                        "review record {} references missing source {}",
-                        record.id, record.source_id
-                    ))
-                })?;
-                Ok(KnowledgeReviewItem {
-                    publish_record_id: record.id,
-                    source_id: record.source_id,
-                    source_name: source.name.clone(),
-                    page_id: record.page_id,
-                    run_id: record.run_id,
-                    document_id: record.document_id,
-                    version_key: record.version_key,
-                    title: document.title.clone(),
-                    source_url: page
-                        .canonical_url
-                        .clone()
-                        .unwrap_or_else(|| page.url.clone()),
-                    publish_status: record.publish_status,
-                    active: record.active != 0,
-                    run_status: run.status.clone(),
-                    run_stage: run.stage.clone(),
-                    quality_score: run.quality_score,
-                    quality_result: run.quality_result.clone(),
-                    risk_flags: run.risk_flags.clone(),
-                    should_publish: run.should_publish.map(|value| value != 0),
-                    created_at: to_utc(record.created_at),
-                    updated_at: to_utc(record.updated_at),
-                })
-            })
-            .collect()
-    }
+}
+
+fn map_review_row(row: KnowledgeReviewRow) -> Result<KnowledgeReviewItem, WebIngestionError> {
+    let run = row.run.ok_or_else(|| {
+        WebIngestionError::Internal(format!(
+            "review record {} references missing run {}",
+            row.publish_record_id, row.run_id
+        ))
+    })?;
+    let document = row.document.ok_or_else(|| {
+        WebIngestionError::Internal(format!(
+            "review record {} references missing document {}",
+            row.publish_record_id, row.document_id
+        ))
+    })?;
+    let page = row.page.ok_or_else(|| {
+        WebIngestionError::Internal(format!(
+            "review record {} references missing page {}",
+            row.publish_record_id, row.page_id
+        ))
+    })?;
+    let source = row.source.ok_or_else(|| {
+        WebIngestionError::Internal(format!(
+            "review record {} references missing source {}",
+            row.publish_record_id, row.source_id
+        ))
+    })?;
+
+    Ok(KnowledgeReviewItem {
+        publish_record_id: row.publish_record_id,
+        source_id: row.source_id,
+        source_name: source.name,
+        page_id: row.page_id,
+        run_id: row.run_id,
+        document_id: row.document_id,
+        version_key: row.version_key,
+        title: document.title,
+        source_url: page.canonical_url.unwrap_or(page.url),
+        publish_status: row.publish_status,
+        active: row.active != 0,
+        run_status: run.status,
+        run_stage: run.stage,
+        quality_score: run.quality_score,
+        quality_result: run.quality_result.map(Into::into),
+        risk_flags: run.risk_flags.map(Into::into),
+        should_publish: run.should_publish.map(|value| value != 0),
+        created_at: to_utc(row.created_at),
+        updated_at: to_utc(row.updated_at),
+    })
 }
 #[async_trait]
 impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
@@ -140,15 +143,23 @@ impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
             query = query.filter(knowledge_publish_records::Column::SourceId.eq(source_id));
         }
         let paginator = query
+            .left_join(knowledge_ingestion_runs::Entity)
+            .left_join(knowledge_documents::Entity)
+            .left_join(web_pages::Entity)
+            .left_join(web_sources::Entity)
             .order_by_desc(knowledge_publish_records::Column::CreatedAt)
+            .into_partial_model::<KnowledgeReviewRow>()
             .paginate(&self.db, filter.page_size);
         let total = paginator.num_items().await.map_err(map_db_err)?;
-        let records = paginator
+        let rows = paginator
             .fetch_page(filter.page.saturating_sub(1))
             .await
             .map_err(map_db_err)?;
         Ok(KnowledgeReviewPage {
-            items: self.hydrate(records).await?,
+            items: rows
+                .into_iter()
+                .map(map_review_row)
+                .collect::<Result<_, _>>()?,
             page: filter.page,
             page_size: filter.page_size,
             total,
@@ -158,14 +169,16 @@ impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
         &self,
         publish_record_id: u64,
     ) -> Result<Option<KnowledgeReviewItem>, WebIngestionError> {
-        let record = knowledge_publish_records::Entity::find_by_id(publish_record_id)
+        let row = knowledge_publish_records::Entity::find_by_id(publish_record_id)
+            .left_join(knowledge_ingestion_runs::Entity)
+            .left_join(knowledge_documents::Entity)
+            .left_join(web_pages::Entity)
+            .left_join(web_sources::Entity)
+            .into_partial_model::<KnowledgeReviewRow>()
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        Ok(self.hydrate(vec![record]).await?.into_iter().next())
+        row.map(map_review_row).transpose()
     }
     async fn find_detail_by_id(
         &self,
@@ -202,11 +215,9 @@ impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
             })
             .collect();
         let review = self
-            .hydrate(vec![record])
+            .find_item_by_id(publish_record_id)
             .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| WebIngestionError::Internal("review hydration failed".into()))?;
+            .ok_or_else(|| WebIngestionError::Internal("review query failed".into()))?;
         Ok(Some(KnowledgeReviewDetail {
             review,
             clean_text: run.clean_text,

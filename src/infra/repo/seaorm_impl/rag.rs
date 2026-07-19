@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityLoaderTrait, EntityTrait, Order,
+    PaginatorTrait, QueryFilter, QueryOrder, Set,
 };
 use tracing::warn;
 
@@ -397,26 +397,24 @@ impl RAGRepoT for RAGRepo {
         &self,
         limit: u64,
     ) -> Result<Vec<(KnowledgeChunk, KnowledgeDocument)>, AppError> {
-        // Load unindexed chunks with their parent document, two-step approach
-        let chunk_rows = knowledge_chunks::Entity::find()
+        let chunk_rows = knowledge_chunks::Entity::load()
+            .with(knowledge_documents::Entity)
             .filter(knowledge_chunks::Column::Status.eq(1))
             .filter(knowledge_chunks::Column::VectorId.is_null())
+            .filter(knowledge_documents::Column::Status.eq(1))
+            .filter(knowledge_documents::Column::DeletedAt.is_null())
             .paginate(&self.db, limit)
             .fetch_page(0)
             .await
             .map_err(|e| AppError::internal(format!("list_indexable_chunks: {e}")))?;
 
-        let mut results = Vec::new();
-        for chunk in chunk_rows {
-            if let Ok(Some(doc)) = knowledge_documents::Entity::find_by_id(chunk.document_id)
-                .filter(knowledge_documents::Column::Status.eq(1))
-                .filter(knowledge_documents::Column::DeletedAt.is_null())
-                .one(&self.db)
-                .await
-            {
-                results.push((map_chunk(chunk), map_document(doc)));
-            }
-        }
-        Ok(results)
+        Ok(chunk_rows
+            .into_iter()
+            .filter_map(|chunk| {
+                let document = chunk.knowledge_documents.as_ref()?.clone().into();
+                let chunk = chunk.into();
+                Some((map_chunk(chunk), map_document(document)))
+            })
+            .collect())
     }
 }
