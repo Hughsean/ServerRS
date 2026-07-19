@@ -190,6 +190,51 @@ fn rejects_api_repository_ports_in_imports_and_state_types() {
 }
 
 #[test]
+fn rejects_api_state_domain_ports_regardless_of_type_name_or_alias() {
+    let workspace =
+        TestWorkspace::new("rejects_api_state_domain_ports_regardless_of_type_name_or_alias");
+    workspace.write(
+        "src/api/state.rs",
+        r#"
+use std::sync::Arc;
+use crate::domain::conversation::ConversationGateway as ChatStorage;
+
+pub struct ChatState {
+    storage: Arc<dyn ChatStorage>,
+    direct: Arc<dyn crate::domain::memory::MemoryStore>,
+}
+"#,
+    );
+
+    let report = check_workspace(workspace.path(), FeatureSet::default())
+        .expect_err("API State must not depend on renamed or aliased domain ports");
+
+    assert_contains(
+        &report.to_string(),
+        "API State must depend on application services, not domain ports",
+    );
+}
+
+#[test]
+fn allows_the_explicit_api_state_security_port() {
+    let workspace = TestWorkspace::new("allows_the_explicit_api_state_security_port");
+    workspace.write(
+        "src/api/state.rs",
+        r#"
+use std::sync::Arc;
+use crate::domain::auth::token_service::TokenServiceT;
+
+pub struct SignatureState {
+    token_service: Arc<dyn TokenServiceT>,
+}
+"#,
+    );
+
+    check_workspace(workspace.path(), FeatureSet::default())
+        .expect("the approved API security port must remain allowed");
+}
+
+#[test]
 fn rejects_adapter_vocabulary_outside_infrastructure() {
     let workspace = TestWorkspace::new("rejects_adapter_vocabulary_outside_infrastructure");
     workspace.write("src/domain/vector.rs", "pub struct QdrantLocation;\n");

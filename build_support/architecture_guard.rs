@@ -210,6 +210,8 @@ const BUSINESS_LAYER_FORBIDDEN_EXTERNAL_CRATES: &[InfraOnlyExternalCrate] = &[
     },
 ];
 
+const API_STATE_ALLOWED_DOMAIN_PORTS: &[&str] = &["domain::auth::token_service::TokenServiceT"];
+
 impl fmt::Display for ArchitectureReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "architecture layering violations:")?;
@@ -337,6 +339,17 @@ impl AstBoundaryVisitor<'_> {
                     segments.join("::"),
                 );
             }
+        }
+
+        if is_api_state_file(self.relative_path)
+            && is_domain_path(segments)
+            && !is_allowed_api_state_domain_port(segments)
+        {
+            self.push(
+                span,
+                "API State must depend on application services, not domain ports",
+                segments.join("::"),
+            );
         }
 
         if matches!(layer, "api" | "app" | "domain" | "shared") {
@@ -538,6 +551,28 @@ fn is_adapter_name(name: &str) -> bool {
     ["qdrant", "seaorm", "sqlx", "redis"]
         .iter()
         .any(|adapter| lower.contains(adapter))
+}
+
+fn is_api_state_file(relative_path: &str) -> bool {
+    relative_path == "src/api/state.rs"
+}
+
+fn is_domain_path(segments: &[String]) -> bool {
+    matches!(
+        segments.first().map(String::as_str),
+        Some("crate" | "server_rs")
+    ) && segments.get(1).is_some_and(|segment| segment == "domain")
+}
+
+fn is_allowed_api_state_domain_port(segments: &[String]) -> bool {
+    if !is_domain_path(segments) {
+        return false;
+    }
+
+    let domain_path = segments[1..].join("::");
+    API_STATE_ALLOWED_DOMAIN_PORTS
+        .iter()
+        .any(|allowed| domain_path == *allowed)
 }
 
 fn rust_source_files(manifest_dir: &Path) -> Vec<PathBuf> {
