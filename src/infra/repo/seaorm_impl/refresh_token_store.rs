@@ -46,19 +46,18 @@ impl RefreshTokenStoreT for RefreshTokenStoreImpl {
             .timestamp()
             .saturating_add_unsigned(self.refresh_ttl_secs) as u64;
 
-        refresh_tokens::ActiveModel {
-            refresh_token_id: Set(0), // auto-increment
-            token_id: Set(token_id),
-            user_id: Set(user_id),
-            token_hash: Set(token_hash),
-            expires_at: Set(expires_at),
-            revoked_at: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-        }
-        .insert(&self.db)
-        .await
-        .map_err(map_db_err)?;
+        let active: refresh_tokens::ActiveModel = refresh_tokens::ActiveModel::builder()
+            .set_refresh_token_id(0_u64)
+            .set_token_id(token_id)
+            .set_user_id(user_id)
+            .set_token_hash(token_hash)
+            .set_expires_at(expires_at)
+            .set_revoked_at(None)
+            .set_created_at(now)
+            .set_updated_at(now)
+            .into();
+
+        active.insert(&self.db).await.map_err(map_db_err)?;
 
         Ok(())
     }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::domain::qq_bot::qq_profile_repo::QqUserProfileRepoT;
 use crate::domain::qq_bot::user_profile::UserProfile;
@@ -55,20 +55,19 @@ impl QqUserProfileRepoT for QqUserProfileRepo {
             .as_ref()
             .map(|tags| serde_json::to_value(tags).unwrap_or(serde_json::Value::Null));
 
-        let model = qq_user_profiles::ActiveModel {
-            qq_user_id: Set(profile.qq_user_id),
-            interest_tags: Set(interest_tags),
-            active_hours: Set(profile.active_hours.clone()),
-            speaking_style: Set(profile.speaking_style.clone()),
-            topic_frequency: Set(profile.topic_frequency.clone()),
-            total_messages: Set(profile.total_messages),
-            avg_message_length: Set(profile.avg_message_length),
-            emoji_usage_rate: Set(profile.emoji_usage_rate),
-            first_seen_at: Set(profile.first_seen_at),
-            last_summary_at: Set(profile.last_summary_at),
-            raw_profile: Set(profile.raw_profile.clone()),
-            ..Default::default()
-        };
+        let model: qq_user_profiles::ActiveModel = qq_user_profiles::ActiveModel::builder()
+            .set_qq_user_id(profile.qq_user_id)
+            .set_interest_tags(interest_tags)
+            .set_active_hours(profile.active_hours.clone())
+            .set_speaking_style(profile.speaking_style.clone())
+            .set_topic_frequency(profile.topic_frequency.clone())
+            .set_total_messages(profile.total_messages)
+            .set_avg_message_length(profile.avg_message_length)
+            .set_emoji_usage_rate(profile.emoji_usage_rate)
+            .set_first_seen_at(profile.first_seen_at)
+            .set_last_summary_at(profile.last_summary_at)
+            .set_raw_profile(profile.raw_profile.clone())
+            .into();
 
         let update_columns = vec![
             qq_user_profiles::Column::InterestTags,

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::domain::qq_bot::config::ExternalUser;
 use crate::domain::qq_bot::repository::ExternalUserRepoT;
@@ -44,16 +44,15 @@ impl ExternalUserRepoT for ExternalUserRepo {
     }
 
     async fn upsert(&self, user: &ExternalUser) -> Result<ExternalUser, AppError> {
-        let model = qq_external_users::ActiveModel {
-            qq_user_id: Set(user.qq_user_id),
-            internal_user_id: Set(user.internal_user_id),
-            nickname: Set(user.nickname.clone()),
-            avatar_url: Set(user.avatar_url.clone()),
-            last_seen_at: Set(user.last_seen_at),
-            memory_enabled: Set(if user.memory_enabled { 1i8 } else { 0i8 }),
-            persona_enabled: Set(if user.persona_enabled { 1i8 } else { 0i8 }),
-            ..Default::default()
-        };
+        let model: qq_external_users::ActiveModel = qq_external_users::ActiveModel::builder()
+            .set_qq_user_id(user.qq_user_id)
+            .set_internal_user_id(user.internal_user_id)
+            .set_nickname(user.nickname.clone())
+            .set_avatar_url(user.avatar_url.clone())
+            .set_last_seen_at(user.last_seen_at)
+            .set_memory_enabled(if user.memory_enabled { 1_i8 } else { 0_i8 })
+            .set_persona_enabled(if user.persona_enabled { 1_i8 } else { 0_i8 })
+            .into();
 
         let update_columns = vec![
             qq_external_users::Column::InternalUserId,

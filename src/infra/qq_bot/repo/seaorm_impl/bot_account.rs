@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TryIntoModel,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TryIntoModel,
 };
 
 use crate::domain::qq_bot::attention::BotAccount;
@@ -59,32 +59,30 @@ impl BotAccountRepoT for BotAccountRepo {
         // Check if a record with this self_qq_id already exists
         let existing = self.find_by_self_qq_id(account.self_qq_id).await?;
 
-        let model = match existing {
+        let model: qq_bot_accounts::ActiveModel = match existing {
             Some(existing) => {
                 // Update existing record
-                qq_bot_accounts::ActiveModel {
-                    bot_account_id: Set(existing.bot_account_id),
-                    platform: Set(account.platform.clone()),
-                    self_qq_id: Set(account.self_qq_id),
-                    display_name: Set(account.display_name.clone()),
-                    adapter: Set(account.adapter.clone()),
-                    connection_mode: Set(account.connection_mode.clone()),
-                    enabled: Set(if account.enabled { 1 } else { 0 }),
-                    ..Default::default()
-                }
+                qq_bot_accounts::ActiveModel::builder()
+                    .set_bot_account_id(existing.bot_account_id)
+                    .set_platform(account.platform.clone())
+                    .set_self_qq_id(account.self_qq_id)
+                    .set_display_name(account.display_name.clone())
+                    .set_adapter(account.adapter.clone())
+                    .set_connection_mode(account.connection_mode.clone())
+                    .set_enabled(if account.enabled { 1_i8 } else { 0_i8 })
+                    .into()
             }
             None => {
                 // Insert new record (bot_account_id is auto-increment)
-                qq_bot_accounts::ActiveModel {
-                    bot_account_id: Set(0u64), // ignored for auto-increment
-                    platform: Set(account.platform.clone()),
-                    self_qq_id: Set(account.self_qq_id),
-                    display_name: Set(account.display_name.clone()),
-                    adapter: Set(account.adapter.clone()),
-                    connection_mode: Set(account.connection_mode.clone()),
-                    enabled: Set(if account.enabled { 1 } else { 0 }),
-                    ..Default::default()
-                }
+                qq_bot_accounts::ActiveModel::builder()
+                    .set_bot_account_id(0_u64)
+                    .set_platform(account.platform.clone())
+                    .set_self_qq_id(account.self_qq_id)
+                    .set_display_name(account.display_name.clone())
+                    .set_adapter(account.adapter.clone())
+                    .set_connection_mode(account.connection_mode.clone())
+                    .set_enabled(if account.enabled { 1_i8 } else { 0_i8 })
+                    .into()
             }
         };
 

@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
-    Set,
 };
 
 use super::super::entities::agent_events;
@@ -37,18 +36,18 @@ impl AgentEventRepoT for AgentEventRepo {
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent {
         let now = Utc::now().naive_utc();
 
-        let active = agent_events::ActiveModel {
-            event_id: Set(0),
-            user_id: Set(event.user_id),
-            conversation_id: Set(event.conversation_id),
-            trace_id: Set(None),
-            turn_id: Set(None),
-            event_type: Set(event.event_type),
-            severity: Set("info".to_string()),
-            tool_name: Set(event.tool_name),
-            payload: Set(event.payload.into()),
-            created_at: Set(now),
-        };
+        let active: agent_events::ActiveModel = agent_events::ActiveModel::builder()
+            .set_event_id(0_u64)
+            .set_user_id(event.user_id)
+            .set_conversation_id(event.conversation_id)
+            .set_trace_id(None)
+            .set_turn_id(None)
+            .set_event_type(event.event_type)
+            .set_severity("info")
+            .set_tool_name(event.tool_name)
+            .set_payload(event.payload)
+            .set_created_at(now)
+            .into();
 
         let saved = active
             .insert(&self.db)

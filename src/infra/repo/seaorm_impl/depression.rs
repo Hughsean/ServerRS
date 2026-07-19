@@ -78,17 +78,17 @@ impl DepressionRepoT for DepressionRepo {
         total_score: i16,
     ) -> Result<DepressionAssessment, AppError> {
         let now = chrono::Utc::now();
-        let am = depression_assessments::ActiveModel {
-            user_id: Set(new.user_id),
-            scale_id: Set(new.scale_id),
-            assessment_date: Set(chrono::Utc::now().date_naive()),
-            answers: Set(new.answers),
-            total_score: Set(total_score),
-            notes: Set(new.notes),
-            created_at: Set(Some(now.naive_utc())),
-            updated_at: Set(Some(now.naive_utc())),
-            ..Default::default()
-        };
+        let am: depression_assessments::ActiveModel =
+            depression_assessments::ActiveModel::builder()
+                .set_user_id(new.user_id)
+                .set_scale_id(new.scale_id)
+                .set_assessment_date(chrono::Utc::now().date_naive())
+                .set_answers(new.answers)
+                .set_total_score(total_score)
+                .set_notes(new.notes)
+                .set_created_at(Some(now.naive_utc()))
+                .set_updated_at(Some(now.naive_utc()))
+                .into();
         Ok(map_assessment(am.insert(&self.db).await.map_err(map_err)?))
     }
 

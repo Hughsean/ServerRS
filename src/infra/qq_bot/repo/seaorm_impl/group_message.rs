@@ -74,21 +74,20 @@ impl GroupMessageRepoT for GroupMessageRepo {
         let segments_json =
             serde_json::to_value(&msg.segments).unwrap_or_else(|_| serde_json::Value::Null);
 
-        let model = qq_group_messages::ActiveModel {
-            bot_account_id: Set(msg.bot_account_id),
-            qq_group_id: Set(msg.qq_group_id),
-            qq_user_id: Set(msg.qq_user_id),
-            platform_message_id: Set(msg.platform_message_id.clone()),
-            direction: Set(direction_to_str(msg.direction).to_string()),
-            raw_text: Set(msg.raw_text.clone()),
-            normalized_text: Set(msg.normalized_text.clone()),
-            segments: Set(segments_json),
-            at_bot: Set(if msg.at_bot { 1 } else { 0 }),
-            command_name: Set(msg.command_name.clone()),
-            sent_at: Set(msg.sent_at),
-            status: Set("pending".to_string()),
-            ..Default::default()
-        };
+        let model: qq_group_messages::ActiveModel = qq_group_messages::ActiveModel::builder()
+            .set_bot_account_id(msg.bot_account_id)
+            .set_qq_group_id(msg.qq_group_id)
+            .set_qq_user_id(msg.qq_user_id)
+            .set_platform_message_id(msg.platform_message_id.clone())
+            .set_direction(direction_to_str(msg.direction))
+            .set_raw_text(msg.raw_text.clone())
+            .set_normalized_text(msg.normalized_text.clone())
+            .set_segments(segments_json)
+            .set_at_bot(if msg.at_bot { 1_i8 } else { 0_i8 })
+            .set_command_name(msg.command_name.clone())
+            .set_sent_at(msg.sent_at)
+            .set_status("pending")
+            .into();
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
     }

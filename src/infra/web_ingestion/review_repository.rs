@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use std::collections::HashMap;
 pub struct KnowledgeReviewRepo {
@@ -263,8 +263,47 @@ impl KnowledgeReviewRepoT for KnowledgeReviewRepo {
                 ),
             });
         }
-        let event = domain_event_outbox::ActiveModel {            event_key: Set(request.event_key),            event_type: Set(ev::KNOWLEDGE_PUBLISH_REQUESTED.into()),            aggregate_type: Set(aggregate::KNOWLEDGE_PUBLISH_RECORD.into()),            aggregate_id: Set(record.id),            payload: Set(serde_json::json!({                "publish_record_id": record.id,                "run_id": record.run_id,                "automatic": false,                "reviewed": true,                "reviewed_by_user_id": request.reviewer_user_id,                "reviewed_by_username": request.reviewer_username.clone(),                "review_notes": request.notes.clone(),            })),            status: Set("pending".into()),            max_retries: Set(5),            ..Default::default()        }        .insert(&txn)        .await        .map_err(map_db_err)?;
-        web_ingestion_audit_logs::ActiveModel {            source_id: Set(Some(record.source_id)),            source_url_id: Set(run.source_url_id),            page_id: Set(Some(record.page_id)),            run_id: Set(Some(record.run_id)),            publish_record_id: Set(Some(record.id)),            action: Set("manual_publish_requested".into()),            status: Set("pending".into()),            message: Set(format!(                "reviewer {} requested publication",                request.reviewer_username            )),            metadata: Set(Some(serde_json::json!({                "reviewed_by_user_id": request.reviewer_user_id,                "reviewed_by_username": request.reviewer_username,                "review_notes": request.notes,                "event_id": event.id,            }))),            ..Default::default()        }        .insert(&txn)        .await        .map_err(map_db_err)?;
+        let event_active: domain_event_outbox::ActiveModel =
+            domain_event_outbox::ActiveModel::builder()
+                .set_event_key(request.event_key)
+                .set_event_type(ev::KNOWLEDGE_PUBLISH_REQUESTED)
+                .set_aggregate_type(aggregate::KNOWLEDGE_PUBLISH_RECORD)
+                .set_aggregate_id(record.id)
+                .set_payload(serde_json::json!({
+                    "publish_record_id": record.id,
+                    "run_id": record.run_id,
+                    "automatic": false,
+                    "reviewed": true,
+                    "reviewed_by_user_id": request.reviewer_user_id,
+                    "reviewed_by_username": request.reviewer_username.clone(),
+                    "review_notes": request.notes.clone(),
+                }))
+                .set_status("pending")
+                .set_max_retries(5_u32)
+                .into();
+        let event = event_active.insert(&txn).await.map_err(map_db_err)?;
+
+        let audit_active: web_ingestion_audit_logs::ActiveModel =
+            web_ingestion_audit_logs::ActiveModel::builder()
+                .set_source_id(Some(record.source_id))
+                .set_source_url_id(run.source_url_id)
+                .set_page_id(Some(record.page_id))
+                .set_run_id(Some(record.run_id))
+                .set_publish_record_id(Some(record.id))
+                .set_action("manual_publish_requested")
+                .set_status("pending")
+                .set_message(format!(
+                    "reviewer {} requested publication",
+                    request.reviewer_username
+                ))
+                .set_metadata(Some(serde_json::json!({
+                    "reviewed_by_user_id": request.reviewer_user_id,
+                    "reviewed_by_username": request.reviewer_username,
+                    "review_notes": request.notes,
+                    "event_id": event.id,
+                })))
+                .into();
+        audit_active.insert(&txn).await.map_err(map_db_err)?;
         txn.commit().await.map_err(map_db_err)?;
         Ok(ReviewPublishRequest {
             publish_record_id: record.id,

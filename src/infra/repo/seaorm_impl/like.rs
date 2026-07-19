@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    Set,
 };
 
 use crate::domain::like::{ContentLike, ContentLikeRepoT};
@@ -57,12 +56,11 @@ impl ContentLikeRepoT for LikeRepo {
                 .map_err(map_err)?;
             Ok(false)
         } else {
-            let am = content_likes::ActiveModel {
-                user_id: Set(user_id),
-                content_type: Set(content_type.to_owned()),
-                content_id: Set(content_id),
-                ..Default::default()
-            };
+            let am: content_likes::ActiveModel = content_likes::ActiveModel::builder()
+                .set_user_id(user_id)
+                .set_content_type(content_type)
+                .set_content_id(content_id)
+                .into();
             match am.insert(&self.db).await {
                 Ok(_) => Ok(true),
                 Err(sea_orm::DbErr::Exec(_)) => Ok(false), // unique constraint: already liked

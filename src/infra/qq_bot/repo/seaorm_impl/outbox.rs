@@ -3,7 +3,7 @@ use sea_orm::sea_query::SimpleExpr;
 use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, Value,
+    QuerySelect, Value,
 };
 
 use crate::domain::qq_bot::repository::{OutboxEntry, OutboxRepoT, OutboxStatus};
@@ -67,21 +67,20 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 #[async_trait]
 impl OutboxRepoT for OutboxRepo {
     async fn insert(&self, entry: &OutboxEntry) -> Result<OutboxEntry, AppError> {
-        let model = qq_message_outbox::ActiveModel {
-            bot_account_id: Set(entry.bot_account_id),
-            qq_group_id: Set(entry.qq_group_id),
-            qq_user_id: Set(entry.qq_user_id),
-            target_type: Set(entry.target_type.clone()),
-            payload: Set(entry.payload.clone()),
-            related_turn_id: Set(entry.related_turn_id),
-            status: Set(status_to_str(entry.status).to_string()),
-            attempts: Set(entry.attempts),
-            max_attempts: Set(entry.max_attempts),
-            next_run_at: Set(entry.next_run_at),
-            platform_message_id: Set(entry.platform_message_id.clone()),
-            last_error: Set(entry.last_error.clone()),
-            ..Default::default()
-        };
+        let model: qq_message_outbox::ActiveModel = qq_message_outbox::ActiveModel::builder()
+            .set_bot_account_id(entry.bot_account_id)
+            .set_qq_group_id(entry.qq_group_id)
+            .set_qq_user_id(entry.qq_user_id)
+            .set_target_type(entry.target_type.clone())
+            .set_payload(entry.payload.clone())
+            .set_related_turn_id(entry.related_turn_id)
+            .set_status(status_to_str(entry.status))
+            .set_attempts(entry.attempts)
+            .set_max_attempts(entry.max_attempts)
+            .set_next_run_at(entry.next_run_at)
+            .set_platform_message_id(entry.platform_message_id.clone())
+            .set_last_error(entry.last_error.clone())
+            .into();
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
     }

@@ -91,27 +91,26 @@ fn map_db_err(e: sea_orm::DbErr) -> AppError {
 #[async_trait]
 impl AgentTurnRepoT for AgentTurnRepo {
     async fn insert(&self, turn: &AgentTurn) -> Result<AgentTurn, AppError> {
-        let model = qq_agent_turns::ActiveModel {
-            bot_account_id: Set(turn.bot_account_id),
-            qq_group_id: Set(turn.qq_group_id),
-            trigger_message_id: Set(turn.trigger_message_id),
-            response_message_id: Set(turn.response_message_id),
-            trigger_type: Set(trigger_type_to_str(turn.trigger_type).to_string()),
-            qq_user_id: Set(turn.qq_user_id),
-            internal_user_id: Set(turn.internal_user_id),
-            prompt_version: Set(turn.prompt_version.clone()),
-            model_name: Set(turn.model_name.clone()),
-            reasoning_enabled: Set(turn.reasoning_enabled.map(|v| if v { 1i8 } else { 0i8 })),
-            input_token_count: Set(turn.input_token_count),
-            output_token_count: Set(turn.output_token_count),
-            latency_ms: Set(turn.latency_ms),
-            status: Set(turn_status_to_str(turn.status).to_string()),
-            error_message: Set(turn.error_message.clone()),
-            trace_id: Set(turn.trace_id.clone()),
-            created_at: Set(turn.created_at.naive_utc()),
-            updated_at: Set(turn.updated_at.naive_utc()),
-            ..Default::default()
-        };
+        let model: qq_agent_turns::ActiveModel = qq_agent_turns::ActiveModel::builder()
+            .set_bot_account_id(turn.bot_account_id)
+            .set_qq_group_id(turn.qq_group_id)
+            .set_trigger_message_id(turn.trigger_message_id)
+            .set_response_message_id(turn.response_message_id)
+            .set_trigger_type(trigger_type_to_str(turn.trigger_type))
+            .set_qq_user_id(turn.qq_user_id)
+            .set_internal_user_id(turn.internal_user_id)
+            .set_prompt_version(turn.prompt_version.clone())
+            .set_model_name(turn.model_name.clone())
+            .set_reasoning_enabled(turn.reasoning_enabled.map(|v| if v { 1_i8 } else { 0_i8 }))
+            .set_input_token_count(turn.input_token_count)
+            .set_output_token_count(turn.output_token_count)
+            .set_latency_ms(turn.latency_ms)
+            .set_status(turn_status_to_str(turn.status))
+            .set_error_message(turn.error_message.clone())
+            .set_trace_id(turn.trace_id.clone())
+            .set_created_at(turn.created_at.naive_utc())
+            .set_updated_at(turn.updated_at.naive_utc())
+            .into();
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
     }

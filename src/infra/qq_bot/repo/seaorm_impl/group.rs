@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, JsonValue, QueryFilter};
 
 use crate::domain::qq_bot::config::{GroupConfig, MemoryPolicy, ReplyPolicy, TriggerPolicy};
 use crate::domain::qq_bot::repository::GroupRepoT;
@@ -87,25 +87,24 @@ fn domain_to_active_model(group: &GroupConfig) -> qq_groups::ActiveModel {
         ))
     };
 
-    qq_groups::ActiveModel {
-        qq_group_id: Set(group.qq_group_id),
-        group_name: Set(group.group_name.clone()),
-        bot_account_id: Set(group.bot_account_id),
-        enabled: Set(if group.enabled { 1 } else { 0 }),
-        trigger_policy: Set(trigger_policy_to_str(group.trigger_policy).to_string()),
-        cooldown_secs: Set(group.reply_policy.cooldown_secs),
-        max_segments: Set(group.reply_policy.max_segments),
-        max_chars_per_segment: Set(group.reply_policy.max_chars_per_segment),
-        allow_proactive: Set(if group.reply_policy.allow_proactive {
-            1
+    qq_groups::ActiveModel::builder()
+        .set_qq_group_id(group.qq_group_id)
+        .set_group_name(group.group_name.clone())
+        .set_bot_account_id(group.bot_account_id)
+        .set_enabled(if group.enabled { 1_i8 } else { 0_i8 })
+        .set_trigger_policy(trigger_policy_to_str(group.trigger_policy))
+        .set_cooldown_secs(group.reply_policy.cooldown_secs)
+        .set_max_segments(group.reply_policy.max_segments)
+        .set_max_chars_per_segment(group.reply_policy.max_chars_per_segment)
+        .set_allow_proactive(if group.reply_policy.allow_proactive {
+            1_i8
         } else {
-            0
-        }),
-        keywords: Set(keywords),
-        memory_policy: Set(memory_policy_to_str(group.memory_policy).to_string()),
-        last_seen_at: Set(None),
-        ..Default::default()
-    }
+            0_i8
+        })
+        .set_keywords(keywords)
+        .set_memory_policy(memory_policy_to_str(group.memory_policy))
+        .set_last_seen_at(None)
+        .into()
 }
 
 fn map_db_err(e: sea_orm::DbErr) -> AppError {

@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, Set,
-    Statement,
+    ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, Statement,
 };
 
 use crate::domain::user::user_context_version::{
@@ -42,11 +41,12 @@ impl UserContextVersionRepoT for UserContextVersionRepo {
         }
 
         let now = Utc::now().naive_utc();
-        let active = user_context_versions::ActiveModel {
-            user_id: Set(user_id),
-            version: Set(1),
-            updated_at: Set(now),
-        };
+        let active: user_context_versions::ActiveModel =
+            user_context_versions::ActiveModel::builder()
+                .set_user_id(user_id)
+                .set_version(1_u64)
+                .set_updated_at(now)
+                .into();
         match active.insert(&self.db).await {
             Ok(model) => Ok(map_model(model)),
             Err(_) => user_context_versions::Entity::find_by_id(user_id)

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::domain::storage::{StorageBackend, StoredObject, StoredObjectRepoT};
 use crate::shared::error::AppError;
@@ -56,19 +56,18 @@ fn map_err(e: sea_orm::DbErr) -> AppError {
 #[async_trait]
 impl StoredObjectRepoT for StoredObjectRepo {
     async fn save(&self, object: StoredObject) -> Result<StoredObject, AppError> {
-        let am = stored_objects::ActiveModel {
-            bucket: Set(object.bucket),
-            object_key: Set(object.object_key),
-            original_name: Set(object.original_name),
-            mime_type: Set(object.mime_type),
-            size_bytes: Set(object.size_bytes),
-            sha256: Set(object.sha256),
-            storage_backend: Set(backend_to_str(&object.storage_backend)),
-            public_url: Set(object.public_url),
-            created_by: Set(object.created_by),
-            created_at: Set(object.created_at.naive_utc()),
-            ..Default::default()
-        };
+        let am: stored_objects::ActiveModel = stored_objects::ActiveModel::builder()
+            .set_bucket(object.bucket)
+            .set_object_key(object.object_key)
+            .set_original_name(object.original_name)
+            .set_mime_type(object.mime_type)
+            .set_size_bytes(object.size_bytes)
+            .set_sha256(object.sha256)
+            .set_storage_backend(backend_to_str(&object.storage_backend))
+            .set_public_url(object.public_url)
+            .set_created_by(object.created_by)
+            .set_created_at(object.created_at.naive_utc())
+            .into();
 
         Ok(map(am.insert(&self.db).await.map_err(map_err)?))
     }

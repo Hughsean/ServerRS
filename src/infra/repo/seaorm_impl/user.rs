@@ -111,20 +111,21 @@ impl UserRepoT for UserRepo {
 
     async fn save(&self, new_user: NewUser) -> Result<User, AppError> {
         let now = chrono::Utc::now();
-        let model = users::ActiveModel {
-            username: Set(new_user.username),
-            password: Set(new_user
-                .password_hash
-                .unwrap_or_else(|| QQ_AUTO_REGISTERED_SENTINEL.to_string())),
-            email: Set(new_user.email),
-            phone: Set(new_user.phone),
-            nickname: Set(new_user.nickname),
-            status: Set(new_user.status.to_i32() as i8),
-            role: Set(new_user.role.as_str().to_string()),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let model: users::ActiveModel = users::ActiveModel::builder()
+            .set_username(new_user.username)
+            .set_password(
+                new_user
+                    .password_hash
+                    .unwrap_or_else(|| QQ_AUTO_REGISTERED_SENTINEL.to_string()),
+            )
+            .set_email(new_user.email)
+            .set_phone(new_user.phone)
+            .set_nickname(new_user.nickname)
+            .set_status(new_user.status.to_i32() as i8)
+            .set_role(new_user.role.as_str())
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
 
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))

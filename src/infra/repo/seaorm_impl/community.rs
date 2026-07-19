@@ -109,18 +109,17 @@ impl CommunityRepoT for CommunityRepo {
 
     async fn save_post(&self, new_post: NewPost) -> Result<Post, AppError> {
         let now = chrono::Utc::now();
-        let am = community_posts::ActiveModel {
-            user_id: Set(new_post.user_id),
-            title: Set(new_post.title),
-            content: Set(new_post.content),
-            extra_metadata: Set(new_post.extra_metadata.map(|v| v.into())),
-            likes_count: Set(0),
-            comments_count: Set(0),
-            status: Set(new_post.status.to_i8()),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: community_posts::ActiveModel = community_posts::ActiveModel::builder()
+            .set_user_id(new_post.user_id)
+            .set_title(new_post.title)
+            .set_content(new_post.content)
+            .set_extra_metadata(new_post.extra_metadata.map(Into::into))
+            .set_likes_count(0_u32)
+            .set_comments_count(0_u32)
+            .set_status(new_post.status.to_i8())
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         Ok(map_post(am.insert(&self.db).await.map_err(map_err)?))
     }
 
@@ -209,18 +208,17 @@ impl CommunityRepoT for CommunityRepo {
     async fn save_comment(&self, new_comment: NewComment) -> Result<Comment, AppError> {
         let now = chrono::Utc::now();
         let post_id = new_comment.post_id;
-        let am = community_comments::ActiveModel {
-            post_id: Set(post_id),
-            user_id: Set(new_comment.user_id),
-            parent_comment_id: Set(new_comment.parent_comment_id),
-            content: Set(new_comment.content),
-            attachments: Set(new_comment.attachments.map(|v| v.into())),
-            likes_count: Set(0),
-            status: Set(new_comment.status.to_i8()),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: community_comments::ActiveModel = community_comments::ActiveModel::builder()
+            .set_post_id(post_id)
+            .set_user_id(new_comment.user_id)
+            .set_parent_comment_id(new_comment.parent_comment_id)
+            .set_content(new_comment.content)
+            .set_attachments(new_comment.attachments.map(Into::into))
+            .set_likes_count(0_u32)
+            .set_status(new_comment.status.to_i8())
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         let txn = self.db.begin().await.map_err(map_err)?;
         let comment = map_comment(am.insert(&txn).await.map_err(map_err)?);
         let sql = format!(
@@ -295,14 +293,13 @@ impl CommunityRepoT for CommunityRepo {
 
     async fn save_media(&self, new_media: NewPostMedia) -> Result<PostMedia, AppError> {
         let now = chrono::Utc::now();
-        let am = community_post_media::ActiveModel {
-            post_id: Set(new_media.post_id),
-            media_type: Set(new_media.media_type),
-            mime_type: Set(new_media.mime_type),
-            media_data: Set(new_media.media_data),
-            created_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: community_post_media::ActiveModel = community_post_media::ActiveModel::builder()
+            .set_post_id(new_media.post_id)
+            .set_media_type(new_media.media_type)
+            .set_mime_type(new_media.mime_type)
+            .set_media_data(new_media.media_data)
+            .set_created_at(now.naive_utc())
+            .into();
         Ok(map_media(am.insert(&self.db).await.map_err(map_err)?))
     }
 
@@ -322,13 +319,12 @@ impl CommunityRepoT for CommunityRepo {
             return Ok(()); // already liked – idempotent
         }
         let now = chrono::Utc::now().naive_utc();
-        let am = content_likes::ActiveModel {
-            user_id: Set(user_id),
-            content_type: Set("community_post".to_owned()),
-            content_id: Set(post_id),
-            created_at: Set(now),
-            ..Default::default()
-        };
+        let am: content_likes::ActiveModel = content_likes::ActiveModel::builder()
+            .set_user_id(user_id)
+            .set_content_type("community_post")
+            .set_content_id(post_id)
+            .set_created_at(now)
+            .into();
         am.insert(&txn).await.map_err(map_err)?;
 
         // bump the denormalized counter
@@ -376,13 +372,12 @@ impl CommunityRepoT for CommunityRepo {
             return Ok(());
         }
         let now = chrono::Utc::now().naive_utc();
-        let am = content_likes::ActiveModel {
-            user_id: Set(user_id),
-            content_type: Set("community_comment".to_owned()),
-            content_id: Set(comment_id),
-            created_at: Set(now),
-            ..Default::default()
-        };
+        let am: content_likes::ActiveModel = content_likes::ActiveModel::builder()
+            .set_user_id(user_id)
+            .set_content_type("community_comment")
+            .set_content_id(comment_id)
+            .set_created_at(now)
+            .into();
         am.insert(&txn).await.map_err(map_err)?;
 
         let sql = format!(

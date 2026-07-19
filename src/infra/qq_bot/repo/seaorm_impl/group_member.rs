@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::domain::qq_bot::config::GroupMember;
 use crate::domain::qq_bot::repository::GroupMemberRepoT;
@@ -50,18 +50,17 @@ impl GroupMemberRepoT for GroupMemberRepo {
     }
 
     async fn upsert(&self, member: &GroupMember) -> Result<GroupMember, AppError> {
-        let model = qq_group_members::ActiveModel {
-            qq_group_id: Set(member.qq_group_id),
-            qq_user_id: Set(member.qq_user_id),
-            card: Set(member.card.clone()),
-            nickname: Set(member.nickname.clone()),
-            role: Set(member.role.clone()),
-            title: Set(member.title.clone()),
-            join_time: Set(member.join_time),
-            last_seen_at: Set(member.last_seen_at),
-            status: Set(member.status.clone()),
-            ..Default::default()
-        };
+        let model: qq_group_members::ActiveModel = qq_group_members::ActiveModel::builder()
+            .set_qq_group_id(member.qq_group_id)
+            .set_qq_user_id(member.qq_user_id)
+            .set_card(member.card.clone())
+            .set_nickname(member.nickname.clone())
+            .set_role(member.role.clone())
+            .set_title(member.title.clone())
+            .set_join_time(member.join_time)
+            .set_last_seen_at(member.last_seen_at)
+            .set_status(member.status.clone())
+            .into();
 
         let update_columns = vec![
             qq_group_members::Column::Card,

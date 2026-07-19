@@ -97,19 +97,17 @@ impl RelationshipRepoT for RelationshipRepo {
             active.known_avoid_topics = Set(known_avoid_topics_json);
             active.update(&self.db).await.map_err(map_db_err)?
         } else {
-            let active = qq_relationships::ActiveModel {
-                id: sea_orm::ActiveValue::NotSet,
-                qq_group_id: Set(rel.qq_group_id),
-                qq_user_id: Set(rel.qq_user_id),
-                familiarity: Set(rel.familiarity),
-                interaction_count: Set(rel.interaction_count),
-                last_interaction_at: Set(rel.last_interaction_at),
-                rapport: Set(rapport_str),
-                nickname_preference: Set(rel.nickname_preference.clone()),
-                known_interests: Set(known_interests_json),
-                known_avoid_topics: Set(known_avoid_topics_json),
-                ..Default::default()
-            };
+            let active: qq_relationships::ActiveModel = qq_relationships::ActiveModel::builder()
+                .set_qq_group_id(rel.qq_group_id)
+                .set_qq_user_id(rel.qq_user_id)
+                .set_familiarity(rel.familiarity)
+                .set_interaction_count(rel.interaction_count)
+                .set_last_interaction_at(rel.last_interaction_at)
+                .set_rapport(rapport_str)
+                .set_nickname_preference(rel.nickname_preference.clone())
+                .set_known_interests(known_interests_json)
+                .set_known_avoid_topics(known_avoid_topics_json)
+                .into();
             active.insert(&self.db).await.map_err(map_db_err)?
         };
 
@@ -151,19 +149,17 @@ impl RelationshipRepoT for RelationshipRepo {
             active.update(&self.db).await.map_err(map_db_err)?;
         } else {
             let now = chrono::Utc::now().timestamp();
-            let active = qq_relationships::ActiveModel {
-                id: sea_orm::ActiveValue::NotSet,
-                qq_group_id: Set(qq_group_id),
-                qq_user_id: Set(qq_user_id),
-                familiarity: Set(0.1),
-                interaction_count: Set(1),
-                last_interaction_at: Set(Some(now)),
-                rapport: Set("neutral".to_string()),
-                nickname_preference: Set(None),
-                known_interests: Set(None),
-                known_avoid_topics: Set(None),
-                ..Default::default()
-            };
+            let active: qq_relationships::ActiveModel = qq_relationships::ActiveModel::builder()
+                .set_qq_group_id(qq_group_id)
+                .set_qq_user_id(qq_user_id)
+                .set_familiarity(0.1_f32)
+                .set_interaction_count(1_u32)
+                .set_last_interaction_at(Some(now))
+                .set_rapport("neutral")
+                .set_nickname_preference(None)
+                .set_known_interests(None)
+                .set_known_avoid_topics(None)
+                .into();
             active.insert(&self.db).await.map_err(map_db_err)?;
         }
 

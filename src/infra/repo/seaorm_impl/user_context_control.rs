@@ -389,24 +389,24 @@ where
 
     let supersedes_id = current.as_ref().map(|value| value.snapshot_id);
     expire_active_persona(db, user_id).await?;
-    let active = user_persona_snapshots::ActiveModel {
-        user_id: Set(user_id),
-        status: Set("active".into()),
-        snapshot_data: Set(aggregate.snapshot_data),
-        source_memory_ids: Set(json!(aggregate.source_memory_ids)),
-        source_summary_ids: Set(Some(json!([]))),
-        source_recent_message_ids: Set(Some(json!([]))),
-        input_hash: Set(aggregate.input_hash),
-        model_name: Set("deterministic-memory-aggregate".into()),
-        prompt_version: Set("persona-rebuild-v1".into()),
-        schema_version: Set("1.0".into()),
-        generation_ms: Set(0),
-        supersedes_id: Set(supersedes_id),
-        error_message: Set(None),
-        created_at: Set(Utc::now().naive_utc()),
-        expires_at: Set(None),
-        ..Default::default()
-    };
+    let active: user_persona_snapshots::ActiveModel =
+        user_persona_snapshots::ActiveModel::builder()
+            .set_user_id(user_id)
+            .set_status("active")
+            .set_snapshot_data(aggregate.snapshot_data)
+            .set_source_memory_ids(json!(aggregate.source_memory_ids))
+            .set_source_summary_ids(Some(json!([])))
+            .set_source_recent_message_ids(Some(json!([])))
+            .set_input_hash(aggregate.input_hash)
+            .set_model_name("deterministic-memory-aggregate")
+            .set_prompt_version("persona-rebuild-v1")
+            .set_schema_version("1.0")
+            .set_generation_ms(0_u32)
+            .set_supersedes_id(supersedes_id)
+            .set_error_message(None)
+            .set_created_at(Utc::now().naive_utc())
+            .set_expires_at(None)
+            .into();
     let saved = active
         .insert(db)
         .await

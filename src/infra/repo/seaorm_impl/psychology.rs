@@ -236,16 +236,15 @@ impl PsychologyRepoT for PsychologyRepo {
         new: NewPsychologyCategory,
     ) -> Result<PsychologyCategory, AppError> {
         let now = chrono::Utc::now();
-        let am = psychology_categories::ActiveModel {
-            category_name: Set(new.name),
-            parent_id: Set(new.parent_id.map(|id| id as u16)),
-            description: Set(new.description),
-            sort_order: Set(new.sort_order),
-            status: Set(if new.is_enabled { 1_i8 } else { 0_i8 }),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: psychology_categories::ActiveModel = psychology_categories::ActiveModel::builder()
+            .set_category_name(new.name)
+            .set_parent_id(new.parent_id.map(|id| id as u16))
+            .set_description(new.description)
+            .set_sort_order(new.sort_order)
+            .set_status(if new.is_enabled { 1_i8 } else { 0_i8 })
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         am.insert(&self.db).await.map_err(map_err).map(map_category)
     }
 
@@ -404,24 +403,23 @@ impl PsychologyRepoT for PsychologyRepo {
         new: NewPsychologyArticle,
     ) -> Result<PsychologyArticle, AppError> {
         let now = chrono::Utc::now();
-        let am = psychology_articles::ActiveModel {
-            category_id: Set(new.category_id.unwrap_or(0) as u16),
-            title: Set(new.title),
-            summary: Set(new.summary),
-            content: Set(new.content),
-            author: Set(new.author),
-            source: Set(new.source),
-            tags: Set(string_to_json(new.tags)),
-            cover_image: Set(None),
-            view_count: Set(0_u32),
-            like_count: Set(0_u32),
-            is_featured: Set(if new.is_featured { 1_i8 } else { 0_i8 }),
-            is_published: Set(if new.is_published { 1_i8 } else { 0_i8 }),
-            publish_date: Set(None),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: psychology_articles::ActiveModel = psychology_articles::ActiveModel::builder()
+            .set_category_id(new.category_id.unwrap_or(0) as u16)
+            .set_title(new.title)
+            .set_summary(new.summary)
+            .set_content(new.content)
+            .set_author(new.author)
+            .set_source(new.source)
+            .set_tags(string_to_json(new.tags))
+            .set_cover_image(None)
+            .set_view_count(0_u32)
+            .set_like_count(0_u32)
+            .set_is_featured(if new.is_featured { 1_i8 } else { 0_i8 })
+            .set_is_published(if new.is_published { 1_i8 } else { 0_i8 })
+            .set_publish_date(None)
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         am.insert(&self.db).await.map_err(map_err).map(map_article)
     }
 
@@ -562,21 +560,20 @@ impl PsychologyRepoT for PsychologyRepo {
 
     async fn create_qna(&self, new: NewPsychologyQna) -> Result<PsychologyQna, AppError> {
         let now = chrono::Utc::now();
-        let am = psychology_qna::ActiveModel {
-            category_id: Set(new.category_id.unwrap_or(0) as u16),
-            question: Set(new.question),
-            answer: Set(new.answer),
-            expert_name: Set(new.expert_name),
-            expert_title: Set(new.expert_title),
-            tags: Set(string_to_json(new.tags)),
-            view_count: Set(0_u32),
-            like_count: Set(0_u32),
-            is_verified: Set(if new.is_verified { 1_i8 } else { 0_i8 }),
-            status: Set(if new.is_published { 1_i8 } else { 0_i8 }),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: psychology_qna::ActiveModel = psychology_qna::ActiveModel::builder()
+            .set_category_id(new.category_id.unwrap_or(0) as u16)
+            .set_question(new.question)
+            .set_answer(new.answer)
+            .set_expert_name(new.expert_name)
+            .set_expert_title(new.expert_title)
+            .set_tags(string_to_json(new.tags))
+            .set_view_count(0_u32)
+            .set_like_count(0_u32)
+            .set_is_verified(if new.is_verified { 1_i8 } else { 0_i8 })
+            .set_status(if new.is_published { 1_i8 } else { 0_i8 })
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         am.insert(&self.db).await.map_err(map_err).map(map_qna)
     }
 
@@ -715,24 +712,23 @@ impl PsychologyRepoT for PsychologyRepo {
         new: NewPsychologyResource,
     ) -> Result<PsychologyResource, AppError> {
         let now = chrono::Utc::now();
-        let am = psychology_resources::ActiveModel {
-            category_id: Set(new.category_id.unwrap_or(0) as u16),
-            resource_type: Set(new.resource_type),
-            title: Set(new.title),
-            description: Set(new.description),
-            external_url: Set(new.external_url),
-            file_size: Set(None),
-            mime_type: Set(None),
-            duration: Set(None),
-            tags: Set(string_to_json(new.tags)),
-            view_count: Set(0_u32),
-            like_count: Set(0_u32),
-            status: Set(if new.is_published { 1_i8 } else { 0_i8 }),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            thumbnail: Set(None),
-            ..Default::default()
-        };
+        let am: psychology_resources::ActiveModel = psychology_resources::ActiveModel::builder()
+            .set_category_id(new.category_id.unwrap_or(0) as u16)
+            .set_resource_type(new.resource_type)
+            .set_title(new.title)
+            .set_description(new.description)
+            .set_external_url(new.external_url)
+            .set_file_size(None)
+            .set_mime_type(None)
+            .set_duration(None)
+            .set_tags(string_to_json(new.tags))
+            .set_view_count(0_u32)
+            .set_like_count(0_u32)
+            .set_status(if new.is_published { 1_i8 } else { 0_i8 })
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .set_thumbnail(None)
+            .into();
         am.insert(&self.db).await.map_err(map_err).map(map_resource)
     }
 
@@ -854,13 +850,12 @@ impl PsychologyRepoT for PsychologyRepo {
                 .map_err(map_err)?;
             false
         } else {
-            let am = content_likes::ActiveModel {
-                user_id: Set(new.user_id),
-                content_type: Set(content_type.to_string()),
-                content_id: Set(new.content_id),
-                created_at: Set(chrono::Utc::now().naive_utc()),
-                ..Default::default()
-            };
+            let am: content_likes::ActiveModel = content_likes::ActiveModel::builder()
+                .set_user_id(new.user_id)
+                .set_content_type(content_type)
+                .set_content_id(new.content_id)
+                .set_created_at(chrono::Utc::now().naive_utc())
+                .into();
             am.insert(&txn).await.map_err(map_err)?;
             true
         };

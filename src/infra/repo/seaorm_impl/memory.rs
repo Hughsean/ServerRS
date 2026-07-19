@@ -50,37 +50,35 @@ where
     let source_confidence =
         sea_orm::prelude::Decimal::from_str(&format!("{:.2}", memory.confidence.clamp(0.0, 1.0)))
             .unwrap_or(sea_orm::prelude::Decimal::ZERO);
-    let active = user_memories::ActiveModel {
-        memory_id: sea_orm::ActiveValue::NotSet,
-        user_id: Set(memory.user_id),
-        memory_type: Set(memory.memory_type),
-        memory_key: Set(memory.memory_key),
-        canonical_form: Set(memory.canonical_form),
-        content: Set(memory.content),
-        source_confidence: Set(source_confidence),
-        confidence: Set(memory.confidence.clamp(0.0, 1.0)),
-        salience: sea_orm::ActiveValue::NotSet,
-        source_conversation_id: Set(memory.source_conversation_id),
-        source_message_id: Set(memory.source_message_id),
-        reinforced_at: Set(None),
-        reinforce_count: Set(0),
-        contradicted_at: Set(None),
-        superseded_by: Set(None),
-        status: Set(1),
-        canonicalizer_version: Set(None),
-        merge_decision: Set(Some(memory.merge_decision)),
-        merge_reason: Set(None),
-        metadata: Set(None),
-        created_at: Set(now),
-        updated_at: Set(now),
-        last_accessed_at: Set(None),
-        access_count: Set(0),
-        vector_id: Set(None),
-        embedding_provider: Set(None),
-        embedding_model: Set(None),
-        embedding_dimension: Set(None),
-        indexed_at: Set(None),
-    };
+    let active: user_memories::ActiveModel = user_memories::ActiveModel::builder()
+        .set_user_id(memory.user_id)
+        .set_memory_type(memory.memory_type)
+        .set_memory_key(memory.memory_key)
+        .set_canonical_form(memory.canonical_form)
+        .set_content(memory.content)
+        .set_source_confidence(source_confidence)
+        .set_confidence(memory.confidence.clamp(0.0, 1.0))
+        .set_source_conversation_id(memory.source_conversation_id)
+        .set_source_message_id(memory.source_message_id)
+        .set_reinforced_at(None)
+        .set_reinforce_count(0_u32)
+        .set_contradicted_at(None)
+        .set_superseded_by(None)
+        .set_status(1)
+        .set_canonicalizer_version(None)
+        .set_merge_decision(Some(memory.merge_decision))
+        .set_merge_reason(None)
+        .set_metadata(None)
+        .set_created_at(now)
+        .set_updated_at(now)
+        .set_last_accessed_at(None)
+        .set_access_count(0_u32)
+        .set_vector_id(None)
+        .set_embedding_provider(None)
+        .set_embedding_model(None)
+        .set_embedding_dimension(None)
+        .set_indexed_at(None)
+        .into();
 
     let saved = active
         .insert(db)
@@ -102,19 +100,18 @@ where
         sea_orm::prelude::Decimal::from_str(&format!("{:.3}", value.clamp(0.0, 1.0)))
             .unwrap_or(sea_orm::prelude::Decimal::ZERO)
     });
-    let active = user_memory_evidence::ActiveModel {
-        evidence_id: sea_orm::ActiveValue::NotSet,
-        memory_id: Set(memory_id),
-        source_type: Set(evidence.source_type),
-        source_ref_id: Set(evidence.source_ref_id),
-        message_id: Set(evidence.message_id),
-        summary_id: Set(evidence.summary_id),
-        source_deleted: Set(0),
-        evidence_type: Set(evidence.evidence_type),
-        confidence: Set(confidence),
-        extractor_version: Set(evidence.extractor_version),
-        created_at: Set(Utc::now().naive_utc()),
-    };
+    let active: user_memory_evidence::ActiveModel = user_memory_evidence::ActiveModel::builder()
+        .set_memory_id(memory_id)
+        .set_source_type(evidence.source_type)
+        .set_source_ref_id(evidence.source_ref_id)
+        .set_message_id(evidence.message_id)
+        .set_summary_id(evidence.summary_id)
+        .set_source_deleted(0)
+        .set_evidence_type(evidence.evidence_type)
+        .set_confidence(confidence)
+        .set_extractor_version(evidence.extractor_version)
+        .set_created_at(Utc::now().naive_utc())
+        .into();
     active
         .insert(db)
         .await

@@ -39,15 +39,14 @@ impl DiaryRepo {
 impl DiaryRepoT for DiaryRepo {
     async fn save(&self, diary: NewUserDiary) -> Result<UserDiary, AppError> {
         let now = chrono::Utc::now();
-        let am = user_diaries::ActiveModel {
-            user_id: Set(diary.user_id),
-            title: Set(diary.title),
-            content: Set(diary.content),
-            mood_description: Set(None),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: user_diaries::ActiveModel = user_diaries::ActiveModel::builder()
+            .set_user_id(diary.user_id)
+            .set_title(diary.title)
+            .set_content(diary.content)
+            .set_mood_description(None)
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
         Ok(map(am.insert(&self.db).await.map_err(map_err)?))
     }
 

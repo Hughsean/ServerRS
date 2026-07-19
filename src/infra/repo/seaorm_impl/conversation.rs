@@ -104,14 +104,12 @@ impl ConversationRepoT for ConversationRepo {
 
     async fn save(&self, c: NewConversation) -> Result<Conversation, AppError> {
         let now = chrono::Utc::now();
-        let am = conversations::ActiveModel {
-            user_id: Set(c.user_id),
-            title: Set(c.title),
-
-            message_count: Set(0),
-            created_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: conversations::ActiveModel = conversations::ActiveModel::builder()
+            .set_user_id(c.user_id)
+            .set_title(c.title)
+            .set_message_count(0_u64)
+            .set_created_at(now.naive_utc())
+            .into();
         Ok(map_conv(am.insert(&self.db).await.map_err(map_err)?))
     }
 
@@ -155,16 +153,15 @@ impl ConversationRepoT for ConversationRepo {
         msg: NewConversationMessage,
     ) -> Result<ConversationMessage, AppError> {
         let now = chrono::Utc::now();
-        let am = conversation_messages::ActiveModel {
-            conversation_id: Set(msg.conversation_id),
-            sender_role: Set(msg.sender_role),
-            sender_user_id: Set(msg.sender_user_id),
-            message_type: Set(msg.message_type),
-            content: Set(serde_json::from_str(&msg.content).unwrap_or(serde_json::Value::Null)),
-            token_count: Set(msg.token_count.map(|v| v as u32)),
-            created_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let am: conversation_messages::ActiveModel = conversation_messages::ActiveModel::builder()
+            .set_conversation_id(msg.conversation_id)
+            .set_sender_role(msg.sender_role)
+            .set_sender_user_id(msg.sender_user_id)
+            .set_message_type(msg.message_type)
+            .set_content(serde_json::from_str(&msg.content).unwrap_or(serde_json::Value::Null))
+            .set_token_count(msg.token_count.map(|v| v as u32))
+            .set_created_at(now.naive_utc())
+            .into();
         Ok(map_msg(am.insert(&self.db).await.map_err(map_err)?))
     }
 
@@ -264,33 +261,34 @@ impl ConversationRepoT for ConversationRepo {
             let now = chrono::Utc::now();
 
             // 1. 保存用户消息
-            let user_am = conversation_messages::ActiveModel {
-                conversation_id: Set(conversation_id),
-                sender_role: Set(user_msg.sender_role),
-                sender_user_id: Set(user_msg.sender_user_id),
-                message_type: Set(user_msg.message_type),
-                content: Set(
-                    serde_json::from_str(&user_msg.content).unwrap_or(serde_json::Value::Null)
-                ),
-                token_count: Set(user_msg.token_count.map(|v| v as u32)),
-                created_at: Set(now.naive_utc()),
-                ..Default::default()
-            };
+            let user_am: conversation_messages::ActiveModel =
+                conversation_messages::ActiveModel::builder()
+                    .set_conversation_id(conversation_id)
+                    .set_sender_role(user_msg.sender_role)
+                    .set_sender_user_id(user_msg.sender_user_id)
+                    .set_message_type(user_msg.message_type)
+                    .set_content(
+                        serde_json::from_str(&user_msg.content).unwrap_or(serde_json::Value::Null),
+                    )
+                    .set_token_count(user_msg.token_count.map(|v| v as u32))
+                    .set_created_at(now.naive_utc())
+                    .into();
             let user_saved = user_am.insert(&txn).await.map_err(map_err)?;
 
             // 2. 保存助手消息
-            let asst_am = conversation_messages::ActiveModel {
-                conversation_id: Set(conversation_id),
-                sender_role: Set(assistant_msg.sender_role),
-                sender_user_id: Set(assistant_msg.sender_user_id),
-                message_type: Set(assistant_msg.message_type),
-                content: Set(
-                    serde_json::from_str(&assistant_msg.content).unwrap_or(serde_json::Value::Null)
-                ),
-                token_count: Set(assistant_msg.token_count.map(|v| v as u32)),
-                created_at: Set(now.naive_utc()),
-                ..Default::default()
-            };
+            let asst_am: conversation_messages::ActiveModel =
+                conversation_messages::ActiveModel::builder()
+                    .set_conversation_id(conversation_id)
+                    .set_sender_role(assistant_msg.sender_role)
+                    .set_sender_user_id(assistant_msg.sender_user_id)
+                    .set_message_type(assistant_msg.message_type)
+                    .set_content(
+                        serde_json::from_str(&assistant_msg.content)
+                            .unwrap_or(serde_json::Value::Null),
+                    )
+                    .set_token_count(assistant_msg.token_count.map(|v| v as u32))
+                    .set_created_at(now.naive_utc())
+                    .into();
             let asst_saved = asst_am.insert(&txn).await.map_err(map_err)?;
 
             // 3. 更新对话计数和最后消息时间

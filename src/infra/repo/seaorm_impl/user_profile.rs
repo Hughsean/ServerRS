@@ -74,17 +74,16 @@ impl UserProfileRepoT for UserProfileRepo {
 
     async fn save(&self, profile: NewUserProfile) -> Result<UserProfile, AppError> {
         let now = chrono::Utc::now();
-        let model = user_profiles::ActiveModel {
-            user_id: Set(profile.user_id),
-            interests: Set(to_json_array(&profile.interests)),
-            personality_traits: Set(to_json_array(&profile.personality_traits)),
-            interaction_preferences: Set(to_json_array(&profile.interaction_preferences)),
-            emotional_tendency: Set(to_json_array(&profile.emotional_tendency)),
-            learning_records: Set(to_json_array(&profile.learning_records)),
-            created_at: Set(now.naive_utc()),
-            updated_at: Set(now.naive_utc()),
-            ..Default::default()
-        };
+        let model: user_profiles::ActiveModel = user_profiles::ActiveModel::builder()
+            .set_user_id(profile.user_id)
+            .set_interests(to_json_array(&profile.interests))
+            .set_personality_traits(to_json_array(&profile.personality_traits))
+            .set_interaction_preferences(to_json_array(&profile.interaction_preferences))
+            .set_emotional_tendency(to_json_array(&profile.emotional_tendency))
+            .set_learning_records(to_json_array(&profile.learning_records))
+            .set_created_at(now.naive_utc())
+            .set_updated_at(now.naive_utc())
+            .into();
 
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
@@ -129,19 +128,18 @@ impl UserProfileRepoT for UserProfileRepo {
     /// 使用 INSERT ... ON DUPLICATE KEY UPDATE 消除 TOCTOU 竞态。
     async fn upsert(&self, user_id: u64, profile: NewUserProfile) -> Result<UserProfile, AppError> {
         let now = chrono::Utc::now().naive_utc();
-        let model = user_profiles::ActiveModel {
-            user_id: Set(profile.user_id),
-            interests: Set(to_json_array(&profile.interests)),
-            personality_traits: Set(to_json_array(&profile.personality_traits)),
-            interaction_preferences: Set(to_json_array(&profile.interaction_preferences)),
-            emotional_tendency: Set(to_json_array(&profile.emotional_tendency)),
-            learning_records: Set(to_json_array(&profile.learning_records)),
-            personalization_enabled: Set(0),
-            personalization_reset_at: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-            ..Default::default()
-        };
+        let model: user_profiles::ActiveModel = user_profiles::ActiveModel::builder()
+            .set_user_id(profile.user_id)
+            .set_interests(to_json_array(&profile.interests))
+            .set_personality_traits(to_json_array(&profile.personality_traits))
+            .set_interaction_preferences(to_json_array(&profile.interaction_preferences))
+            .set_emotional_tendency(to_json_array(&profile.emotional_tendency))
+            .set_learning_records(to_json_array(&profile.learning_records))
+            .set_personalization_enabled(0)
+            .set_personalization_reset_at(None)
+            .set_created_at(now)
+            .set_updated_at(now)
+            .into();
 
         // 使用 SeaORM 的 insert_many + on_conflict 实现原子化 upsert，
         // 确保在并发场景下不会产生 Duplicate Entry 错误。

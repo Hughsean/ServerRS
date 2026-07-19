@@ -72,30 +72,30 @@ impl RiskRepoT for RiskRepo {
         new_audit: NewPostConversationRiskAudit,
     ) -> Result<PostConversationRiskAudit, AppError> {
         let now = Utc::now().naive_utc();
-        let am = post_conversation_risk_audits::ActiveModel {
-            audit_id: sea_orm::ActiveValue::NotSet,
-            user_id: Set(new_audit.user_id),
-            conversation_id: Set(new_audit.conversation_id),
-            audit_scope: Set(new_audit.audit_scope),
-            user_message_ref_id: Set(new_audit.user_message_ref_id),
-            assistant_message_ref_id: Set(new_audit.assistant_message_ref_id),
-            user_message_id: Set(new_audit.user_message_id),
-            assistant_message_id: Set(new_audit.assistant_message_id),
-            status: Set("pending".to_string()),
-            risk_level: Set(None),
-            risk_categories: Set(None),
-            confidence: Set(None),
-            input_hash: Set(None),
-            detector_name: Set(None),
-            detector_version: Set(None),
-            model_name: Set(None),
-            checked_at: Set(None),
-            error_message: Set(None),
-            metadata: Set(None),
-            source_deleted: Set(0),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
+        let am: post_conversation_risk_audits::ActiveModel =
+            post_conversation_risk_audits::ActiveModel::builder()
+                .set_user_id(new_audit.user_id)
+                .set_conversation_id(new_audit.conversation_id)
+                .set_audit_scope(new_audit.audit_scope)
+                .set_user_message_ref_id(new_audit.user_message_ref_id)
+                .set_assistant_message_ref_id(new_audit.assistant_message_ref_id)
+                .set_user_message_id(new_audit.user_message_id)
+                .set_assistant_message_id(new_audit.assistant_message_id)
+                .set_status("pending")
+                .set_risk_level(None)
+                .set_risk_categories(None)
+                .set_confidence(None)
+                .set_input_hash(None)
+                .set_detector_name(None)
+                .set_detector_version(None)
+                .set_model_name(None)
+                .set_checked_at(None)
+                .set_error_message(None)
+                .set_metadata(None)
+                .set_source_deleted(0)
+                .set_created_at(now)
+                .set_updated_at(now)
+                .into();
         let saved = am.insert(&self.db).await.map_err(map_err)?;
         Ok(map_audit(saved))
     }

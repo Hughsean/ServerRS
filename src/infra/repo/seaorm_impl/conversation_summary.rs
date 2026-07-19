@@ -116,25 +116,25 @@ impl SummaryRepoT for ConversationSummaryRepo {
             None
         };
 
-        let active = conversation_summaries::ActiveModel {
-            summary_id: sea_orm::ActiveValue::NotSet,
-            conversation_id: Set(summary.conversation_id),
-            user_id: Set(summary.user_id),
-            summary_type: Set(summary.summary_type),
-            content: Set(summary.content),
-            message_start_id: Set(summary.message_start_id),
-            message_end_id: Set(summary.message_end_id),
-            token_count: Set(summary.word_count),
-            status: Set(1),
-            supersedes_id: Set(supersedes_id),
-            created_at: Set(now),
-            updated_at: Set(now),
-            vector_id: Set(None),
-            embedding_provider: Set(None),
-            embedding_model: Set(None),
-            embedding_dimension: Set(None),
-            indexed_at: Set(None),
-        };
+        let active: conversation_summaries::ActiveModel =
+            conversation_summaries::ActiveModel::builder()
+                .set_conversation_id(summary.conversation_id)
+                .set_user_id(summary.user_id)
+                .set_summary_type(summary.summary_type)
+                .set_content(summary.content)
+                .set_message_start_id(summary.message_start_id)
+                .set_message_end_id(summary.message_end_id)
+                .set_token_count(summary.word_count)
+                .set_status(1)
+                .set_supersedes_id(supersedes_id)
+                .set_created_at(now)
+                .set_updated_at(now)
+                .set_vector_id(None)
+                .set_embedding_provider(None)
+                .set_embedding_model(None)
+                .set_embedding_dimension(None)
+                .set_indexed_at(None)
+                .into();
 
         let saved = active
             .insert(&txn)

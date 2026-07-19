@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
     EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
-    TransactionTrait, Unchanged, Value,
+    TransactionTrait, Value,
 };
 use serde_json::Value as JsonValue;
 
@@ -58,17 +58,16 @@ impl WebSourceRepoT for WebSourceRepo {
         Ok(rows.into_iter().map(model_to_web_source).collect())
     }
     async fn insert(&self, src: NewWebSource) -> Result<WebSource, WebIngestionError> {
-        let active = web_sources::ActiveModel {
-            name: Set(src.name),
-            description: Set(src.description),
-            approval_status: Set(src.approval_status),
-            trust_level: Set(src.trust_level),
-            auto_publish: Set(if src.auto_publish { 1 } else { 0 }),
-            allowed_domains: Set(src.allowed_domains),
-            default_language: Set(src.default_language),
-            enabled: Set(if src.enabled { 1 } else { 0 }),
-            ..Default::default()
-        };
+        let active: web_sources::ActiveModel = web_sources::ActiveModel::builder()
+            .set_name(src.name)
+            .set_description(src.description)
+            .set_approval_status(src.approval_status)
+            .set_trust_level(src.trust_level)
+            .set_auto_publish(if src.auto_publish { 1_i8 } else { 0_i8 })
+            .set_allowed_domains(src.allowed_domains)
+            .set_default_language(src.default_language)
+            .set_enabled(if src.enabled { 1_i8 } else { 0_i8 })
+            .into();
         let model = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_web_source(model))
     }
@@ -188,14 +187,13 @@ impl WebSourceUrlRepoT for WebSourceUrlRepo {
             let model = active.update(&self.db).await.map_err(map_db_err)?;
             Ok(model_to_ws_url(model))
         } else {
-            let active = web_source_urls::ActiveModel {
-                source_id: Set(url.source_id),
-                url: Set(url.url),
-                canonical_url: Set(url.canonical_url),
-                url_hash: Set(url.url_hash),
-                crawl_interval_secs: Set(url.crawl_interval_secs),
-                ..Default::default()
-            };
+            let active: web_source_urls::ActiveModel = web_source_urls::ActiveModel::builder()
+                .set_source_id(url.source_id)
+                .set_url(url.url)
+                .set_canonical_url(url.canonical_url)
+                .set_url_hash(url.url_hash)
+                .set_crawl_interval_secs(url.crawl_interval_secs)
+                .into();
             let model = active.insert(&self.db).await.map_err(map_db_err)?;
             Ok(model_to_ws_url(model))
         }
@@ -240,20 +238,21 @@ fn model_to_ws_url(m: web_source_urls::Model) -> WebSourceUrl {
 }
 
 fn row_to_ws_url_active(row: WebSourceUrl) -> web_source_urls::ActiveModel {
-    web_source_urls::ActiveModel {
-        id: Unchanged(row.id),
-        source_id: Unchanged(row.source_id),
-        url: Unchanged(row.url),
-        canonical_url: Unchanged(row.canonical_url),
-        url_hash: Unchanged(row.url_hash),
-        enabled: Unchanged(if row.enabled { 1 } else { 0 }),
-        crawl_interval_secs: Unchanged(row.crawl_interval_secs),
-        last_crawled_at: Unchanged(row.last_crawled_at.map(to_naive)),
-        last_content_hash: Unchanged(row.last_content_hash),
-        created_at: Unchanged(to_naive(row.created_at)),
-        updated_at: Unchanged(to_naive(row.updated_at)),
-        deleted_at: Unchanged(row.deleted_at.map(to_naive)),
-    }
+    let active: web_source_urls::ActiveModel = web_source_urls::ActiveModel::builder()
+        .set_id(row.id)
+        .set_source_id(row.source_id)
+        .set_url(row.url)
+        .set_canonical_url(row.canonical_url)
+        .set_url_hash(row.url_hash)
+        .set_enabled(if row.enabled { 1_i8 } else { 0_i8 })
+        .set_crawl_interval_secs(row.crawl_interval_secs)
+        .set_last_crawled_at(row.last_crawled_at.map(to_naive))
+        .set_last_content_hash(row.last_content_hash)
+        .set_created_at(to_naive(row.created_at))
+        .set_updated_at(to_naive(row.updated_at))
+        .set_deleted_at(row.deleted_at.map(to_naive))
+        .into();
+    active.reset_all()
 }
 
 // ============================================================================
@@ -280,12 +279,11 @@ impl WebCrawlJobRepoT for WebCrawlJobRepo {
         Ok(row.map(model_to_crawl_job))
     }
     async fn insert(&self, job: NewWebCrawlJob) -> Result<WebCrawlJob, WebIngestionError> {
-        let active = web_crawl_jobs::ActiveModel {
-            source_id: Set(job.source_id),
-            status: Set(job.status),
-            scheduled_at: Set(to_naive(job.scheduled_at)),
-            ..Default::default()
-        };
+        let active: web_crawl_jobs::ActiveModel = web_crawl_jobs::ActiveModel::builder()
+            .set_source_id(job.source_id)
+            .set_status(job.status)
+            .set_scheduled_at(to_naive(job.scheduled_at))
+            .into();
         let model = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_crawl_job(model))
     }
@@ -403,14 +401,13 @@ impl WebPageRepoT for WebPageRepo {
             let model = active.update(&self.db).await.map_err(map_db_err)?;
             Ok(model_to_web_page(model))
         } else {
-            let active = web_pages::ActiveModel {
-                source_id: Set(page.source_id),
-                source_url_id: Set(page.source_url_id),
-                url: Set(page.url),
-                canonical_url: Set(page.canonical_url),
-                url_hash: Set(page.url_hash),
-                ..Default::default()
-            };
+            let active: web_pages::ActiveModel = web_pages::ActiveModel::builder()
+                .set_source_id(page.source_id)
+                .set_source_url_id(page.source_url_id)
+                .set_url(page.url)
+                .set_canonical_url(page.canonical_url)
+                .set_url_hash(page.url_hash)
+                .into();
             let model = active.insert(&self.db).await.map_err(map_db_err)?;
             Ok(model_to_web_page(model))
         }
@@ -457,20 +454,21 @@ fn model_to_web_page(m: web_pages::Model) -> WebPage {
 }
 
 fn row_to_web_page_active(row: WebPage) -> web_pages::ActiveModel {
-    web_pages::ActiveModel {
-        id: Unchanged(row.id),
-        source_id: Unchanged(row.source_id),
-        source_url_id: Unchanged(row.source_url_id),
-        url: Unchanged(row.url),
-        canonical_url: Unchanged(row.canonical_url),
-        url_hash: Unchanged(row.url_hash),
-        latest_content_hash: Unchanged(row.latest_content_hash),
-        latest_success_run_id: Unchanged(row.latest_success_run_id),
-        last_fetched_at: Unchanged(row.last_fetched_at.map(to_naive)),
-        created_at: Unchanged(to_naive(row.created_at)),
-        updated_at: Unchanged(to_naive(row.updated_at)),
-        deleted_at: Unchanged(row.deleted_at.map(to_naive)),
-    }
+    let active: web_pages::ActiveModel = web_pages::ActiveModel::builder()
+        .set_id(row.id)
+        .set_source_id(row.source_id)
+        .set_source_url_id(row.source_url_id)
+        .set_url(row.url)
+        .set_canonical_url(row.canonical_url)
+        .set_url_hash(row.url_hash)
+        .set_latest_content_hash(row.latest_content_hash)
+        .set_latest_success_run_id(row.latest_success_run_id)
+        .set_last_fetched_at(row.last_fetched_at.map(to_naive))
+        .set_created_at(to_naive(row.created_at))
+        .set_updated_at(to_naive(row.updated_at))
+        .set_deleted_at(row.deleted_at.map(to_naive))
+        .into();
+    active.reset_all()
 }
 
 // ============================================================================
@@ -525,19 +523,19 @@ impl IngestionRunRepoT for IngestionRunRepo {
         &self,
         run: NewIngestionRun,
     ) -> Result<KnowledgeIngestionRun, WebIngestionError> {
-        let active = knowledge_ingestion_runs::ActiveModel {
-            source_id: Set(run.source_id),
-            source_url_id: Set(run.source_url_id),
-            crawl_job_id: Set(run.crawl_job_id),
-            page_id: Set(run.page_id),
-            content_hash: Set(run.content_hash),
-            content_key: Set(run.content_key),
-            run_key: Set(run.run_key),
-            version_key: Set(run.version_key),
-            status: Set("pending".into()),
-            stage: Set("pending".into()),
-            ..Default::default()
-        };
+        let active: knowledge_ingestion_runs::ActiveModel =
+            knowledge_ingestion_runs::ActiveModel::builder()
+                .set_source_id(run.source_id)
+                .set_source_url_id(run.source_url_id)
+                .set_crawl_job_id(run.crawl_job_id)
+                .set_page_id(run.page_id)
+                .set_content_hash(run.content_hash)
+                .set_content_key(run.content_key)
+                .set_run_key(run.run_key)
+                .set_version_key(run.version_key)
+                .set_status("pending")
+                .set_stage("pending")
+                .into();
         let model = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_run(model))
     }
@@ -814,18 +812,18 @@ impl PublishRecordRepoT for PublishRecordRepo {
         &self,
         record: NewPublishRecord,
     ) -> Result<KnowledgePublishRecord, WebIngestionError> {
-        let active = knowledge_publish_records::ActiveModel {
-            source_id: Set(record.source_id),
-            page_id: Set(record.page_id),
-            run_id: Set(record.run_id),
-            document_id: Set(record.document_id),
-            version_key: Set(record.version_key),
-            content_hash: Set(record.content_hash),
-            active_page_key: Set(record.active_page_key),
-            publish_status: Set("staged".into()),
-            active: Set(0),
-            ..Default::default()
-        };
+        let active: knowledge_publish_records::ActiveModel =
+            knowledge_publish_records::ActiveModel::builder()
+                .set_source_id(record.source_id)
+                .set_page_id(record.page_id)
+                .set_run_id(record.run_id)
+                .set_document_id(record.document_id)
+                .set_version_key(record.version_key)
+                .set_content_hash(record.content_hash)
+                .set_active_page_key(record.active_page_key)
+                .set_publish_status("staged")
+                .set_active(0_i8)
+                .into();
         let model = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_pr(model))
     }
@@ -1188,18 +1186,18 @@ impl ChunkManifestRepoT for ChunkManifestRepo {
     ) -> Result<Vec<KnowledgeChunkManifest>, WebIngestionError> {
         let mut results = Vec::with_capacity(manifests.len());
         for m in manifests {
-            let active = knowledge_chunk_manifests::ActiveModel {
-                publish_record_id: Set(m.publish_record_id),
-                run_id: Set(m.run_id),
-                document_id: Set(m.document_id),
-                chunk_id: Set(m.chunk_id),
-                version_key: Set(m.version_key.clone()),
-                chunk_hash: Set(m.chunk_hash.clone()),
-                chunk_type: Set(m.chunk_type.clone()),
-                chunk_index: Set(m.chunk_index),
-                active: Set(0),
-                ..Default::default()
-            };
+            let active: knowledge_chunk_manifests::ActiveModel =
+                knowledge_chunk_manifests::ActiveModel::builder()
+                    .set_publish_record_id(m.publish_record_id)
+                    .set_run_id(m.run_id)
+                    .set_document_id(m.document_id)
+                    .set_chunk_id(m.chunk_id)
+                    .set_version_key(m.version_key.clone())
+                    .set_chunk_hash(m.chunk_hash.clone())
+                    .set_chunk_type(m.chunk_type.clone())
+                    .set_chunk_index(m.chunk_index)
+                    .set_active(0_i8)
+                    .into();
             let model = active.insert(&self.db).await.map_err(map_db_err)?;
             results.push(model_to_cm(model));
         }
@@ -1301,20 +1299,20 @@ impl VectorManifestRepoT for VectorManifestRepo {
     ) -> Result<Vec<KnowledgeVectorManifest>, WebIngestionError> {
         let mut results = Vec::with_capacity(manifests.len());
         for m in manifests {
-            let active = knowledge_vector_manifests::ActiveModel {
-                publish_record_id: Set(m.publish_record_id),
-                run_id: Set(m.run_id),
-                document_id: Set(m.document_id),
-                chunk_id: Set(m.chunk_id),
-                chunk_hash: Set(m.chunk_hash.clone()),
-                vector_index_name: Set(m.location.index_name.clone()),
-                vector_point_id: Set(m.location.point_id.clone()),
-                embedding_provider: Set(m.embedding_provider.clone()),
-                embedding_model: Set(m.embedding_model.clone()),
-                embedding_dimension: Set(m.embedding_dimension),
-                active: Set(0),
-                ..Default::default()
-            };
+            let active: knowledge_vector_manifests::ActiveModel =
+                knowledge_vector_manifests::ActiveModel::builder()
+                    .set_publish_record_id(m.publish_record_id)
+                    .set_run_id(m.run_id)
+                    .set_document_id(m.document_id)
+                    .set_chunk_id(m.chunk_id)
+                    .set_chunk_hash(m.chunk_hash.clone())
+                    .set_vector_index_name(m.location.index_name.clone())
+                    .set_vector_point_id(m.location.point_id.clone())
+                    .set_embedding_provider(m.embedding_provider.clone())
+                    .set_embedding_model(m.embedding_model.clone())
+                    .set_embedding_dimension(m.embedding_dimension)
+                    .set_active(0_i8)
+                    .into();
             let model = active.insert(&self.db).await.map_err(map_db_err)?;
             results.push(model_to_vm(model));
         }
@@ -1792,18 +1790,18 @@ impl AuditLogRepo {
 #[async_trait]
 impl AuditLogRepoT for AuditLogRepo {
     async fn insert(&self, log: NewAuditLog) -> Result<AuditLog, WebIngestionError> {
-        let active = web_ingestion_audit_logs::ActiveModel {
-            source_id: Set(log.source_id),
-            source_url_id: Set(log.source_url_id),
-            page_id: Set(log.page_id),
-            run_id: Set(log.run_id),
-            publish_record_id: Set(log.publish_record_id),
-            action: Set(log.action),
-            status: Set(log.status),
-            message: Set(log.message),
-            metadata: Set(log.metadata),
-            ..Default::default()
-        };
+        let active: web_ingestion_audit_logs::ActiveModel =
+            web_ingestion_audit_logs::ActiveModel::builder()
+                .set_source_id(log.source_id)
+                .set_source_url_id(log.source_url_id)
+                .set_page_id(log.page_id)
+                .set_run_id(log.run_id)
+                .set_publish_record_id(log.publish_record_id)
+                .set_action(log.action)
+                .set_status(log.status)
+                .set_message(log.message)
+                .set_metadata(log.metadata)
+                .into();
         let model = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_audit(model))
     }

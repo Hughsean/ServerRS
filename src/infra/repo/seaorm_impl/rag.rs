@@ -72,22 +72,21 @@ fn map_embedding(m: knowledge_embeddings::Model) -> KnowledgeEmbedding {
 impl RAGRepoT for RAGRepo {
     async fn save_document(&self, doc: NewDocument) -> Result<KnowledgeDocument, AppError> {
         let now = Utc::now().naive_utc();
-        let active = knowledge_documents::ActiveModel {
-            document_id: sea_orm::ActiveValue::NotSet,
-            source_type: Set(doc.source_type),
-            source_id: Set(doc.source_id),
-            owner_user_id: Set(None),
-            visibility: Set("public".to_string()),
-            title: Set(doc.title),
-            content_hash: Set(doc.content_hash),
-            source_version: Set(None),
-            source_updated_at: Set(None),
-            metadata: Set(doc.metadata.map(|v| v.into())),
-            status: Set(doc.status),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-        };
+        let active: knowledge_documents::ActiveModel = knowledge_documents::ActiveModel::builder()
+            .set_source_type(doc.source_type)
+            .set_source_id(doc.source_id)
+            .set_owner_user_id(None)
+            .set_visibility("public")
+            .set_title(doc.title)
+            .set_content_hash(doc.content_hash)
+            .set_source_version(None)
+            .set_source_updated_at(None)
+            .set_metadata(doc.metadata.map(Into::into))
+            .set_status(doc.status)
+            .set_created_at(now)
+            .set_updated_at(now)
+            .set_deleted_at(None)
+            .into();
 
         let saved = active
             .insert(&self.db)
@@ -144,23 +143,24 @@ impl RAGRepoT for RAGRepo {
         let now = Utc::now().naive_utc();
         let models: Vec<knowledge_chunks::ActiveModel> = chunks
             .iter()
-            .map(|c| knowledge_chunks::ActiveModel {
-                chunk_id: sea_orm::ActiveValue::NotSet,
-                document_id: Set(c.document_id),
-                chunk_index: Set(c.chunk_index),
-                char_start: Set(None),
-                char_end: Set(None),
-                content: Set(c.content.clone()),
-                content_hash: Set(None),
-                token_count: Set(c.token_count),
-                metadata: Set(c.metadata.clone().map(|v| v.into())),
-                status: Set(1),
-                created_at: Set(now),
-                vector_id: Set(None),
-                embedding_provider: Set(None),
-                embedding_model: Set(None),
-                embedding_dimension: Set(None),
-                indexed_at: Set(None),
+            .map(|c| {
+                knowledge_chunks::ActiveModel::builder()
+                    .set_document_id(c.document_id)
+                    .set_chunk_index(c.chunk_index)
+                    .set_char_start(None)
+                    .set_char_end(None)
+                    .set_content(c.content.clone())
+                    .set_content_hash(None)
+                    .set_token_count(c.token_count)
+                    .set_metadata(c.metadata.clone().map(Into::into))
+                    .set_status(1)
+                    .set_created_at(now)
+                    .set_vector_id(None)
+                    .set_embedding_provider(None)
+                    .set_embedding_model(None)
+                    .set_embedding_dimension(None)
+                    .set_indexed_at(None)
+                    .into()
             })
             .collect();
 
@@ -208,15 +208,15 @@ impl RAGRepoT for RAGRepo {
 
     async fn save_embedding(&self, emb: NewEmbedding) -> Result<KnowledgeEmbedding, AppError> {
         let now = Utc::now().naive_utc();
-        let active = knowledge_embeddings::ActiveModel {
-            embedding_id: sea_orm::ActiveValue::NotSet,
-            chunk_id: Set(emb.chunk_id),
-            provider: Set(emb.provider),
-            model: Set(emb.model),
-            dimension: Set(emb.dimension),
-            embedding_json: Set(emb.embedding_json.into()),
-            created_at: Set(now),
-        };
+        let active: knowledge_embeddings::ActiveModel =
+            knowledge_embeddings::ActiveModel::builder()
+                .set_chunk_id(emb.chunk_id)
+                .set_provider(emb.provider)
+                .set_model(emb.model)
+                .set_dimension(emb.dimension)
+                .set_embedding_json(emb.embedding_json)
+                .set_created_at(now)
+                .into();
 
         let saved = active
             .insert(&self.db)

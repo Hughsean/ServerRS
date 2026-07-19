@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::sea_query::SimpleExpr;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, Value,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Value};
 
 use crate::domain::qq_bot::repository::{GroupSummary, GroupSummaryRepoT};
 use crate::shared::error::AppError;
@@ -55,18 +53,17 @@ impl GroupSummaryRepoT for GroupSummaryRepo {
     }
 
     async fn insert(&self, summary: &GroupSummary) -> Result<GroupSummary, AppError> {
-        let model = qq_group_summaries::ActiveModel {
-            qq_group_id: Set(summary.qq_group_id),
-            summary_type: Set(summary.summary_type.clone()),
-            content: Set(summary.content.clone()),
-            message_start_id: Set(summary.message_start_id),
-            message_end_id: Set(summary.message_end_id),
-            supersedes_id: Set(summary.supersedes_id),
-            token_count: Set(summary.token_count),
-            status: Set(if summary.status { 1i8 } else { 0i8 }),
-            vector_id: Set(summary.vector_id.clone()),
-            ..Default::default()
-        };
+        let model: qq_group_summaries::ActiveModel = qq_group_summaries::ActiveModel::builder()
+            .set_qq_group_id(summary.qq_group_id)
+            .set_summary_type(summary.summary_type.clone())
+            .set_content(summary.content.clone())
+            .set_message_start_id(summary.message_start_id)
+            .set_message_end_id(summary.message_end_id)
+            .set_supersedes_id(summary.supersedes_id)
+            .set_token_count(summary.token_count)
+            .set_status(if summary.status { 1_i8 } else { 0_i8 })
+            .set_vector_id(summary.vector_id.clone())
+            .into();
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
     }

@@ -98,26 +98,26 @@ impl VectorIndexRepoT for VectorIndexRepo {
                 .map_err(|e| AppError::internal(format!("update vector_index_record: {e}")))?;
             Ok(map_record(saved))
         } else {
-            let active = vector_index_records::ActiveModel {
-                record_id: sea_orm::ActiveValue::NotSet,
-                vector_id: Set(record.vector_id),
-                collection_name: Set(record.collection_name),
-                object_type: Set(record.object_type),
-                object_id: Set(record.object_id),
-                owner_user_id: Set(record.owner_user_id),
-                source_table: Set(record.source_table),
-                source_hash: Set(record.source_hash),
-                embedding_provider: Set(record.embedding_provider),
-                embedding_model: Set(record.embedding_model),
-                embedding_dimension: Set(record.embedding_dimension),
-                payload: Set(record.payload.into()),
-                index_status: Set(record.index_status),
-                indexed_at: Set(None),
-                failed_at: Set(None),
-                error_message: Set(None),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
+            let active: vector_index_records::ActiveModel =
+                vector_index_records::ActiveModel::builder()
+                    .set_vector_id(record.vector_id)
+                    .set_collection_name(record.collection_name)
+                    .set_object_type(record.object_type)
+                    .set_object_id(record.object_id)
+                    .set_owner_user_id(record.owner_user_id)
+                    .set_source_table(record.source_table)
+                    .set_source_hash(record.source_hash)
+                    .set_embedding_provider(record.embedding_provider)
+                    .set_embedding_model(record.embedding_model)
+                    .set_embedding_dimension(record.embedding_dimension)
+                    .set_payload(record.payload)
+                    .set_index_status(record.index_status)
+                    .set_indexed_at(None)
+                    .set_failed_at(None)
+                    .set_error_message(None)
+                    .set_created_at(now)
+                    .set_updated_at(now)
+                    .into();
             let saved = active
                 .insert(&self.db)
                 .await
@@ -176,26 +176,26 @@ impl VectorIndexRepoT for VectorIndexRepo {
             }
             None => {
                 // Create a failed record even if none existed
-                let active = vector_index_records::ActiveModel {
-                    record_id: sea_orm::ActiveValue::NotSet,
-                    vector_id: Set(vector_id.to_string()),
-                    collection_name: Set("unknown".to_string()),
-                    object_type: Set("unknown".to_string()),
-                    object_id: Set(0),
-                    owner_user_id: Set(None),
-                    source_table: Set("unknown".to_string()),
-                    source_hash: Set(None),
-                    embedding_provider: Set("unknown".to_string()),
-                    embedding_model: Set("unknown".to_string()),
-                    embedding_dimension: Set(0),
-                    payload: Set(serde_json::Value::Null.into()),
-                    index_status: Set("failed".to_string()),
-                    indexed_at: Set(None),
-                    failed_at: Set(Some(now)),
-                    error_message: Set(Some(error_message)),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
+                let active: vector_index_records::ActiveModel =
+                    vector_index_records::ActiveModel::builder()
+                        .set_vector_id(vector_id)
+                        .set_collection_name("unknown")
+                        .set_object_type("unknown")
+                        .set_object_id(0_u64)
+                        .set_owner_user_id(None)
+                        .set_source_table("unknown")
+                        .set_source_hash(None)
+                        .set_embedding_provider("unknown")
+                        .set_embedding_model("unknown")
+                        .set_embedding_dimension(0_u32)
+                        .set_payload(serde_json::Value::Null)
+                        .set_index_status("failed")
+                        .set_indexed_at(None)
+                        .set_failed_at(Some(now))
+                        .set_error_message(Some(error_message))
+                        .set_created_at(now)
+                        .set_updated_at(now)
+                        .into();
                 active.insert(&self.db).await.map_err(|e| {
                     AppError::internal(format!("insert failed record {vector_id}: {e}"))
                 })?;
@@ -256,24 +256,23 @@ impl VectorIndexRepoT for VectorIndexRepo {
 
     async fn enqueue_job(&self, job: NewVectorIndexJob) -> Result<VectorIndexJob, AppError> {
         let now = Utc::now().naive_utc();
-        let active = vector_index_jobs::ActiveModel {
-            job_id: sea_orm::ActiveValue::NotSet,
-            action: Set(job.action),
-            object_type: Set(job.object_type),
-            object_id: Set(job.object_id),
-            collection_name: Set(job.collection_name),
-            vector_id: Set(job.vector_id),
-            priority: Set(job.priority),
-            status: Set("pending".to_string()),
-            attempts: Set(0),
-            max_attempts: Set(5),
-            next_run_at: Set(now),
-            locked_at: Set(None),
-            locked_by: Set(None),
-            last_error: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
+        let active: vector_index_jobs::ActiveModel = vector_index_jobs::ActiveModel::builder()
+            .set_action(job.action)
+            .set_object_type(job.object_type)
+            .set_object_id(job.object_id)
+            .set_collection_name(job.collection_name)
+            .set_vector_id(job.vector_id)
+            .set_priority(job.priority)
+            .set_status("pending")
+            .set_attempts(0_u32)
+            .set_max_attempts(5_u32)
+            .set_next_run_at(now)
+            .set_locked_at(None)
+            .set_locked_by(None)
+            .set_last_error(None)
+            .set_created_at(now)
+            .set_updated_at(now)
+            .into();
         let saved = active
             .insert(&self.db)
             .await

@@ -81,19 +81,18 @@ impl GroupMemoryRepoT for GroupMemoryRepo {
         }
 
         // Insert new
-        let model = qq_group_memories::ActiveModel {
-            qq_group_id: Set(memory.qq_group_id),
-            memory_key: Set(memory.memory_key.clone()),
-            canonical_form: Set(memory.canonical_form.clone()),
-            memory_type: Set(memory.memory_type.clone()),
-            content: Set(memory.content.clone()),
-            confidence: Set(memory.confidence),
-            salience: Set(memory.salience),
-            source_message_id: Set(memory.source_message_id),
-            reinforce_count: Set(memory.reinforce_count),
-            status: Set(memory.status),
-            ..Default::default()
-        };
+        let model: qq_group_memories::ActiveModel = qq_group_memories::ActiveModel::builder()
+            .set_qq_group_id(memory.qq_group_id)
+            .set_memory_key(memory.memory_key.clone())
+            .set_canonical_form(memory.canonical_form.clone())
+            .set_memory_type(memory.memory_type.clone())
+            .set_content(memory.content.clone())
+            .set_confidence(memory.confidence)
+            .set_salience(memory.salience)
+            .set_source_message_id(memory.source_message_id)
+            .set_reinforce_count(memory.reinforce_count)
+            .set_status(memory.status)
+            .into();
         let result = model.insert(&self.db).await.map_err(map_db_err)?;
         Ok(model_to_domain(result))
     }

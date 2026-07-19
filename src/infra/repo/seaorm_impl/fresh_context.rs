@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    QueryOrder, QuerySelect,
 };
 
 use crate::domain::fresh_context::{
@@ -41,28 +41,28 @@ impl FreshContextRepo {
         let risk_flags = topic.risk_flags.or(existing.risk_flags);
         let metadata = topic.metadata.or(existing.metadata);
 
-        let active = fresh_topics::ActiveModel {
-            id: Set(existing.id),
-            topic_key: Set(existing.topic_key),
-            title: Set(if topic.title.trim().is_empty() {
+        let active: fresh_topics::ActiveModel = fresh_topics::ActiveModel::builder()
+            .set_id(existing.id)
+            .set_topic_key(existing.topic_key)
+            .set_title(if topic.title.trim().is_empty() {
                 existing.title
             } else {
                 topic.title
-            }),
-            summary: Set(summary.map(Into::into)),
-            entities: Set(entities.map(Into::into)),
-            first_seen_at: Set(first_seen_at.naive_utc()),
-            last_seen_at: Set(last_seen_at.naive_utc()),
-            heat_score: Set(heat_score),
-            freshness_score: Set(freshness_score),
-            expires_at: Set(expires_at.naive_utc()),
-            status: Set(topic.status),
-            risk_flags: Set(risk_flags.map(Into::into)),
-            metadata: Set(metadata.map(Into::into)),
-            created_at: Set(existing.created_at.naive_utc()),
-            updated_at: Set(Utc::now().naive_utc()),
-            deleted_at: Set(existing.deleted_at.map(|t| t.naive_utc())),
-        };
+            })
+            .set_summary(summary)
+            .set_entities(entities.map(Into::into))
+            .set_first_seen_at(first_seen_at.naive_utc())
+            .set_last_seen_at(last_seen_at.naive_utc())
+            .set_heat_score(heat_score)
+            .set_freshness_score(freshness_score)
+            .set_expires_at(expires_at.naive_utc())
+            .set_status(topic.status)
+            .set_risk_flags(risk_flags.map(Into::into))
+            .set_metadata(metadata.map(Into::into))
+            .set_created_at(existing.created_at.naive_utc())
+            .set_updated_at(Utc::now().naive_utc())
+            .set_deleted_at(existing.deleted_at.map(|t| t.naive_utc()))
+            .into();
         let saved = active
             .update(&self.db)
             .await
@@ -176,23 +176,22 @@ fn map_evidence(m: fresh_topic_evidence::Model) -> FreshTopicEvidence {
 impl FreshContextRepoT for FreshContextRepo {
     async fn insert_source(&self, source: NewFreshSource) -> Result<FreshSource, AppError> {
         let now = Utc::now().naive_utc();
-        let active = fresh_sources::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            name: Set(source.name),
-            source_kind: Set(source.source_kind),
-            base_url: Set(source.base_url),
-            allowed_domains: Set(source.allowed_domains.map(Into::into)),
-            trust_level: Set(source.trust_level),
-            reliability_score: Set(source.reliability_score),
-            crawl_interval_secs: Set(source.crawl_interval_secs),
-            default_ttl_secs: Set(source.default_ttl_secs),
-            risk_policy: Set(source.risk_policy),
-            enabled: Set(source.enabled),
-            metadata: Set(source.metadata.map(Into::into)),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-        };
+        let active: fresh_sources::ActiveModel = fresh_sources::ActiveModel::builder()
+            .set_name(source.name)
+            .set_source_kind(source.source_kind)
+            .set_base_url(source.base_url)
+            .set_allowed_domains(source.allowed_domains.map(Into::into))
+            .set_trust_level(source.trust_level)
+            .set_reliability_score(source.reliability_score)
+            .set_crawl_interval_secs(source.crawl_interval_secs)
+            .set_default_ttl_secs(source.default_ttl_secs)
+            .set_risk_policy(source.risk_policy)
+            .set_enabled(source.enabled)
+            .set_metadata(source.metadata.map(Into::into))
+            .set_created_at(now)
+            .set_updated_at(now)
+            .set_deleted_at(None)
+            .into();
         let saved = active
             .insert(&self.db)
             .await
@@ -223,31 +222,30 @@ impl FreshContextRepoT for FreshContextRepo {
 
     async fn insert_item(&self, item: NewFreshItem) -> Result<FreshItem, AppError> {
         let now = Utc::now().naive_utc();
-        let active = fresh_items::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            source_id: Set(item.source_id),
-            url: Set(item.url),
-            canonical_url: Set(item.canonical_url),
-            url_hash: Set(item.url_hash),
-            title: Set(item.title),
-            raw_text: Set(item.raw_text),
-            clean_text: Set(item.clean_text),
-            summary: Set(item.summary),
-            published_at: Set(item.published_at.map(|t| t.naive_utc())),
-            fetched_at: Set(item.fetched_at.naive_utc()),
-            expires_at: Set(item.expires_at.naive_utc()),
-            content_hash: Set(item.content_hash),
-            status: Set(item.status),
-            reliability_score: Set(item.reliability_score),
-            freshness_score: Set(item.freshness_score),
-            heat_score: Set(item.heat_score),
-            rumor_level: Set(item.rumor_level),
-            risk_flags: Set(item.risk_flags.map(Into::into)),
-            metadata: Set(item.metadata.map(Into::into)),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-        };
+        let active: fresh_items::ActiveModel = fresh_items::ActiveModel::builder()
+            .set_source_id(item.source_id)
+            .set_url(item.url)
+            .set_canonical_url(item.canonical_url)
+            .set_url_hash(item.url_hash)
+            .set_title(item.title)
+            .set_raw_text(item.raw_text)
+            .set_clean_text(item.clean_text)
+            .set_summary(item.summary)
+            .set_published_at(item.published_at.map(|t| t.naive_utc()))
+            .set_fetched_at(item.fetched_at.naive_utc())
+            .set_expires_at(item.expires_at.naive_utc())
+            .set_content_hash(item.content_hash)
+            .set_status(item.status)
+            .set_reliability_score(item.reliability_score)
+            .set_freshness_score(item.freshness_score)
+            .set_heat_score(item.heat_score)
+            .set_rumor_level(item.rumor_level)
+            .set_risk_flags(item.risk_flags.map(Into::into))
+            .set_metadata(item.metadata.map(Into::into))
+            .set_created_at(now)
+            .set_updated_at(now)
+            .set_deleted_at(None)
+            .into();
         let saved = active
             .insert(&self.db)
             .await
@@ -436,24 +434,23 @@ impl FreshContextRepoT for FreshContextRepo {
 
     async fn insert_topic(&self, topic: NewFreshTopic) -> Result<FreshTopic, AppError> {
         let now = Utc::now().naive_utc();
-        let active = fresh_topics::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            topic_key: Set(topic.topic_key),
-            title: Set(topic.title),
-            summary: Set(topic.summary),
-            entities: Set(topic.entities.map(Into::into)),
-            first_seen_at: Set(topic.first_seen_at.naive_utc()),
-            last_seen_at: Set(topic.last_seen_at.naive_utc()),
-            heat_score: Set(topic.heat_score),
-            freshness_score: Set(topic.freshness_score),
-            expires_at: Set(topic.expires_at.naive_utc()),
-            status: Set(topic.status),
-            risk_flags: Set(topic.risk_flags.map(Into::into)),
-            metadata: Set(topic.metadata.map(Into::into)),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-        };
+        let active: fresh_topics::ActiveModel = fresh_topics::ActiveModel::builder()
+            .set_topic_key(topic.topic_key)
+            .set_title(topic.title)
+            .set_summary(topic.summary)
+            .set_entities(topic.entities.map(Into::into))
+            .set_first_seen_at(topic.first_seen_at.naive_utc())
+            .set_last_seen_at(topic.last_seen_at.naive_utc())
+            .set_heat_score(topic.heat_score)
+            .set_freshness_score(topic.freshness_score)
+            .set_expires_at(topic.expires_at.naive_utc())
+            .set_status(topic.status)
+            .set_risk_flags(topic.risk_flags.map(Into::into))
+            .set_metadata(topic.metadata.map(Into::into))
+            .set_created_at(now)
+            .set_updated_at(now)
+            .set_deleted_at(None)
+            .into();
         let saved = active
             .insert(&self.db)
             .await
@@ -492,14 +489,14 @@ impl FreshContextRepoT for FreshContextRepo {
         &self,
         evidence: NewFreshTopicEvidence,
     ) -> Result<FreshTopicEvidence, AppError> {
-        let active = fresh_topic_evidence::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            topic_id: Set(evidence.topic_id),
-            item_id: Set(evidence.item_id),
-            stance: Set(evidence.stance),
-            confidence: Set(evidence.confidence),
-            created_at: Set(Utc::now().naive_utc()),
-        };
+        let active: fresh_topic_evidence::ActiveModel =
+            fresh_topic_evidence::ActiveModel::builder()
+                .set_topic_id(evidence.topic_id)
+                .set_item_id(evidence.item_id)
+                .set_stance(evidence.stance)
+                .set_confidence(evidence.confidence)
+                .set_created_at(Utc::now().naive_utc())
+                .into();
         let saved = active.insert(&self.db).await;
         let saved = match saved {
             Ok(saved) => saved,
@@ -552,25 +549,24 @@ impl FreshContextRepoT for FreshContextRepo {
         let mut saved = Vec::with_capacity(chunks.len());
         for chunk in chunks {
             let now = Utc::now().naive_utc();
-            let active = fresh_chunks::ActiveModel {
-                id: sea_orm::ActiveValue::NotSet,
-                item_id: Set(chunk.item_id),
-                topic_id: Set(chunk.topic_id),
-                chunk_index: Set(chunk.chunk_index),
-                content: Set(chunk.content.clone()),
-                content_hash: Set(chunk.content_hash.clone()),
-                token_count: Set(chunk.token_count),
-                metadata: Set(chunk.metadata.clone().map(Into::into)),
-                vector_id: Set(None),
-                embedding_provider: Set(None),
-                embedding_model: Set(None),
-                embedding_dimension: Set(None),
-                active: Set(1),
-                indexed_at: Set(None),
-                expires_at: Set(chunk.expires_at.naive_utc()),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
+            let active: fresh_chunks::ActiveModel = fresh_chunks::ActiveModel::builder()
+                .set_item_id(chunk.item_id)
+                .set_topic_id(chunk.topic_id)
+                .set_chunk_index(chunk.chunk_index)
+                .set_content(chunk.content.clone())
+                .set_content_hash(chunk.content_hash.clone())
+                .set_token_count(chunk.token_count)
+                .set_metadata(chunk.metadata.clone().map(Into::into))
+                .set_vector_id(None)
+                .set_embedding_provider(None)
+                .set_embedding_model(None)
+                .set_embedding_dimension(None)
+                .set_active(1)
+                .set_indexed_at(None)
+                .set_expires_at(chunk.expires_at.naive_utc())
+                .set_created_at(now)
+                .set_updated_at(now)
+                .into();
             let row = match active.insert(&self.db).await {
                 Ok(row) => row,
                 Err(err) => {
