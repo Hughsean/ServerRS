@@ -1,3 +1,12 @@
+pub mod message;
+pub mod state;
+
+pub use message::{AgentMessage, AgentMessageError, AgentObservation, AgentOutcome, AgentToolCall};
+pub use state::{
+    AgentBusinessState, AgentState, AgentStateError, AgentUpdate, PromptSection, PromptSource,
+    PromptTrust,
+};
+
 use crate::domain::llm::tools::LlmTool;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -85,6 +94,8 @@ pub enum AgentAction {
     Respond(String),
     /// Invoke the named tool with the given arguments.
     UseTool(String, Value),
+    /// Invoke a tool using a provider-neutral, typed call description.
+    CallTool(AgentToolCall),
     /// Escalate to a human safety reviewer with the provided reason.
     SafetyEscalate(String),
     /// Ask the user for clarification on an ambiguous request.
@@ -113,4 +124,135 @@ pub enum AgentPolicy {
 pub trait AgentEventRepoT: Send + Sync {
     /// 持久化新代理事件并返回完整填充的记录。
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent;
+}
+
+#[cfg(test)]
+mod state_model_tests {
+    use super::*;
+    use crate::domain::llm::ChatMessage;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestBusiness(u32);
+
+    enum TestUpdate {
+        Set(u32),
+        Reject,
+    }
+
+    impl AgentBusinessState for TestBusiness {
+        type Update = TestUpdate;
+
+        fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
+            match update {
+                TestUpdate::Set(value) => {
+                    self.0 = value;
+                    Ok(())
+                }
+                TestUpdate::Reject => Err(AgentStateError::Business("rejected".into())),
+            }
+        }
+    }
+
+    #[test]
+    fn update_batch_is_atomic_when_business_update_fails() {
+        let mut state = AgentState::new(TestBusiness(1));
+
+        let result = state.apply_updates(vec![
+            AgentUpdate::AppendMessages(vec![AgentMessage::user("hello")]),
+            AgentUpdate::Business(TestUpdate::Reject),
+        ]);
+
+        assert!(result.is_err());
+        assert!(state.messages().is_empty());
+        assert_eq!(state.business(), &TestBusiness(1));
+    }
+
+    #[test]
+    fn outcome_is_write_once() {
+        let mut state = AgentState::new(TestBusiness(1));
+        state
+            .apply_updates(vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                "first".into(),
+            ))])
+            .unwrap();
+
+        let result = state.apply_updates(vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+            "second".into(),
+        ))]);
+
+        assert!(matches!(result, Err(AgentStateError::TerminalState)));
+        assert_eq!(
+            state.outcome().and_then(AgentOutcome::response_text),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn terminal_state_allows_only_business_updates() {
+        let mut state = AgentState::new(TestBusiness(1));
+        state
+            .apply_updates(vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                "done".into(),
+            ))])
+            .unwrap();
+
+        assert!(matches!(
+            state.apply_updates(vec![AgentUpdate::AppendMessages(vec![AgentMessage::user(
+                "late",
+            )])]),
+            Err(AgentStateError::TerminalState)
+        ));
+
+        state
+            .apply_updates(vec![AgentUpdate::Business(TestUpdate::Set(2))])
+            .unwrap();
+        assert_eq!(state.business(), &TestBusiness(2));
+    }
+
+    #[test]
+    fn pending_actions_are_replaced_explicitly() {
+        let mut state = AgentState::new(TestBusiness(1));
+        let action = AgentAction::CallTool(AgentToolCall {
+            id: "call-1".into(),
+            name: "get_time".into(),
+            arguments: serde_json::json!({}),
+        });
+
+        state
+            .apply_updates(vec![AgentUpdate::ReplacePendingActions(vec![action])])
+            .unwrap();
+        assert_eq!(state.pending_actions().len(), 1);
+
+        state
+            .apply_updates(vec![AgentUpdate::ReplacePendingActions(Vec::new())])
+            .unwrap();
+        assert!(state.pending_actions().is_empty());
+    }
+
+    #[test]
+    fn assistant_message_round_trips_typed_tool_calls() {
+        let original = ChatMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(serde_json::json!([{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "get_time",
+                    "arguments": "{}"
+                }
+            }])),
+            tool_call_id: None,
+            name: None,
+        };
+
+        let typed = AgentMessage::try_from(original).unwrap();
+        let restored: ChatMessage = typed.into();
+
+        assert_eq!(restored.role, "assistant");
+        assert_eq!(
+            restored.tool_calls.unwrap()[0]["function"]["name"],
+            "get_time"
+        );
+    }
 }

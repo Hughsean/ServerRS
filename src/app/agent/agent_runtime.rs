@@ -2,21 +2,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::Value;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use super::agent_context::AgentContextBuilder;
-use super::prompt_builder::PromptBuilder;
-use crate::app::memory::memory_service::MemoryService;
-use crate::domain::agent::{AgentContext, AgentEventRepoT, NewAgentEvent};
-use crate::domain::conversation::conversation_message::NewConversationMessage;
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
-use crate::domain::llm::{
-    ChatCompletionRequest, ChatMessage, LlmProvider, ReasoningConfig, ToolDefinition as LlmToolDef,
+use super::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
+use super::chat_state::{ChatTurnState, PersistedTurn as GraphPersistedTurn};
+use super::graph::GraphRunError;
+use super::nodes::{ConversationTurnWriter, DefaultChatContextProvider};
+#[cfg(test)]
+use super::response::{fallback_reply, normalize_final_content};
+pub use super::tool::{
+    AgentTool, ToolTrace, is_tool_call_argument_error, normalize_tool_arguments,
 };
+use crate::app::memory::memory_service::MemoryService;
+use crate::domain::agent::{AgentEventRepoT, AgentOutcome, AgentState};
+use crate::domain::conversation::conversation_repo::ConversationRepoT;
+use crate::domain::llm::{ChatMessage, LlmProvider, ReasoningConfig};
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repository::UserProfileRepoT;
 use crate::shared::error::AppError;
-use crate::shared::llm_json::parse_llm_json;
 
 // ── AgentRuntimeSettings ─────────────────────────────────────────────────
 
@@ -70,33 +74,6 @@ impl Default for AgentRuntimeSettings {
 }
 
 // ---------------------------------------------------------------------------
-// AgentTool trait
-// ---------------------------------------------------------------------------
-
-/// AgentRuntime可调用的工具。
-///
-/// 这里有意与 `LlmTool` 保持分离，使Agent可以
-/// 定义能够访问完整 `AgentContext`（用户画像、
-/// 记忆、RAG 片段等）的工具，而不是只能访问较窄的 `ToolExecutionContext`。
-#[async_trait::async_trait]
-pub trait AgentTool: Send + Sync {
-    /// 唯一的工具名称（必须与 `ToolDefinition` 中的名称匹配）。
-    fn name(&self) -> &str;
-
-    /// 面向用户可读的描述。
-    fn description(&self) -> &str;
-
-    /// 描述可接受参数的 JSON Schema。
-    fn parameters(&self) -> Value;
-
-    /// 执行工具。
-    ///
-    /// `context` 提供本轮的完整 Agent 上下文，因此工具
-    /// 可以基于用户画像、记忆等做出决策。
-    async fn execute(&self, context: &AgentContext, args: Value) -> Result<String, AppError>;
-}
-
-// ---------------------------------------------------------------------------
 // Agent响应
 // ---------------------------------------------------------------------------
 
@@ -107,102 +84,19 @@ pub struct AgentResponse {
     pub reply: String,
     /// 本轮调用过的每个工具的追踪记录。
     pub tool_calls: Vec<ToolTrace>,
-    /// 已持久化消息的 ID，在 persist_messages 成功后可用。
+    /// 已持久化消息的 ID，在图持久化节点成功后可用。
     pub user_message_id: Option<u64>,
     pub assistant_message_id: Option<u64>,
-}
-
-/// 一次会话轮次中单个工具调用的记录。
-#[derive(Debug, Clone)]
-pub struct ToolTrace {
-    pub tool_name: String,
-    pub arguments: Value,
-    pub result: String,
-}
-
-struct PersistedTurn {
-    user_message_id: u64,
-    assistant_message_id: u64,
-}
-
-// ---------------------------------------------------------------------------
-// 工具调用参数辅助函数
-// ---------------------------------------------------------------------------
-
-/// 规范化工具调用参数，使工具始终收到 JSON Object。
-///
-/// OpenAI 兼容 API（包括 Ollama）通常会把参数作为
-/// JSON 编码字符串嵌入 `function.arguments`，而不是使用原生对象。
-/// 此函数处理以下情况：
-///
-/// - `Value::String`  → 解析内部 JSON
-/// - `Value::Null`    → 返回 `{}`
-/// - `Value::Object`  → 原样传递
-/// - other            → 原样传递（并记录 warn）
-pub fn normalize_tool_arguments(raw: &Value) -> Value {
-    match raw {
-        Value::String(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                return serde_json::json!({});
-            }
-            parse_llm_json::<Value>(trimmed).unwrap_or_else(|err| {
-                warn!(
-                    error = %err,
-                    raw_arguments = %trimmed,
-                    "failed to parse tool call arguments; wrapping as error response"
-                );
-                serde_json::json!({
-                    "_invalid_tool_arguments": true,
-                    "_raw": trimmed,
-                    "_error": err.to_string()
-                })
-            })
-        }
-        Value::Null => serde_json::json!({}),
-        Value::Object(_) => raw.clone(),
-        other => {
-            warn!(
-                ?other,
-                "unexpected tool arguments type; passing through as-is"
-            );
-            other.clone()
-        }
-    }
-}
-
-/// 检查 LLM 错误消息是否表示工具调用参数的
-/// 兼容性问题。
-pub fn is_tool_call_argument_error(msg: &str) -> bool {
-    let lower = msg.to_lowercase();
-    lower.contains("invalid tool call arguments")
-        || (lower.contains("400") && lower.contains("bad request") && lower.contains("tool"))
-        || lower.contains("tool call arguments")
 }
 
 // ---------------------------------------------------------------------------
 // AgentRuntime
 // ---------------------------------------------------------------------------
 
-/// Top AgentRuntime，负责编排单轮消息-回复流程。
-///
-/// 流程：
-/// 1. 构建 `AgentContext`（摘要、记忆、RAG 片段、用户画像）。
-/// 2. 使用工具定义运行 LLM。
-/// 3. 从 LLM 响应中提取工具调用并执行它们。
-/// 4. 将工具结果回传给 LLM，以生成最终响应。
-/// 5. 持久化消息。
-/// 6. 启动异步记忆提取。
+/// HTTP Chat 的兼容门面：把单轮请求交给已编译图执行，并保留记忆提取行为。
 pub struct AgentRuntime {
-    llm: Arc<dyn LlmProvider>,
+    chat_graph: ChatAgentGraph,
     memory_service: Arc<MemoryService>,
-    event_repo: Arc<dyn AgentEventRepoT>,
-    conversation_repo: Arc<dyn ConversationRepoT>,
-    user_profile_repo: Arc<dyn UserProfileRepoT>,
-    context_version_repo: Arc<dyn UserContextVersionRepoT>,
-    context_builder: Arc<AgentContextBuilder>,
-    prompt_builder: PromptBuilder,
-    tools: Vec<Arc<dyn AgentTool>>,
     settings: AgentRuntimeSettings,
 
     /// 上一次记忆提取失败的时间（失败时的 Instant::now()）。
@@ -223,16 +117,25 @@ impl AgentRuntime {
         tools: Vec<Arc<dyn AgentTool>>,
         settings: AgentRuntimeSettings,
     ) -> Self {
+        let context_provider = Arc::new(DefaultChatContextProvider::new(
+            Arc::clone(&context_version_repo),
+            Arc::clone(&user_profile_repo),
+            Arc::clone(&context_builder),
+        ));
+        let turn_writer = Arc::new(ConversationTurnWriter::new(Arc::clone(&conversation_repo)));
+        let chat_graph = ChatAgentGraph::new(ChatAgentGraphDeps {
+            llm: Arc::clone(&llm),
+            event_repo: Arc::clone(&event_repo),
+            context_provider,
+            turn_writer,
+            tools: tools.clone(),
+            settings: settings.clone(),
+        })
+        .expect("静态 HTTP Chat Agent 图必须能够编译");
+
         Self {
-            llm,
+            chat_graph,
             memory_service,
-            event_repo,
-            conversation_repo,
-            user_profile_repo,
-            context_version_repo,
-            context_builder,
-            prompt_builder: PromptBuilder::new(),
-            tools,
             settings,
             last_extraction_failure: Arc::new(Mutex::new(None)),
         }
@@ -242,7 +145,7 @@ impl AgentRuntime {
         self.settings.max_context_messages
     }
 
-    /// 处理单条用户消息并返回 Agent 的响应。
+    /// 保持原有公开签名，将单轮编排委托给已编译的 Chat Agent 图。
     pub async fn respond(
         &self,
         user_id: u64,
@@ -252,341 +155,21 @@ impl AgentRuntime {
         location: Option<Value>,
         recent_messages: Vec<ChatMessage>,
     ) -> Result<AgentResponse, AppError> {
-        let task_epoch = self
-            .context_version_repo
-            .get_or_create(user_id)
-            .await?
-            .version;
-        // ── 步骤 3：构建 Agent 上下文 ──────────────────────────
-        let profile = self
-            .user_profile_repo
-            .find_by_user_id(user_id)
+        let state = build_initial_chat_state(
+            user_id,
+            conversation_id,
+            user_message.clone(),
+            emotion,
+            location,
+            recent_messages,
+        )?;
+        let result = self
+            .chat_graph
+            .run(state)
             .await
-            .ok()
-            .flatten();
+            .map_err(map_graph_run_error)?;
+        let completed = map_completed_chat_turn(result.state)?;
 
-        let recent_messages =
-            self.prepare_recent_messages(recent_messages, &user_message, &emotion);
-
-        let llm_tool_defs: Vec<LlmToolDef> = self
-            .tools
-            .iter()
-            .map(|t| LlmToolDef {
-                name: t.name().to_string(),
-                description: t.description().to_string(),
-                parameters: t.parameters(),
-            })
-            .collect();
-
-        let agent_tool_defs: Vec<crate::domain::agent::ToolDefinition> = self
-            .tools
-            .iter()
-            .map(|t| crate::domain::agent::ToolDefinition {
-                name: t.name().to_string(),
-                description: t.description().to_string(),
-                parameters: t.parameters(),
-            })
-            .collect();
-
-        let agent_on = self.settings.agent_enabled;
-        let summary_enabled = agent_on && self.settings.summary_enabled;
-        let memory_enabled = agent_on && self.settings.memory_enabled;
-        let rag_enabled = agent_on && self.settings.rag_enabled;
-
-        let context = self
-            .context_builder
-            .build(
-                user_id,
-                conversation_id,
-                recent_messages.clone(),
-                profile,
-                agent_tool_defs,
-                location.clone(),
-                self.settings.max_memory_items,
-                self.settings.max_rag_chunks,
-                summary_enabled,
-                memory_enabled,
-                rag_enabled,
-            )
-            .await;
-
-        trace!(
-            conversation_id,
-            summary_enabled, memory_enabled, rag_enabled, "built AgentContext"
-        );
-
-        trace!(conversation_id, "AgentContext details:\n{:#?}", context);
-
-        // ── 步骤 4：使用工具进行 LLM 聊天 ──────────────────────────
-        let registered_tools_available = !self.tools.is_empty();
-        let tools_available = self.settings.agent_enabled
-            && registered_tools_available
-            && self.settings.max_tool_depth > 0;
-
-        let system_message = self
-            .prompt_builder
-            .build_system_message(&context, tools_available);
-
-        trace!(
-            conversation_id,
-            system_message = %system_message,
-            "built system message"
-        );
-
-        let mut llm_messages = Vec::with_capacity(recent_messages.len() + 1);
-        llm_messages.push(ChatMessage {
-            role: "system".into(),
-            content: system_message,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
-        llm_messages.extend(
-            recent_messages
-                .iter()
-                .filter(|m| m.role != "system")
-                .cloned(),
-        );
-
-        let mut tool_traces: Vec<ToolTrace> = Vec::new();
-        let mut messages_with_tool_results = llm_messages.clone();
-        let mut depth = 0usize;
-        #[allow(unused_assignments)]
-        let mut final_content = String::new();
-        let _end_session = false;
-
-        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
-
-        info!(
-            ?conversation_id,
-            tools_available,
-            registered_tools = registered_tools_available,
-            tool_names = %tool_names.join(","),
-            message_count = messages_with_tool_results.len(),
-            "calling LLM"
-        );
-
-        loop {
-            let tools_allowed = tools_allowed_for_round(
-                self.settings.agent_enabled,
-                registered_tools_available,
-                depth,
-                self.settings.max_tool_depth,
-            );
-
-            let request = ChatCompletionRequest {
-                messages: messages_with_tool_results.clone(),
-                temperature: self.settings.temperature,
-                top_p: self.settings.top_p,
-                max_tokens: None,
-                tools: if tools_allowed {
-                    Some(llm_tool_defs.clone())
-                } else {
-                    None
-                },
-                reasoning: self.settings.reasoning_config(),
-            };
-
-            let response = match if tools_allowed {
-                self.llm
-                    .chat_with_tools(request.clone(), llm_tool_defs.clone())
-                    .await
-            } else {
-                self.llm.chat(request.clone()).await
-            } {
-                Ok(r) => r,
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    warn!(
-                        ?conversation_id,
-                        error = %e,
-                        "LLM chat failed"
-                    );
-
-                    if registered_tools_available && is_tool_call_argument_error(&err_msg) {
-                        warn!(
-                            ?conversation_id,
-                            error = %e,
-                            "LLM tool call failed; retrying without tools"
-                        );
-
-                        let fallback_request = ChatCompletionRequest {
-                            messages: messages_with_tool_results.clone(),
-                            temperature: self.settings.temperature,
-                            top_p: self.settings.top_p,
-                            max_tokens: None,
-                            tools: None,
-                            reasoning: self.settings.reasoning_config(),
-                        };
-
-                        match self.llm.chat(fallback_request).await {
-                            Ok(r) => {
-                                final_content = normalize_final_content(r.content);
-                                break;
-                            }
-                            Err(fb_err) => {
-                                warn!(
-                                    ?conversation_id,
-                                    error = %fb_err,
-                                    "LLM fallback (no tools) also failed"
-                                );
-                                final_content =
-                                    "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
-                                        .to_string();
-                                break;
-                            }
-                        }
-                    } else {
-                        final_content =
-                            "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
-                                .to_string();
-                        break;
-                    }
-                }
-            };
-
-            // ── 未返回工具调用：使用内容 ─────────────
-            if response.tool_calls.is_empty() {
-                final_content = normalize_final_content(response.content);
-                break;
-            }
-
-            // ── 返回了工具调用但当前不允许：忽略它们 ─
-            if !tools_allowed {
-                warn!(
-                    ?conversation_id,
-                    tool_call_count = response.tool_calls.len(),
-                    "LLM returned tool calls when tools were not allowed; ignoring tool calls"
-                );
-
-                if !response.content.trim().is_empty() {
-                    final_content = response.content;
-                } else {
-                    final_content = self
-                        .final_chat_without_tools(messages_with_tool_results.clone(), false)
-                        .await;
-                }
-                final_content = normalize_final_content(final_content);
-                break;
-            }
-
-            // ── 执行工具调用 ───────────────────────────────
-            info!(
-                tool_call_count = response.tool_calls.len(),
-                "LLM returned tool calls"
-            );
-
-            let mut tool_results: Vec<ChatMessage> = Vec::new();
-
-            for tc in &response.tool_calls {
-                let normalized_arguments = normalize_tool_arguments(&tc.arguments);
-
-                debug!(
-                    tool_name = %tc.name,
-                    raw_arguments = %tc.arguments,
-                    parsed_arguments = %normalized_arguments,
-                    "processing tool call"
-                );
-
-                let result = self
-                    .execute_tool(&context, &tc.name, &normalized_arguments)
-                    .await;
-
-                let result_string = match &result {
-                    Ok(text) => text.clone(),
-                    Err(e) => format!("Tool error: {e}"),
-                };
-
-                let result_preview = truncate_for_event(&result_string, 2000);
-
-                tool_traces.push(ToolTrace {
-                    tool_name: tc.name.clone(),
-                    arguments: normalized_arguments.clone(),
-                    result: result_string.clone(),
-                });
-
-                self.log_event(
-                    user_id,
-                    conversation_id,
-                    "tool_call",
-                    Some(tc.name.clone()),
-                    serde_json::json!({
-                        "tool": tc.name,
-                        "arguments": normalized_arguments,
-                        "raw_arguments": tc.arguments,
-                        "ok": result.is_ok(),
-                        "result_preview": result_preview,
-                        "error": result.as_ref().err().map(|e| e.to_string()),
-                    }),
-                )
-                .await;
-
-                tool_results.push(ChatMessage {
-                    role: "tool".into(),
-                    content: result_string,
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                    name: Some(tc.name.clone()),
-                });
-            }
-
-            let tool_calls_openai: Vec<Value> = response
-                .tool_calls
-                .iter()
-                .map(|tc| {
-                    let args_str = match &tc.arguments {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": args_str,
-                        }
-                    })
-                })
-                .collect();
-            let tool_calls_value = Value::Array(tool_calls_openai);
-            messages_with_tool_results.push(ChatMessage {
-                role: "assistant".into(),
-                content: response.content.clone(),
-                tool_calls: Some(tool_calls_value),
-                tool_call_id: None,
-                name: None,
-            });
-            messages_with_tool_results.extend(tool_results);
-            depth += 1;
-
-            // 执行工具后，如果深度已耗尽，则再进行一次
-            // 不带工具的最终轮次，以生成自然语言摘要。
-            if !tools_allowed_for_round(
-                self.settings.agent_enabled,
-                registered_tools_available,
-                depth,
-                self.settings.max_tool_depth,
-            ) {
-                final_content = self
-                    .final_chat_without_tools(messages_with_tool_results.clone(), true)
-                    .await;
-                break;
-            }
-        }
-
-        // ── 步骤 7：持久化消息 ─────────────────────────────
-        let persisted = self
-            .persist_messages(
-                user_id,
-                conversation_id,
-                &user_message,
-                &final_content,
-                &emotion,
-            )
-            .await?;
-        // 风险持久化延后到 TurnClosedEvent
-
-        // ── 步骤 8：异步记忆提取 ──────────────────────
         if self.settings.agent_enabled
             && self.settings.memory_enabled
             && self.settings.memory_extraction_async
@@ -594,202 +177,21 @@ impl AgentRuntime {
             self.spawn_memory_extraction(
                 user_id,
                 conversation_id,
-                persisted.user_message_id,
+                completed.memory_source_message_id,
                 &user_message,
-                &final_content,
-                task_epoch,
+                &completed.response.reply,
+                completed.context_version,
             );
         }
 
         trace!(
             conversation_id,
-            user_message = %user_message,
-            assistant_reply = %final_content,
-            tool_call_count = tool_traces.len(),
-            "AgentRuntime completed respond()"
+            user_message_chars = user_message.chars().count(),
+            assistant_reply_chars = completed.response.reply.chars().count(),
+            tool_call_count = completed.response.tool_calls.len(),
+            "AgentRuntime completed graph-backed respond()"
         );
-
-        Ok(AgentResponse {
-            reply: final_content,
-            tool_calls: tool_traces,
-            user_message_id: Some(persisted.user_message_id),
-            assistant_message_id: Some(persisted.assistant_message_id),
-        })
-    }
-
-    // ── 私有辅助函数 ──────────────────────────────────────────
-
-    fn prepare_recent_messages(
-        &self,
-        mut messages: Vec<ChatMessage>,
-        user_message: &str,
-        emotion: &Option<String>,
-    ) -> Vec<ChatMessage> {
-        let content = match emotion {
-            Some(e) if !e.trim().is_empty() => {
-                format!("{user_message}\n\n[user emotion: {}]", e.trim())
-            }
-            _ => user_message.to_string(),
-        };
-
-        if let Some(last_user_message) = messages.iter_mut().rev().find(|m| m.role == "user") {
-            if last_user_message.content.trim() == user_message.trim() {
-                last_user_message.content = content;
-                // 应用 max_context_messages 限制（保留 system 消息，截断其余消息）
-                return self.apply_context_limit(messages);
-            }
-        }
-
-        messages.push(ChatMessage {
-            role: "user".into(),
-            content,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
-        self.apply_context_limit(messages)
-    }
-
-    /// 保留 system 消息，并仅保留最近 N 条非 system 消息。
-    fn apply_context_limit(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-        let limit = self.settings.max_context_messages;
-        if limit == 0 || messages.is_empty() {
-            return messages;
-        }
-        let system_msgs: Vec<ChatMessage> = messages
-            .iter()
-            .filter(|m| m.role == "system")
-            .cloned()
-            .collect();
-        let mut other_msgs: Vec<ChatMessage> = messages
-            .into_iter()
-            .filter(|m| m.role != "system")
-            .collect();
-        let other_count = other_msgs.len();
-        if other_count > limit {
-            let skip = other_count.saturating_sub(limit);
-            other_msgs = other_msgs.into_iter().skip(skip).collect();
-        }
-        let mut result = system_msgs;
-        result.extend(other_msgs);
-        result
-    }
-
-    /// 执行一次不带工具的最终 LLM 调用，并返回回复文本。
-    /// 当工具已耗尽或不可用时作为回退使用。
-    async fn final_chat_without_tools(
-        &self,
-        mut messages: Vec<ChatMessage>,
-        had_tool_results: bool,
-    ) -> String {
-        messages.push(ChatMessage {
-            role: "user".into(),
-            content: if had_tool_results {
-                "本轮工具已经用完。请基于已有上下文和工具结果，直接用中文回复用户，不要再调用工具。"
-                    .into()
-            } else {
-                "本轮没有可用工具。请基于已有上下文直接用中文回复用户，不要调用工具。".into()
-            },
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
-
-        let request = ChatCompletionRequest {
-            messages,
-            temperature: self.settings.temperature,
-            top_p: self.settings.top_p,
-            max_tokens: None,
-            tools: None,
-            reasoning: self.settings.reasoning_config(),
-        };
-
-        match self.llm.chat(request).await {
-            Ok(r) => normalize_final_content(r.content),
-            Err(e) => {
-                warn!(error = %e, "final chat without tools failed");
-                "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
-                    .to_string()
-            }
-        }
-    }
-
-    /// 按名称执行单个工具，并返回其输出。
-    async fn execute_tool(
-        &self,
-        context: &AgentContext,
-        name: &str,
-        args: &Value,
-    ) -> Result<String, AppError> {
-        for tool in &self.tools {
-            if tool.name() == name {
-                match tool.execute(context, args.clone()).await {
-                    Ok(output) => {
-                        info!(tool = name, "agent tool completed");
-                        return Ok(output);
-                    }
-                    Err(e) => {
-                        warn!(tool = name, error = %e, "agent tool failed");
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        Err(AppError::Internal(format!("Unknown tool: {name}")))
-    }
-
-    /// 持久化用户消息和 AI 回复到数据库（使用事务保证原子性）。
-    async fn persist_messages(
-        &self,
-        user_id: u64,
-        conversation_id: Option<u64>,
-        user_message: &str,
-        assistant_reply: &str,
-        emotion: &Option<String>,
-    ) -> Result<PersistedTurn, AppError> {
-        let cid = match conversation_id {
-            Some(id) => id,
-            None => {
-                return Err(AppError::Internal("需要对话 ID 才能持久化消息".into()));
-            }
-        };
-
-        let user_content = serde_json::json!({
-            "text": user_message,
-            "emotion": emotion,
-        });
-
-        let asst_content = serde_json::json!({ "text": assistant_reply });
-
-        // 使用事务原子化保存两条消息并更新计数
-        let (user_saved, asst_saved) = self
-            .conversation_repo
-            .save_turn_atomic(
-                cid,
-                user_id,
-                NewConversationMessage {
-                    conversation_id: cid,
-                    sender_role: "user".into(),
-                    sender_user_id: Some(user_id),
-                    message_type: "text".into(),
-                    content: user_content.to_string(),
-                    token_count: None,
-                },
-                NewConversationMessage {
-                    conversation_id: cid,
-                    sender_role: "assistant".into(),
-                    sender_user_id: None,
-                    message_type: "text".into(),
-                    content: asst_content.to_string(),
-                    token_count: None,
-                },
-            )
-            .await?;
-
-        Ok(PersistedTurn {
-            user_message_id: user_saved.id,
-            assistant_message_id: asst_saved.id,
-        })
+        Ok(completed.response)
     }
 
     /// 即发即忘任务：通过 MemoryService 提取记忆，带重试和限流。
@@ -895,14 +297,79 @@ impl AgentRuntime {
     }
 }
 
-/// 截断用于事件记录的字符串，最多保留 `max_chars` 个字符。
-fn truncate_for_event(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_chars).collect();
-        format!("{truncated}...[truncated]")
+fn build_initial_chat_state(
+    user_id: u64,
+    conversation_id: Option<u64>,
+    user_message: String,
+    emotion: Option<String>,
+    location: Option<Value>,
+    recent_messages: Vec<ChatMessage>,
+) -> Result<AgentState<ChatTurnState>, AppError> {
+    let conversation_id =
+        conversation_id.ok_or_else(|| AppError::Internal("需要对话 ID 才能持久化消息".into()))?;
+    Ok(AgentState::new(ChatTurnState::new(
+        user_id,
+        conversation_id,
+        user_message,
+        emotion,
+        location,
+        recent_messages,
+    )))
+}
+
+fn map_graph_run_error(error: GraphRunError) -> AppError {
+    if let GraphRunError::NodeFailed { error, .. } = &error
+        && let Some(application_error) = error.application_error()
+    {
+        return application_error.clone();
     }
+    AppError::Internal(format!("Agent 图运行失败: {error}"))
+}
+
+struct CompletedChatTurn {
+    response: AgentResponse,
+    memory_source_message_id: u64,
+    context_version: u64,
+}
+
+fn map_completed_chat_turn(
+    state: AgentState<ChatTurnState>,
+) -> Result<CompletedChatTurn, AppError> {
+    let reply = state
+        .outcome()
+        .and_then(AgentOutcome::response_text)
+        .ok_or_else(|| AppError::Internal("Agent 图完成时缺少最终回复".into()))?
+        .to_owned();
+    let persisted: &GraphPersistedTurn = state
+        .business()
+        .persisted_turn()
+        .ok_or_else(|| AppError::Internal("Agent 图完成时缺少持久化消息 ID".into()))?;
+    let context_version = state
+        .business()
+        .context_version()
+        .ok_or_else(|| AppError::Internal("Agent 图完成时缺少上下文版本".into()))?;
+    let tool_calls = state
+        .observations()
+        .iter()
+        .map(|observation| ToolTrace {
+            tool_name: observation.call.name.clone(),
+            arguments: observation.call.arguments.clone(),
+            result: observation.result.clone(),
+        })
+        .collect();
+    let user_message_id = persisted.user_message_id();
+    let assistant_message_id = persisted.assistant_message_id();
+
+    Ok(CompletedChatTurn {
+        response: AgentResponse {
+            reply,
+            tool_calls,
+            user_message_id: Some(user_message_id),
+            assistant_message_id: Some(assistant_message_id),
+        },
+        memory_source_message_id: user_message_id,
+        context_version,
+    })
 }
 
 /// 检查当前轮次是否允许使用工具。
@@ -910,6 +377,7 @@ fn truncate_for_event(s: &str, max_chars: usize) -> String {
 /// - Agent 已启用
 /// - 已注册工具
 /// - 深度尚未达到 max_tool_depth
+#[cfg(test)]
 fn tools_allowed_for_round(
     agent_enabled: bool,
     have_tools: bool,
@@ -919,73 +387,109 @@ fn tools_allowed_for_round(
     agent_enabled && have_tools && depth < max_tool_depth
 }
 
-/// 移除某些模型在最终答案前回显的序列化工具调用。
-fn strip_leading_tool_call_artifacts(content: &str) -> &str {
-    const CLOSING_TAG: &str = "</tool_call>";
-    const OPENING_MARKERS: [&str; 3] = ["<tool_call>", "<|tool_call|>", "_icall_"];
-
-    let mut remaining = content.trim();
-    loop {
-        let Some(closing_index) = remaining.find(CLOSING_TAG) else {
-            break;
-        };
-        let artifact = &remaining[..closing_index];
-        let starts_with_marker = OPENING_MARKERS
-            .iter()
-            .any(|marker| artifact.trim_start().starts_with(marker));
-        let looks_like_tool_call =
-            artifact.contains("\"name\"") && artifact.contains("\"arguments\"");
-
-        if !starts_with_marker || !looks_like_tool_call {
-            break;
-        }
-
-        remaining = remaining[closing_index + CLOSING_TAG.len()..].trim_start();
-    }
-
-    remaining
-}
-
-/// 确保最终内容干净且非空；必要时返回中文回退文本。
-fn normalize_final_content(content: String) -> String {
-    let content = strip_leading_tool_call_artifacts(&content);
-    if content.is_empty() {
-        "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
-            .to_string()
-    } else {
-        content.to_string()
-    }
-}
-
-impl AgentRuntime {
-    /// 持久化Agent Event，用于可观测性 / 审计。
-    async fn log_event(
-        &self,
-        user_id: u64,
-        conversation_id: Option<u64>,
-        event_type: &str,
-        tool_name: Option<String>,
-        payload: Value,
-    ) {
-        let _ = self
-            .event_repo
-            .log_event(NewAgentEvent {
-                user_id,
-                conversation_id,
-                event_type: event_type.to_string(),
-                tool_name,
-                payload,
-            })
-            .await;
-    }
-}
-
 // ── 测试 ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::agent::chat_state::{
+        ChatTurnState, ChatTurnUpdate, PersistedTurn as GraphPersistedTurn,
+    };
+    use crate::domain::agent::{
+        AgentBusinessState, AgentContext, AgentObservation, AgentOutcome, AgentState,
+        AgentToolCall, AgentUpdate,
+    };
     use serde_json::json;
+
+    #[test]
+    fn graph_facade_requires_the_existing_conversation_id() {
+        let error =
+            build_initial_chat_state(7, None, "hello".into(), None, None, vec![]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::Internal(message) if message == "需要对话 ID 才能持久化消息"
+        ));
+    }
+
+    #[test]
+    fn graph_facade_restores_application_error_variants() {
+        let error = crate::app::agent::graph::GraphRunError::NodeFailed {
+            node: crate::app::agent::graph::NodeId::try_from("persist").unwrap(),
+            error: crate::app::agent::graph::NodeError::from_application(AppError::Conflict(
+                "turn changed".into(),
+            )),
+        };
+
+        assert!(matches!(
+            map_graph_run_error(error),
+            AppError::Conflict(message) if message == "turn changed"
+        ));
+    }
+
+    #[test]
+    fn completed_graph_state_maps_response_and_memory_metadata() {
+        let mut business = ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]);
+        business
+            .apply_update(ChatTurnUpdate::SetContext {
+                context: AgentContext {
+                    user_id: 7,
+                    conversation_id: Some(9),
+                    recent_messages: vec![],
+                    summary: None,
+                    memories: vec![],
+                    rag_chunks: vec![],
+                    fresh_chunks: vec![],
+                    user_profile: None,
+                    tools: vec![],
+                    location: None,
+                },
+                context_version: 37,
+            })
+            .unwrap();
+        let mut state = AgentState::new(business);
+        state
+            .apply_updates(vec![
+                AgentUpdate::AppendObservations(vec![AgentObservation {
+                    call: AgentToolCall {
+                        id: "call-1".into(),
+                        name: "clock".into(),
+                        arguments: json!({"zone": "Asia/Shanghai"}),
+                    },
+                    result: "12:00".into(),
+                    succeeded: true,
+                }]),
+                AgentUpdate::SetOutcome(AgentOutcome::Respond("done".into())),
+                AgentUpdate::Business(ChatTurnUpdate::SetPersistedTurn(GraphPersistedTurn::new(
+                    101, 102,
+                ))),
+            ])
+            .unwrap();
+
+        let completed = map_completed_chat_turn(state).unwrap();
+
+        assert_eq!(completed.response.reply, "done");
+        assert_eq!(completed.response.user_message_id, Some(101));
+        assert_eq!(completed.response.assistant_message_id, Some(102));
+        assert_eq!(completed.response.tool_calls[0].tool_name, "clock");
+        assert_eq!(completed.memory_source_message_id, 101);
+        assert_eq!(completed.context_version, 37);
+    }
+
+    #[test]
+    fn compatibility_fallback_text_is_stable() {
+        assert_eq!(
+            fallback_reply(),
+            "抱歉，我刚才处理这条消息时遇到了一点问题。你可以换个说法再发一次，我会继续帮你。"
+        );
+    }
+
+    #[test]
+    fn compatibility_tool_depth_boundary_is_stable() {
+        assert!(tools_allowed_for_round(true, true, 0, 1));
+        assert!(!tools_allowed_for_round(true, true, 1, 1));
+        assert!(!tools_allowed_for_round(true, true, 0, 0));
+    }
 
     // ── normalize_tool_arguments ──────────────────────────────────────
 
@@ -1121,12 +625,9 @@ mod tests {
         assert_eq!(normalize_final_content(content.into()), content);
     }
 
-    // ── 运行时行为测试（通过集成测试辅助模块） ─────────
-    // 这些测试验证主 AgentRuntime 循环能够正确处理
-    // max_tool_depth=0 和 max_tool_depth=1 场景。由于构造
-    // 完整的 AgentRuntime 需要许多 mock 依赖（这些依赖容易
-    // 因 trait 签名漂移而变脆弱），这些测试放在集成测试
-    // 套件中：tests/common/mod.rs → agent_depth_behavior_tests。
+    // ── 兼容边界测试 ────────────────────────────────────────
+    // 这里锁定旧门面的工具可用性判定；完整工具循环由
+    // reasoning_loop 与 chat_graph 的脚本化端到端测试覆盖。
 
     /// 验证：max_tool_depth=0 → tools_allowed_for_round 返回 false，
     /// 且 build_system_message 在 tools_available=false 时不会声明
@@ -1163,10 +664,7 @@ mod tests {
     /// 验证：工具不可用时，系统提示词不会声明工具能力。
     #[test]
     fn system_prompt_without_tools_no_tool_claims() {
-        // 构造一个最小 AgentRuntime，仅用于测试 build_system_message
-        // 我们以静态方式测试该属性：tools_available 标志控制
-        // 提示词内容。实际的 build_system_message 方法会在
-        // 集成测试中覆盖。
+        // PromptBuilder 自身的测试验证 tools_available=false 时的提示词内容。
         let agent_enabled = true;
         let have_tools = false; // 没有已注册工具
         let tools_available = agent_enabled && have_tools;
