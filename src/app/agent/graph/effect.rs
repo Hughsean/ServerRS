@@ -3,7 +3,7 @@ use crate::domain::agent::AgentUpdate;
 use crate::shared::error::AppError;
 use async_trait::async_trait;
 use std::convert::Infallible;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
@@ -166,6 +166,14 @@ impl EffectError {
 pub enum NoEffect<U> {
     #[doc(hidden)]
     Never(Infallible, PhantomData<fn() -> U>),
+}
+
+impl<U> Debug for NoEffect<U> {
+    fn fmt(&self, _formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Never(value, _) => match *value {},
+        }
+    }
 }
 
 impl<U: Send + Sync + 'static> AgentEffect for NoEffect<U> {

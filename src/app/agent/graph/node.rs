@@ -12,7 +12,7 @@ pub trait AgentNode<B: AgentBusinessState>: Send + Sync {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError>;
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError>;
 }
 
 pub trait Router<B: AgentBusinessState>: Send + Sync {
@@ -21,20 +21,42 @@ pub trait Router<B: AgentBusinessState>: Send + Sync {
 }
 
 #[derive(Debug)]
-pub struct NodeResult<U> {
+pub struct NodeResult<U, E> {
     pub updates: Vec<AgentUpdate<U>>,
+    pub effects: Vec<E>,
     pub usage: UsageDelta,
 }
 
-impl<U> NodeResult<U> {
+impl<U, E> NodeResult<U, E> {
     pub fn new(updates: Vec<AgentUpdate<U>>, usage: UsageDelta) -> Self {
-        Self { updates, usage }
+        Self {
+            updates,
+            effects: Vec::new(),
+            usage,
+        }
     }
 
     pub fn empty() -> Self {
         Self {
             updates: Vec::new(),
+            effects: Vec::new(),
             usage: UsageDelta::default(),
+        }
+    }
+
+    pub fn with_effect(updates: Vec<AgentUpdate<U>>, effect: E, usage: UsageDelta) -> Self {
+        Self {
+            updates,
+            effects: vec![effect],
+            usage,
+        }
+    }
+
+    pub fn with_effects(updates: Vec<AgentUpdate<U>>, effects: Vec<E>, usage: UsageDelta) -> Self {
+        Self {
+            updates,
+            effects,
+            usage,
         }
     }
 }

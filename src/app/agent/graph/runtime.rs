@@ -178,6 +178,7 @@ mod tests {
 
     impl AgentBusinessState for TestBusiness {
         type Update = TestUpdate;
+        type Effect = NoEffect<TestUpdate>;
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {
@@ -222,7 +223,7 @@ mod tests {
             &self,
             _state: &AgentState<TestBusiness>,
             _context: &RunContext,
-        ) -> Result<NodeResult<TestUpdate>, NodeError> {
+        ) -> Result<NodeResult<TestUpdate, NoEffect<TestUpdate>>, NodeError> {
             match self.behavior {
                 Behavior::Noop => Ok(NodeResult::empty()),
                 Behavior::Set(value) => Ok(NodeResult::new(

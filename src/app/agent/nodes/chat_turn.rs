@@ -3,7 +3,9 @@ use crate::app::agent::graph::{
     AgentNode, NodeError, NodeErrorKind, NodeId, NodeResult, RunContext, UsageDelta,
 };
 use crate::app::agent::response::{fallback_reply, normalize_final_content};
-use crate::domain::agent::{AgentMessage, AgentOutcome, AgentState, AgentUpdate};
+use crate::domain::agent::{
+    AgentBusinessState, AgentMessage, AgentOutcome, AgentState, AgentUpdate,
+};
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::shared::error::AppError;
@@ -34,7 +36,8 @@ impl AgentNode<ChatTurnState> for PrepareTurnNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate>, NodeError> {
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
         let turn = state.business();
         let messages = prepare_recent_messages(
             turn.recent_messages().to_vec(),
@@ -71,7 +74,8 @@ impl AgentNode<ChatTurnState> for NormalizeReplyNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate>, NodeError> {
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
         let content = state
             .messages()
             .iter()
@@ -149,7 +153,8 @@ impl AgentNode<ChatTurnState> for PersistTurnNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate>, NodeError> {
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
         let turn = state.business();
         let reply = state
             .outcome()

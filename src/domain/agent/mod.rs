@@ -141,6 +141,7 @@ mod state_model_tests {
 
     impl AgentBusinessState for TestBusiness {
         type Update = TestUpdate;
+        type Effect = ();
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {

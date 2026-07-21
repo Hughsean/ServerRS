@@ -285,7 +285,7 @@ impl<B: AgentBusinessState> AgentNode<B> for NamespacedNode<B> {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
         self.inner.execute(state, context).await
     }
 }
@@ -474,6 +474,7 @@ mod tests {
 
     impl AgentBusinessState for TestBusiness {
         type Update = ();
+        type Effect = NoEffect<()>;
 
         fn apply_update(&mut self, _update: Self::Update) -> Result<(), AgentStateError> {
             Ok(())
@@ -502,7 +503,7 @@ mod tests {
             &self,
             _state: &AgentState<TestBusiness>,
             _context: &RunContext,
-        ) -> Result<NodeResult<()>, NodeError> {
+        ) -> Result<NodeResult<(), NoEffect<()>>, NodeError> {
             Ok(NodeResult::empty())
         }
     }
