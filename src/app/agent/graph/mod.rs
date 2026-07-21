@@ -1,5 +1,6 @@
 mod budget;
 mod definition;
+mod effect;
 mod error;
 mod fragment;
 mod id;
@@ -10,6 +11,10 @@ pub use budget::{
     GraphPolicy, RunBudget, RunBudgetHandle, RunContext, RunTrace, UsageDelta, UsageSnapshot,
 };
 pub use definition::{CompiledGraph, GraphDefinition};
+pub use effect::{
+    AgentEffect, EffectEnvelope, EffectError, EffectErrorKind, EffectExecutor, EffectId,
+    EffectReceipt, NoEffect, RunStep,
+};
 pub use error::{
     BudgetResource, GraphBuildError, GraphCompileError, GraphRunError, NodeError, NodeErrorKind,
 };
