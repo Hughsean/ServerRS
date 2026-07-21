@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use architecture_guard::{FeatureSet, check_workspace};
+use syn::visit::Visit;
 
 #[test]
 fn allows_current_layer_dependency_directions() {
@@ -404,6 +405,59 @@ mod tests {
 
     check_workspace(workspace.path(), FeatureSet::default())
         .expect("test-only infra fakes are allowed inside cfg(test) blocks");
+}
+
+#[test]
+fn checkpoint_model_fields_exclude_runtime_and_infrastructure_handles() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/agent/graph/checkpoint.rs");
+    let source = fs::read_to_string(&path).expect("checkpoint source must be readable");
+    let syntax = syn::parse_file(&source).expect("checkpoint source must parse");
+    let checkpoint = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "AgentCheckpoint" => Some(item),
+            _ => None,
+        })
+        .expect("AgentCheckpoint struct must exist");
+    let mut collector = TypePathCollector::default();
+    for field in &checkpoint.fields {
+        collector.visit_type(&field.ty);
+    }
+
+    for forbidden in [
+        "Arc",
+        "CancellationToken",
+        "Instant",
+        "CheckpointStore",
+        "EffectExecutor",
+        "Provider",
+        "Repository",
+        "Connection",
+        "Deadline",
+        "Future",
+    ] {
+        assert!(
+            !collector
+                .segments
+                .iter()
+                .any(|segment| segment == forbidden),
+            "AgentCheckpoint field types must not contain {forbidden}: {:?}",
+            collector.segments
+        );
+    }
+}
+
+#[derive(Default)]
+struct TypePathCollector {
+    segments: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for TypePathCollector {
+    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+        self.segments.push(segment.ident.to_string());
+        syn::visit::visit_path_segment(self, segment);
+    }
 }
 
 fn assert_contains(haystack: &str, needle: &str) {

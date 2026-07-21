@@ -1,4 +1,4 @@
-use super::{NodeError, NodeId, RouteKey, RunContext, UsageDelta};
+use super::{NodeError, NodeId, RouteKey, RunContext, SuspendRequest, UsageDelta};
 use crate::domain::agent::{AgentBusinessState, AgentState, AgentUpdate};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ pub trait AgentNode<B: AgentBusinessState>: Send + Sync {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError>;
+    ) -> Result<NodeResult<B::Update, B::Effect, B::SuspendData>, NodeError>;
 }
 
 pub trait Router<B: AgentBusinessState>: Send + Sync {
@@ -21,15 +21,41 @@ pub trait Router<B: AgentBusinessState>: Send + Sync {
 }
 
 #[derive(Debug)]
-pub struct NodeResult<U, E> {
-    pub updates: Vec<AgentUpdate<U>>,
-    pub effects: Vec<E>,
-    pub usage: UsageDelta,
+pub enum NodeResult<U, E, S = ()> {
+    Continue {
+        updates: Vec<AgentUpdate<U>>,
+        effects: Vec<E>,
+        usage: UsageDelta,
+    },
+    Suspend {
+        updates: Vec<AgentUpdate<U>>,
+        effects: Vec<E>,
+        usage: UsageDelta,
+        request: SuspendRequest<S>,
+    },
 }
 
-impl<U, E> NodeResult<U, E> {
+impl<U, E, S> NodeResult<U, E, S> {
+    pub fn updates(&self) -> &[AgentUpdate<U>] {
+        match self {
+            Self::Continue { updates, .. } | Self::Suspend { updates, .. } => updates,
+        }
+    }
+
+    pub fn effects(&self) -> &[E] {
+        match self {
+            Self::Continue { effects, .. } | Self::Suspend { effects, .. } => effects,
+        }
+    }
+
+    pub fn into_updates(self) -> Vec<AgentUpdate<U>> {
+        match self {
+            Self::Continue { updates, .. } | Self::Suspend { updates, .. } => updates,
+        }
+    }
+
     pub fn new(updates: Vec<AgentUpdate<U>>, usage: UsageDelta) -> Self {
-        Self {
+        Self::Continue {
             updates,
             effects: Vec::new(),
             usage,
@@ -37,7 +63,7 @@ impl<U, E> NodeResult<U, E> {
     }
 
     pub fn empty() -> Self {
-        Self {
+        Self::Continue {
             updates: Vec::new(),
             effects: Vec::new(),
             usage: UsageDelta::default(),
@@ -45,7 +71,7 @@ impl<U, E> NodeResult<U, E> {
     }
 
     pub fn with_effect(updates: Vec<AgentUpdate<U>>, effect: E, usage: UsageDelta) -> Self {
-        Self {
+        Self::Continue {
             updates,
             effects: vec![effect],
             usage,
@@ -53,10 +79,24 @@ impl<U, E> NodeResult<U, E> {
     }
 
     pub fn with_effects(updates: Vec<AgentUpdate<U>>, effects: Vec<E>, usage: UsageDelta) -> Self {
-        Self {
+        Self::Continue {
             updates,
             effects,
             usage,
+        }
+    }
+
+    pub fn suspend(
+        updates: Vec<AgentUpdate<U>>,
+        effects: Vec<E>,
+        usage: UsageDelta,
+        request: SuspendRequest<S>,
+    ) -> Self {
+        Self::Suspend {
+            updates,
+            effects,
+            usage,
+            request,
         }
     }
 }

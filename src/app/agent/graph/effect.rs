@@ -76,7 +76,7 @@ impl Display for EffectId {
 
 pub trait AgentEffect: Send + Sync + 'static {
     type Update: Send + Sync + 'static;
-    type Receipt: Send + Sync + 'static;
+    type Receipt: Clone + Send + Sync + 'static;
 
     fn receipt_updates(receipt: &Self::Receipt) -> Vec<AgentUpdate<Self::Update>>;
 }
@@ -87,7 +87,7 @@ pub struct EffectEnvelope<E> {
     pub effect: E,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EffectReceipt<R> {
     pub effect_id: EffectId,
     pub value: R,

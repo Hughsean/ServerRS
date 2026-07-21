@@ -257,6 +257,10 @@ pub enum GraphRunError {
         #[source]
         error: AgentStateError,
     },
+    #[error("节点 {node} 请求暂停，但调用方使用了仅支持运行到完成的入口")]
+    UnexpectedSuspend { node: NodeId },
+    #[error("节点 {node} 请求暂停，但该节点的转移规则是 End")]
+    SuspendAtEnd { node: NodeId },
     #[error("节点 {node} 的 Router 返回未声明路由 {route}")]
     UnknownRoute { node: NodeId, route: RouteKey },
     #[error("图到达 End 时尚未产生 AgentOutcome")]

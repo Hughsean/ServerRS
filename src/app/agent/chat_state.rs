@@ -104,6 +104,14 @@ pub enum ChatTurnUpdate {
 impl AgentBusinessState for ChatTurnState {
     type Update = ChatTurnUpdate;
     type Effect = ChatEffect;
+    type SuspendData = ();
+    type ResumeInput = ();
+
+    fn resume_updates(
+        _input: Self::ResumeInput,
+    ) -> Vec<crate::domain::agent::AgentUpdate<Self::Update>> {
+        Vec::new()
+    }
 
     fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
         match update {

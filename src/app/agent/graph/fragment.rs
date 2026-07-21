@@ -285,7 +285,7 @@ impl<B: AgentBusinessState> AgentNode<B> for NamespacedNode<B> {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect, B::SuspendData>, NodeError> {
         self.inner.execute(state, context).await
     }
 }
@@ -475,6 +475,14 @@ mod tests {
     impl AgentBusinessState for TestBusiness {
         type Update = ();
         type Effect = NoEffect<()>;
+        type SuspendData = ();
+        type ResumeInput = ();
+
+        fn resume_updates(
+            _input: Self::ResumeInput,
+        ) -> Vec<crate::domain::agent::AgentUpdate<Self::Update>> {
+            Vec::new()
+        }
 
         fn apply_update(&mut self, _update: Self::Update) -> Result<(), AgentStateError> {
             Ok(())

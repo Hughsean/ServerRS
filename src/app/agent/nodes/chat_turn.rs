@@ -261,7 +261,7 @@ mod tests {
 
         let result = node.execute(&state, &run_context()).await.unwrap();
         let mut state = state;
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         assert_eq!(state.business().recent_messages().len(), 1);
         assert_eq!(
@@ -288,7 +288,7 @@ mod tests {
 
         let result = node.execute(&state, &run_context()).await.unwrap();
         let mut state = state;
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         let messages = state.business().recent_messages();
         assert_eq!(messages.len(), 3);
@@ -312,7 +312,7 @@ mod tests {
         let node = NormalizeReplyNode::new(id("normalize"));
 
         let result = node.execute(&state, &run_context()).await.unwrap();
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         assert_eq!(
             state.outcome().and_then(AgentOutcome::response_text),
@@ -327,7 +327,7 @@ mod tests {
         let node = NormalizeReplyNode::new(id("normalize"));
 
         let result = node.execute(&state, &run_context()).await.unwrap();
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         assert!(
             state
@@ -357,9 +357,9 @@ mod tests {
 
         let result = node.execute(&state, &run_context()).await.unwrap();
 
-        assert!(result.updates.is_empty());
-        assert_eq!(result.effects.len(), 1);
-        match &result.effects[0] {
+        assert!(result.updates().is_empty());
+        assert_eq!(result.effects().len(), 1);
+        match &result.effects()[0] {
             ChatEffect::PersistTurn(effect) => {
                 assert_eq!(effect.conversation_id, 9);
                 assert_eq!(effect.user_id, 7);

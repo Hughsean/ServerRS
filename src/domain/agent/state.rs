@@ -1,5 +1,6 @@
 use super::{AgentAction, AgentMessage, AgentObservation, AgentOutcome};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
 
 /// Prompt 片段的来源，用于保留信任边界和审计信息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,10 +50,41 @@ impl PromptSection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StateSchemaVersion(NonZeroU32);
+
+impl StateSchemaVersion {
+    pub const fn initial() -> Self {
+        Self(NonZeroU32::MIN)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u32> for StateSchemaVersion {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        NonZeroU32::new(value)
+            .map(Self)
+            .ok_or("StateSchemaVersion 必须大于 0")
+    }
+}
+
 /// 业务状态扩展协议。节点只能通过显式 Update 修改业务字段。
 pub trait AgentBusinessState: Clone + Send + Sync + 'static {
     type Update: Send + Sync + 'static;
     type Effect: Send + Sync + 'static;
+    type SuspendData: Clone + Send + Sync + 'static;
+    type ResumeInput: Send + Sync + 'static;
+
+    fn state_schema_version() -> StateSchemaVersion {
+        StateSchemaVersion::initial()
+    }
+
+    fn resume_updates(input: Self::ResumeInput) -> Vec<AgentUpdate<Self::Update>>;
 
     fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError>;
 }

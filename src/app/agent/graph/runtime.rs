@@ -1,7 +1,9 @@
 use super::{
-    AgentEffect, CompiledGraph, EffectEnvelope, EffectError, EffectExecutor, EffectId,
-    EffectReceipt, GraphRunError, NodeError, NodeErrorKind, NodeId, RunBudget, RunContext, RunId,
-    RunTrace, TransitionRule, UsageSnapshot,
+    AgentCheckpoint, AgentEffect, CheckpointError, CheckpointId, CheckpointRunError,
+    CheckpointStore, CompiledGraph, EffectEnvelope, EffectError, EffectExecutor, EffectId,
+    EffectReceipt, GraphExecutionResult, GraphRunError, NodeError, NodeErrorKind, NodeId,
+    NodeResult, ResumeError, RunBudget, RunContext, RunId, RunPosition, RunTrace, SuspendedRun,
+    TransitionRule, UsageSnapshot,
 };
 use crate::domain::agent::{AgentBusinessState, AgentState};
 use std::sync::Arc;
@@ -17,6 +19,7 @@ where
 {
     graph: Arc<CompiledGraph<B>>,
     effect_executor: Option<Arc<dyn EffectExecutor<B::Effect>>>,
+    checkpoint_store: Option<Arc<dyn CheckpointStore<B>>>,
 }
 
 impl<B> GraphRuntime<B>
@@ -28,6 +31,7 @@ where
         Self {
             graph: Arc::new(graph),
             effect_executor: None,
+            checkpoint_store: None,
         }
     }
 
@@ -38,7 +42,13 @@ where
         Self {
             graph: Arc::new(graph),
             effect_executor: Some(effect_executor),
+            checkpoint_store: None,
         }
+    }
+
+    pub fn with_checkpoint_store(mut self, store: Arc<dyn CheckpointStore<B>>) -> Self {
+        self.checkpoint_store = Some(store);
+        self
     }
 
     pub fn graph(&self) -> &CompiledGraph<B> {
@@ -60,13 +70,177 @@ where
     /// 远端系统提交，因此这不等价于回滚；写节点仍需保守地处理未知提交状态。
     pub async fn run_with_context(
         &self,
-        mut state: AgentState<B>,
+        state: AgentState<B>,
         context: RunContext,
     ) -> Result<GraphRunResult<B>, GraphRunError> {
-        let mut current = self.graph.entry().clone();
-        let mut visited = Vec::new();
-        let mut effect_receipts = Vec::new();
+        match self
+            .execute_from(
+                state,
+                context,
+                self.graph.entry().clone(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .await
+        {
+            Ok(GraphExecutionResult::Completed(result)) => Ok(result),
+            Ok(GraphExecutionResult::Suspended(_)) => {
+                unreachable!("completion-only execution cannot return Suspended")
+            }
+            Err(CheckpointRunError::Graph(error)) => Err(error),
+            Err(CheckpointRunError::MissingStore) => {
+                unreachable!("completion-only execution never requires a CheckpointStore")
+            }
+            Err(CheckpointRunError::SaveFailed { .. }) => {
+                unreachable!("completion-only execution never saves a Checkpoint")
+            }
+        }
+    }
 
+    pub async fn run_checkpointed(
+        &self,
+        state: AgentState<B>,
+        budget: RunBudget,
+    ) -> Result<GraphExecutionResult<B>, CheckpointRunError<B>> {
+        let context = RunContext::new(budget, CancellationToken::new(), RunTrace::default());
+        self.run_checkpointed_with_context(state, context).await
+    }
+
+    pub async fn run_checkpointed_with_context(
+        &self,
+        state: AgentState<B>,
+        context: RunContext,
+    ) -> Result<GraphExecutionResult<B>, CheckpointRunError<B>> {
+        if self.checkpoint_store.is_none() {
+            return Err(CheckpointRunError::MissingStore);
+        }
+        self.execute_from(
+            state,
+            context,
+            self.graph.entry().clone(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .await
+    }
+
+    pub async fn resume(
+        &self,
+        checkpoint_id: CheckpointId,
+        input: B::ResumeInput,
+    ) -> Result<GraphExecutionResult<B>, ResumeError<B>> {
+        self.resume_with_context(
+            checkpoint_id,
+            input,
+            CancellationToken::new(),
+            RunTrace::default(),
+        )
+        .await
+    }
+
+    pub async fn resume_with_context(
+        &self,
+        checkpoint_id: CheckpointId,
+        input: B::ResumeInput,
+        cancellation: CancellationToken,
+        trace: RunTrace,
+    ) -> Result<GraphExecutionResult<B>, ResumeError<B>> {
+        let store = self
+            .checkpoint_store
+            .as_ref()
+            .ok_or_else(|| ResumeError::RunFailed {
+                source: Box::new(CheckpointRunError::MissingStore),
+            })?;
+        let checkpoint = store
+            .load(checkpoint_id)
+            .await
+            .map_err(|source| ResumeError::CheckpointLoad { source })?;
+
+        if checkpoint.graph_id() != self.graph.id() {
+            return Err(ResumeError::GraphIdMismatch {
+                expected: self.graph.id().clone(),
+                actual: checkpoint.graph_id().clone(),
+            });
+        }
+        if checkpoint.graph_version() != self.graph.version() {
+            return Err(ResumeError::GraphVersionMismatch {
+                expected: self.graph.version(),
+                actual: checkpoint.graph_version(),
+            });
+        }
+        let state_schema_version = B::state_schema_version();
+        if checkpoint.state_schema_version() != state_schema_version {
+            return Err(ResumeError::StateSchemaVersionMismatch {
+                expected: state_schema_version,
+                actual: checkpoint.state_schema_version(),
+            });
+        }
+        let completed_step = checkpoint.position().completed_step().get();
+        let usage_steps = checkpoint.usage().steps;
+        if completed_step != usage_steps {
+            return Err(ResumeError::RunPositionMismatch {
+                completed_step,
+                usage_steps,
+            });
+        }
+        let next_node = checkpoint.position().next_node().clone();
+        if self.graph.node(&next_node).is_none() {
+            return Err(ResumeError::MissingNode { node: next_node });
+        }
+
+        let mut state = checkpoint.state().clone();
+        state
+            .apply_updates(B::resume_updates(input))
+            .map_err(|error| ResumeError::ResumeInputRejected { error })?;
+
+        store
+            .take(checkpoint_id)
+            .await
+            .map_err(|error| match error {
+                CheckpointError::NotFound { .. } => {
+                    ResumeError::CheckpointAlreadyConsumed { checkpoint_id }
+                }
+                source => ResumeError::CheckpointLoad { source },
+            })?;
+
+        let mut restored_trace = checkpoint.trace().clone();
+        if restored_trace.trace_id.is_none() {
+            restored_trace.trace_id = trace.trace_id;
+        }
+        restored_trace.attributes.extend(trace.attributes);
+        let context = RunContext::resume(
+            checkpoint.run_id(),
+            checkpoint.budget(),
+            checkpoint.usage(),
+            cancellation,
+            restored_trace,
+        );
+
+        self.execute_from(
+            state,
+            context,
+            next_node,
+            checkpoint.visited().to_vec(),
+            checkpoint.effect_receipts().to_vec(),
+            true,
+        )
+        .await
+        .map_err(|source| ResumeError::RunFailed {
+            source: Box::new(source),
+        })
+    }
+
+    async fn execute_from(
+        &self,
+        mut state: AgentState<B>,
+        context: RunContext,
+        mut current: NodeId,
+        mut visited: Vec<NodeId>,
+        mut effect_receipts: Vec<EffectReceipt<<B::Effect as AgentEffect>::Receipt>>,
+        checkpointing: bool,
+    ) -> Result<GraphExecutionResult<B>, CheckpointRunError<B>> {
         loop {
             let run_step = context.check_ready(self.graph.policy().max_steps())?;
             let step = run_step.get();
@@ -91,29 +265,63 @@ where
             let execution = node.execute(&state, &context);
             let node_result = tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => return Err(GraphRunError::Cancelled),
+                _ = cancellation.cancelled() => {
+                    return Err(GraphRunError::Cancelled.into());
+                }
                 _ = tokio::time::sleep_until(deadline) => {
-                    return Err(GraphRunError::DeadlineExceeded);
+                    return Err(GraphRunError::DeadlineExceeded.into());
                 }
                 result = execution => result,
             };
             let result = match node_result {
                 Ok(result) => result,
-                Err(error) => return Err(error.into_graph_run(current.clone())),
+                Err(error) => return Err(error.into_graph_run(current.clone()).into()),
             };
-            context.budget().record_usage(result.usage)?;
-            let mut candidate = state.clone();
-            candidate.apply_updates(result.updates).map_err(|error| {
-                GraphRunError::StateUpdateFailed {
+            let (updates, effects, usage, suspend_request) = match result {
+                NodeResult::Continue {
+                    updates,
+                    effects,
+                    usage,
+                } => (updates, effects, usage, None),
+                NodeResult::Suspend {
+                    updates,
+                    effects,
+                    usage,
+                    request,
+                } => {
+                    if !checkpointing {
+                        return Err(GraphRunError::UnexpectedSuspend {
+                            node: current.clone(),
+                        }
+                        .into());
+                    }
+                    (updates, effects, usage, Some(request))
+                }
+            };
+            let transition = self.graph.transition(&current).cloned().ok_or_else(|| {
+                GraphRunError::MissingTransition {
                     node: current.clone(),
-                    error,
                 }
             })?;
+            if suspend_request.is_some() && matches!(transition, TransitionRule::End) {
+                return Err(GraphRunError::SuspendAtEnd {
+                    node: current.clone(),
+                }
+                .into());
+            }
+            context.budget().record_usage(usage)?;
+            let mut candidate = state.clone();
+            candidate
+                .apply_updates(updates)
+                .map_err(|error| GraphRunError::StateUpdateFailed {
+                    node: current.clone(),
+                    error,
+                })?;
 
-            let mut node_receipts = Vec::with_capacity(result.effects.len());
-            let mut completed_effect_ids = Vec::with_capacity(result.effects.len());
+            let mut node_receipts = Vec::with_capacity(effects.len());
+            let mut completed_effect_ids = Vec::with_capacity(effects.len());
 
-            for (ordinal, effect) in result.effects.into_iter().enumerate() {
+            for (ordinal, effect) in effects.into_iter().enumerate() {
                 let ordinal = u32::try_from(ordinal).map_err(|_| GraphRunError::NodeFailed {
                     node: current.clone(),
                     error: NodeError::new(
@@ -184,13 +392,8 @@ where
                 "agent graph node completed"
             );
 
-            let transition = self.graph.transition(&current).ok_or_else(|| {
-                GraphRunError::MissingTransition {
-                    node: current.clone(),
-                }
-            })?;
-            match transition {
-                TransitionRule::Goto(next) => current = next.clone(),
+            let next_node = match transition {
+                TransitionRule::Goto(next) => Some(next),
                 TransitionRule::Branch { router, targets } => {
                     let route =
                         router
@@ -206,24 +409,65 @@ where
                         route = %route,
                         "agent graph route selected"
                     );
-                    current = targets.get(&route).cloned().ok_or_else(|| {
+                    Some(targets.get(&route).cloned().ok_or_else(|| {
                         GraphRunError::UnknownRoute {
                             node: current.clone(),
                             route,
                         }
-                    })?;
+                    })?)
                 }
                 TransitionRule::End => {
                     if state.outcome().is_none() {
-                        return Err(GraphRunError::MissingOutcome);
+                        return Err(GraphRunError::MissingOutcome.into());
                     }
-                    return Ok(GraphRunResult {
+                    None
+                }
+            };
+
+            if let Some(request) = suspend_request {
+                let next_node = next_node.expect("SuspendAtEnd was rejected before execution");
+                let checkpoint = AgentCheckpoint::new(
+                    CheckpointId::new(),
+                    self.graph.id().clone(),
+                    self.graph.version(),
+                    B::state_schema_version(),
+                    context.run_id(),
+                    RunPosition::new(run_step, next_node),
+                    state,
+                    context.budget().limits(),
+                    context.budget().snapshot(),
+                    visited,
+                    effect_receipts,
+                    request,
+                    context.trace().clone(),
+                );
+                let checkpoint_id = checkpoint.id();
+                let store = self
+                    .checkpoint_store
+                    .as_ref()
+                    .ok_or(CheckpointRunError::MissingStore)?;
+                if let Err(source) = store.save(checkpoint.clone()).await {
+                    return Err(CheckpointRunError::SaveFailed {
+                        checkpoint_id,
+                        checkpoint: Box::new(checkpoint),
+                        source,
+                    });
+                }
+                return Ok(GraphExecutionResult::Suspended(SuspendedRun::new(
+                    checkpoint,
+                )));
+            }
+
+            match next_node {
+                Some(next_node) => current = next_node,
+                None => {
+                    return Ok(GraphExecutionResult::Completed(GraphRunResult {
                         state,
                         usage: context.budget().snapshot(),
                         visited,
                         run_id: context.run_id(),
                         effect_receipts,
-                    });
+                    }));
                 }
             }
         }
@@ -283,6 +527,11 @@ mod tests {
         Reject,
     }
 
+    enum TestResumeInput {
+        Set(i32),
+        Reject,
+    }
+
     #[derive(Debug, Clone)]
     enum TestEffect {
         Set(i32),
@@ -291,7 +540,7 @@ mod tests {
         Pending(Arc<tokio::sync::Notify>),
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     enum TestReceipt {
         Set(i32),
         Reject,
@@ -323,6 +572,43 @@ mod tests {
         }
     }
 
+    struct FailingCheckpointStore {
+        save_calls: AtomicUsize,
+    }
+
+    impl FailingCheckpointStore {
+        fn new() -> Self {
+            Self {
+                save_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CheckpointStore<TestBusiness> for FailingCheckpointStore {
+        async fn save(
+            &self,
+            _checkpoint: AgentCheckpoint<TestBusiness>,
+        ) -> Result<(), CheckpointError> {
+            self.save_calls.fetch_add(1, Ordering::SeqCst);
+            Err(CheckpointError::StoreUnavailable)
+        }
+
+        async fn load(
+            &self,
+            checkpoint_id: CheckpointId,
+        ) -> Result<AgentCheckpoint<TestBusiness>, CheckpointError> {
+            Err(CheckpointError::NotFound { checkpoint_id })
+        }
+
+        async fn take(
+            &self,
+            checkpoint_id: CheckpointId,
+        ) -> Result<AgentCheckpoint<TestBusiness>, CheckpointError> {
+            Err(CheckpointError::NotFound { checkpoint_id })
+        }
+    }
+
     #[async_trait]
     impl EffectExecutor<TestEffect> for TestEffectExecutor {
         async fn execute(
@@ -348,6 +634,15 @@ mod tests {
     impl AgentBusinessState for TestBusiness {
         type Update = TestUpdate;
         type Effect = TestEffect;
+        type SuspendData = String;
+        type ResumeInput = TestResumeInput;
+
+        fn resume_updates(input: Self::ResumeInput) -> Vec<AgentUpdate<Self::Update>> {
+            vec![AgentUpdate::Business(match input {
+                TestResumeInput::Set(value) => TestUpdate::Set(value),
+                TestResumeInput::Reject => TestUpdate::Reject,
+            })]
+        }
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {
@@ -364,6 +659,7 @@ mod tests {
         Noop,
         Set(i32),
         Finish,
+        FinishFromState,
         Fail,
         Usage(UsageDelta),
         ReserveLlm,
@@ -372,6 +668,17 @@ mod tests {
         RejectThenEffect(TestEffect),
         CancelThenEffects(Vec<TestEffect>),
         UsageThenEffects(UsageDelta, Vec<TestEffect>),
+        Suspend {
+            update: i32,
+            effect: i32,
+            tokens: u64,
+            data: String,
+        },
+        SuspendEffects {
+            update: i32,
+            effects: Vec<TestEffect>,
+            data: String,
+        },
         Pending,
         ApplicationFailure(AppError),
     }
@@ -398,9 +705,9 @@ mod tests {
 
         async fn execute(
             &self,
-            _state: &AgentState<TestBusiness>,
+            state: &AgentState<TestBusiness>,
             _context: &RunContext,
-        ) -> Result<NodeResult<TestUpdate, TestEffect>, NodeError> {
+        ) -> Result<NodeResult<TestUpdate, TestEffect, String>, NodeError> {
             match self.behavior {
                 Behavior::Noop => Ok(NodeResult::empty()),
                 Behavior::Set(value) => Ok(NodeResult::new(
@@ -410,6 +717,12 @@ mod tests {
                 Behavior::Finish => Ok(NodeResult::new(
                     vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
                         "done".into(),
+                    ))],
+                    UsageDelta::default(),
+                )),
+                Behavior::FinishFromState => Ok(NodeResult::new(
+                    vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                        state.business().value.to_string(),
                     ))],
                     UsageDelta::default(),
                 )),
@@ -468,6 +781,27 @@ mod tests {
                     effects.clone(),
                     usage,
                 )),
+                Behavior::Suspend {
+                    update,
+                    effect,
+                    tokens,
+                    ref data,
+                } => Ok(NodeResult::Suspend {
+                    updates: vec![AgentUpdate::Business(TestUpdate::Set(update))],
+                    effects: vec![TestEffect::Set(effect)],
+                    usage: UsageDelta { tokens },
+                    request: SuspendRequest::new(SuspendReason::ExternalInput, data.clone()),
+                }),
+                Behavior::SuspendEffects {
+                    update,
+                    ref effects,
+                    ref data,
+                } => Ok(NodeResult::Suspend {
+                    updates: vec![AgentUpdate::Business(TestUpdate::Set(update))],
+                    effects: effects.clone(),
+                    usage: UsageDelta::default(),
+                    request: SuspendRequest::new(SuspendReason::ExternalInput, data.clone()),
+                }),
                 Behavior::Pending => std::future::pending().await,
                 Behavior::ApplicationFailure(ref error) => {
                     Err(NodeError::from_application(error.clone()))
@@ -520,12 +854,28 @@ mod tests {
     }
 
     fn direct_graph(start_behavior: Behavior) -> CompiledGraph<TestBusiness> {
-        let mut graph = GraphDefinition::new(GraphId::try_from("direct").unwrap());
+        direct_graph_with_finish(start_behavior, Behavior::Finish, GraphVersion::initial())
+    }
+
+    fn direct_graph_versioned(
+        start_behavior: Behavior,
+        version: GraphVersion,
+    ) -> CompiledGraph<TestBusiness> {
+        direct_graph_with_finish(start_behavior, Behavior::Finish, version)
+    }
+
+    fn direct_graph_with_finish(
+        start_behavior: Behavior,
+        finish_behavior: Behavior,
+        version: GraphVersion,
+    ) -> CompiledGraph<TestBusiness> {
+        let mut graph =
+            GraphDefinition::new_versioned(GraphId::try_from("direct").unwrap(), version);
         graph
             .add_node(Arc::new(FakeNode::new("start", start_behavior)))
             .unwrap();
         graph
-            .add_node(Arc::new(FakeNode::new("finish", Behavior::Finish)))
+            .add_node(Arc::new(FakeNode::new("finish", finish_behavior)))
             .unwrap();
         graph.set_entry(node_id("start"));
         graph
@@ -579,6 +929,36 @@ mod tests {
             .set_transition(node_id("finish"), TransitionRule::End)
             .unwrap();
         graph.compile(policy(graph_max_steps)).unwrap()
+    }
+
+    fn manual_checkpoint(
+        graph_id: GraphId,
+        graph_version: GraphVersion,
+        state_schema_version: StateSchemaVersion,
+        next_node: NodeId,
+        completed_step: u32,
+        usage_steps: u32,
+    ) -> AgentCheckpoint<TestBusiness> {
+        AgentCheckpoint::new(
+            CheckpointId::new(),
+            graph_id,
+            graph_version,
+            state_schema_version,
+            RunId::new(),
+            RunPosition::new(RunStep::try_from(completed_step).unwrap(), next_node),
+            AgentState::new(TestBusiness::default()),
+            RunBudget::for_test(8),
+            UsageSnapshot {
+                steps: usage_steps,
+                llm_calls: 0,
+                tool_calls: 0,
+                tokens: 0,
+            },
+            vec![node_id("start")],
+            Vec::new(),
+            SuspendRequest::new(SuspendReason::ExternalInput, "ticket".into()),
+            RunTrace::default(),
+        )
     }
 
     #[tokio::test]
@@ -641,6 +1021,531 @@ mod tests {
             result.state.outcome().unwrap().response_text(),
             Some("done")
         );
+    }
+
+    #[tokio::test]
+    async fn checkpointed_run_resumes_from_next_node_with_same_run_and_receipts() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph_with_finish(
+                Behavior::Suspend {
+                    update: 5,
+                    effect: 7,
+                    tokens: 3,
+                    data: "ticket-42".into(),
+                },
+                Behavior::FinishFromState,
+                GraphVersion::initial(),
+            ),
+            executor.clone(),
+        )
+        .with_checkpoint_store(store.clone());
+
+        let suspended = match runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Suspended(suspended) => suspended,
+            GraphExecutionResult::Completed(_) => panic!("expected suspension"),
+        };
+        let checkpoint_id = suspended.checkpoint().id();
+        let run_id = suspended.checkpoint().run_id();
+
+        assert_eq!(
+            suspended.checkpoint().position().next_node(),
+            &node_id("finish")
+        );
+        assert_eq!(suspended.checkpoint().usage().steps, 1);
+        assert_eq!(suspended.checkpoint().usage().tokens, 3);
+        assert_eq!(suspended.checkpoint().state().business().value, 7);
+        assert_eq!(suspended.checkpoint().effect_receipts().len(), 1);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+
+        let completed = match runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Completed(completed) => completed,
+            GraphExecutionResult::Suspended(_) => panic!("expected completion"),
+        };
+
+        assert_eq!(completed.run_id, run_id);
+        assert_eq!(completed.usage.steps, 2);
+        assert_eq!(completed.usage.tokens, 3);
+        assert_eq!(completed.visited, vec![node_id("start"), node_id("finish")]);
+        assert_eq!(completed.state.business().value, 11);
+        assert_eq!(
+            completed
+                .state
+                .outcome()
+                .and_then(AgentOutcome::response_text),
+            Some("11")
+        );
+        assert_eq!(completed.effect_receipts.len(), 1);
+        assert_eq!(completed.effect_receipts[0].effect_id.step().get(), 1);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            store.load(checkpoint_id).await,
+            Err(CheckpointError::NotFound { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_graph_version_mismatch_without_consuming_checkpoint() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            Arc::new(TestEffectExecutor::recording()),
+        )
+        .with_checkpoint_store(store.clone());
+        let checkpoint_id = match runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Suspended(suspended) => suspended.checkpoint().id(),
+            GraphExecutionResult::Completed(_) => panic!("expected suspension"),
+        };
+
+        let version_two = GraphVersion::try_from(2).unwrap();
+        let incompatible = GraphRuntime::new(direct_graph_versioned(Behavior::Noop, version_two))
+            .with_checkpoint_store(store.clone());
+        let error = incompatible
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResumeError::GraphVersionMismatch { expected, actual }
+                if expected == version_two && actual == GraphVersion::initial()
+        ));
+        assert!(store.load(checkpoint_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_graph_id_mismatch_without_consuming_checkpoint() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let checkpoint = manual_checkpoint(
+            GraphId::try_from("other").unwrap(),
+            GraphVersion::initial(),
+            StateSchemaVersion::initial(),
+            node_id("finish"),
+            1,
+            1,
+        );
+        let checkpoint_id = checkpoint.id();
+        store.save(checkpoint).await.unwrap();
+        let runtime =
+            GraphRuntime::new(direct_graph(Behavior::Noop)).with_checkpoint_store(store.clone());
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ResumeError::GraphIdMismatch { .. }));
+        assert!(store.load(checkpoint_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_state_schema_mismatch_without_consuming_checkpoint() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let checkpoint = manual_checkpoint(
+            GraphId::try_from("direct").unwrap(),
+            GraphVersion::initial(),
+            StateSchemaVersion::try_from(2).unwrap(),
+            node_id("finish"),
+            1,
+            1,
+        );
+        let checkpoint_id = checkpoint.id();
+        store.save(checkpoint).await.unwrap();
+        let runtime =
+            GraphRuntime::new(direct_graph(Behavior::Noop)).with_checkpoint_store(store.clone());
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResumeError::StateSchemaVersionMismatch { expected, actual }
+                if expected == StateSchemaVersion::initial() && actual.get() == 2
+        ));
+        assert!(store.load(checkpoint_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_missing_next_node_without_consuming_checkpoint() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let checkpoint = manual_checkpoint(
+            GraphId::try_from("direct").unwrap(),
+            GraphVersion::initial(),
+            StateSchemaVersion::initial(),
+            node_id("missing"),
+            1,
+            1,
+        );
+        let checkpoint_id = checkpoint.id();
+        store.save(checkpoint).await.unwrap();
+        let runtime =
+            GraphRuntime::new(direct_graph(Behavior::Noop)).with_checkpoint_store(store.clone());
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResumeError::MissingNode { node } if node == node_id("missing")
+        ));
+        assert!(store.load(checkpoint_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_run_position_mismatch_without_consuming_checkpoint() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let checkpoint = manual_checkpoint(
+            GraphId::try_from("direct").unwrap(),
+            GraphVersion::initial(),
+            StateSchemaVersion::initial(),
+            node_id("finish"),
+            2,
+            1,
+        );
+        let checkpoint_id = checkpoint.id();
+        store.save(checkpoint).await.unwrap();
+        let runtime =
+            GraphRuntime::new(direct_graph(Behavior::Noop)).with_checkpoint_store(store.clone());
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResumeError::RunPositionMismatch {
+                completed_step: 2,
+                usage_steps: 1,
+            }
+        ));
+        assert!(store.load(checkpoint_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejected_resume_input_keeps_checkpoint_and_does_not_run_next_node() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            executor.clone(),
+        )
+        .with_checkpoint_store(store.clone());
+        let checkpoint_id = match runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Suspended(suspended) => suspended.checkpoint().id(),
+            GraphExecutionResult::Completed(_) => panic!("expected suspension"),
+        };
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Reject)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ResumeError::ResumeInputRejected { .. }));
+        assert!(store.load(checkpoint_id).await.is_ok());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn completion_only_entry_rejects_suspend_before_effect_dispatch() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, GraphRunError::UnexpectedSuspend { .. }));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn checkpointed_run_requires_store_before_node_execution() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, CheckpointRunError::MissingStore));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn suspend_at_end_is_rejected_before_effect_dispatch() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            executor.clone(),
+        )
+        .with_checkpoint_store(Arc::new(InMemoryCheckpointStore::new()));
+
+        let error = runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CheckpointRunError::Graph(GraphRunError::SuspendAtEnd { .. })
+        ));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_save_failure_returns_unsaved_state_without_replaying_effect() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let store = Arc::new(FailingCheckpointStore::new());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            executor.clone(),
+        )
+        .with_checkpoint_store(store.clone());
+
+        let error = runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        match error {
+            CheckpointRunError::SaveFailed {
+                checkpoint,
+                source: CheckpointError::StoreUnavailable,
+                ..
+            } => {
+                assert_eq!(checkpoint.state().business().value, 7);
+                assert_eq!(checkpoint.effect_receipts().len(), 1);
+                assert_eq!(checkpoint.position().next_node(), &node_id("finish"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.save_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn effect_ids_continue_across_resume_without_collision() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph_with_finish(
+                Behavior::Suspend {
+                    update: 5,
+                    effect: 7,
+                    tokens: 0,
+                    data: "ticket".into(),
+                },
+                Behavior::Effect(9),
+                GraphVersion::initial(),
+            ),
+            executor.clone(),
+        )
+        .with_checkpoint_store(store);
+        let suspended = match runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Suspended(suspended) => suspended,
+            GraphExecutionResult::Completed(_) => panic!("expected suspension"),
+        };
+        let checkpoint_id = suspended.checkpoint().id();
+        let first_id = suspended.checkpoint().effect_receipts()[0]
+            .effect_id
+            .clone();
+
+        let completed = match runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Completed(completed) => completed,
+            GraphExecutionResult::Suspended(_) => panic!("expected completion"),
+        };
+
+        let second_id = &completed.effect_receipts[1].effect_id;
+        assert_eq!(completed.effect_receipts.len(), 2);
+        assert_eq!(first_id.run_id(), second_id.run_id());
+        assert_eq!(first_id.step().get(), 1);
+        assert_eq!(second_id.step().get(), 2);
+        assert_ne!(first_id, *second_id);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_commit_does_not_create_a_checkpoint() {
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let context = RunContext::new(RunBudget::for_test(8), token, RunTrace::default());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::SuspendEffects {
+                update: 5,
+                effects: vec![TestEffect::Pending(started.clone())],
+                data: "ticket".into(),
+            }),
+            executor,
+        )
+        .with_checkpoint_store(store.clone());
+
+        let mut run = tokio::spawn(async move {
+            runtime
+                .run_checkpointed_with_context(AgentState::new(TestBusiness::default()), context)
+                .await
+        });
+        started.notified().await;
+        cancel.cancel();
+
+        let joined = match tokio::time::timeout(Duration::from_secs(1), &mut run).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                run.abort();
+                panic!("runtime did not observe in-flight cancellation");
+            }
+        };
+        let error = joined.unwrap().unwrap_err();
+
+        match error {
+            CheckpointRunError::Graph(GraphRunError::EffectFailed { error, .. }) => {
+                assert_eq!(error.kind(), EffectErrorKind::UnknownCommit)
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(store.is_empty().unwrap());
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_the_original_step_budget_instead_of_resetting_it() {
+        let store = Arc::new(InMemoryCheckpointStore::<TestBusiness>::new());
+        let runtime = GraphRuntime::with_effect_executor(
+            direct_graph(Behavior::Suspend {
+                update: 5,
+                effect: 7,
+                tokens: 0,
+                data: "ticket".into(),
+            }),
+            Arc::new(TestEffectExecutor::recording()),
+        )
+        .with_checkpoint_store(store.clone());
+        let checkpoint_id = match runtime
+            .run_checkpointed(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(1),
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Suspended(suspended) => suspended.checkpoint().id(),
+            GraphExecutionResult::Completed(_) => panic!("expected suspension"),
+        };
+
+        let error = runtime
+            .resume(checkpoint_id, TestResumeInput::Set(11))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResumeError::RunFailed { source }
+                if matches!(
+                    *source,
+                    CheckpointRunError::Graph(GraphRunError::BudgetExceeded {
+                        resource: BudgetResource::Steps,
+                        limit: 1,
+                        attempted: 2,
+                    })
+                )
+        ));
+        assert!(matches!(
+            store.load(checkpoint_id).await,
+            Err(CheckpointError::NotFound { .. })
+        ));
     }
 
     #[tokio::test]
