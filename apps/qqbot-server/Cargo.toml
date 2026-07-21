@@ -1,0 +1,21 @@
+[package]
+name = "qqbot-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+dotenvy.workspace = true
+qqbot.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+url.workspace = true

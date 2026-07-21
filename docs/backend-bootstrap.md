@@ -1,11 +1,12 @@
 # ServerRS 启动装配结构
 
 > 最后核对: 2026-07-21
-> 代码基准: 当前工作区 `apps/server/src/main.rs` + `apps/server/src/bootstrap/*`
+> 代码基准: 当前工作区 `apps/digital-human-server/src/main.rs` +
+> `apps/digital-human-server/src/bootstrap/*`
 >
 > Workspace 依赖边界见 [crate-boundaries.md](crate-boundaries.md)。下文省略的 `src/`
-> 前缀均指 `apps/server/src/`；数字人业务实现位于 `crates/digital-human/src/`，QQ
-> 业务实现位于 `crates/qqbot/src/`。
+> 前缀均指 `apps/digital-human-server/src/`；数字人业务实现位于
+> `crates/digital-human/src/`。QQBot 已是独立进程，不参与这里的装配。
 
 ## 概述
 
@@ -18,8 +19,8 @@ main.rs
        ├─ 2. RepoGraph       SeaORM 仓库集合
        ├─ 3. TaskContext     后台任务、任务发布器、清理循环
        ├─ 4. VectorContext   Embedding、Qdrant、VectorIndex
-       ├─ 5. ServiceGraph    provider-based 业务服务、Agent、QQ Bot、Web Ingestion
-       └─ 6. HTTP Serve      Axum Router、CORS、静态 TTS、优雅关闭
+       ├─ 5. ServiceGraph    provider-based 业务服务、Agent、Web Ingestion
+       └─ 6. HTTP Serve      Axum Router、CORS、优雅关闭
 ```
 
 `main.rs` 只负责加载配置、初始化日志、调用 `bootstrap::runtime::run`。日志同时写 stdout 和 `logs/app.log.YYYY-MM-DD`。
@@ -52,7 +53,7 @@ pub struct InfraContext {
 代码: `src/bootstrap/repos.rs`
 
 职责：调用 `digital-human::repositories::build_repositories` 获取领域端口聚合。
-具体 SeaORM Repo 由 `digital-human` 在 crate 内部构造，`server` 不再依赖其实现类型。
+具体 SeaORM Repo 由 `digital-human` 在 crate 内部构造，宿主不依赖其实现类型。
 `build_repos` 仍传入 memory/summary collection 名称，用于忘记/清空上下文时同步删除对应向量。
 
 包含的仓库：
@@ -120,7 +121,6 @@ graph::object_provider   ObjectService 和本地对象存储
 graph::wellbeing_provider Psychology/Depression/Diary 服务
 graph::content_provider  Music/Community 服务
 graph::integration_provider 集成子系统总编排
-graph::qq_bot_provider QQ Bot 启动和后台任务注册（feature `qq_bot`）
 graph::web_ingestion_provider Web Ingestion 启动和 KnowledgeReviewService
 graph::fresh_context_provider Fresh Context 启动和后台任务注册
 ```
@@ -140,10 +140,8 @@ AgentRuntime, KnowledgeReviewService
 `ServiceGraph::build` 只保留服务图拓扑：
 - 各业务服务族由 `graph::*_provider` 构造。
 - 后台 handler 由对应 provider 返回，并在 `TaskContext` 上集中注册。
-- QQ Bot、Web Ingestion、Fresh Context 通过 `integration_provider` 统一启动。
-- QQ Bot 的 NapCat/注意力实现不得泄漏到 `app::qq_bot`：应用层只依赖
-  `domain::qq_bot::{AttentionStore, GroupMessageGateway, GroupMessageHandler}` 端口，
-  具体实现由 `bootstrap::qq_bot` 装配。
+- Web Ingestion、Fresh Context 通过 `integration_provider` 统一启动。
+- QQBot/NapCat 不进入数字人 `ServiceGraph`，由独立的 `apps/qqbot-server` 启动。
 
 ### 6. `bootstrap::runtime`
 
@@ -152,7 +150,6 @@ AgentRuntime, KnowledgeReviewService
 职责：
 - 按 6 阶段编排启动。
 - 构造 Axum router。
-- 挂载 `/tts` 静态目录（仅 QQ Bot + TTS 配置可用时）。
 - 监听 Ctrl+C / SIGTERM。
 - 关闭时停止后台任务并关闭 SSH tunnel。
 

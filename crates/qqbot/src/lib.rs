@@ -1,13 +1,6 @@
-//! QQ business boundary: message lifecycle, group knowledge, NapCat and outbox.
+//! QQBot 的 NapCat/OneBot 协议适配器。
+//!
+//! 当前 crate 不包含 QQ 业务流程、数据库实体或仓储实现。后续业务通过
+//! [`napcat::NapCatEventHandler`] 接入协议事件。
 
-pub mod app;
-pub mod config;
-pub mod domain;
-pub mod infra;
-pub mod repositories;
-mod shared;
-
-pub use config::QqBotConfig;
-pub use domain::qq_bot::{
-    AttentionStore, GroupMessageGateway, GroupMessageHandler, PlatformUserDirectory, QqBotError,
-};
+pub mod napcat;

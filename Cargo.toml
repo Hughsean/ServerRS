@@ -1,13 +1,14 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/server",
+    "apps/digital-human-server",
+    "apps/qqbot-server",
     "crates/agent-core",
     "crates/ai-core",
     "crates/digital-human",
     "crates/qqbot",
 ]
-default-members = ["apps/server"]
+default-members = ["apps/digital-human-server", "apps/qqbot-server"]
 
 [workspace.package]
 version = "1.0.0"

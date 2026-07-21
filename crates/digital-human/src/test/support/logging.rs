@@ -2,11 +2,11 @@
 pub fn init() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(
-            "server_rs=debug,\
-             server_rs::app::agent=trace,\
-             server_rs::app::context_routing=debug,\
-             server_rs::app::fresh_context=trace,\
-             server_rs::app::session=debug,\
+            "digital_human=debug,\
+             digital_human::app::agent=trace,\
+             digital_human::app::context_routing=debug,\
+             digital_human::app::fresh_context=trace,\
+             digital_human::app::session=debug,\
              reqwest=warn,\
              qdrant_client=warn,\
              hyper=warn,\

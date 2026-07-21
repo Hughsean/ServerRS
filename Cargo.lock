@@ -1211,6 +1211,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "digital-human-server"
+version = "1.0.0"
+dependencies = [
+ "agent-core",
+ "ai-core",
+ "async-trait",
+ "axum 0.8.9",
+ "base64",
+ "bcrypt",
+ "chrono",
+ "dashmap",
+ "digital-human",
+ "dotenvy",
+ "futures-util",
+ "jsonwebtoken",
+ "proc-macro2",
+ "qdrant-client",
+ "regex",
+ "reqwest 0.13.4",
+ "rpassword",
+ "rustyline",
+ "scraper",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "syn 2.0.119",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+ "validator",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,12 +1774,6 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
 
 [[package]]
 name = "httparse"
@@ -2313,16 +2352,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2879,22 +2908,32 @@ dependencies = [
 name = "qqbot"
 version = "1.0.0"
 dependencies = [
- "ai-core",
  "async-trait",
- "base64",
- "chrono",
- "dashmap",
  "futures-util",
  "regex",
  "reqwest 0.13.4",
- "sea-orm",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "uuid",
+]
+
+[[package]]
+name = "qqbot-server"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "dotenvy",
+ "qqbot",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -3771,52 +3810,6 @@ checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
 dependencies = [
  "base16ct",
  "serde",
-]
-
-[[package]]
-name = "server"
-version = "1.0.0"
-dependencies = [
- "agent-core",
- "ai-core",
- "async-trait",
- "axum 0.8.9",
- "base64",
- "bcrypt",
- "chrono",
- "dashmap",
- "digital-human",
- "dotenvy",
- "futures-util",
- "jsonwebtoken",
- "proc-macro2",
- "qdrant-client",
- "qqbot",
- "regex",
- "reqwest 0.13.4",
- "rpassword",
- "rustyline",
- "scraper",
- "sea-orm",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "syn 2.0.119",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "toml",
- "tower-http 0.7.0",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "uuid",
- "validator",
 ]
 
 [[package]]
@@ -4723,14 +4716,8 @@ dependencies = [
  "bitflags",
  "bytes",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
- "http-body-util",
- "http-range-header",
- "httpdate",
- "mime",
- "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "tokio",
@@ -4856,12 +4843,6 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
-
-[[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-bidi"

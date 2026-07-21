@@ -2,35 +2,50 @@
 
 > 最后核对：2026-07-21
 
-后端已拆分为 5 个 workspace member：
+后端包含 6 个 workspace member：
 
-| crate | 路径 | 职责 |
+| package | 路径 | 职责 |
 |---|---|---|
 | `agent-core` | `crates/agent-core` | 通用 Agent Graph、Effect、Checkpoint、Suspend/Resume、状态机 |
 | `ai-core` | `crates/ai-core` | Provider 中立的 LLM、Embedding、TTS 与工具协议 |
 | `digital-human` | `crates/digital-human` | 聊天、记忆、RAG、画像、工具和数字人业务持久化 |
-| `qqbot` | `crates/qqbot` | QQ 消息、群知识、运营、NapCat、Outbox 和 QQ 持久化 |
-| `server` | `apps/server` | Axum、进程配置、数据库连接、依赖装配和启动 |
+| `qqbot` | `crates/qqbot` | 仅保留 NapCat/OneBot HTTP、WebSocket、CQ 解析与协议事件接口 |
+| `digital-human-server` | `apps/digital-human-server` | 数字人 Axum API、配置、数据库连接、依赖装配和启动 |
+| `qqbot-server` | `apps/qqbot-server` | NapCat 独立进程、配置、重连、退出与待接入业务回调 |
 
 ## 依赖方向
 
 ```text
 agent-core       ai-core
      ^              ^
-     |              |\
-     +-- digital-human  qqbot
-              \       /
-               server
+     |              |
+     +-- digital-human
+              ^
+              |
+  digital-human-server
+
+qqbot <--- qqbot-server
 ```
 
 - `digital-human -> agent-core, ai-core`
-- `qqbot -> ai-core`
-- `server -> agent-core, ai-core, digital-human`，启用 QQ feature 时再依赖 `qqbot`
-- 禁止 `agent-core` 或 `ai-core` 依赖业务 crate
-- 禁止 `digital-human` 与 `qqbot` 相互依赖
+- `digital-human-server -> agent-core, ai-core, digital-human`
+- `qqbot-server -> qqbot`
+- `qqbot` 不依赖数字人、AI Core、ORM 或数据库驱动
+- 两个应用不互相依赖，也不在同一进程中装配
 
-具体 SeaORM Repository 类型不对宿主公开。业务 crate 通过各自的
-`repositories::build_repositories` 返回领域端口聚合；数据库连接由 `server` 建立。
+## QQBot 当前边界
+
+现阶段 QQBot 业务等待重新设计。`crates/qqbot` 只保留：
+
+- NapCat HTTP API 客户端
+- NapCat 正向 WebSocket 监听器
+- OneBot/CQ 消息解析
+- 类型化 `NapCatEvent`
+- 未来业务需要实现的 `NapCatEventHandler`
+
+画像、关系、群记忆、主动回复、Outbox、领域服务、Repository、SeaORM entity 和旧
+QQ 建表 SQL 均不再属于当前代码基线。`qqbot-server` 的占位 handler 只记录事件元数据，
+不会回复消息、写数据库或改变外部状态。
 
 ## 依赖版本统一
 
@@ -46,43 +61,33 @@ tokio = "1.52.1"
 tokio = { workspace = true, features = ["io-util"] }
 ```
 
-`workspace = true` 统一版本约束，`Cargo.lock` 固定本次实际解析版本。子 crate 的
-feature 是增量能力声明，不会产生第二套 Tokio 版本，也不会让所有 crate 自动依赖 Tokio。
+`workspace = true` 统一版本约束，`Cargo.lock` 固定实际解析版本；子 crate 的 feature
+只增加该依赖在当前构建中需要的能力。
 
-## Feature
+## Cargo Feature
 
-- 默认构建启用 `qdrant`。
-- QQ 业务使用 `qqbot` feature；兼容旧命令，`qq_bot` 仍保留为底层 feature。
-- 未启用 QQ feature 时，`server` 不会编译可选的 `qqbot` dependency。
+数字人服务器只保留 `qdrant` feature。QQBot 是独立应用，不存在 `qqbot` 或
+`qq_bot` Cargo feature，也不存在可选的 QQBot 宿主依赖。
 
-```powershell
-cargo check -p server --no-default-features
-cargo check -p server --features qqbot
-```
+## 数据库和配置
 
-## 数据库与配置兼容性
-
-本次拆分只移动 Rust 代码归属，不修改 `database/sql`、表名、字段名或现有数据。
-数字人实体保留在 `digital-human`，11 个 `qq_*` 实体归属 `qqbot`；跨业务关联继续
-通过标量 ID 表达，业务 crate 不互相引用实体。
-
-配置文件格式保持不变。`server` 负责读取完整配置，将数字人部分交给
-`digital-human` 校验，并在启用 QQ feature 时把 `[qq_bot]` 解析为
-`qqbot::QqBotConfig`。
+- 此次代码调整不连接、不迁移、不删除 MySQL 实例中的任何表或数据。
+- 源码中的 QQ Repository、SeaORM entity 与 `database/sql/QQ_init.sql` 已删除。
+- 物理数据库中可能仍存在的旧 `qq_*` 表暂时保留，但当前代码不会读写它们。
+- 数字人继续读取根目录 `config.toml`/`CONFIG_PATH`。
+- QQBot 独立读取 `qqbot.toml`/`QQBOT_CONFIG_PATH`，配置只包含 NapCat 连接与重连参数，
+  不接受数据库或旧业务配置。
 
 ## 验证命令
 
 ```powershell
 cargo fmt --all --check
-cargo check --workspace --all-features
-cargo test --workspace --no-fail-fast
-cargo check -p agent-core
-cargo check -p ai-core
-cargo check -p digital-human
+cargo check -p digital-human-server --no-default-features
+cargo check -p digital-human-server
 cargo check -p qqbot
-cargo check -p server --no-default-features
-cargo check -p server --features qqbot
+cargo check -p qqbot-server
+cargo test --workspace --all-features --no-fail-fast
 ```
 
-`apps/server/tests/workspace_boundaries.rs` 会持续检查 workspace 成员、内部依赖方向、
-中立核心依赖、业务源码隔离、Repository 可见性和 QQ 实体归属。
+`apps/digital-human-server/tests/workspace_boundaries.rs` 持续检查工作区成员、双应用依赖
+隔离、QQBot 无 ORM/Repository、旧 QQ SQL 缺失以及 NapCat 适配器文件完整性。
