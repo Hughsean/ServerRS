@@ -1,4 +1,5 @@
-use crate::app::agent::chat_state::{ChatTurnState, ChatTurnUpdate, PersistedTurn};
+use crate::app::agent::chat_effect::{ChatEffect, PersistTurnEffect};
+use crate::app::agent::chat_state::{ChatTurnState, ChatTurnUpdate};
 use crate::app::agent::graph::{
     AgentNode, NodeError, NodeErrorKind, NodeId, NodeResult, RunContext, UsageDelta,
 };
@@ -7,10 +8,7 @@ use crate::domain::agent::{
     AgentBusinessState, AgentMessage, AgentOutcome, AgentState, AgentUpdate,
 };
 use crate::domain::conversation::conversation_message::NewConversationMessage;
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
-use crate::shared::error::AppError;
 use async_trait::async_trait;
-use std::sync::Arc;
 
 pub struct PrepareTurnNode {
     id: NodeId,
@@ -94,52 +92,13 @@ impl AgentNode<ChatTurnState> for NormalizeReplyNode {
     }
 }
 
-#[async_trait]
-pub trait TurnWriterT: Send + Sync {
-    async fn save_turn_atomic(
-        &self,
-        conversation_id: u64,
-        user_id: u64,
-        user: NewConversationMessage,
-        assistant: NewConversationMessage,
-    ) -> Result<PersistedTurn, AppError>;
-}
-
-pub struct ConversationTurnWriter {
-    repository: Arc<dyn ConversationRepoT>,
-}
-
-impl ConversationTurnWriter {
-    pub fn new(repository: Arc<dyn ConversationRepoT>) -> Self {
-        Self { repository }
-    }
-}
-
-#[async_trait]
-impl TurnWriterT for ConversationTurnWriter {
-    async fn save_turn_atomic(
-        &self,
-        conversation_id: u64,
-        user_id: u64,
-        user: NewConversationMessage,
-        assistant: NewConversationMessage,
-    ) -> Result<PersistedTurn, AppError> {
-        let (user, assistant) = self
-            .repository
-            .save_turn_atomic(conversation_id, user_id, user, assistant)
-            .await?;
-        Ok(PersistedTurn::new(user.id, assistant.id))
-    }
-}
-
 pub struct PersistTurnNode {
     id: NodeId,
-    writer: Arc<dyn TurnWriterT>,
 }
 
 impl PersistTurnNode {
-    pub fn new(id: NodeId, writer: Arc<dyn TurnWriterT>) -> Self {
-        Self { id, writer }
+    pub fn new(id: NodeId) -> Self {
+        Self { id }
     }
 }
 
@@ -170,12 +129,12 @@ impl AgentNode<ChatTurnState> for PersistTurnNode {
         let conversation_id = turn.conversation_id();
         let user_id = turn.user_id();
 
-        let persisted = self
-            .writer
-            .save_turn_atomic(
+        Ok(NodeResult::with_effect(
+            Vec::new(),
+            ChatEffect::PersistTurn(PersistTurnEffect {
                 conversation_id,
                 user_id,
-                NewConversationMessage {
+                user: NewConversationMessage {
                     conversation_id,
                     sender_role: "user".into(),
                     sender_user_id: Some(user_id),
@@ -183,7 +142,7 @@ impl AgentNode<ChatTurnState> for PersistTurnNode {
                     content: user_content.to_string(),
                     token_count: None,
                 },
-                NewConversationMessage {
+                assistant: NewConversationMessage {
                     conversation_id,
                     sender_role: "assistant".into(),
                     sender_user_id: None,
@@ -191,14 +150,7 @@ impl AgentNode<ChatTurnState> for PersistTurnNode {
                     content: assistant_content.to_string(),
                     token_count: None,
                 },
-            )
-            .await
-            .map_err(NodeError::from_application)?;
-
-        Ok(NodeResult::new(
-            vec![AgentUpdate::Business(ChatTurnUpdate::SetPersistedTurn(
-                persisted,
-            ))],
+            }),
             UsageDelta::default(),
         ))
     }
@@ -266,61 +218,12 @@ fn apply_context_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::agent::chat_effect::ChatEffect;
     use crate::app::agent::chat_state::ChatTurnState;
     use crate::app::agent::graph::{AgentNode, NodeId, RunBudget, RunContext, RunTrace};
     use crate::domain::agent::{AgentMessage, AgentOutcome, AgentState, AgentUpdate};
-    use crate::domain::conversation::conversation_message::NewConversationMessage;
     use crate::domain::llm::ChatMessage;
-    use crate::shared::error::AppError;
-    use async_trait::async_trait;
-    use std::sync::{Arc, Mutex};
     use tokio_util::sync::CancellationToken;
-
-    #[derive(Debug)]
-    struct RecordedTurn {
-        conversation_id: u64,
-        user_id: u64,
-        user: NewConversationMessage,
-        assistant: NewConversationMessage,
-    }
-
-    struct FakeTurnWriter {
-        recorded: Mutex<Option<RecordedTurn>>,
-    }
-
-    struct FailingTurnWriter;
-
-    #[async_trait]
-    impl TurnWriterT for FakeTurnWriter {
-        async fn save_turn_atomic(
-            &self,
-            conversation_id: u64,
-            user_id: u64,
-            user: NewConversationMessage,
-            assistant: NewConversationMessage,
-        ) -> Result<PersistedTurn, AppError> {
-            *self.recorded.lock().unwrap() = Some(RecordedTurn {
-                conversation_id,
-                user_id,
-                user,
-                assistant,
-            });
-            Ok(PersistedTurn::new(101, 102))
-        }
-    }
-
-    #[async_trait]
-    impl TurnWriterT for FailingTurnWriter {
-        async fn save_turn_atomic(
-            &self,
-            _conversation_id: u64,
-            _user_id: u64,
-            _user: NewConversationMessage,
-            _assistant: NewConversationMessage,
-        ) -> Result<PersistedTurn, AppError> {
-            Err(AppError::Conflict("turn changed".into()))
-        }
-    }
 
     fn id(value: &str) -> NodeId {
         NodeId::try_from(value).unwrap()
@@ -436,10 +339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_persist_uses_atomic_writer_with_compatible_json() {
-        let writer = Arc::new(FakeTurnWriter {
-            recorded: Mutex::new(None),
-        });
+    async fn chat_persist_builds_compatible_effect_without_writer() {
         let mut state = AgentState::new(ChatTurnState::new(
             7,
             9,
@@ -453,48 +353,35 @@ mod tests {
                 "world".into(),
             ))])
             .unwrap();
-        let node = PersistTurnNode::new(id("persist"), writer.clone());
+        let node = PersistTurnNode::new(id("persist"));
 
         let result = node.execute(&state, &run_context()).await.unwrap();
-        state.apply_updates(result.updates).unwrap();
 
-        let recorded = writer.recorded.lock().unwrap();
-        let recorded = recorded.as_ref().unwrap();
-        assert_eq!(recorded.conversation_id, 9);
-        assert_eq!(recorded.user_id, 7);
-        assert_eq!(recorded.user.sender_role, "user");
-        assert_eq!(recorded.user.sender_user_id, Some(7));
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&recorded.user.content).unwrap(),
-            serde_json::json!({"text": "hello", "emotion": "calm"})
-        );
-        assert_eq!(recorded.assistant.sender_role, "assistant");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&recorded.assistant.content).unwrap(),
-            serde_json::json!({"text": "world"})
-        );
-        assert_eq!(
-            state.business().persisted_turn().unwrap().user_message_id(),
-            101
-        );
-    }
-
-    #[tokio::test]
-    async fn chat_persist_preserves_application_error_variant() {
-        let node = PersistTurnNode::new(id("persist"), Arc::new(FailingTurnWriter));
-        let mut state =
-            AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
-        state
-            .apply_updates(vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
-                "done".into(),
-            ))])
-            .unwrap();
-
-        let error = node.execute(&state, &run_context()).await.unwrap_err();
-
-        assert!(matches!(
-            error.application_error(),
-            Some(AppError::Conflict(message)) if message == "turn changed"
-        ));
+        assert!(result.updates.is_empty());
+        assert_eq!(result.effects.len(), 1);
+        match &result.effects[0] {
+            ChatEffect::PersistTurn(effect) => {
+                assert_eq!(effect.conversation_id, 9);
+                assert_eq!(effect.user_id, 7);
+                assert_eq!(effect.user.conversation_id, 9);
+                assert_eq!(effect.user.sender_role, "user");
+                assert_eq!(effect.user.sender_user_id, Some(7));
+                assert_eq!(effect.user.message_type, "text");
+                assert_eq!(effect.user.token_count, None);
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&effect.user.content).unwrap(),
+                    serde_json::json!({"text": "hello", "emotion": "calm"})
+                );
+                assert_eq!(effect.assistant.conversation_id, 9);
+                assert_eq!(effect.assistant.sender_role, "assistant");
+                assert_eq!(effect.assistant.sender_user_id, None);
+                assert_eq!(effect.assistant.message_type, "text");
+                assert_eq!(effect.assistant.token_count, None);
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&effect.assistant.content).unwrap(),
+                    serde_json::json!({"text": "world"})
+                );
+            }
+        }
     }
 }

@@ -5,10 +5,11 @@ use serde_json::Value;
 use tracing::{debug, trace, warn};
 
 use super::agent_context::AgentContextBuilder;
+use super::chat_effect::ConversationTurnWriter;
 use super::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
 use super::chat_state::{ChatTurnState, PersistedTurn as GraphPersistedTurn};
 use super::graph::GraphRunError;
-use super::nodes::{ConversationTurnWriter, DefaultChatContextProvider};
+use super::nodes::DefaultChatContextProvider;
 #[cfg(test)]
 use super::response::{fallback_reply, normalize_final_content};
 pub use super::tool::{
@@ -318,9 +319,12 @@ fn build_initial_chat_state(
 }
 
 fn map_graph_run_error(error: GraphRunError) -> AppError {
-    if let GraphRunError::NodeFailed { error, .. } = &error
-        && let Some(application_error) = error.application_error()
-    {
+    let application_error = match &error {
+        GraphRunError::NodeFailed { error, .. } => error.application_error(),
+        GraphRunError::EffectFailed { error, .. } => error.application_error(),
+        _ => None,
+    };
+    if let Some(application_error) = application_error {
         return application_error.clone();
     }
     AppError::Internal(format!("Agent 图运行失败: {error}"))
@@ -419,6 +423,28 @@ mod tests {
             error: crate::app::agent::graph::NodeError::from_application(AppError::Conflict(
                 "turn changed".into(),
             )),
+        };
+
+        assert!(matches!(
+            map_graph_run_error(error),
+            AppError::Conflict(message) if message == "turn changed"
+        ));
+    }
+
+    #[test]
+    fn graph_facade_restores_effect_application_error_variants() {
+        use crate::app::agent::graph::{EffectError, EffectId, NodeId, RunId, RunStep};
+
+        let error = GraphRunError::EffectFailed {
+            node: NodeId::try_from("persist_turn").unwrap(),
+            effect_id: EffectId::new(
+                RunId::new(),
+                RunStep::try_from(1).unwrap(),
+                NodeId::try_from("persist_turn").unwrap(),
+                0,
+            ),
+            error: EffectError::from_application(AppError::Conflict("turn changed".into())),
+            completed_effect_ids: Vec::new(),
         };
 
         assert!(matches!(

@@ -1,4 +1,5 @@
 use crate::app::agent::agent_runtime::AgentRuntimeSettings;
+use crate::app::agent::chat_effect::{ChatEffectExecutor, TurnWriterT};
 use crate::app::agent::chat_state::ChatTurnState;
 use crate::app::agent::graph::{
     GraphBuildError, GraphCompileError, GraphDefinition, GraphId, GraphPolicy, GraphRunError,
@@ -6,7 +7,7 @@ use crate::app::agent::graph::{
 };
 use crate::app::agent::nodes::{
     BuildContextNode, BuildPromptNode, ChatContextOptions, ChatContextProviderT,
-    NormalizeReplyNode, PersistTurnNode, PrepareTurnNode, ReasoningSettings, TurnWriterT,
+    NormalizeReplyNode, PersistTurnNode, PrepareTurnNode, ReasoningSettings,
 };
 use crate::app::agent::subgraphs::{ReasoningLoopDeps, build_reasoning_loop};
 use crate::app::agent::tool::AgentTool;
@@ -32,6 +33,9 @@ pub struct ChatAgentGraph {
 
 impl ChatAgentGraph {
     pub fn new(dependencies: ChatAgentGraphDeps) -> Result<Self, ChatGraphBuildError> {
+        let effect_executor = Arc::new(ChatEffectExecutor::new(Arc::clone(
+            &dependencies.turn_writer,
+        )));
         let agent_on = dependencies.settings.agent_enabled;
         let tools_available =
             agent_on && !dependencies.tools.is_empty() && dependencies.settings.max_tool_depth > 0;
@@ -76,10 +80,7 @@ impl ChatAgentGraph {
             tools_available,
         )))?;
         definition.add_node(Arc::new(NormalizeReplyNode::new(node("normalize_reply"))))?;
-        definition.add_node(Arc::new(PersistTurnNode::new(
-            node("persist_turn"),
-            dependencies.turn_writer,
-        )))?;
+        definition.add_node(Arc::new(PersistTurnNode::new(node("persist_turn"))))?;
 
         let reasoning = build_reasoning_loop(ReasoningLoopDeps {
             llm: dependencies.llm,
@@ -121,7 +122,7 @@ impl ChatAgentGraph {
             .with_tool_calls(u32::MAX)
             .with_tokens(u64::MAX);
         Ok(Self {
-            runtime: GraphRuntime::new(compiled),
+            runtime: GraphRuntime::with_effect_executor(compiled, effect_executor),
             budget,
         })
     }
@@ -172,10 +173,9 @@ fn node(value: &str) -> NodeId {
 mod tests {
     use super::*;
     use crate::app::agent::agent_runtime::AgentRuntimeSettings;
+    use crate::app::agent::chat_effect::TurnWriterT;
     use crate::app::agent::chat_state::{ChatTurnState, PersistedTurn};
-    use crate::app::agent::nodes::{
-        ChatContextProviderT, ChatContextRequest, LoadedChatContext, TurnWriterT,
-    };
+    use crate::app::agent::nodes::{ChatContextProviderT, ChatContextRequest, LoadedChatContext};
     use crate::domain::agent::{
         AgentContext, AgentEvent, AgentEventRepoT, AgentOutcome, AgentState, NewAgentEvent,
     };

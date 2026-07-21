@@ -1,5 +1,6 @@
 pub mod agent_context;
 pub mod agent_runtime;
+pub mod chat_effect;
 pub mod chat_graph;
 pub mod chat_state;
 pub mod graph;
