@@ -46,7 +46,8 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
         let mut visited = Vec::new();
 
         loop {
-            context.check_ready(self.graph.policy().max_steps())?;
+            let run_step = context.check_ready(self.graph.policy().max_steps())?;
+            let step = run_step.get();
 
             let node = self
                 .graph
@@ -54,7 +55,6 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
                 .ok_or_else(|| GraphRunError::MissingNode {
                     node: current.clone(),
                 })?;
-            let step = context.budget().snapshot().steps;
             let started_at = Instant::now();
             trace!(
                 graph_id = %self.graph.id(),
