@@ -448,6 +448,28 @@ fn checkpoint_model_fields_exclude_runtime_and_infrastructure_handles() {
     }
 }
 
+#[test]
+fn agent_runtime_facade_does_not_orchestrate_memory_extraction() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/agent/agent_runtime.rs");
+    let source = fs::read_to_string(&path).expect("AgentRuntime source must be readable");
+
+    assert!(
+        source.contains("AsyncMemoryExtractionScheduler::new"),
+        "AgentRuntime may compose the memory extraction adapter"
+    );
+    for forbidden in [
+        "extract_and_save_at_version",
+        "tokio::spawn",
+        "last_extraction_failure",
+        "spawn_memory_extraction",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "AgentRuntime facade must not retain memory orchestration token `{forbidden}`"
+        );
+    }
+}
+
 #[derive(Default)]
 struct TypePathCollector {
     segments: Vec<String>,

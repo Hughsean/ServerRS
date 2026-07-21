@@ -1,5 +1,8 @@
 use super::chat_state::{ChatTurnUpdate, PersistedTurn};
 use super::graph::{AgentEffect, EffectEnvelope, EffectError, EffectExecutor, RunContext};
+use super::memory_extraction::{
+    MemoryExtractionDispatch, MemoryExtractionRequest, MemoryExtractionSchedulerT,
+};
 use crate::domain::agent::AgentUpdate;
 use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
@@ -10,6 +13,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub enum ChatEffect {
     PersistTurn(PersistTurnEffect),
+    ScheduleMemoryExtraction(MemoryExtractionRequest),
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +27,7 @@ pub struct PersistTurnEffect {
 #[derive(Debug, Clone)]
 pub enum ChatEffectReceipt {
     TurnPersisted(PersistedTurn),
+    MemoryExtractionDispatched(MemoryExtractionDispatch),
 }
 
 impl AgentEffect for ChatEffect {
@@ -34,6 +39,7 @@ impl AgentEffect for ChatEffect {
             ChatEffectReceipt::TurnPersisted(persisted) => vec![AgentUpdate::Business(
                 ChatTurnUpdate::SetPersistedTurn(persisted.clone()),
             )],
+            ChatEffectReceipt::MemoryExtractionDispatched(_) => Vec::new(),
         }
     }
 }
@@ -78,11 +84,18 @@ impl TurnWriterT for ConversationTurnWriter {
 
 pub struct ChatEffectExecutor {
     writer: Arc<dyn TurnWriterT>,
+    memory_extraction_scheduler: Arc<dyn MemoryExtractionSchedulerT>,
 }
 
 impl ChatEffectExecutor {
-    pub fn new(writer: Arc<dyn TurnWriterT>) -> Self {
-        Self { writer }
+    pub fn new(
+        writer: Arc<dyn TurnWriterT>,
+        memory_extraction_scheduler: Arc<dyn MemoryExtractionSchedulerT>,
+    ) -> Self {
+        Self {
+            writer,
+            memory_extraction_scheduler,
+        }
     }
 }
 
@@ -105,6 +118,11 @@ impl EffectExecutor<ChatEffect> for ChatEffectExecutor {
                 .await
                 .map(ChatEffectReceipt::TurnPersisted)
                 .map_err(EffectError::from_application),
+            ChatEffect::ScheduleMemoryExtraction(request) => {
+                Ok(ChatEffectReceipt::MemoryExtractionDispatched(
+                    self.memory_extraction_scheduler.schedule(request.clone()),
+                ))
+            }
         }
     }
 }

@@ -4,6 +4,7 @@ pub mod chat_effect;
 pub mod chat_graph;
 pub mod chat_state;
 pub mod graph;
+pub mod memory_extraction;
 pub mod nodes;
 pub mod prompt_builder;
 pub mod reasoning_state;

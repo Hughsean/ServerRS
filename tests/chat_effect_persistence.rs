@@ -7,6 +7,9 @@ use server_rs::app::agent::graph::{
     AgentEffect, EffectEnvelope, EffectExecutor, EffectId, NodeId, RunBudget, RunContext, RunId,
     RunStep, RunTrace,
 };
+use server_rs::app::agent::memory_extraction::{
+    MemoryExtractionDispatch, MemoryExtractionRequest, MemoryExtractionSchedulerT,
+};
 use server_rs::domain::agent::AgentUpdate;
 use server_rs::domain::conversation::conversation_message::NewConversationMessage;
 use server_rs::shared::error::AppError;
@@ -52,6 +55,18 @@ impl TurnWriterT for RecordingTurnWriter {
 
 struct FailingTurnWriter {
     calls: AtomicUsize,
+}
+
+#[derive(Default)]
+struct RecordingMemoryScheduler {
+    requests: Mutex<Vec<MemoryExtractionRequest>>,
+}
+
+impl MemoryExtractionSchedulerT for RecordingMemoryScheduler {
+    fn schedule(&self, request: MemoryExtractionRequest) -> MemoryExtractionDispatch {
+        self.requests.lock().unwrap().push(request);
+        MemoryExtractionDispatch::Scheduled
+    }
 }
 
 #[async_trait]
@@ -121,7 +136,10 @@ fn run_context() -> RunContext {
 #[tokio::test]
 async fn chat_effect_executor_writes_once_and_returns_typed_receipt() {
     let writer = Arc::new(RecordingTurnWriter::default());
-    let executor = ChatEffectExecutor::new(writer.clone());
+    let executor = ChatEffectExecutor::new(
+        writer.clone(),
+        Arc::new(RecordingMemoryScheduler::default()),
+    );
 
     let receipt = executor.execute(&envelope(), &run_context()).await.unwrap();
 
@@ -153,6 +171,9 @@ async fn chat_effect_executor_writes_once_and_returns_typed_receipt() {
             assert_eq!(persisted.user_message_id(), 101);
             assert_eq!(persisted.assistant_message_id(), 102);
         }
+        ChatEffectReceipt::MemoryExtractionDispatched(_) => {
+            panic!("expected turn persistence receipt")
+        }
     }
 }
 
@@ -170,12 +191,24 @@ fn persisted_receipt_becomes_one_business_update() {
     }
 }
 
+#[test]
+fn memory_dispatch_receipt_does_not_mutate_chat_state() {
+    let receipt = ChatEffectReceipt::MemoryExtractionDispatched(
+        MemoryExtractionDispatch::SkippedRecentFailure,
+    );
+
+    assert!(ChatEffect::receipt_updates(&receipt).is_empty());
+}
+
 #[tokio::test]
 async fn chat_effect_executor_preserves_writer_application_error() {
     let writer = Arc::new(FailingTurnWriter {
         calls: AtomicUsize::new(0),
     });
-    let executor = ChatEffectExecutor::new(writer.clone());
+    let executor = ChatEffectExecutor::new(
+        writer.clone(),
+        Arc::new(RecordingMemoryScheduler::default()),
+    );
 
     let error = executor
         .execute(&envelope(), &run_context())
@@ -186,5 +219,37 @@ async fn chat_effect_executor_preserves_writer_application_error() {
     assert!(matches!(
         error.application_error(),
         Some(AppError::Conflict(message)) if message == "turn changed"
+    ));
+}
+
+#[tokio::test]
+async fn chat_effect_executor_dispatches_memory_extraction_request() {
+    let writer = Arc::new(RecordingTurnWriter::default());
+    let scheduler = Arc::new(RecordingMemoryScheduler::default());
+    let executor = ChatEffectExecutor::new(writer, scheduler.clone());
+    let request = MemoryExtractionRequest {
+        user_id: 7,
+        conversation_id: 9,
+        source_message_id: 101,
+        user_message: "hello".into(),
+        assistant_reply: "world".into(),
+        context_version: 23,
+    };
+    let envelope = EffectEnvelope {
+        id: EffectId::new(
+            RunId::new(),
+            RunStep::try_from(2).unwrap(),
+            NodeId::try_from("schedule_memory_extraction").unwrap(),
+            0,
+        ),
+        effect: ChatEffect::ScheduleMemoryExtraction(request.clone()),
+    };
+
+    let receipt = executor.execute(&envelope, &run_context()).await.unwrap();
+
+    assert_eq!(scheduler.requests.lock().unwrap().as_slice(), &[request]);
+    assert!(matches!(
+        receipt,
+        ChatEffectReceipt::MemoryExtractionDispatched(MemoryExtractionDispatch::Scheduled)
     ));
 }

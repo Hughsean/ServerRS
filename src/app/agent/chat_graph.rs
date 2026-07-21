@@ -3,11 +3,13 @@ use crate::app::agent::chat_effect::{ChatEffectExecutor, TurnWriterT};
 use crate::app::agent::chat_state::ChatTurnState;
 use crate::app::agent::graph::{
     GraphBuildError, GraphCompileError, GraphDefinition, GraphId, GraphPolicy, GraphRunError,
-    GraphRunResult, GraphRuntime, NodeId, RunBudget, TransitionRule,
+    GraphRunResult, GraphRuntime, GraphVersion, NodeId, RunBudget, TransitionRule,
 };
+use crate::app::agent::memory_extraction::MemoryExtractionSchedulerT;
 use crate::app::agent::nodes::{
     BuildContextNode, BuildPromptNode, ChatContextOptions, ChatContextProviderT,
     NormalizeReplyNode, PersistTurnNode, PrepareTurnNode, ReasoningSettings,
+    ScheduleMemoryExtractionNode,
 };
 use crate::app::agent::subgraphs::{ReasoningLoopDeps, build_reasoning_loop};
 use crate::app::agent::tool::AgentTool;
@@ -22,6 +24,7 @@ pub struct ChatAgentGraphDeps {
     pub event_repo: Arc<dyn AgentEventRepoT>,
     pub context_provider: Arc<dyn ChatContextProviderT>,
     pub turn_writer: Arc<dyn TurnWriterT>,
+    pub memory_extraction_scheduler: Arc<dyn MemoryExtractionSchedulerT>,
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub settings: AgentRuntimeSettings,
 }
@@ -33,9 +36,10 @@ pub struct ChatAgentGraph {
 
 impl ChatAgentGraph {
     pub fn new(dependencies: ChatAgentGraphDeps) -> Result<Self, ChatGraphBuildError> {
-        let effect_executor = Arc::new(ChatEffectExecutor::new(Arc::clone(
-            &dependencies.turn_writer,
-        )));
+        let effect_executor = Arc::new(ChatEffectExecutor::new(
+            Arc::clone(&dependencies.turn_writer),
+            Arc::clone(&dependencies.memory_extraction_scheduler),
+        ));
         let agent_on = dependencies.settings.agent_enabled;
         let tools_available =
             agent_on && !dependencies.tools.is_empty() && dependencies.settings.max_tool_depth > 0;
@@ -64,8 +68,10 @@ impl ChatAgentGraph {
             reasoning: dependencies.settings.reasoning_config(),
         };
 
-        let mut definition =
-            GraphDefinition::new(GraphId::try_from("http_chat_agent").expect("static GraphId"));
+        let mut definition = GraphDefinition::new_versioned(
+            GraphId::try_from("http_chat_agent").expect("static GraphId"),
+            GraphVersion::try_from(2).expect("static graph version"),
+        );
         definition.add_node(Arc::new(PrepareTurnNode::new(
             node("prepare_turn"),
             dependencies.settings.max_context_messages,
@@ -81,6 +87,12 @@ impl ChatAgentGraph {
         )))?;
         definition.add_node(Arc::new(NormalizeReplyNode::new(node("normalize_reply"))))?;
         definition.add_node(Arc::new(PersistTurnNode::new(node("persist_turn"))))?;
+        definition.add_node(Arc::new(ScheduleMemoryExtractionNode::new(
+            node("schedule_memory_extraction"),
+            agent_on
+                && dependencies.settings.memory_enabled
+                && dependencies.settings.memory_extraction_async,
+        )))?;
 
         let reasoning = build_reasoning_loop(ReasoningLoopDeps {
             llm: dependencies.llm,
@@ -113,7 +125,11 @@ impl ChatAgentGraph {
             node("normalize_reply"),
             TransitionRule::Goto(node("persist_turn")),
         )?;
-        definition.set_transition(node("persist_turn"), TransitionRule::End)?;
+        definition.set_transition(
+            node("persist_turn"),
+            TransitionRule::Goto(node("schedule_memory_extraction")),
+        )?;
+        definition.set_transition(node("schedule_memory_extraction"), TransitionRule::End)?;
 
         let limits = chat_graph_limits(dependencies.settings.max_tool_depth);
         let compiled = definition.compile(GraphPolicy::new(limits.max_steps))?;
@@ -136,6 +152,11 @@ impl ChatAgentGraph {
 
     pub fn node_ids(&self) -> impl Iterator<Item = &NodeId> {
         self.runtime.graph().node_ids()
+    }
+
+    #[cfg(test)]
+    fn graph_version(&self) -> GraphVersion {
+        self.runtime.graph().version()
     }
 }
 
@@ -175,6 +196,9 @@ mod tests {
     use crate::app::agent::agent_runtime::AgentRuntimeSettings;
     use crate::app::agent::chat_effect::TurnWriterT;
     use crate::app::agent::chat_state::{ChatTurnState, PersistedTurn};
+    use crate::app::agent::memory_extraction::{
+        MemoryExtractionDispatch, MemoryExtractionRequest, MemoryExtractionSchedulerT,
+    };
     use crate::app::agent::nodes::{ChatContextProviderT, ChatContextRequest, LoadedChatContext};
     use crate::domain::agent::{
         AgentContext, AgentEvent, AgentEventRepoT, AgentOutcome, AgentState, NewAgentEvent,
@@ -230,6 +254,18 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingMemoryScheduler {
+        requests: Mutex<Vec<MemoryExtractionRequest>>,
+    }
+
+    impl MemoryExtractionSchedulerT for RecordingMemoryScheduler {
+        fn schedule(&self, request: MemoryExtractionRequest) -> MemoryExtractionDispatch {
+            self.requests.lock().unwrap().push(request);
+            MemoryExtractionDispatch::Scheduled
+        }
+    }
+
     struct TextLlm;
 
     #[async_trait]
@@ -273,17 +309,24 @@ mod tests {
         }
     }
 
-    fn graph() -> (ChatAgentGraph, Arc<FakeTurnWriter>) {
+    fn graph(
+        memory_extraction_async: bool,
+    ) -> (
+        ChatAgentGraph,
+        Arc<FakeTurnWriter>,
+        Arc<RecordingMemoryScheduler>,
+    ) {
         let writer = Arc::new(FakeTurnWriter::default());
+        let memory_scheduler = Arc::new(RecordingMemoryScheduler::default());
         let settings = AgentRuntimeSettings {
             agent_enabled: true,
-            memory_enabled: false,
+            memory_enabled: true,
             rag_enabled: false,
             summary_enabled: false,
             max_context_messages: 10,
             max_memory_items: 0,
             max_rag_chunks: 0,
-            memory_extraction_async: false,
+            memory_extraction_async,
             max_tool_depth: 2,
             temperature: 0.0,
             top_p: 1.0,
@@ -294,16 +337,17 @@ mod tests {
             event_repo: Arc::new(FakeEventRepo),
             context_provider: Arc::new(FakeContextProvider),
             turn_writer: writer.clone(),
+            memory_extraction_scheduler: memory_scheduler.clone(),
             tools: vec![],
             settings,
         })
         .unwrap();
-        (graph, writer)
+        (graph, writer, memory_scheduler)
     }
 
     #[test]
     fn chat_graph_compiles_with_expected_namespaced_nodes() {
-        let (graph, _) = graph();
+        let (graph, _, _) = graph(false);
         let node_ids: Vec<_> = graph.node_ids().map(ToString::to_string).collect();
 
         assert_eq!(
@@ -318,13 +362,15 @@ mod tests {
                 "reasoning.final_without_tools",
                 "reasoning.llm",
                 "reasoning.tools",
+                "schedule_memory_extraction",
             ]
         );
+        assert_eq!(graph.graph_version().get(), 2);
     }
 
     #[tokio::test]
     async fn chat_graph_runs_the_complete_turn_and_persists_it() {
-        let (graph, writer) = graph();
+        let (graph, writer, memory_scheduler) = graph(false);
         let state = AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
 
         let result = graph.run(state).await.unwrap();
@@ -344,5 +390,28 @@ mod tests {
             102
         );
         assert_eq!(*writer.calls.lock().unwrap(), 1);
+        assert!(memory_scheduler.requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn chat_graph_schedules_memory_extraction_after_turn_persistence() {
+        let (graph, writer, memory_scheduler) = graph(true);
+        let state = AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
+
+        let result = graph.run(state).await.unwrap();
+
+        assert_eq!(*writer.calls.lock().unwrap(), 1);
+        let requests = memory_scheduler.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].user_id, 7);
+        assert_eq!(requests[0].conversation_id, 9);
+        assert_eq!(requests[0].source_message_id, 101);
+        assert_eq!(requests[0].user_message, "hello");
+        assert_eq!(requests[0].assistant_reply, "graph reply");
+        assert_eq!(requests[0].context_version, 23);
+        assert_eq!(
+            result.visited.last(),
+            Some(&node("schedule_memory_extraction"))
+        );
     }
 }

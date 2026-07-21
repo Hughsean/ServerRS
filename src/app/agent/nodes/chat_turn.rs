@@ -3,6 +3,7 @@ use crate::app::agent::chat_state::{ChatTurnState, ChatTurnUpdate};
 use crate::app::agent::graph::{
     AgentNode, NodeError, NodeErrorKind, NodeId, NodeResult, RunContext, UsageDelta,
 };
+use crate::app::agent::memory_extraction::MemoryExtractionRequest;
 use crate::app::agent::response::{fallback_reply, normalize_final_content};
 use crate::domain::agent::{
     AgentBusinessState, AgentMessage, AgentOutcome, AgentState, AgentUpdate,
@@ -94,6 +95,65 @@ impl AgentNode<ChatTurnState> for NormalizeReplyNode {
 
 pub struct PersistTurnNode {
     id: NodeId,
+}
+
+pub struct ScheduleMemoryExtractionNode {
+    id: NodeId,
+    enabled: bool,
+}
+
+impl ScheduleMemoryExtractionNode {
+    pub fn new(id: NodeId, enabled: bool) -> Self {
+        Self { id, enabled }
+    }
+}
+
+#[async_trait]
+impl AgentNode<ChatTurnState> for ScheduleMemoryExtractionNode {
+    fn id(&self) -> &NodeId {
+        &self.id
+    }
+
+    async fn execute(
+        &self,
+        state: &AgentState<ChatTurnState>,
+        _context: &RunContext,
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
+        if !self.enabled {
+            return Ok(NodeResult::empty());
+        }
+
+        let turn = state.business();
+        let persisted = turn.persisted_turn().ok_or_else(|| {
+            NodeError::new(NodeErrorKind::Invariant, "调度记忆提取前本轮消息尚未持久化")
+        })?;
+        let context_version = turn.context_version().ok_or_else(|| {
+            NodeError::new(NodeErrorKind::Invariant, "调度记忆提取前上下文版本尚未设置")
+        })?;
+        let assistant_reply = state
+            .outcome()
+            .and_then(AgentOutcome::response_text)
+            .ok_or_else(|| {
+                NodeError::new(
+                    NodeErrorKind::Invariant,
+                    "调度记忆提取前 AgentOutcome 尚未设置",
+                )
+            })?;
+
+        Ok(NodeResult::with_effect(
+            Vec::new(),
+            ChatEffect::ScheduleMemoryExtraction(MemoryExtractionRequest {
+                user_id: turn.user_id(),
+                conversation_id: turn.conversation_id(),
+                source_message_id: persisted.user_message_id(),
+                user_message: turn.user_message().to_owned(),
+                assistant_reply: assistant_reply.to_owned(),
+                context_version,
+            }),
+            UsageDelta::default(),
+        ))
+    }
 }
 
 impl PersistTurnNode {
@@ -219,9 +279,9 @@ fn apply_context_limit(
 mod tests {
     use super::*;
     use crate::app::agent::chat_effect::ChatEffect;
-    use crate::app::agent::chat_state::ChatTurnState;
+    use crate::app::agent::chat_state::{ChatTurnState, PersistedTurn};
     use crate::app::agent::graph::{AgentNode, NodeId, RunBudget, RunContext, RunTrace};
-    use crate::domain::agent::{AgentMessage, AgentOutcome, AgentState, AgentUpdate};
+    use crate::domain::agent::{AgentContext, AgentMessage, AgentOutcome, AgentState, AgentUpdate};
     use crate::domain::llm::ChatMessage;
     use tokio_util::sync::CancellationToken;
 
@@ -382,6 +442,63 @@ mod tests {
                     serde_json::json!({"text": "world"})
                 );
             }
+            ChatEffect::ScheduleMemoryExtraction(_) => panic!("expected PersistTurn effect"),
         }
+    }
+
+    #[tokio::test]
+    async fn memory_extraction_node_uses_persisted_turn_and_context_version() {
+        let mut state =
+            AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
+        state
+            .apply_updates(vec![
+                AgentUpdate::Business(ChatTurnUpdate::SetContext {
+                    context: AgentContext {
+                        user_id: 7,
+                        conversation_id: Some(9),
+                        recent_messages: vec![],
+                        summary: None,
+                        memories: vec![],
+                        rag_chunks: vec![],
+                        fresh_chunks: vec![],
+                        user_profile: None,
+                        tools: vec![],
+                        location: None,
+                    },
+                    context_version: 23,
+                }),
+                AgentUpdate::SetOutcome(AgentOutcome::Respond("world".into())),
+                AgentUpdate::Business(ChatTurnUpdate::SetPersistedTurn(PersistedTurn::new(
+                    101, 102,
+                ))),
+            ])
+            .unwrap();
+        let node = ScheduleMemoryExtractionNode::new(id("memory"), true);
+
+        let result = node.execute(&state, &run_context()).await.unwrap();
+
+        assert!(result.updates().is_empty());
+        match &result.effects()[0] {
+            ChatEffect::ScheduleMemoryExtraction(request) => {
+                assert_eq!(request.user_id, 7);
+                assert_eq!(request.conversation_id, 9);
+                assert_eq!(request.source_message_id, 101);
+                assert_eq!(request.user_message, "hello");
+                assert_eq!(request.assistant_reply, "world");
+                assert_eq!(request.context_version, 23);
+            }
+            ChatEffect::PersistTurn(_) => panic!("expected memory extraction effect"),
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_memory_extraction_node_is_a_noop() {
+        let state = AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
+        let node = ScheduleMemoryExtractionNode::new(id("memory"), false);
+
+        let result = node.execute(&state, &run_context()).await.unwrap();
+
+        assert!(result.updates().is_empty());
+        assert!(result.effects().is_empty());
     }
 }
