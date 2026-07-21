@@ -9,7 +9,7 @@ use tracing::warn;
 use crate::domain::tasks::task_event::TaskEvent;
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::user::user::UserStatus;
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 
 /// 速率限制/暴力破解防护处理的配置。
 #[derive(Debug, Clone)]

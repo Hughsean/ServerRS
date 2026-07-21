@@ -7,7 +7,7 @@ use sea_orm::{
 use crate::domain::user::user::{
     NewUser, QQ_AUTO_REGISTERED_SENTINEL, User, UserListItem, UserStatus, UserUpdate,
 };
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::users;

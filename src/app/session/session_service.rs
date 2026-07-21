@@ -4,7 +4,7 @@ use crate::domain::conversation::conversation::Conversation;
 use crate::domain::conversation::conversation_message::ConversationMessage;
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::risk::post_conversation_risk_audit::PostConversationRiskAudit;
-use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::risk::risk_repo::RiskRepoT;
 use crate::shared::error::AppError;
 
 /// Unified session-domain operations: conversations + post-conversation risk audits.

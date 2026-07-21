@@ -8,7 +8,7 @@ use crate::domain::risk::post_conversation_risk_audit::{
     NewPostConversationRiskAudit, PostRiskAuditResult,
 };
 use crate::domain::risk::risk_detector::RiskDetector;
-use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::risk::risk_repo::RiskRepoT;
 use crate::domain::tasks::task_event::{RiskDetectedTask, TaskEvent};
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::shared::error::AppError;

@@ -19,7 +19,7 @@ use crate::domain::agent::{AgentEventRepoT, AgentOutcome, AgentState};
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::{ChatMessage, LlmProvider, ReasoningConfig};
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::shared::error::AppError;
 
 // ── AgentRuntimeSettings ─────────────────────────────────────────────────

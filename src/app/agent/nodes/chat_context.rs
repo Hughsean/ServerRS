@@ -7,7 +7,7 @@ use crate::app::agent::prompt_builder::PromptBuilder;
 use crate::domain::agent::{AgentContext, AgentMessage, AgentState, AgentUpdate, ToolDefinition};
 use crate::domain::llm::ChatMessage;
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::shared::error::AppError;
 use async_trait::async_trait;
 use serde_json::Value;

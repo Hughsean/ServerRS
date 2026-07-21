@@ -7,7 +7,7 @@ use crate::domain::auth::password_service::PasswordServiceT;
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::domain::auth::token_service::TokenServiceT;
 use crate::domain::tasks::task_publisher::TaskPublisher;
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 use crate::infra::auth::bcrypt_password_hasher::BcryptPasswordHasher;
 use crate::infra::auth::jwt_token_service::JwtTokenService;
 use crate::infra::repo::seaorm_impl::refresh_token_store::RefreshTokenStoreImpl;

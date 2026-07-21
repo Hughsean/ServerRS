@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::tasks::task_handler::TaskHandler;
 use crate::domain::tasks::task_publisher::TaskPublisher;
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 use crate::infra::tasks::alert_handler::{AlertConfig, AlertHandler};
 use crate::infra::tasks::in_memory_task_flow::{
     RetryingTaskPublisher, TaskWorker, new_task_channel,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::risk::risk_repo::RiskRepoT;
 use crate::shared::error::AppError;
 
 #[derive(Debug, Clone)]

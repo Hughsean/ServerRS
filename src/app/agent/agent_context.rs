@@ -14,7 +14,7 @@ use crate::domain::agent::{AgentContext, ToolDefinition};
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::domain::llm::ChatMessage;
 use crate::domain::user::user_profile::UserProfile;
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
 
 /// Builder that assembles an `AgentContext` for a single turn.
 pub struct AgentContextBuilder {

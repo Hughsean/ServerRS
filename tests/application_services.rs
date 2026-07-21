@@ -13,7 +13,7 @@ use server_rs::domain::conversation::conversation_repo::ConversationRepoT;
 use server_rs::domain::risk::post_conversation_risk_audit::{
     NewPostConversationRiskAudit, PostConversationRiskAudit, PostRiskAuditResult,
 };
-use server_rs::domain::risk::risk_repository::RiskRepoT;
+use server_rs::domain::risk::risk_repo::RiskRepoT;
 use server_rs::shared::error::AppError;
 
 #[tokio::test]

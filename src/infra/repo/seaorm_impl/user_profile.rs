@@ -5,7 +5,7 @@ use sea_orm::{
 };
 
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile, UserProfileUpdate};
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::user_profiles;

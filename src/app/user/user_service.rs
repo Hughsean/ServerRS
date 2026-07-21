@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::domain::user::user::{User, UserListItem, UserRole, UserStatus, UserUpdate};
 use crate::domain::user::user_profile::{NewUserProfile, UserProfile};
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 use crate::shared::error::AppError;
 
 /// Unified user + profile operations.  Replaces 5 separate use-case files.

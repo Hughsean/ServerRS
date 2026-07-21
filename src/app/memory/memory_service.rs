@@ -9,7 +9,7 @@ use crate::domain::memory::{
     MemoryRepoT, NewMemory, NewMemoryEvidence, UserMemory, is_allowed_memory_type,
 };
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
-use crate::domain::user::user_profile_repository::UserProfileRepoT;
+use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::domain::vector_store::{VectorFilter, VectorStoreT};
 use crate::shared::error::AppError;
 

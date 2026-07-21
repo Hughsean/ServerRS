@@ -8,7 +8,7 @@ use sea_orm::{
 use crate::domain::risk::post_conversation_risk_audit::{
     NewPostConversationRiskAudit, PostConversationRiskAudit, PostRiskAuditResult,
 };
-use crate::domain::risk::risk_repository::RiskRepoT;
+use crate::domain::risk::risk_repo::RiskRepoT;
 use crate::shared::error::AppError;
 
 use super::super::entities::post_conversation_risk_audits;

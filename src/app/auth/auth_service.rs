@@ -14,7 +14,7 @@ use crate::domain::tasks::task_event::{
 };
 use crate::domain::tasks::task_publisher::TaskPublisher;
 use crate::domain::user::user::{NewUser, UserRole, UserStatus};
-use crate::domain::user::user_repository::UserRepoT;
+use crate::domain::user::user_repo::UserRepoT;
 use crate::shared::error::AppError;
 
 // ── Supporting types ─────────────────────────────────────────────────────────
