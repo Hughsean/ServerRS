@@ -240,8 +240,16 @@ pub enum GraphRunError {
     EffectFailed {
         node: NodeId,
         effect_id: EffectId,
+        completed_effect_ids: Vec<EffectId>,
         #[source]
         error: EffectError,
+    },
+    #[error("节点 {node} 的 Effect {effect_id} 已成功，但回执状态更新失败: {error}")]
+    PostEffectStateUpdateFailed {
+        node: NodeId,
+        effect_id: EffectId,
+        #[source]
+        error: AgentStateError,
     },
     #[error("节点 {node} 产生了非法状态更新: {error}")]
     StateUpdateFailed {

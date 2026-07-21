@@ -1,7 +1,7 @@
 use super::{
-    AgentEffect, CompiledGraph, EffectEnvelope, EffectExecutor, EffectId, EffectReceipt,
-    GraphRunError, NodeError, NodeErrorKind, NodeId, RunBudget, RunContext, RunId, RunTrace,
-    TransitionRule, UsageSnapshot,
+    AgentEffect, CompiledGraph, EffectEnvelope, EffectError, EffectExecutor, EffectId,
+    EffectReceipt, GraphRunError, NodeError, NodeErrorKind, NodeId, RunBudget, RunContext, RunId,
+    RunTrace, TransitionRule, UsageSnapshot,
 };
 use crate::domain::agent::{AgentBusinessState, AgentState};
 use std::sync::Arc;
@@ -111,9 +111,9 @@ where
             })?;
 
             let mut node_receipts = Vec::with_capacity(result.effects.len());
+            let mut completed_effect_ids = Vec::with_capacity(result.effects.len());
 
             for (ordinal, effect) in result.effects.into_iter().enumerate() {
-                context.check_active()?;
                 let ordinal = u32::try_from(ordinal).map_err(|_| GraphRunError::NodeFailed {
                     node: current.clone(),
                     error: NodeError::new(
@@ -127,25 +127,44 @@ where
                         node: current.clone(),
                     }
                 })?;
+                context.check_active()?;
                 let envelope = EffectEnvelope {
                     id: effect_id.clone(),
                     effect,
                 };
-                let value = executor
-                    .execute(&envelope, &context)
-                    .await
-                    .map_err(|error| GraphRunError::EffectFailed {
+                let cancellation = context.cancellation().clone();
+                let deadline = tokio::time::Instant::from_std(context.deadline());
+                let execution = executor.execute(&envelope, &context);
+                let value = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        Err(EffectError::unknown_commit(
+                            "Effect 执行期间运行被取消，外部提交状态未知",
+                        ))
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        Err(EffectError::unknown_commit(
+                            "Effect 执行期间超过截止时间，外部提交状态未知",
+                        ))
+                    }
+                    result = execution => result,
+                };
+
+                let value = value.map_err(|error| GraphRunError::EffectFailed {
+                    node: current.clone(),
+                    effect_id: effect_id.clone(),
+                    completed_effect_ids: completed_effect_ids.clone(),
+                    error,
+                })?;
+                let receipt_updates = B::Effect::receipt_updates(&value);
+                candidate.apply_updates(receipt_updates).map_err(|error| {
+                    GraphRunError::PostEffectStateUpdateFailed {
                         node: current.clone(),
                         effect_id: effect_id.clone(),
                         error,
-                    })?;
-                let receipt_updates = B::Effect::receipt_updates(&value);
-                candidate.apply_updates(receipt_updates).map_err(|error| {
-                    GraphRunError::StateUpdateFailed {
-                        node: current.clone(),
-                        error,
                     }
                 })?;
+                completed_effect_ids.push(effect_id.clone());
                 node_receipts.push(EffectReceipt { effect_id, value });
             }
 
@@ -261,16 +280,21 @@ mod tests {
 
     enum TestUpdate {
         Set(i32),
+        Reject,
     }
 
     #[derive(Debug, Clone)]
     enum TestEffect {
         Set(i32),
+        Fail,
+        RejectUpdate,
+        Pending(Arc<tokio::sync::Notify>),
     }
 
     #[derive(Debug)]
     enum TestReceipt {
         Set(i32),
+        Reject,
     }
 
     impl AgentEffect for TestEffect {
@@ -282,12 +306,21 @@ mod tests {
                 TestReceipt::Set(value) => {
                     vec![AgentUpdate::Business(TestUpdate::Set(*value))]
                 }
+                TestReceipt::Reject => vec![AgentUpdate::Business(TestUpdate::Reject)],
             }
         }
     }
 
     struct TestEffectExecutor {
         calls: AtomicUsize,
+    }
+
+    impl TestEffectExecutor {
+        fn recording() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
     }
 
     #[async_trait]
@@ -300,6 +333,14 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match &envelope.effect {
                 TestEffect::Set(value) => Ok(TestReceipt::Set(*value)),
+                TestEffect::Fail => Err(EffectError::from_application(AppError::Conflict(
+                    "turn changed".into(),
+                ))),
+                TestEffect::RejectUpdate => Ok(TestReceipt::Reject),
+                TestEffect::Pending(started) => {
+                    started.notify_one();
+                    std::future::pending::<Result<TestReceipt, EffectError>>().await
+                }
             }
         }
     }
@@ -310,9 +351,12 @@ mod tests {
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {
-                TestUpdate::Set(value) => self.value = value,
+                TestUpdate::Set(value) => {
+                    self.value = value;
+                    Ok(())
+                }
+                TestUpdate::Reject => Err(AgentStateError::Business("rejected".into())),
             }
-            Ok(())
         }
     }
 
@@ -324,6 +368,10 @@ mod tests {
         Usage(UsageDelta),
         ReserveLlm,
         Effect(i32),
+        Effects(Vec<TestEffect>),
+        RejectThenEffect(TestEffect),
+        CancelThenEffects(Vec<TestEffect>),
+        UsageThenEffects(UsageDelta, Vec<TestEffect>),
         Pending,
         ApplicationFailure(AppError),
     }
@@ -390,6 +438,35 @@ mod tests {
                     ))],
                     TestEffect::Set(value),
                     UsageDelta::default(),
+                )),
+                Behavior::Effects(ref effects) => Ok(NodeResult::with_effects(
+                    vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                        "done".into(),
+                    ))],
+                    effects.clone(),
+                    UsageDelta::default(),
+                )),
+                Behavior::RejectThenEffect(ref effect) => Ok(NodeResult::with_effect(
+                    vec![AgentUpdate::Business(TestUpdate::Reject)],
+                    effect.clone(),
+                    UsageDelta::default(),
+                )),
+                Behavior::CancelThenEffects(ref effects) => {
+                    _context.cancellation().cancel();
+                    Ok(NodeResult::with_effects(
+                        vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                            "done".into(),
+                        ))],
+                        effects.clone(),
+                        UsageDelta::default(),
+                    ))
+                }
+                Behavior::UsageThenEffects(usage, ref effects) => Ok(NodeResult::with_effects(
+                    vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                        "done".into(),
+                    ))],
+                    effects.clone(),
+                    usage,
                 )),
                 Behavior::Pending => std::future::pending().await,
                 Behavior::ApplicationFailure(ref error) => {
@@ -610,6 +687,236 @@ mod tests {
             error,
             GraphRunError::MissingEffectExecutor { node } if node == node_id("only")
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_effect_is_not_retried_and_preserves_application_error() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effects(vec![TestEffect::Fail])),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        match error {
+            GraphRunError::EffectFailed { error, .. } => assert!(matches!(
+                error.application_error(),
+                Some(AppError::Conflict(message)) if message == "turn changed"
+            )),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_pure_update_prevents_effect_dispatch() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::RejectThenEffect(TestEffect::Set(7))),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, GraphRunError::StateUpdateFailed { .. }));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_effect_dispatch_does_not_call_executor() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::CancelThenEffects(vec![TestEffect::Set(7)])),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, GraphRunError::Cancelled));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn usage_budget_failure_prevents_effect_dispatch() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::UsageThenEffects(
+                UsageDelta { tokens: 1 },
+                vec![TestEffect::Set(7)],
+            )),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8).with_tokens(0),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GraphRunError::BudgetExceeded {
+                resource: BudgetResource::Tokens,
+                ..
+            }
+        ));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn successful_effect_with_rejected_receipt_update_has_distinct_error() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effects(vec![TestEffect::RejectUpdate])),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            error,
+            GraphRunError::PostEffectStateUpdateFailed { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn later_effect_failure_reports_already_completed_effect_ids() {
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effects(vec![
+                TestEffect::Set(1),
+                TestEffect::Fail,
+            ])),
+            executor.clone(),
+        );
+
+        let error = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        match error {
+            GraphRunError::EffectFailed {
+                effect_id,
+                completed_effect_ids,
+                ..
+            } => {
+                assert_eq!(completed_effect_ids.len(), 1);
+                assert_eq!(completed_effect_ids[0].ordinal(), 0);
+                assert_eq!(effect_id.ordinal(), 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_effect_execution_reports_unknown_commit() {
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let context = RunContext::new(RunBudget::for_test(8), token, RunTrace::default());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effects(vec![TestEffect::Pending(
+                started.clone(),
+            )])),
+            executor,
+        );
+
+        let mut run = tokio::spawn(async move {
+            runtime
+                .run_with_context(AgentState::new(TestBusiness::default()), context)
+                .await
+        });
+        started.notified().await;
+        cancel.cancel();
+
+        let joined = match tokio::time::timeout(Duration::from_secs(1), &mut run).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                run.abort();
+                panic!("runtime did not observe in-flight cancellation");
+            }
+        };
+        let error = joined.unwrap().unwrap_err();
+
+        match error {
+            GraphRunError::EffectFailed { error, .. } => {
+                assert_eq!(error.kind(), EffectErrorKind::UnknownCommit)
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deadline_during_effect_execution_reports_unknown_commit() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let budget = RunBudget::new(NonZeroU32::new(8).unwrap(), Duration::from_millis(500));
+        let context = RunContext::new(budget, CancellationToken::new(), RunTrace::default());
+        let executor = Arc::new(TestEffectExecutor::recording());
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effects(vec![TestEffect::Pending(
+                started.clone(),
+            )])),
+            executor,
+        );
+
+        let mut run = tokio::spawn(async move {
+            runtime
+                .run_with_context(AgentState::new(TestBusiness::default()), context)
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("executor did not start before the Run deadline");
+
+        let joined = match tokio::time::timeout(Duration::from_secs(2), &mut run).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                run.abort();
+                panic!("runtime did not observe the in-flight deadline");
+            }
+        };
+        let error = joined.unwrap().unwrap_err();
+
+        match error {
+            GraphRunError::EffectFailed { error, .. } => {
+                assert_eq!(error.kind(), EffectErrorKind::UnknownCommit)
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[tokio::test]
