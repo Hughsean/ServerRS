@@ -4,7 +4,9 @@ use crate::app::agent::graph::{
     AgentNode, NodeError, NodeErrorKind, NodeId, NodeResult, RunContext, UsageDelta,
 };
 use crate::app::agent::prompt_builder::PromptBuilder;
-use crate::domain::agent::{AgentContext, AgentMessage, AgentState, AgentUpdate, ToolDefinition};
+use crate::domain::agent::{
+    AgentBusinessState, AgentContext, AgentMessage, AgentState, AgentUpdate, ToolDefinition,
+};
 use crate::domain::llm::ChatMessage;
 use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repo::UserProfileRepoT;
@@ -137,7 +139,8 @@ impl AgentNode<ChatTurnState> for BuildContextNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate>, NodeError> {
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
         let turn = state.business();
         if !turn.messages_prepared() {
             return Err(NodeError::new(
@@ -199,7 +202,8 @@ impl AgentNode<ChatTurnState> for BuildPromptNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate>, NodeError> {
+    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
+    {
         if !state.messages().is_empty() {
             return Err(NodeError::new(
                 NodeErrorKind::Invariant,

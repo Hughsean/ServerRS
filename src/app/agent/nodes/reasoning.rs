@@ -121,7 +121,7 @@ impl<B: ReasoningState> AgentNode<B> for LlmCallNode {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
         if !state.pending_actions().is_empty() {
             return Err(NodeError::new(
                 NodeErrorKind::Invariant,
@@ -262,7 +262,7 @@ impl<B: ReasoningState> AgentNode<B> for ExecuteToolsNode {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
         let calls: Vec<AgentToolCall> = state
             .pending_actions()
             .iter()
@@ -383,7 +383,7 @@ impl<B: ReasoningState> AgentNode<B> for FinalWithoutToolsNode {
         &self,
         state: &AgentState<B>,
         context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
         context
             .budget()
             .reserve_llm_call()
@@ -440,7 +440,7 @@ impl<B: ReasoningState> AgentNode<B> for CompletionNode {
         &self,
         _state: &AgentState<B>,
         _context: &RunContext,
-    ) -> Result<NodeResult<B::Update>, NodeError> {
+    ) -> Result<NodeResult<B::Update, B::Effect>, NodeError> {
         Ok(NodeResult::empty())
     }
 }
@@ -521,7 +521,7 @@ fn llm_node_error(error: LlmError) -> NodeError {
     NodeError::new(kind, format!("LLM 调用失败: {error}"))
 }
 
-fn final_assistant_result<U>(content: String, tokens: u64) -> NodeResult<U> {
+fn final_assistant_result<U, E>(content: String, tokens: u64) -> NodeResult<U, E> {
     NodeResult::new(
         vec![
             AgentUpdate::AppendMessages(vec![AgentMessage::assistant(content, Vec::new())]),

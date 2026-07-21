@@ -2,6 +2,7 @@ use crate::domain::agent::{AgentBusinessState, AgentContext, AgentStateError};
 use crate::domain::llm::ChatMessage;
 use serde_json::Value;
 
+use super::chat_effect::ChatEffect;
 use super::reasoning_state::ReasoningState;
 
 /// HTTP Chat 图的业务扩展状态。
@@ -102,6 +103,7 @@ pub enum ChatTurnUpdate {
 
 impl AgentBusinessState for ChatTurnState {
     type Update = ChatTurnUpdate;
+    type Effect = ChatEffect;
 
     fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
         match update {

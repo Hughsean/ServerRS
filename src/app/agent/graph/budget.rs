@@ -1,4 +1,4 @@
-use super::{BudgetResource, GraphRunError, RunId};
+use super::{BudgetResource, GraphRunError, RunId, RunStep};
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -170,7 +170,10 @@ impl RunBudgetHandle {
         self.record_tokens(delta.tokens)
     }
 
-    pub(crate) fn reserve_step(&self, graph_max_steps: NonZeroU32) -> Result<(), GraphRunError> {
+    pub(crate) fn reserve_step(
+        &self,
+        graph_max_steps: NonZeroU32,
+    ) -> Result<RunStep, GraphRunError> {
         let mut usage = self.lock_usage();
         let limit = self.limits.max_steps.get().min(graph_max_steps.get());
         let attempted = usage.steps.saturating_add(1);
@@ -181,8 +184,9 @@ impl RunBudgetHandle {
                 attempted: u64::from(attempted),
             });
         }
+        let step = RunStep::try_from(attempted).expect("a reserved graph step is always non-zero");
         usage.steps = attempted;
-        Ok(())
+        Ok(step)
     }
 
     fn lock_usage(&self) -> std::sync::MutexGuard<'_, UsageSnapshot> {
@@ -264,13 +268,40 @@ impl RunContext {
         &self.trace
     }
 
-    pub(crate) fn check_ready(&self, graph_max_steps: NonZeroU32) -> Result<(), GraphRunError> {
+    pub(crate) fn check_active(&self) -> Result<(), GraphRunError> {
         if self.cancellation.is_cancelled() {
             return Err(GraphRunError::Cancelled);
         }
         if Instant::now() >= self.deadline {
             return Err(GraphRunError::DeadlineExceeded);
         }
+        Ok(())
+    }
+
+    pub(crate) fn check_ready(
+        &self,
+        graph_max_steps: NonZeroU32,
+    ) -> Result<RunStep, GraphRunError> {
+        self.check_active()?;
         self.budget.reserve_step(graph_max_steps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_ready_returns_monotonic_steps_starting_at_one() {
+        let context = RunContext::new(
+            RunBudget::for_test(3),
+            CancellationToken::new(),
+            RunTrace::default(),
+        );
+        let graph_limit = NonZeroU32::new(3).unwrap();
+
+        assert_eq!(context.check_ready(graph_limit).unwrap().get(), 1);
+        assert_eq!(context.check_ready(graph_limit).unwrap().get(), 2);
+        assert_eq!(context.budget().snapshot().steps, 2);
     }
 }

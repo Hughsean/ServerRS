@@ -97,7 +97,8 @@ mod tests {
     use super::*;
     use crate::app::agent::chat_state::{ChatTurnState, ChatTurnUpdate};
     use crate::app::agent::graph::{
-        GraphDefinition, GraphId, GraphPolicy, GraphRuntime, NodeId, RunBudget, TransitionRule,
+        GraphDefinition, GraphId, GraphPolicy, GraphRuntime, NoEffect, NodeId, RunBudget,
+        TransitionRule,
     };
     use crate::app::agent::nodes::NormalizeReplyNode;
     use crate::app::agent::reasoning_state::ReasoningState;
@@ -257,6 +258,7 @@ mod tests {
 
     impl AgentBusinessState for AlternateReasoningState {
         type Update = AlternateReasoningUpdate;
+        type Effect = NoEffect<AlternateReasoningUpdate>;
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {

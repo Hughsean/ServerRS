@@ -52,6 +52,7 @@ impl PromptSection {
 /// 业务状态扩展协议。节点只能通过显式 Update 修改业务字段。
 pub trait AgentBusinessState: Clone + Send + Sync + 'static {
     type Update: Send + Sync + 'static;
+    type Effect: Send + Sync + 'static;
 
     fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError>;
 }

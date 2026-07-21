@@ -1,5 +1,6 @@
 mod budget;
 mod definition;
+mod effect;
 mod error;
 mod fragment;
 mod id;
@@ -10,6 +11,10 @@ pub use budget::{
     GraphPolicy, RunBudget, RunBudgetHandle, RunContext, RunTrace, UsageDelta, UsageSnapshot,
 };
 pub use definition::{CompiledGraph, GraphDefinition};
+pub use effect::{
+    AgentEffect, EffectEnvelope, EffectError, EffectErrorKind, EffectExecutor, EffectId,
+    EffectReceipt, NoEffect, RunStep,
+};
 pub use error::{
     BudgetResource, GraphBuildError, GraphCompileError, GraphRunError, NodeError, NodeErrorKind,
 };
@@ -32,6 +37,7 @@ mod tests {
 
     impl AgentBusinessState for TestBusiness {
         type Update = ();
+        type Effect = NoEffect<()>;
 
         fn apply_update(&mut self, _update: Self::Update) -> Result<(), AgentStateError> {
             Ok(())
@@ -58,7 +64,7 @@ mod tests {
             &self,
             _state: &AgentState<TestBusiness>,
             _context: &RunContext,
-        ) -> Result<NodeResult<()>, NodeError> {
+        ) -> Result<NodeResult<(), NoEffect<()>>, NodeError> {
             Ok(NodeResult::empty())
         }
     }
