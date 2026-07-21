@@ -1,7 +1,7 @@
 # Agent Effect 内核与会话持久化垂直切片设计
 
 - 日期：2026-07-21
-- 状态：设计已确认，待规格复核
+- 状态：已复核，待实施
 - 分支：`codex/agent-effect-persistence`
 - 适用范围：默认非 `qq_bot` 构建中的 Agent 图运行时与 HTTP ChatAgent
 
@@ -136,12 +136,13 @@ pub struct NodeResult<U, E> {
 
 1. `RunContext::check_ready` 检查预取消、截止时间与步数预算，并返回 `RunStep`。
 2. 执行节点 Future；节点仍受 Run 的取消和截止时间控制。
-3. 在 `AgentState` 候选副本上应用节点的纯 Updates。若失败，立即返回，任何 Effect 都不得发出。
-4. 按 `effects` 顺序为每项分配 `EffectId`，构造 Envelope。
-5. Effect 发出前再次检查取消和截止时间。此时失败表示外部调用尚未开始。
-6. 执行器 Future 一旦进入 Runtime 的执行选择分支，就视为可能已向外部系统发出请求。
-7. 执行成功后生成 `EffectReceipt`，通过 `AgentEffect::receipt_updates` 得到显式 Updates，并应用到候选 State。
-8. 全部 Effects 和 Receipt Updates 成功后，才用候选 State 替换当前 State，记录节点 Usage 与 Receipts，然后执行路由。
+3. 记录节点已经实际消耗的 Usage，并在任何 Effect 发出前完成资源预算校验；预算失败时不得执行 Effect。
+4. 在 `AgentState` 候选副本上应用节点的纯 Updates。若失败，立即返回，任何 Effect 都不得发出。
+5. 按 `effects` 顺序为每项分配 `EffectId`，构造 Envelope。
+6. Effect 发出前再次检查取消和截止时间。此时失败表示外部调用尚未开始。
+7. 执行器 Future 一旦进入 Runtime 的执行选择分支，就视为可能已向外部系统发出请求。
+8. 执行成功后生成 `EffectReceipt`，通过 `AgentEffect::receipt_updates` 得到显式 Updates，并应用到候选 State。
+9. 全部 Effects 和 Receipt Updates 成功后，才用候选 State 替换当前 State，记录 Receipts，然后执行路由。
 
 候选 State 只能提供内存状态原子性，不能回滚已经提交的外部副作用。如果同一节点未来返回多个 Effects，前序 Effect 成功而后序 Effect 失败时，错误必须携带已完成的 Effect ID 列表，不能暗示外部操作整体回滚。本阶段生产图中的持久化节点只产生一个 Effect。
 
@@ -249,7 +250,7 @@ AgentUpdate::Business(ChatTurnUpdate::SetPersistedTurn(...))
 - `src/app/agent/graph/node.rs`：`NodeResult` 携带 Effects。
 - `src/app/agent/graph/runtime.rs`：Effect 执行、候选 State、Receipt 收集与错误语义。
 - `src/app/agent/graph/budget.rs`：节点预留返回 `RunStep`。
-- `src/app/agent/graph/error.rs`、`id.rs`、`mod.rs`：导出和运行错误整合。
+- `src/app/agent/graph/error.rs`、`mod.rs`：导出和运行错误整合。
 - `src/app/agent/chat_state.rs`：关联 `ChatEffect`。
 - `src/app/agent/nodes/chat_turn.rs`：持久化节点纯化并移除 Writer 实现。
 - `src/app/agent/nodes/mod.rs`、`src/app/agent/mod.rs`：调整导出。
