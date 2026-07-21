@@ -9,6 +9,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-core"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -40,6 +54,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "ai-core"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1148,6 +1172,42 @@ dependencies = [
  "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
+]
+
+[[package]]
+name = "digital-human"
+version = "1.0.0"
+dependencies = [
+ "agent-core",
+ "ai-core",
+ "async-trait",
+ "base64",
+ "bcrypt",
+ "chrono",
+ "dashmap",
+ "dotenvy",
+ "futures-util",
+ "jsonwebtoken",
+ "qdrant-client",
+ "regex",
+ "reqwest 0.13.4",
+ "scraper",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+ "validator",
 ]
 
 [[package]]
@@ -2816,6 +2876,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "qqbot"
+version = "1.0.0"
+dependencies = [
+ "ai-core",
+ "async-trait",
+ "base64",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "regex",
+ "reqwest 0.13.4",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3692,20 +3774,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "server-rs"
+name = "server"
 version = "1.0.0"
 dependencies = [
+ "agent-core",
+ "ai-core",
  "async-trait",
  "axum 0.8.9",
  "base64",
  "bcrypt",
  "chrono",
  "dashmap",
+ "digital-human",
  "dotenvy",
  "futures-util",
  "jsonwebtoken",
  "proc-macro2",
  "qdrant-client",
+ "qqbot",
  "regex",
  "reqwest 0.13.4",
  "rpassword",

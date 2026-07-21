@@ -1,7 +1,11 @@
 # ServerRS 启动装配结构
 
-> 最后核对: 2026-07-02
-> 代码基准: 当前工作区 `src/main.rs` + `src/bootstrap/*`
+> 最后核对: 2026-07-21
+> 代码基准: 当前工作区 `apps/server/src/main.rs` + `apps/server/src/bootstrap/*`
+>
+> Workspace 依赖边界见 [crate-boundaries.md](crate-boundaries.md)。下文省略的 `src/`
+> 前缀均指 `apps/server/src/`；数字人业务实现位于 `crates/digital-human/src/`，QQ
+> 业务实现位于 `crates/qqbot/src/`。
 
 ## 概述
 
@@ -47,7 +51,9 @@ pub struct InfraContext {
 
 代码: `src/bootstrap/repos.rs`
 
-职责：集中构造 DB repository。`build_repos` 需要传入 Qdrant 的 memory/summary collection 名称，用于忘记/清空上下文时同步删除对应向量。
+职责：调用 `digital-human::repositories::build_repositories` 获取领域端口聚合。
+具体 SeaORM Repo 由 `digital-human` 在 crate 内部构造，`server` 不再依赖其实现类型。
+`build_repos` 仍传入 memory/summary collection 名称，用于忘记/清空上下文时同步删除对应向量。
 
 包含的仓库：
 

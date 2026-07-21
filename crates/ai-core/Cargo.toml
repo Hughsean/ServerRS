@@ -1,0 +1,10 @@
+[package]
+name = "ai-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true

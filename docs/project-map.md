@@ -1,5 +1,11 @@
 # ServerRS 项目地图 — 从入门到精通
 
+> **Workspace 路径提示（2026-07-21）**：后端已拆为 5 个 crate。本文后续出现的旧
+> `src/api`、`src/bootstrap` 路径现在位于 `apps/server/src`；数字人 `src/app`、
+> `src/domain`、`src/infra` 位于 `crates/digital-human/src`；QQ 模块位于
+> `crates/qqbot/src`；通用 Agent Runtime 位于 `crates/agent-core/src`。依赖边界和
+> 最新目录以 [crate-boundaries.md](crate-boundaries.md) 为准。
+
 > 作者：项目代码自动分析
 > 目标：让一个完全不懂这个项目的人，看完这个文件就能知道
 > "这个项目是干什么的"、"代码放在哪"、"每个文件是干啥的"
@@ -17,19 +23,16 @@
 
 ```
 D:\WorkSpace\ServerRS/
-├── Cargo.toml            # Rust 项目配置（依赖声明）
+├── Cargo.toml            # Cargo workspace 与统一依赖版本
 ├── config.toml           # 服务器配置文件（数据库/Ollama/JWT 等）
 ├── .env                  # 环境变量（密钥、数据库密码等）
 │
-├── src/                  # ★ 核心代码（Rust 源码）
-│   ├── main.rs           # 程序入口（加载配置、初始化日志、调用 runtime）
-│   ├── lib.rs            # 模块声明（各模块的入口）
-│   ├── api/              # ★ 网络层（路由 + 请求处理）
-│   ├── app/              # ★ 业务层（服务的具体逻辑）
-│   ├── domain/           # ★ 领域层（核心数据结构和接口）
-│   ├── infra/            # ★ 基础设施（数据库/LLM/存储的具体实现）
-│   ├── bootstrap/        # 组装代码（把各组件拼装起来）
-│   └── shared/           # 共享代码（配置、错误定义）
+├── apps/server/          # Axum、配置、数据库连接、装配与进程入口
+├── crates/
+│   ├── agent-core/       # 通用 Agent Runtime / Effect / Checkpoint
+│   ├── ai-core/          # Provider 中立 AI 接口
+│   ├── digital-human/    # 数字人业务与其持久化适配器
+│   └── qqbot/            # QQ 业务、NapCat、Outbox 与其持久化适配器
 │
 ├── database/
 │   └── sql/
