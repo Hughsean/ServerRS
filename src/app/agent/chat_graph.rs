@@ -1,4 +1,3 @@
-use crate::app::agent::agent_runtime::AgentRuntimeSettings;
 use crate::app::agent::chat_effect::{ChatEffectExecutor, TurnWriterT};
 use crate::app::agent::chat_state::ChatTurnState;
 use crate::app::agent::graph::{
@@ -14,10 +13,59 @@ use crate::app::agent::nodes::{
 use crate::app::agent::subgraphs::{ReasoningLoopDeps, build_reasoning_loop};
 use crate::app::agent::tool::AgentTool;
 use crate::domain::agent::{AgentEventRepoT, AgentState, ToolDefinition};
-use crate::domain::llm::LlmProvider;
+use crate::domain::llm::{LlmProvider, ReasoningConfig};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// HTTP Chat Agent 图配置，派生自 `AppConfig`。
+#[derive(Debug, Clone)]
+pub struct AgentRuntimeSettings {
+    pub agent_enabled: bool,
+    pub memory_enabled: bool,
+    pub rag_enabled: bool,
+    pub summary_enabled: bool,
+    pub max_context_messages: usize,
+    pub max_memory_items: u32,
+    pub max_rag_chunks: u64,
+    pub memory_extraction_async: bool,
+    pub max_tool_depth: usize,
+    pub temperature: f64,
+    pub top_p: f64,
+    pub enable_reasoning: bool,
+}
+
+impl AgentRuntimeSettings {
+    /// 当推理被禁用时返回 `Some(ReasoningConfig { enabled: false })`，
+    /// 当推理启用时返回 `None`（Ollama 默认行为）。发送 `None` 表示
+    /// 序列化后的 JSON 会直接省略 `reasoning` 字段。
+    pub fn reasoning_config(&self) -> Option<ReasoningConfig> {
+        if self.enable_reasoning {
+            None
+        } else {
+            Some(ReasoningConfig { enabled: false })
+        }
+    }
+}
+
+impl Default for AgentRuntimeSettings {
+    fn default() -> Self {
+        Self {
+            agent_enabled: true,
+            memory_enabled: true,
+            rag_enabled: true,
+            summary_enabled: true,
+            max_context_messages: 30,
+            max_memory_items: 10,
+            max_rag_chunks: 5,
+            memory_extraction_async: true,
+            max_tool_depth: 10,
+            temperature: 0.7,
+            top_p: 0.9,
+            enable_reasoning: true,
+        }
+    }
+}
 
 pub struct ChatAgentGraphDeps {
     pub llm: Arc<dyn LlmProvider>,
@@ -193,7 +241,6 @@ fn node(value: &str) -> NodeId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::agent::agent_runtime::AgentRuntimeSettings;
     use crate::app::agent::chat_effect::TurnWriterT;
     use crate::app::agent::chat_state::{ChatTurnState, PersistedTurn};
     use crate::app::agent::memory_extraction::{

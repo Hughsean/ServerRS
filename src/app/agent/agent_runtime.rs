@@ -1,78 +1,18 @@
-use std::sync::Arc;
-
 use serde_json::Value;
 use tracing::trace;
 
-use super::agent_context::AgentContextBuilder;
-use super::chat_effect::ConversationTurnWriter;
-use super::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
+pub use super::chat_graph::AgentRuntimeSettings;
+use super::chat_graph::ChatAgentGraph;
 use super::chat_state::{ChatTurnState, PersistedTurn as GraphPersistedTurn};
 use super::graph::GraphRunError;
-use super::memory_extraction::AsyncMemoryExtractionScheduler;
-use super::nodes::DefaultChatContextProvider;
 #[cfg(test)]
 use super::response::{fallback_reply, normalize_final_content};
 pub use super::tool::{
     AgentTool, ToolTrace, is_tool_call_argument_error, normalize_tool_arguments,
 };
-use crate::app::memory::memory_service::MemoryService;
-use crate::domain::agent::{AgentEventRepoT, AgentOutcome, AgentState};
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
-use crate::domain::llm::{ChatMessage, LlmProvider, ReasoningConfig};
-use crate::domain::user::user_context_version::UserContextVersionRepoT;
-use crate::domain::user::user_profile_repo::UserProfileRepoT;
+use crate::domain::agent::{AgentOutcome, AgentState};
+use crate::domain::llm::ChatMessage;
 use crate::shared::error::AppError;
-
-// ── AgentRuntimeSettings ─────────────────────────────────────────────────
-
-/// AgentRuntime配置，派生自 `AppConfig`。
-#[derive(Debug, Clone)]
-pub struct AgentRuntimeSettings {
-    pub agent_enabled: bool,
-    pub memory_enabled: bool,
-    pub rag_enabled: bool,
-    pub summary_enabled: bool,
-    pub max_context_messages: usize,
-    pub max_memory_items: u32,
-    pub max_rag_chunks: u64,
-    pub memory_extraction_async: bool,
-    pub max_tool_depth: usize,
-    pub temperature: f64,
-    pub top_p: f64,
-    pub enable_reasoning: bool,
-}
-
-impl AgentRuntimeSettings {
-    /// 当推理被禁用时返回 `Some(ReasoningConfig { enabled: false })`，
-    /// 当推理启用时返回 `None`（Ollama 默认行为）。发送 `None` 表示
-    /// 序列化后的 JSON 会直接省略 `reasoning` 字段。
-    pub fn reasoning_config(&self) -> Option<ReasoningConfig> {
-        if self.enable_reasoning {
-            None
-        } else {
-            Some(ReasoningConfig { enabled: false })
-        }
-    }
-}
-
-impl Default for AgentRuntimeSettings {
-    fn default() -> Self {
-        Self {
-            agent_enabled: true,
-            memory_enabled: true,
-            rag_enabled: true,
-            summary_enabled: true,
-            max_context_messages: 30,
-            max_memory_items: 10,
-            max_rag_chunks: 5,
-            memory_extraction_async: true,
-            max_tool_depth: 10,
-            temperature: 0.7,
-            top_p: 0.9,
-            enable_reasoning: true,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Agent响应
@@ -101,40 +41,10 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        llm: Arc<dyn LlmProvider>,
-        memory_service: Arc<MemoryService>,
-        event_repo: Arc<dyn AgentEventRepoT>,
-        conversation_repo: Arc<dyn ConversationRepoT>,
-        user_profile_repo: Arc<dyn UserProfileRepoT>,
-        context_version_repo: Arc<dyn UserContextVersionRepoT>,
-        context_builder: Arc<AgentContextBuilder>,
-        tools: Vec<Arc<dyn AgentTool>>,
-        settings: AgentRuntimeSettings,
-    ) -> Self {
-        let context_provider = Arc::new(DefaultChatContextProvider::new(
-            Arc::clone(&context_version_repo),
-            Arc::clone(&user_profile_repo),
-            Arc::clone(&context_builder),
-        ));
-        let turn_writer = Arc::new(ConversationTurnWriter::new(Arc::clone(&conversation_repo)));
-        let memory_extraction_scheduler =
-            Arc::new(AsyncMemoryExtractionScheduler::new(memory_service));
-        let chat_graph = ChatAgentGraph::new(ChatAgentGraphDeps {
-            llm: Arc::clone(&llm),
-            event_repo: Arc::clone(&event_repo),
-            context_provider,
-            turn_writer,
-            memory_extraction_scheduler,
-            tools: tools.clone(),
-            settings: settings.clone(),
-        })
-        .expect("静态 HTTP Chat Agent 图必须能够编译");
-
+    pub fn from_graph(chat_graph: ChatAgentGraph, max_context_messages: usize) -> Self {
         Self {
             chat_graph,
-            max_context_messages: settings.max_context_messages,
+            max_context_messages,
         }
     }
 

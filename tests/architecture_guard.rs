@@ -449,15 +449,20 @@ fn checkpoint_model_fields_exclude_runtime_and_infrastructure_handles() {
 }
 
 #[test]
-fn agent_runtime_facade_does_not_orchestrate_memory_extraction() {
+fn agent_runtime_facade_does_not_construct_graph_dependencies() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/agent/agent_runtime.rs");
     let source = fs::read_to_string(&path).expect("AgentRuntime source must be readable");
 
     assert!(
-        source.contains("AsyncMemoryExtractionScheduler::new"),
-        "AgentRuntime may compose the memory extraction adapter"
+        source.contains(".chat_graph") && source.contains(".run(state)"),
+        "AgentRuntime must delegate each turn to the prebuilt ChatAgentGraph"
     );
     for forbidden in [
+        "pub struct AgentRuntimeSettings",
+        "ChatAgentGraphDeps",
+        "DefaultChatContextProvider::new",
+        "ConversationTurnWriter::new",
+        "AsyncMemoryExtractionScheduler::new",
         "extract_and_save_at_version",
         "tokio::spawn",
         "last_extraction_failure",
@@ -465,7 +470,23 @@ fn agent_runtime_facade_does_not_orchestrate_memory_extraction() {
     ] {
         assert!(
             !source.contains(forbidden),
-            "AgentRuntime facade must not retain memory orchestration token `{forbidden}`"
+            "AgentRuntime facade must not construct or orchestrate dependency `{forbidden}`"
+        );
+    }
+
+    let provider_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bootstrap/graph/agent_runtime_provider.rs");
+    let provider = fs::read_to_string(&provider_path).expect("bootstrap provider must be readable");
+    for required in [
+        "ChatAgentGraph::new",
+        "DefaultChatContextProvider::new",
+        "ConversationTurnWriter::new",
+        "AsyncMemoryExtractionScheduler::new",
+        "AgentRuntime::from_graph",
+    ] {
+        assert!(
+            provider.contains(required),
+            "bootstrap provider must own graph dependency construction token `{required}`"
         );
     }
 }
