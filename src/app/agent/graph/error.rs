@@ -1,4 +1,4 @@
-use super::{GraphIdError, NodeId, RouteKey};
+use super::{EffectError, EffectId, GraphIdError, NodeId, RouteKey};
 use crate::domain::agent::AgentStateError;
 use crate::shared::error::AppError;
 
@@ -233,6 +233,15 @@ pub enum GraphRunError {
         node: NodeId,
         #[source]
         error: NodeError,
+    },
+    #[error("节点 {node} 返回 Effect，但图运行器未配置 EffectExecutor")]
+    MissingEffectExecutor { node: NodeId },
+    #[error("节点 {node} 的 Effect {effect_id} 执行失败: {error}")]
+    EffectFailed {
+        node: NodeId,
+        effect_id: EffectId,
+        #[source]
+        error: EffectError,
     },
     #[error("节点 {node} 产生了非法状态更新: {error}")]
     StateUpdateFailed {

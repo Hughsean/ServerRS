@@ -1,6 +1,7 @@
 use super::{
-    CompiledGraph, GraphRunError, NodeId, RunBudget, RunContext, RunId, RunTrace, TransitionRule,
-    UsageSnapshot,
+    AgentEffect, CompiledGraph, EffectEnvelope, EffectExecutor, EffectId, EffectReceipt,
+    GraphRunError, NodeError, NodeErrorKind, NodeId, RunBudget, RunContext, RunId, RunTrace,
+    TransitionRule, UsageSnapshot,
 };
 use crate::domain::agent::{AgentBusinessState, AgentState};
 use std::sync::Arc;
@@ -9,14 +10,34 @@ use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 #[derive(Clone)]
-pub struct GraphRuntime<B: AgentBusinessState> {
+pub struct GraphRuntime<B>
+where
+    B: AgentBusinessState,
+    B::Effect: AgentEffect<Update = B::Update>,
+{
     graph: Arc<CompiledGraph<B>>,
+    effect_executor: Option<Arc<dyn EffectExecutor<B::Effect>>>,
 }
 
-impl<B: AgentBusinessState> GraphRuntime<B> {
+impl<B> GraphRuntime<B>
+where
+    B: AgentBusinessState,
+    B::Effect: AgentEffect<Update = B::Update>,
+{
     pub fn new(graph: CompiledGraph<B>) -> Self {
         Self {
             graph: Arc::new(graph),
+            effect_executor: None,
+        }
+    }
+
+    pub fn with_effect_executor(
+        graph: CompiledGraph<B>,
+        effect_executor: Arc<dyn EffectExecutor<B::Effect>>,
+    ) -> Self {
+        Self {
+            graph: Arc::new(graph),
+            effect_executor: Some(effect_executor),
         }
     }
 
@@ -44,6 +65,7 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
     ) -> Result<GraphRunResult<B>, GraphRunError> {
         let mut current = self.graph.entry().clone();
         let mut visited = Vec::new();
+        let mut effect_receipts = Vec::new();
 
         loop {
             let run_step = context.check_ready(self.graph.policy().max_steps())?;
@@ -80,12 +102,55 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
                 Err(error) => return Err(error.into_graph_run(current.clone())),
             };
             context.budget().record_usage(result.usage)?;
-            state.apply_updates(result.updates).map_err(|error| {
+            let mut candidate = state.clone();
+            candidate.apply_updates(result.updates).map_err(|error| {
                 GraphRunError::StateUpdateFailed {
                     node: current.clone(),
                     error,
                 }
             })?;
+
+            let mut node_receipts = Vec::with_capacity(result.effects.len());
+
+            for (ordinal, effect) in result.effects.into_iter().enumerate() {
+                context.check_active()?;
+                let ordinal = u32::try_from(ordinal).map_err(|_| GraphRunError::NodeFailed {
+                    node: current.clone(),
+                    error: NodeError::new(
+                        NodeErrorKind::Invariant,
+                        "节点返回的 Effect 数量超过 u32",
+                    ),
+                })?;
+                let effect_id = EffectId::new(context.run_id(), run_step, current.clone(), ordinal);
+                let executor = self.effect_executor.as_ref().ok_or_else(|| {
+                    GraphRunError::MissingEffectExecutor {
+                        node: current.clone(),
+                    }
+                })?;
+                let envelope = EffectEnvelope {
+                    id: effect_id.clone(),
+                    effect,
+                };
+                let value = executor
+                    .execute(&envelope, &context)
+                    .await
+                    .map_err(|error| GraphRunError::EffectFailed {
+                        node: current.clone(),
+                        effect_id: effect_id.clone(),
+                        error,
+                    })?;
+                let receipt_updates = B::Effect::receipt_updates(&value);
+                candidate.apply_updates(receipt_updates).map_err(|error| {
+                    GraphRunError::StateUpdateFailed {
+                        node: current.clone(),
+                        error,
+                    }
+                })?;
+                node_receipts.push(EffectReceipt { effect_id, value });
+            }
+
+            state = candidate;
+            effect_receipts.extend(node_receipts);
             visited.push(current.clone());
             let usage = context.budget().snapshot();
             trace!(
@@ -138,6 +203,7 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
                         usage: context.budget().snapshot(),
                         visited,
                         run_id: context.run_id(),
+                        effect_receipts,
                     });
                 }
             }
@@ -145,12 +211,32 @@ impl<B: AgentBusinessState> GraphRuntime<B> {
     }
 }
 
-#[derive(Debug)]
-pub struct GraphRunResult<B: AgentBusinessState> {
+pub struct GraphRunResult<B>
+where
+    B: AgentBusinessState,
+    B::Effect: AgentEffect<Update = B::Update>,
+{
     pub state: AgentState<B>,
     pub usage: UsageSnapshot,
     pub visited: Vec<NodeId>,
     pub run_id: RunId,
+    pub effect_receipts: Vec<EffectReceipt<<B::Effect as AgentEffect>::Receipt>>,
+}
+
+impl<B> std::fmt::Debug for GraphRunResult<B>
+where
+    B: AgentBusinessState,
+    B::Effect: AgentEffect<Update = B::Update>,
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GraphRunResult")
+            .field("usage", &self.usage)
+            .field("visited", &self.visited)
+            .field("run_id", &self.run_id)
+            .field("effect_receipt_count", &self.effect_receipts.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +250,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU32;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
@@ -176,9 +263,50 @@ mod tests {
         Set(i32),
     }
 
+    #[derive(Debug, Clone)]
+    enum TestEffect {
+        Set(i32),
+    }
+
+    #[derive(Debug)]
+    enum TestReceipt {
+        Set(i32),
+    }
+
+    impl AgentEffect for TestEffect {
+        type Update = TestUpdate;
+        type Receipt = TestReceipt;
+
+        fn receipt_updates(receipt: &Self::Receipt) -> Vec<AgentUpdate<Self::Update>> {
+            match receipt {
+                TestReceipt::Set(value) => {
+                    vec![AgentUpdate::Business(TestUpdate::Set(*value))]
+                }
+            }
+        }
+    }
+
+    struct TestEffectExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl EffectExecutor<TestEffect> for TestEffectExecutor {
+        async fn execute(
+            &self,
+            envelope: &EffectEnvelope<TestEffect>,
+            _context: &RunContext,
+        ) -> Result<TestReceipt, EffectError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &envelope.effect {
+                TestEffect::Set(value) => Ok(TestReceipt::Set(*value)),
+            }
+        }
+    }
+
     impl AgentBusinessState for TestBusiness {
         type Update = TestUpdate;
-        type Effect = NoEffect<TestUpdate>;
+        type Effect = TestEffect;
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {
@@ -195,6 +323,7 @@ mod tests {
         Fail,
         Usage(UsageDelta),
         ReserveLlm,
+        Effect(i32),
         Pending,
         ApplicationFailure(AppError),
     }
@@ -223,7 +352,7 @@ mod tests {
             &self,
             _state: &AgentState<TestBusiness>,
             _context: &RunContext,
-        ) -> Result<NodeResult<TestUpdate, NoEffect<TestUpdate>>, NodeError> {
+        ) -> Result<NodeResult<TestUpdate, TestEffect>, NodeError> {
             match self.behavior {
                 Behavior::Noop => Ok(NodeResult::empty()),
                 Behavior::Set(value) => Ok(NodeResult::new(
@@ -255,6 +384,13 @@ mod tests {
                         UsageDelta::default(),
                     ))
                 }
+                Behavior::Effect(value) => Ok(NodeResult::with_effect(
+                    vec![AgentUpdate::SetOutcome(AgentOutcome::Respond(
+                        "done".into(),
+                    ))],
+                    TestEffect::Set(value),
+                    UsageDelta::default(),
+                )),
                 Behavior::Pending => std::future::pending().await,
                 Behavior::ApplicationFailure(ref error) => {
                     Err(NodeError::from_application(error.clone()))
@@ -428,6 +564,52 @@ mod tests {
             result.state.outcome().unwrap().response_text(),
             Some("done")
         );
+    }
+
+    #[tokio::test]
+    async fn effect_receipt_updates_candidate_state_and_is_returned() {
+        let executor = Arc::new(TestEffectExecutor {
+            calls: AtomicUsize::new(0),
+        });
+        let runtime = GraphRuntime::with_effect_executor(
+            single_node_graph(Behavior::Effect(7)),
+            executor.clone(),
+        );
+
+        let result = runtime
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.state.business().value, 7);
+        assert_eq!(result.effect_receipts.len(), 1);
+        assert_eq!(result.effect_receipts[0].effect_id.run_id(), result.run_id);
+        assert_eq!(result.effect_receipts[0].effect_id.step().get(), 1);
+        assert_eq!(
+            result.effect_receipts[0].effect_id.node_id(),
+            &node_id("only")
+        );
+        assert_eq!(result.effect_receipts[0].effect_id.ordinal(), 0);
+    }
+
+    #[tokio::test]
+    async fn effect_without_executor_is_rejected() {
+        let error = GraphRuntime::new(single_node_graph(Behavior::Effect(7)))
+            .run(
+                AgentState::new(TestBusiness::default()),
+                RunBudget::for_test(8),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GraphRunError::MissingEffectExecutor { node } if node == node_id("only")
+        ));
     }
 
     #[tokio::test]
