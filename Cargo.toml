@@ -24,8 +24,8 @@ qqbot = { path = "crates/qqbot" }
 # Async
 async-trait = "0.1.89"
 futures-util = "0.3"
-tokio = "1.52.1"
-tokio-tungstenite = "0.29"
+tokio = "1.53.1"
+tokio-tungstenite = "0.30"
 tokio-util = "0.7"
 
 # Web and transport
@@ -36,7 +36,7 @@ urlencoding = "2"
 
 # Security
 base64 = "0.22.1"
-bcrypt = "0.19.0"
+bcrypt = "0.19.2"
 jsonwebtoken = "10.3.0"
 sha2 = "0.11.0"
 uuid = "1.23.1"
@@ -47,8 +47,8 @@ dotenvy = "0.15"
 regex = "1.12.3"
 scraper = "0.27.0"
 serde = "1.0.228"
-serde_json = "1.0.149"
-thiserror = "2.0.18"
+serde_json = "1.0.151"
+thiserror = "2.0.19"
 toml = "1.1.2"
 url = "2.5.8"
 validator = "0.20.0"
