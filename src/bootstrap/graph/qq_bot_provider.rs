@@ -57,30 +57,31 @@ pub async fn init_qq_bot_integration(ctx: &BootstrapContext<'_>, background: &mu
         None
     };
 
-    let _qq_bot_deps = init_qq_bot(
-        ctx.config,
-        Arc::clone(&ctx.infra.ollama_provider),
-        qq_bot_tts_provider,
-        background,
-        qq_bot_bot_account_repo,
-        qq_bot_group_repo,
-        qq_bot_group_member_repo,
-        qq_bot_group_message_repo,
-        qq_bot_group_summary_repo,
-        qq_bot_group_memory_repo,
-        qq_bot_agent_turn_repo,
-        qq_bot_outbox_repo,
-        Some(Arc::clone(&ctx.repos.user_repo)
-            as Arc<dyn crate::domain::user::user_repo::UserRepoT>),
-        Some(Arc::clone(&qq_bot_external_user_repo)),
-        Some(Arc::clone(&qq_bot_user_profile_repo)),
-        Some(Arc::clone(&qq_bot_relationship_repo)),
-    )
-    .await
-    .unwrap_or_else(|error| {
-        tracing::warn!(error = %error, "qq_bot 初始化失败 — 将继续运行而不启动它");
-        None
-    });
+    let _qq_bot_deps =
+        init_qq_bot(
+            ctx.config,
+            Arc::clone(&ctx.infra.ollama_provider),
+            qq_bot_tts_provider,
+            background,
+            qq_bot_bot_account_repo,
+            qq_bot_group_repo,
+            qq_bot_group_member_repo,
+            qq_bot_group_message_repo,
+            qq_bot_group_summary_repo,
+            qq_bot_group_memory_repo,
+            qq_bot_agent_turn_repo,
+            qq_bot_outbox_repo,
+            Some(Arc::clone(&ctx.repos.user_repo)
+                as Arc<dyn crate::domain::user::user_repo::UserRepoT>),
+            Some(Arc::clone(&qq_bot_external_user_repo)),
+            Some(Arc::clone(&qq_bot_user_profile_repo)),
+            Some(Arc::clone(&qq_bot_relationship_repo)),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "qq_bot 初始化失败 — 将继续运行而不启动它");
+            None
+        });
 }
 
 #[cfg(not(feature = "qq_bot"))]
