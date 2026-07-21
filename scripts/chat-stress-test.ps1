@@ -6,7 +6,7 @@
   每次发送消息后等待 LLM 回复完成，再发下一条。
   覆盖个人信息、日常生活、情绪感受、兴趣爱好四大类话题。
 .NOTES
-  需先启动服务器 (cargo rr --bin server-rs)
+  需先启动服务器 (cargo run -p digital-human-server)
   依赖 PowerShell 7+ (pwsh)
 #>
 

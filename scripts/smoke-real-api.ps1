@@ -1,5 +1,5 @@
 # ServerRS sessionless chat API smoke test.
-# Run against a locally running server: cargo run -p server --bin server-rs
+# Run against a locally running server: cargo run -p digital-human-server
 # Usage: .\scripts\smoke-real-api.ps1 [-IncludeRiskSmoke]
 
 param(

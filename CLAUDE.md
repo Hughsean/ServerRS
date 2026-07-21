@@ -41,9 +41,10 @@
   - `bootstrap::vector`：Qdrant、向量库、向量索引。
   - `bootstrap::services`：领域服务、RAG、Memory、Summary、Agent 上下文。
   - `bootstrap::api`：AppState、Router、中间件和 HTTP serve。
-  - `bootstrap::qq_bot`：QQ Bot 仓库、TTS、bot 初始化和 feature gate 逻辑。
+  - `apps/qqbot-server`：独立 NapCat 进程装配；不得依赖数字人服务或数据库。
 - 多个相关依赖应封装为 graph/context 结构体，例如 `RepoGraph`、`LlmGraph`、`VectorGraph`、`DomainServices`，不要在入口处散落大量 `Arc::clone`。
-- feature gate 相关的大块初始化必须移入对应 bootstrap 模块，入口层只保留条件调用。
+- 可选基础设施的大块初始化必须移入对应 bootstrap 模块，入口层只保留条件调用；
+  QQBot 是独立应用，不得作为数字人服务器的 feature gate 接入。
 
 ## P1：Rust 代码规则
 

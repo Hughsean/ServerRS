@@ -1,17 +1,17 @@
 # NapCatQQ 官方文档研读笔记
 
 > 研读时间：2026-06-16
-> 最后核对：2026-06-27（仅核对本项目集成方式，未重新抓取官方站）
+> 最后核对：2026-07-21（仅核对本项目集成方式，未重新抓取官方站）
 > 文档站：https://napneko.github.io/
 > 目标：记录当时对 NapCatQQ / OneBot 11 的研读结论。官方文档版本会变化，升级 NapCat 前应重新核对官方站。
 
 ## 当前 ServerRS 对接方式
 
-- `qq_bot` 受 Cargo feature `qq_bot` 和 `[qq_bot].enabled` 双重控制。
-- NapCat HTTP API 地址来自 `[qq_bot].http_base_url`，默认 `http://127.0.0.1:3000`。
-- ServerRS 可监听 NapCat 反向 WebSocket，地址由 `[qq_bot].ws_host` / `[qq_bot].ws_port` 控制，默认 `0.0.0.0:6700`。
-- 如果配置了 `[qq_bot].ws_url`，则可使用正向 WebSocket URL。
-- 语音回复通过 TTS 生成本地文件，再经 `/tts` 静态目录暴露给 NapCat 发送 `record` 段。
+- NapCat 是独立的 `qqbot-server` 应用，不再是数字人服务器的 Cargo feature。
+- `crates/qqbot` 只保留 HTTP API、正向 WebSocket、CQ 解析和类型化协议事件。
+- 连接参数来自独立 `qqbot.toml` 的 `[napcat]`，也可通过 `NAPCAT_*` 环境变量覆盖。
+- 当前占位 handler 不回复、不持久化；旧 QQBot 业务与数据库代码已经删除。
+- 后续业务只需实现 `NapCatEventHandler`，不需要修改协议适配器。
 
 ---
 

@@ -1,9 +1,10 @@
 # ServerRS 项目地图 — 从入门到精通
 
-> **Workspace 路径提示（2026-07-21）**：后端已拆为 5 个 crate。本文后续出现的旧
-> `src/api`、`src/bootstrap` 路径现在位于 `apps/server/src`；数字人 `src/app`、
-> `src/domain`、`src/infra` 位于 `crates/digital-human/src`；QQ 模块位于
-> `crates/qqbot/src`；通用 Agent Runtime 位于 `crates/agent-core/src`。依赖边界和
+> **Workspace 路径提示（2026-07-21）**：后端包含 6 个 package。本文后续出现的
+> `src/api`、`src/bootstrap` 路径位于 `apps/digital-human-server/src`；数字人
+> `src/app`、`src/domain`、`src/infra` 位于 `crates/digital-human/src`；NapCat
+> 适配器位于 `crates/qqbot/src/napcat`；通用 Agent Runtime 位于
+> `crates/agent-core/src`。依赖边界和
 > 最新目录以 [crate-boundaries.md](crate-boundaries.md) 为准。
 
 > 作者：项目代码自动分析
@@ -14,7 +15,7 @@
 
 ## 一、这个项目到底是干啥的？
 
-**一句话版**：这是一个 AI 聊天伴侣后端服务器。用户注册后，可以跟 AI 聊天，AI 会维护长期记忆和用户画像，支持 RAG 知识检索、音乐、抑郁评估、日记、社区、QQ Bot、Web 知识摄入与后台审核。
+**一句话版**：这是一个 AI 聊天伴侣后端服务器。用户注册后，可以跟 AI 聊天，AI 会维护长期记忆和用户画像，支持 RAG 知识检索、音乐、抑郁评估、日记、社区、Web 知识摄入与后台审核；QQBot 当前只保留独立 NapCat 适配器，业务等待重新设计。
 **正经版**：ServerRS（代号 Digital Companion）是一个用 **Rust** 写的 **Web 后端服务**，使用 Axum 提供 HTTP API，MySQL 存业务数据，Ollama/OpenAI-compatible Provider 做对话和结构化提取，Qdrant 做向量搜索。
 
 ---
@@ -27,12 +28,14 @@ D:\WorkSpace\ServerRS/
 ├── config.toml           # 服务器配置文件（数据库/Ollama/JWT 等）
 ├── .env                  # 环境变量（密钥、数据库密码等）
 │
-├── apps/server/          # Axum、配置、数据库连接、装配与进程入口
+├── apps/
+│   ├── digital-human-server/ # Axum、数字人配置、数据库连接与进程入口
+│   └── qqbot-server/          # 独立 NapCat 进程；当前无业务与数据库
 ├── crates/
 │   ├── agent-core/       # 通用 Agent Runtime / Effect / Checkpoint
 │   ├── ai-core/          # Provider 中立 AI 接口
 │   ├── digital-human/    # 数字人业务与其持久化适配器
-│   └── qqbot/            # QQ 业务、NapCat、Outbox 与其持久化适配器
+│   └── qqbot/            # 仅 NapCat/OneBot 协议适配
 │
 ├── database/
 │   └── sql/
@@ -112,7 +115,7 @@ Glue modules:
 ### 4.1 入口区：`src/main.rs`（程序的起点）
 
 ```rust
-use server_rs::{bootstrap, shared::config::AppConfig};
+use digital_human_server::{bootstrap, shared::config::AppConfig};
 
 #[tokio::main]
 async fn main() {
@@ -151,7 +154,8 @@ async fn main() {
  pub mod shared;
 ```
 
-顾名思义，这是整栋大楼的**楼层索引图**。其他文件通过 `use server_rs::api::xxx` 互相引用。
+顾名思义，这是整栋大楼的**楼层索引图**。宿主内代码通过
+`use digital_human_server::api::xxx` 引用对应模块。
 
 ---
 
@@ -336,21 +340,6 @@ src/app/
 │   ├── mod.rs
 │   └── object_service.rs     上传/下载/删除文件
 │
-├── qq_bot/                   ★★★ QQ 机器人区
-│   ├── mod.rs
-│   ├── qq_bot_service.rs     ★ QQ 机器人主服务（接收/发送消息）
-│   ├── message_ingestion.rs   消息接入与分派
-│   ├── reply_generator.rs     回复生成
-│   ├── context_builder.rs     构建对话上下文
-│   ├── outbox_worker.rs       发件箱消息投递
-│   ├── segment_dispatcher.rs  消息段分发
-│   ├── trigger_evaluator.rs   触发条件评估
-│   ├── topic_service.rs       话题管理
-│   ├── relationship_service.rs 关系管理
-│   ├── profile_builder.rs     用户画像构建
-│   ├── proactive_evaluator.rs 主动推送评估
-│   └── emotional_state_service.rs 情绪状态服务
-│
 └── web_ingestion/            ★★★ 知识自动爬取流水线
     ├── mod.rs
     ├── dispatcher.rs          分发器（取任务→执行）
@@ -466,27 +455,6 @@ src/domain/
 │   │                          └ AudioFormat(Wav/Mp3/Pcm/OggOpus)
 │   └── (TtsProvider trait)    语音合成接口（async trait）
 │
-├── qq_bot/                    ★★★ QQ 机器人领域
-│   ├── mod.rs                 模块声明
-│   ├── bot_state.rs           机器人状态
-│   ├── config.rs              机器人配置结构
-│   ├── conversation_state.rs  会话状态
-│   ├── error.rs               错误类型
-│   ├── message.rs             消息数据结构
-│   ├── reply.rs               回复数据结构
-│   ├── turn.rs                对话轮次结构
-│   ├── persona.rs             人设定义
-│   ├── attention.rs           注意力机制
-│   ├── ports.rs               ★ QQ Bot 外部能力端口（注意力、群消息发送、监听回调）
-│   ├── proactive.rs           主动行为定义
-│   ├── user_profile.rs        用户画像接口
-│   ├── relationship.rs        关系数据结构
-│   ├── repository.rs          ★ 核心仓库接口
-│   ├── relationship_repo.rs 关系仓库接口
-│   ├── qq_profile_repo.rs   QQ 画像仓库接口
-│   ├── topic_state.rs         话题状态
-│   └── (各类仓库接口)
-│
 └── tasks/
     └── ...                     任务相关
 ```
@@ -514,7 +482,6 @@ src/infra/
 │   │   ├── knowledge_ingestion_runs.rs / knowledge_publish_records.rs
 │   │   ├── knowledge_chunk_manifests.rs / knowledge_vector_manifests.rs
 │   │   ├── domain_event_outbox.rs / web_ingestion_audit_logs.rs
-│   │   ├── qq_*                 QQ Bot 相关表实体
 │   │   └── prelude.rs           实体导出的快捷引用
 │   └── seaorm_impl/             ★ domain trait 的 SeaORM 实现
 │       ├── user.rs / user_profile.rs
@@ -547,35 +514,6 @@ src/infra/
 │                                  └ 调用 v3 API 合成语音
     │                                  └ 支持中文/英文/日文 13 种音色
     │
-    ├── qq_bot/                        ★★★ QQ 机器人基础设施
-    │   ├── mod.rs                    模块声明
-    │   ├── attention_store.rs        注意力存储（实现 domain::qq_bot::AttentionStore）
-    │   ├── napcat/                   NapCat 协议适配
-    │   │   ├── mod.rs
-    │   │   ├── api.rs                ★ NapCat HTTP API 封装（实现群消息发送端口）
-    │   │   ├── listener.rs           ★ WebSocket 事件监听（依赖 domain handler 端口）
-    │   │   ├── notice_handler.rs     通知事件处理
-    │   │   └── message_parser.rs     消息解析
-    │   ├── repo/                     ★ 数据库仓库实现
-    │   │   ├── mod.rs
-    │   │   ├── seaorm_impl/
-    │   │   │   ├── mod.rs
-    │   │   │   ├── agent_turn.rs     对话轮次
-    │   │   │   ├── bot_account.rs    机器人账号
-    │   │   │   ├── external_user.rs  外部用户
-    │   │   │   ├── group_member.rs   群成员
-    │   │   │   ├── group_message.rs  群消息
-    │   │   │   ├── group_memory.rs   群记忆
-    │   │   │   ├── group.rs          群组
-    │   │   │   ├── group_summary.rs  群摘要
-    │   │   │   ├── outbox.rs         发件箱
-    │   │   │   ├── relationship.rs   关系
-    │   │   │   ├── user_profile.rs   用户画像
-    │   │   └── mock.rs              模拟仓库（测试用）
-    │   └── models/                   数据模型
-    │       ├── mod.rs
-    │       └── qq_bot_accounts.rs
-    │
     ├── detector/                      风险检测实现
 │   ├── mod.rs
 │   └── rule_based_detector.rs    ★ 基于规则的风险检测器
@@ -606,6 +544,17 @@ src/infra/
     └── review_repository.rs       审核记录的 MySQL 操作
 ```
 
+QQBot 不在数字人基础设施层中。独立的 `crates/qqbot/src/napcat/` 只包含：
+
+```text
+napcat/
+├── api.rs             NapCat HTTP API 客户端
+├── listener.rs        正向 WebSocket 监听与事件分发
+├── message_parser.rs  CQ 码解析与文本归一化
+├── event.rs           类型化协议事件与回调接口
+└── error.rs           传输/协议错误
+```
+
 ---
 
 ### 4.7 胶水层 `src/bootstrap/` —— 组装车间
@@ -622,7 +571,6 @@ src/bootstrap/
 ├── vector.rs       ★ 向量/RAG 装配（Embedding Provider、Qdrant 向量库、向量索引服务）
 ├── state.rs        ★ 业务服务装配，把所有 Service 打包成 ServiceGraph
 ├── runtime.rs      ★ 顶层编排（6 阶段顺序启动：Infra → Repos → Tasks → Vector → Services → HTTP）
-├── qq_bot.rs       创建 QQ 机器人服务（feature gate 控制）
 └── web_ingestion.rs  初始化知识摄入模块
 ```
 
@@ -643,7 +591,6 @@ src/shared/
 │   ├── web_ingestion.rs      WebIngestionConfig, DistillLlmConfig
 │   ├── tts.rs                TtsConfig
 │   ├── qdrant.rs             QdrantConfig
-│   ├── qq_bot.rs             QqBotConfig
 │   └── display_config.rs     Display for AppConfig 实现
 ├── error.rs       错误类型定义
 └── llm_json.rs    LLM JSON 清洗/提取（处理 <think>、markdown fence、首个 JSON 值）
@@ -664,7 +611,6 @@ src/shared/
 - `embedding`：向量嵌入配置
 - `web_ingestion`：知识摄入全部配置
 - `tts`：语音合成配置（火山引擎 API Key、模型、音色等）
-- `qq_bot`：QQ 机器人配置（QQ 号、NapCat 连接地址等）
 - `ssh_tunnels`：SSH 隧道配置（多组跳板机定义，数据库和 Ollama 可引用）
 - `plugins`：Agent 工具配置（天气、新闻、搜索等）
 - `mail`：邮件配置
@@ -740,23 +686,7 @@ src/shared/
 | `music`          | 音乐表     | 音乐曲库         |
 | `stored_objects` | 对象存储表 | 上传文件的元数据 |
 
-### 5.8 QQ 机器人（11 张表）
-
-| 表名                 | 中文名       | 存什么                    |
-| -------------------- | ------------ | ------------------------- |
-| `qq_bot_accounts`    | 机器人账号表 | 机器人 QQ 号与登录态      |
-| `qq_external_users`  | 外部用户表   | QQ 用户信息映射           |
-| `qq_relationships`   | 关系表       | 机器人对用户的亲密/信任度 |
-| `qq_user_profiles`   | 用户画像表   | AI 对用户的性格/情绪画像  |
-| `qq_groups`          | 群组表       | 群组信息与配置            |
-| `qq_group_members`   | 群成员表     | 群成员列表与角色          |
-| `qq_group_messages`  | 群消息表     | 群聊消息记录              |
-| `qq_group_memories`  | 群记忆表     | 群聊长期记忆              |
-| `qq_group_summaries` | 群摘要表     | 群聊话题摘要              |
-| `qq_agent_turns`     | 对话轮次表   | 每次 LLM 调用的完整记录   |
-| `qq_message_outbox`  | 发件箱表     | 待发送的消息队列          |
-
-### 5.9 知识摄入（15 张表）— 最复杂的一块
+### 5.8 知识摄入（15 张表）— 最复杂的一块
 
 | 表名                         | 中文名     | 存什么                                                 |
 | ---------------------------- | ---------- | ------------------------------------------------------ |
@@ -902,7 +832,6 @@ main.rs
               |-- repo/                MySQL via SeaORM
               |-- llm/                 Ollama/OpenAI-compatible APIs
               |-- tts/                 Volcengine speech API
-              |-- qq_bot/              NapCat QQ protocol adapter
               |-- vector_store/        QdrantVectorStore
               `-- detector/            risk detection rules
 
@@ -935,7 +864,6 @@ Dependency direction:
 | `[qdrant]`          | enabled, url, tunnel, rag/memory/summary collection                                                     | false, 配置段内必填, none, rag_chunks/user_memories/conversation_summaries | 向量数据库；有 tunnel 时 url 必须使用 `{ip}` / `{port}` 模板                                                              |
 | `[web_ingestion]`   | enabled, scheduler_enabled, dispatcher_enabled, outbox_batch_size, dispatcher_parallelism, auto_publish | false, false, false, 20, 1, false                                          | 知识摄入；蒸馏 base_url 有 tunnel 时必须使用 `{ip}` / `{port}` 模板；dispatcher 按 handler 配额领取 outbox 事件并并发处理 |
 | `[tts]`             | provider, api_key, resource_id, model                                                                   | volcengine, "", "", seed-tts-2.0-standard                                  | 语音合成                                                                                                                  |
-| `[qq_bot]`          | enabled, self_qq_id, http_base_url, ws_host/ws_port                                                     | false, 0, <http://127.0.0.1:3000>, 0.0.0.0:6700                            | QQ 机器人                                                                                                                 |
 | `[ssh_tunnels.*]`   | host, user, local_port, remote_port, direction, bind_address                                            | 无                                                                         | SSH 隧道（数据库/Ollama 引用）                                                                                            |
 | `[plugins.weather]` | api_key                                                                                                 | ""                                                                         | 天气 API                                                                                                                  |
 | `[plugins.news]`    | rss_urls                                                                                                | 中国新闻网                                                                 | 新闻源                                                                                                                    |
@@ -1030,8 +958,17 @@ web/sdk/src/
 
 ```
     copy .env.example .env    # 编辑数据库密码等
-    cargo run                 # 编译并启动
+    cargo run -p digital-human-server # 编译并启动数字人服务
 ```
+
+NapCat 适配器使用独立配置启动：
+
+```powershell
+copy apps/qqbot-server/config.example.toml qqbot.toml
+cargo run -p qqbot-server
+```
+
+当前 `qqbot-server` 只接收并记录协议事件元数据，不运行 QQ 业务，也不访问数据库。
 
 1.  **访问**：`http://localhost:8080/health`
 
@@ -1063,16 +1000,16 @@ A：为了"解耦"。业务代码（app/）不需要知道数据存在 MySQL 还
 **Q：有哪些外部依赖？**
 A：MySQL（数据存储）、Ollama（AI 推理）、Qdrant（向量搜索，可选），
 以及和风天气（查天气）、中国新闻网 RSS（新闻）、火山引擎豆包语音（TTS 语音合成）、
-NapCat（QQ 机器人协议适配）等外部 API。
+以及独立进程使用的 NapCat（OneBot 11 协议适配）等外部 API。
 
 **Q：TTS（文字转语音）功能是怎么实现的？**
 A：通过火山引擎（豆包语音）v3 API 将文字合成为语音（WAV/MP3/OGG 格式），
 提供 13 种音色（中/英/日文），支持语速、音量、音调调节。
 
 **Q：QQ 机器人（QQ Bot）是什么？**
-A：ServerRS 内置了一个 QQ 机器人模块，通过 NapCat/OneBot 11 对接 QQ，
-可自动回复群聊/私聊消息、管理群话题、维护用户画像和关系状态、主动推送内容，并支持 TTS 语音段。
-机器人有自己的完整数据库表和服务链路，支持多账号、多群组、长期记忆。
+A：当前只保留独立的 NapCat/OneBot 11 协议适配器，包括 HTTP API、正向 WebSocket、
+CQ 消息解析和类型化事件回调。旧 QQBot 业务、Repository、SeaORM entity 和建表 SQL
+已经删除；新的业务线和数据库模型将在后续需求明确后重新设计。
 
 **Q：什么是向量搜索？为什么需要 Qdrant？**
 A：传统搜索是"关键字匹配"（搜"苹果"只能找到有"苹果"二字的文章），

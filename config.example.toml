@@ -282,14 +282,6 @@ terminal = 8                         # 消费 IngestionSkipped/KnowledgePublishe
 # knowledge_rollback_requested = 1 # 消费 KnowledgeRollbackRequested；回滚当前激活版本
 
 
-[qq_bot]
-enabled = false
-self_qq_id = 1                                     # 你的机器人QQ号
-http_base_url = "http://127.0.0.1:3000"
-ws_url = "ws://127.0.0.1:6700"
-tts_output_dir = "./data/tts/"
-tts_public_url_base = "http://127.0.0.1:8080/tts/"
-
 # ── TTS (Text-to-Speech) ───────────────────────────────────────────
 # 火山引擎豆包语音 v3 配置
 # 生产环境建议用环境变量注入：TTS_API_KEY、TTS_RESOURCE_ID
