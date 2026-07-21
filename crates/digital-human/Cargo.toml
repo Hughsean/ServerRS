@@ -1,0 +1,63 @@
+[package]
+name = "digital-human"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agent-core.workspace = true
+ai-core.workspace = true
+
+async-trait.workspace = true
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "time",
+    "sync",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+futures-util.workspace = true
+
+reqwest = { workspace = true, features = [
+    "json",
+    "gzip",
+    "deflate",
+    "brotli",
+    "native-tls",
+] }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
+urlencoding.workspace = true
+
+base64.workspace = true
+bcrypt.workspace = true
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+sha2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+dashmap.workspace = true
+regex.workspace = true
+scraper.workspace = true
+toml.workspace = true
+url.workspace = true
+validator = { workspace = true, features = ["derive"] }
+dotenvy.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+sqlx = { workspace = true, features = ["mysql-rsa"] }
+sea-orm = { workspace = true, features = [
+    "runtime-tokio",
+    "sqlx-mysql",
+] }
+qdrant-client = { workspace = true, optional = true }
+
+chrono = { workspace = true, features = ["serde"] }
+tracing.workspace = true
+
+[features]
+default = ["qdrant"]
+qdrant = ["dep:qdrant-client"]
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }

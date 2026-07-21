@@ -16,4 +16,4 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt -- --check
-      - run: cargo test --all-features
+      - run: cargo test --workspace --all-features

@@ -472,7 +472,7 @@ if ($ExportOnly) {
     Write-Host "URL files were exported only; run this script without -ExportOnly or import-web-source-urls.ps1 to load them into web ingestion."
 }
 else {
-    Write-Host "Start ServerRS with 'cargo run' to trigger the first scheduler tick."
+    Write-Host "Start ServerRS with 'cargo run -p server --bin server-rs' to trigger the first scheduler tick."
 }
 
 $failedCount = @($results | Where-Object { $_.Status -eq "failed" }).Count
