@@ -4,6 +4,10 @@ use sea_orm::DatabaseConnection;
 
 use crate::app::agent::agent_context::AgentContextBuilder;
 use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings, AgentTool};
+use crate::app::agent::chat_effect::ConversationTurnWriter;
+use crate::app::agent::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
+use crate::app::agent::memory_extraction::AsyncMemoryExtractionScheduler;
+use crate::app::agent::nodes::DefaultChatContextProvider;
 use crate::app::agent::tools::get_time_tool::GetTimeTool;
 use crate::app::agent::tools::knowledge_search_tool::KnowledgeSearchTool;
 use crate::app::agent::tools::memory_search_tool::MemorySearchTool;
@@ -105,13 +109,10 @@ pub async fn chat_service_with_time_tool(
         enable_reasoning: false,
     };
 
-    let agent_runtime = AgentRuntime::new(
+    let agent_runtime = agent_runtime(
         llm_provider,
         Arc::clone(&memory_service),
-        Arc::clone(&repos.agent_event_repo),
-        Arc::clone(&repos.conv_repo),
-        Arc::clone(&repos.profile_repo),
-        Arc::clone(&repos.context_version_repo),
+        repos,
         context_builder,
         tools,
         settings,
@@ -188,13 +189,10 @@ pub async fn chat_service_with_core_test_tools(
         enable_reasoning: false,
     };
 
-    let agent_runtime = AgentRuntime::new(
+    let agent_runtime = agent_runtime(
         llm_provider,
         Arc::clone(&memory_service),
-        Arc::clone(&repos.agent_event_repo),
-        Arc::clone(&repos.conv_repo),
-        Arc::clone(&repos.profile_repo),
-        Arc::clone(&repos.context_version_repo),
+        repos,
         context_builder,
         tools,
         settings,
@@ -215,6 +213,36 @@ pub async fn chat_service_with_core_test_tools(
         chat_service,
         task_publisher,
     }
+}
+
+fn agent_runtime(
+    llm: Arc<dyn LlmProvider>,
+    memory: Arc<MemoryService>,
+    repos: &RepoGraph,
+    context_builder: Arc<AgentContextBuilder>,
+    tools: Vec<Arc<dyn AgentTool>>,
+    settings: AgentRuntimeSettings,
+) -> AgentRuntime {
+    let max_context_messages = settings.max_context_messages;
+    let context_provider = Arc::new(DefaultChatContextProvider::new(
+        Arc::clone(&repos.context_version_repo),
+        Arc::clone(&repos.profile_repo),
+        context_builder,
+    ));
+    let turn_writer = Arc::new(ConversationTurnWriter::new(Arc::clone(&repos.conv_repo)));
+    let memory_extraction_scheduler = Arc::new(AsyncMemoryExtractionScheduler::new(memory));
+    let graph = ChatAgentGraph::new(ChatAgentGraphDeps {
+        llm,
+        event_repo: Arc::clone(&repos.agent_event_repo),
+        context_provider,
+        turn_writer,
+        memory_extraction_scheduler,
+        tools,
+        settings,
+    })
+    .expect("test Chat Agent graph must compile");
+
+    AgentRuntime::from_graph(graph, max_context_messages)
 }
 
 fn retrieval_service(

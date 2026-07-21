@@ -45,8 +45,8 @@ fn node_result_carries_an_explicit_effect_without_mutating_state() {
     let result =
         NodeResult::<(), TestEffect>::with_effect(Vec::new(), TestEffect, UsageDelta::default());
 
-    assert!(result.updates.is_empty());
-    assert_eq!(result.effects.len(), 1);
+    assert!(result.updates().is_empty());
+    assert_eq!(result.effects().len(), 1);
 }
 
 #[test]

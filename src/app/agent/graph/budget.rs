@@ -112,6 +112,13 @@ impl RunBudgetHandle {
         }
     }
 
+    pub(crate) fn from_snapshot(limits: RunBudget, usage: UsageSnapshot) -> Self {
+        Self {
+            limits,
+            usage: Arc::new(Mutex::new(usage)),
+        }
+    }
+
     pub fn limits(&self) -> RunBudget {
         self.limits
     }
@@ -242,6 +249,22 @@ impl RunContext {
         Self {
             run_id: RunId::new(),
             budget: RunBudgetHandle::new(budget),
+            cancellation,
+            deadline: Instant::now() + budget.max_duration(),
+            trace,
+        }
+    }
+
+    pub(crate) fn resume(
+        run_id: RunId,
+        budget: RunBudget,
+        usage: UsageSnapshot,
+        cancellation: CancellationToken,
+        trace: RunTrace,
+    ) -> Self {
+        Self {
+            run_id,
+            budget: RunBudgetHandle::from_snapshot(budget, usage),
             cancellation,
             deadline: Instant::now() + budget.max_duration(),
             trace,

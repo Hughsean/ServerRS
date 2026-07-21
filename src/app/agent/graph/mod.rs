@@ -1,4 +1,6 @@
 mod budget;
+mod checkpoint;
+mod checkpoint_store;
 mod definition;
 mod effect;
 mod error;
@@ -7,9 +9,15 @@ mod id;
 mod node;
 mod runtime;
 
+pub use crate::domain::agent::StateSchemaVersion;
 pub use budget::{
     GraphPolicy, RunBudget, RunBudgetHandle, RunContext, RunTrace, UsageDelta, UsageSnapshot,
 };
+pub use checkpoint::{
+    AgentCheckpoint, CheckpointError, CheckpointId, CheckpointRunError, GraphExecutionResult,
+    GraphVersion, ResumeError, RunPosition, SuspendReason, SuspendRequest, SuspendedRun,
+};
+pub use checkpoint_store::{CheckpointStore, InMemoryCheckpointStore};
 pub use definition::{CompiledGraph, GraphDefinition};
 pub use effect::{
     AgentEffect, EffectEnvelope, EffectError, EffectErrorKind, EffectExecutor, EffectId,
@@ -38,6 +46,12 @@ mod tests {
     impl AgentBusinessState for TestBusiness {
         type Update = ();
         type Effect = NoEffect<()>;
+        type SuspendData = ();
+        type ResumeInput = ();
+
+        fn resume_updates(_input: Self::ResumeInput) -> Vec<crate::domain::agent::AgentUpdate<()>> {
+            Vec::new()
+        }
 
         fn apply_update(&mut self, _update: Self::Update) -> Result<(), AgentStateError> {
             Ok(())

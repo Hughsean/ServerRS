@@ -4,7 +4,7 @@ pub mod state;
 pub use message::{AgentMessage, AgentMessageError, AgentObservation, AgentOutcome, AgentToolCall};
 pub use state::{
     AgentBusinessState, AgentState, AgentStateError, AgentUpdate, PromptSection, PromptSource,
-    PromptTrust,
+    PromptTrust, StateSchemaVersion,
 };
 
 use crate::domain::llm::tools::LlmTool;
@@ -142,6 +142,12 @@ mod state_model_tests {
     impl AgentBusinessState for TestBusiness {
         type Update = TestUpdate;
         type Effect = ();
+        type SuspendData = ();
+        type ResumeInput = ();
+
+        fn resume_updates(_input: Self::ResumeInput) -> Vec<AgentUpdate<Self::Update>> {
+            Vec::new()
+        }
 
         fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
             match update {

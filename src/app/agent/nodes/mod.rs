@@ -6,7 +6,9 @@ pub use chat_context::{
     BuildContextNode, BuildPromptNode, ChatContextOptions, ChatContextProviderT,
     ChatContextRequest, DefaultChatContextProvider, LoadedChatContext,
 };
-pub use chat_turn::{NormalizeReplyNode, PersistTurnNode, PrepareTurnNode};
+pub use chat_turn::{
+    NormalizeReplyNode, PersistTurnNode, PrepareTurnNode, ScheduleMemoryExtractionNode,
+};
 pub use reasoning::{
     CompletionNode, ExecuteToolsNode, FinalResponseRouter, FinalWithoutToolsNode, LlmCallNode,
     LlmResultRouter, ReasoningSettings, ToolDepthRouter,

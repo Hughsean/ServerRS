@@ -1,6 +1,6 @@
 use super::{
-    AgentNode, GraphBuildError, GraphCompileError, GraphId, GraphPolicy, NodeId, RouteKey,
-    TransitionRule,
+    AgentNode, GraphBuildError, GraphCompileError, GraphId, GraphPolicy, GraphVersion, NodeId,
+    RouteKey, TransitionRule,
 };
 use crate::domain::agent::AgentBusinessState;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -31,6 +31,7 @@ impl fmt::Display for FragmentExitKey {
 
 pub struct GraphDefinition<B: AgentBusinessState> {
     pub(super) id: GraphId,
+    pub(super) version: GraphVersion,
     pub(super) nodes: BTreeMap<NodeId, Arc<dyn AgentNode<B>>>,
     pub(super) entry: Option<NodeId>,
     pub(super) transitions: BTreeMap<NodeId, TransitionRule<B>>,
@@ -40,8 +41,13 @@ pub struct GraphDefinition<B: AgentBusinessState> {
 
 impl<B: AgentBusinessState> GraphDefinition<B> {
     pub fn new(id: GraphId) -> Self {
+        Self::new_versioned(id, GraphVersion::initial())
+    }
+
+    pub fn new_versioned(id: GraphId, version: GraphVersion) -> Self {
         Self {
             id,
+            version,
             nodes: BTreeMap::new(),
             entry: None,
             transitions: BTreeMap::new(),
@@ -52,6 +58,10 @@ impl<B: AgentBusinessState> GraphDefinition<B> {
 
     pub fn id(&self) -> &GraphId {
         &self.id
+    }
+
+    pub fn version(&self) -> GraphVersion {
+        self.version
     }
 
     pub fn add_node(&mut self, node: Arc<dyn AgentNode<B>>) -> Result<(), GraphBuildError> {
@@ -109,6 +119,7 @@ impl<B: AgentBusinessState> GraphDefinition<B> {
 
         Ok(CompiledGraph {
             id: self.id,
+            version: self.version,
             nodes: self.nodes,
             entry,
             transitions: self.transitions,
@@ -119,6 +130,7 @@ impl<B: AgentBusinessState> GraphDefinition<B> {
 
 pub struct CompiledGraph<B: AgentBusinessState> {
     id: GraphId,
+    version: GraphVersion,
     nodes: BTreeMap<NodeId, Arc<dyn AgentNode<B>>>,
     entry: NodeId,
     transitions: BTreeMap<NodeId, TransitionRule<B>>,
@@ -128,6 +140,10 @@ pub struct CompiledGraph<B: AgentBusinessState> {
 impl<B: AgentBusinessState> CompiledGraph<B> {
     pub fn id(&self) -> &GraphId {
         &self.id
+    }
+
+    pub fn version(&self) -> GraphVersion {
+        self.version
     }
 
     pub fn entry(&self) -> &NodeId {

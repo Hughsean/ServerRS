@@ -360,7 +360,7 @@ mod tests {
         let mut state = state_with_prepared_history();
 
         let result = node.execute(&state, &run_context()).await.unwrap();
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         assert_eq!(state.business().context_version(), Some(17));
         assert_eq!(
@@ -429,7 +429,7 @@ mod tests {
         let node = BuildPromptNode::new(node_id("prompt"), false);
 
         let result = node.execute(&state, &run_context()).await.unwrap();
-        state.apply_updates(result.updates).unwrap();
+        state.apply_updates(result.into_updates()).unwrap();
 
         assert!(matches!(state.messages()[0], AgentMessage::System { .. }));
         assert!(state.messages()[0].content().contains("remember this"));

@@ -1,78 +1,18 @@
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-
 use serde_json::Value;
-use tracing::{debug, trace, warn};
+use tracing::trace;
 
-use super::agent_context::AgentContextBuilder;
-use super::chat_effect::ConversationTurnWriter;
-use super::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
+pub use super::chat_graph::AgentRuntimeSettings;
+use super::chat_graph::ChatAgentGraph;
 use super::chat_state::{ChatTurnState, PersistedTurn as GraphPersistedTurn};
 use super::graph::GraphRunError;
-use super::nodes::DefaultChatContextProvider;
 #[cfg(test)]
 use super::response::{fallback_reply, normalize_final_content};
 pub use super::tool::{
     AgentTool, ToolTrace, is_tool_call_argument_error, normalize_tool_arguments,
 };
-use crate::app::memory::memory_service::MemoryService;
-use crate::domain::agent::{AgentEventRepoT, AgentOutcome, AgentState};
-use crate::domain::conversation::conversation_repo::ConversationRepoT;
-use crate::domain::llm::{ChatMessage, LlmProvider, ReasoningConfig};
-use crate::domain::user::user_context_version::UserContextVersionRepoT;
-use crate::domain::user::user_profile_repo::UserProfileRepoT;
+use crate::domain::agent::{AgentOutcome, AgentState};
+use crate::domain::llm::ChatMessage;
 use crate::shared::error::AppError;
-
-// ── AgentRuntimeSettings ─────────────────────────────────────────────────
-
-/// AgentRuntime配置，派生自 `AppConfig`。
-#[derive(Debug, Clone)]
-pub struct AgentRuntimeSettings {
-    pub agent_enabled: bool,
-    pub memory_enabled: bool,
-    pub rag_enabled: bool,
-    pub summary_enabled: bool,
-    pub max_context_messages: usize,
-    pub max_memory_items: u32,
-    pub max_rag_chunks: u64,
-    pub memory_extraction_async: bool,
-    pub max_tool_depth: usize,
-    pub temperature: f64,
-    pub top_p: f64,
-    pub enable_reasoning: bool,
-}
-
-impl AgentRuntimeSettings {
-    /// 当推理被禁用时返回 `Some(ReasoningConfig { enabled: false })`，
-    /// 当推理启用时返回 `None`（Ollama 默认行为）。发送 `None` 表示
-    /// 序列化后的 JSON 会直接省略 `reasoning` 字段。
-    pub fn reasoning_config(&self) -> Option<ReasoningConfig> {
-        if self.enable_reasoning {
-            None
-        } else {
-            Some(ReasoningConfig { enabled: false })
-        }
-    }
-}
-
-impl Default for AgentRuntimeSettings {
-    fn default() -> Self {
-        Self {
-            agent_enabled: true,
-            memory_enabled: true,
-            rag_enabled: true,
-            summary_enabled: true,
-            max_context_messages: 30,
-            max_memory_items: 10,
-            max_rag_chunks: 5,
-            memory_extraction_async: true,
-            max_tool_depth: 10,
-            temperature: 0.7,
-            top_p: 0.9,
-            enable_reasoning: true,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Agent响应
@@ -97,53 +37,19 @@ pub struct AgentResponse {
 /// HTTP Chat 的兼容门面：把单轮请求交给已编译图执行，并保留记忆提取行为。
 pub struct AgentRuntime {
     chat_graph: ChatAgentGraph,
-    memory_service: Arc<MemoryService>,
-    settings: AgentRuntimeSettings,
-
-    /// 上一次记忆提取失败的时间（失败时的 Instant::now()）。
-    /// 用于在重复失败后对提取操作进行限流。
-    last_extraction_failure: Arc<Mutex<Option<Instant>>>,
+    max_context_messages: usize,
 }
 
 impl AgentRuntime {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        llm: Arc<dyn LlmProvider>,
-        memory_service: Arc<MemoryService>,
-        event_repo: Arc<dyn AgentEventRepoT>,
-        conversation_repo: Arc<dyn ConversationRepoT>,
-        user_profile_repo: Arc<dyn UserProfileRepoT>,
-        context_version_repo: Arc<dyn UserContextVersionRepoT>,
-        context_builder: Arc<AgentContextBuilder>,
-        tools: Vec<Arc<dyn AgentTool>>,
-        settings: AgentRuntimeSettings,
-    ) -> Self {
-        let context_provider = Arc::new(DefaultChatContextProvider::new(
-            Arc::clone(&context_version_repo),
-            Arc::clone(&user_profile_repo),
-            Arc::clone(&context_builder),
-        ));
-        let turn_writer = Arc::new(ConversationTurnWriter::new(Arc::clone(&conversation_repo)));
-        let chat_graph = ChatAgentGraph::new(ChatAgentGraphDeps {
-            llm: Arc::clone(&llm),
-            event_repo: Arc::clone(&event_repo),
-            context_provider,
-            turn_writer,
-            tools: tools.clone(),
-            settings: settings.clone(),
-        })
-        .expect("静态 HTTP Chat Agent 图必须能够编译");
-
+    pub fn from_graph(chat_graph: ChatAgentGraph, max_context_messages: usize) -> Self {
         Self {
             chat_graph,
-            memory_service,
-            settings,
-            last_extraction_failure: Arc::new(Mutex::new(None)),
+            max_context_messages,
         }
     }
 
     pub fn max_context_messages(&self) -> usize {
-        self.settings.max_context_messages
+        self.max_context_messages
     }
 
     /// 保持原有公开签名，将单轮编排委托给已编译的 Chat Agent 图。
@@ -156,10 +62,11 @@ impl AgentRuntime {
         location: Option<Value>,
         recent_messages: Vec<ChatMessage>,
     ) -> Result<AgentResponse, AppError> {
+        let user_message_chars = user_message.chars().count();
         let state = build_initial_chat_state(
             user_id,
             conversation_id,
-            user_message.clone(),
+            user_message,
             emotion,
             location,
             recent_messages,
@@ -171,130 +78,14 @@ impl AgentRuntime {
             .map_err(map_graph_run_error)?;
         let completed = map_completed_chat_turn(result.state)?;
 
-        if self.settings.agent_enabled
-            && self.settings.memory_enabled
-            && self.settings.memory_extraction_async
-        {
-            self.spawn_memory_extraction(
-                user_id,
-                conversation_id,
-                completed.memory_source_message_id,
-                &user_message,
-                &completed.response.reply,
-                completed.context_version,
-            );
-        }
-
         trace!(
             conversation_id,
-            user_message_chars = user_message.chars().count(),
+            user_message_chars,
             assistant_reply_chars = completed.response.reply.chars().count(),
             tool_call_count = completed.response.tool_calls.len(),
             "AgentRuntime completed graph-backed respond()"
         );
         Ok(completed.response)
-    }
-
-    /// 即发即忘任务：通过 MemoryService 提取记忆，带重试和限流。
-    fn spawn_memory_extraction(
-        &self,
-        user_id: u64,
-        conversation_id: Option<u64>,
-        source_message_id: u64,
-        user_message: &str,
-        assistant_reply: &str,
-        task_epoch: u64,
-    ) {
-        // 限流：如果上一次提取失败距今不到 30 秒，则跳过本轮
-        {
-            if let Ok(guard) = self.last_extraction_failure.lock() {
-                if let Some(last_fail) = *guard {
-                    if last_fail.elapsed() < std::time::Duration::from_secs(30) {
-                        debug!(
-                            user_id,
-                            ?conversation_id,
-                            seconds_since_failure = last_fail.elapsed().as_secs(),
-                            "skipping memory extraction (recent failure)"
-                        );
-                        return;
-                    }
-                }
-            }
-        }
-
-        debug!(user_id, ?conversation_id, "启动异步记忆提取");
-
-        let memory_service = Arc::clone(&self.memory_service);
-        let user_text = user_message.to_string();
-        let asst_text = assistant_reply.to_string();
-        let last_failure = Arc::clone(&self.last_extraction_failure);
-
-        tokio::spawn(async move {
-            let messages = vec![
-                crate::domain::llm::ChatMessage {
-                    role: "user".into(),
-                    content: user_text.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                },
-                crate::domain::llm::ChatMessage {
-                    role: "assistant".into(),
-                    content: asst_text.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                },
-            ];
-
-            let Some(cid) = conversation_id else { return };
-
-            // 尝试提取，失败时重试一次
-            let attempt = || async {
-                memory_service
-                    .extract_and_save_at_version(
-                        user_id,
-                        &messages,
-                        cid,
-                        source_message_id,
-                        Some(task_epoch),
-                    )
-                    .await
-            };
-
-            let result = match attempt().await {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    warn!(
-                        user_id,
-                        conversation_id = cid,
-                        error = %e,
-                        "memory extraction failed (will retry once)"
-                    );
-                    // 使用较短退避进行单次重试
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    attempt().await
-                }
-            };
-
-            match result {
-                Ok(memories) => {
-                    let count = memories.len();
-                    debug!(user_id, ?conversation_id, count, "异步记忆提取完成");
-                }
-                Err(e) => {
-                    warn!(
-                        user_id,
-                        conversation_id = cid,
-                        error = %e,
-                        "memory extraction failed after retry"
-                    );
-                    if let Ok(mut guard) = last_failure.lock() {
-                        *guard = Some(std::time::Instant::now());
-                    }
-                }
-            }
-        });
     }
 }
 
@@ -332,8 +123,6 @@ fn map_graph_run_error(error: GraphRunError) -> AppError {
 
 struct CompletedChatTurn {
     response: AgentResponse,
-    memory_source_message_id: u64,
-    context_version: u64,
 }
 
 fn map_completed_chat_turn(
@@ -348,10 +137,6 @@ fn map_completed_chat_turn(
         .business()
         .persisted_turn()
         .ok_or_else(|| AppError::Internal("Agent 图完成时缺少持久化消息 ID".into()))?;
-    let context_version = state
-        .business()
-        .context_version()
-        .ok_or_else(|| AppError::Internal("Agent 图完成时缺少上下文版本".into()))?;
     let tool_calls = state
         .observations()
         .iter()
@@ -371,8 +156,6 @@ fn map_completed_chat_turn(
             user_message_id: Some(user_message_id),
             assistant_message_id: Some(assistant_message_id),
         },
-        memory_source_message_id: user_message_id,
-        context_version,
     })
 }
 
@@ -454,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_graph_state_maps_response_and_memory_metadata() {
+    fn completed_graph_state_maps_response_metadata() {
         let mut business = ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]);
         business
             .apply_update(ChatTurnUpdate::SetContext {
@@ -498,8 +281,6 @@ mod tests {
         assert_eq!(completed.response.user_message_id, Some(101));
         assert_eq!(completed.response.assistant_message_id, Some(102));
         assert_eq!(completed.response.tool_calls[0].tool_name, "clock");
-        assert_eq!(completed.memory_source_message_id, 101);
-        assert_eq!(completed.context_version, 37);
     }
 
     #[test]
