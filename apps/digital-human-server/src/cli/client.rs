@@ -224,10 +224,60 @@ impl ApiClient {
             .await
     }
 
-    pub async fn chat_send(&self, text: &str) -> Result<ChatMessageResponse, CliError> {
+    pub async fn chat_send(&self, text: &str) -> Result<ChatTurnResponse, CliError> {
         let body = serde_json::to_string(&ChatMessageRequest { text: text.into() })?;
         self.request(Method::POST, "/api/v1/chat/messages", Some(body), true)
             .await
+    }
+
+    /// 查询当前用户的待审批列表（非消费式）。
+    pub async fn list_pending_approvals(
+        &self,
+        limit: u32,
+    ) -> Result<PendingApprovalsResponse, CliError> {
+        self.request(
+            Method::GET,
+            &format!("/api/v1/chat/checkpoints/pending?limit={limit}"),
+            None,
+            true,
+        )
+        .await
+    }
+
+    /// 读取当前用户的单个待审批详情（非消费式）。
+    pub async fn get_checkpoint(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<PendingApprovalItem, CliError> {
+        let checkpoint_id = validate_checkpoint_id(checkpoint_id)?;
+        self.request(
+            Method::GET,
+            &format!("/api/v1/chat/checkpoints/{checkpoint_id}"),
+            None,
+            true,
+        )
+        .await
+    }
+
+    /// 批准或拒绝并恢复一个待审批 Checkpoint。
+    pub async fn resume_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        approval_id: &str,
+        decision: &'static str,
+    ) -> Result<ChatTurnResponse, CliError> {
+        let checkpoint_id = validate_checkpoint_id(checkpoint_id)?;
+        let body = serde_json::to_string(&ChatResumeRequest {
+            approval_id: approval_id.into(),
+            decision,
+        })?;
+        self.request(
+            Method::POST,
+            &format!("/api/v1/chat/checkpoints/{checkpoint_id}/resume"),
+            Some(body),
+            true,
+        )
+        .await
     }
 
     pub async fn chat_history(&self, limit: u64) -> Result<ChatHistoryResponse, CliError> {
@@ -281,6 +331,17 @@ impl ApiClient {
         self.request(Method::POST, "/api/v1/chat/persona/reset", None, true)
             .await
     }
+}
+
+/// 校验 checkpoint_id 是合法 UUID，避免把任意用户输入拼进 URL 路径。
+/// UUID 只含十六进制与连字符，本身不需要额外的 URL 编码。
+fn validate_checkpoint_id(checkpoint_id: &str) -> Result<&str, CliError> {
+    uuid::Uuid::parse_str(checkpoint_id.trim())
+        .map_err(|_| CliError::Api {
+            status: 400,
+            msg: "checkpoint_id 必须是合法的 UUID".into(),
+        })
+        .map(|_| checkpoint_id.trim())
 }
 
 #[cfg(test)]

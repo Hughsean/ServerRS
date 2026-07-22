@@ -10,7 +10,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::app::agent::chat_state::ChatTurnState;
 use crate::app::agent::graph::CheckpointStore;
-use crate::domain::agent::AgentEventRepoT;
+use crate::domain::agent::{AgentEventRepoT, ChatApprovalAuditT, ChatApprovalQueryT};
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::domain::community::CommunityRepoT;
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
@@ -29,7 +29,7 @@ use crate::domain::user::user_context_version::UserContextVersionRepoT;
 use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::domain::user::user_repo::UserRepoT;
 use crate::domain::vector_index::VectorIndexRepoT;
-use crate::infra::repo::seaorm_impl::agent::AgentEventRepo;
+use crate::infra::repo::seaorm_impl::agent::{AgentEventRepo, ChatApprovalAuditRepo};
 use crate::infra::repo::seaorm_impl::agent_checkpoint::MySqlCheckpointStore;
 use crate::infra::repo::seaorm_impl::community::CommunityRepo;
 use crate::infra::repo::seaorm_impl::conversation::ConversationRepo;
@@ -63,6 +63,8 @@ pub struct RepositorySet {
     pub music_repo: Arc<dyn MusicRepoT>,
     pub community_repo: Arc<dyn CommunityRepoT>,
     pub agent_event_repo: Arc<dyn AgentEventRepoT>,
+    pub chat_approval_query: Arc<dyn ChatApprovalQueryT>,
+    pub chat_approval_audit: Arc<dyn ChatApprovalAuditT>,
     pub stored_object_repo: Arc<dyn StoredObjectRepoT>,
     pub rag_repo: Arc<dyn RAGRepoT>,
     pub memory_repo: Arc<dyn MemoryRepoT>,
@@ -91,6 +93,10 @@ pub fn build_repositories(
         music_repo: Arc::new(MusicRepo::new(db.clone())),
         community_repo: Arc::new(CommunityRepo::new(db.clone())),
         agent_event_repo: Arc::new(AgentEventRepo::new(db.clone())),
+        chat_approval_query: Arc::new(MySqlCheckpointStore::<ChatTurnState>::for_approval_query(
+            db.clone(),
+        )),
+        chat_approval_audit: Arc::new(ChatApprovalAuditRepo::new(db.clone())),
         stored_object_repo: Arc::new(StoredObjectRepo::new(db.clone())),
         rag_repo: Arc::new(RAGRepo::new(db.clone())),
         memory_repo: Arc::new(MemoryRepo::new(db.clone())),

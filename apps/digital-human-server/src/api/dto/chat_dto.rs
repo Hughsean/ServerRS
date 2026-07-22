@@ -86,6 +86,33 @@ pub enum ChatApprovalDecisionRequest {
     Reject,
 }
 
+// ── GET /api/v1/chat/checkpoints/pending ──
+
+#[derive(Debug, Deserialize)]
+pub struct PendingApprovalsQuery {
+    pub conversation_id: Option<u64>,
+    pub limit: Option<u32>,
+}
+
+/// 待审批列表项。只暴露用户做决定所需的最小信息；
+/// 绝不包含完整 Checkpoint payload、消息历史或内部 Trace。
+#[derive(Debug, Serialize)]
+pub struct PendingChatApprovalItem {
+    pub status: &'static str,
+    pub checkpoint_id: String,
+    pub run_id: String,
+    pub conversation_id: u64,
+    pub reason: &'static str,
+    pub created_at: String,
+    pub expires_at: String,
+    pub approval: ChatToolApprovalInfo,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingChatApprovalListResponse {
+    pub items: Vec<PendingChatApprovalItem>,
+}
+
 // ── GET /api/v1/chat/history ──
 
 #[derive(Debug, Deserialize)]

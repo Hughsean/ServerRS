@@ -18,6 +18,7 @@ use crate::app::fresh_context::retrieval::FreshRetrievalService;
 use crate::app::memory::memory_extractor::MemoryExtractor;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::retrieval_service::RetrievalService;
+use crate::app::session::chat_approval_service::ChatApprovalService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::summary::summary_service::SummaryService;
 use crate::domain::fresh_context::FreshContextRepoT;
@@ -129,6 +130,10 @@ pub async fn chat_service_with_time_tool(
         Arc::clone(&memory_service),
         Arc::clone(&repos.context_control_repo),
         None,
+        Arc::new(ChatApprovalService::new(
+            Arc::clone(&repos.chat_approval_query),
+            Arc::clone(&repos.chat_approval_audit),
+        )),
     );
 
     DialogueHarness {
@@ -210,6 +215,10 @@ pub async fn chat_service_with_core_test_tools(
         Arc::clone(&memory_service),
         Arc::clone(&repos.context_control_repo),
         None,
+        Arc::new(ChatApprovalService::new(
+            Arc::clone(&repos.chat_approval_query),
+            Arc::clone(&repos.chat_approval_audit),
+        )),
     );
 
     DialogueHarness {

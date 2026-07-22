@@ -1,6 +1,8 @@
 # Digital Human Agent Checkpoint + Suspend/Resume
 
 > 状态：已接入数字人 HTTP Chat 主链路（2026-07-22）。QQBot 不在本功能范围内。
+> 待审批收件箱（列表/详情/决策审计/CLI）见
+> [digital-human-approval-inbox.md](digital-human-approval-inbox.md)。
 
 ## 业务场景
 
@@ -94,6 +96,31 @@ Checkpoint 都不会再次执行工具。
 TypeScript SDK 的 `chat.sendMessage` 返回 `ChatTurnResponse` 联合类型，并提供
 `chat.resumeCheckpoint(checkpointId, request)`。
 
+## 待审批收件箱
+
+客户端丢失 `202` 响应后，可以重新发现自己的待审批任务：
+
+```http
+GET /api/v1/chat/checkpoints/pending?conversation_id=9&limit=20
+GET /api/v1/chat/checkpoints/{checkpoint_id}
+```
+
+两个端点都必须 Bearer 鉴权且只返回当前用户 pending 且未过期的记录，均为
+非消费式查询：不消费 Checkpoint、不执行工具、不修改运行状态。详情接口对
+其他用户、已过期、已消费或不存在的 Checkpoint 统一返回 `404`。列表只暴露
+最小审批信息（审批 ID、提示、工具调用、过期时间），绝不返回完整 Checkpoint
+payload、消息历史、记忆、画像或内部 Trace。
+
+Resume 成功后会以最佳努力向 `agent_events` 写入
+`event_type = tool_approval_decision` 的审计事件（user_id、conversation_id、
+checkpoint_id、run_id、approval_id、decision），审计失败不影响已完成的
+Resume 结果，也不触发工具重放。
+
+TypeScript SDK 提供 `chat.listPendingApprovals()` 与 `chat.getCheckpoint()`；
+内置 CLI 提供 `/approvals`、`/approve`、`/reject` 命令。完整的权限边界、
+并发语义与 CLI 用法见
+[digital-human-approval-inbox.md](digital-human-approval-inbox.md)。
+
 ## 数据库与部署
 
 新安装的完整结构位于 `database/sql/init.sql`。已有数据库必须先应用：
@@ -108,6 +135,10 @@ database/sql/migrations/20260722_agent_checkpoints.sql
 `user_id`、`conversation_id`、图版本、状态版本、下一节点、状态和过期时间等可校验元数据。
 快照包含对话上下文，属于敏感业务数据，应沿用主数据库的访问控制、备份与静态加密策略。
 新 Checkpoint 保存时会尽力清理已过期记录。
+
+待审批收件箱**不新增表、不修改现有表**：列表/详情复用 `agent_checkpoints` 及其
+`(user_id, status, expires_at)` 索引，审批决策审计复用 `agent_events`，过期判断复用
+`expires_at`，因此无需额外迁移。
 
 ## 跨进程与并发语义
 

@@ -145,6 +145,36 @@ export interface ChatCheckpointResumeRequest {
   decision: 'approve' | 'reject'
 }
 
+/**
+ * 当前用户的待审批 Checkpoint（非消费式读取结果）。
+ *
+ * 只包含用户做决定所需的最小信息；服务器不会通过该结构暴露完整
+ * Checkpoint payload、消息历史、记忆、画像或内部 Trace。
+ */
+export interface PendingChatApproval {
+  status: 'pending'
+  checkpoint_id: string
+  run_id: string
+  conversation_id: number
+  reason: 'approval' | 'external_input' | 'external_event' | 'business'
+  /** RFC3339 时间戳 */
+  created_at: string
+  /** RFC3339 时间戳；过期后 Checkpoint 不再可恢复 */
+  expires_at: string
+  approval: ChatToolApprovalInfo
+}
+
+export interface PendingChatApprovalListResponse {
+  items: PendingChatApproval[]
+}
+
+export interface PendingApprovalQuery {
+  /** 可选会话过滤；服务器端仍强制限定为当前用户 */
+  conversationId?: number
+  /** 默认 20，范围 1..=100 */
+  limit?: number
+}
+
 export interface ChatHistoryQuery {
   before_id?: number
   limit?: number

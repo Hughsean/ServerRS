@@ -111,5 +111,7 @@ pub fn build_session(
         conversation_id,
         personalization_enabled,
         username,
+        pending_approval: None,
+        confirm: Arc::new(commands::stdin_confirm),
     }
 }

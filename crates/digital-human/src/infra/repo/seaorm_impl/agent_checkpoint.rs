@@ -7,14 +7,18 @@ use chrono::{Duration, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    TransactionTrait,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 use tracing::{error, warn};
 
-use crate::domain::agent::CheckpointIdentity;
+use crate::domain::agent::{
+    ChatApprovalPreviewSource, ChatApprovalQueryT, CheckpointIdentity, PendingApprovalPage,
+    PendingChatApproval,
+};
 use crate::infra::repo::entities::agent_checkpoints;
+use crate::shared::error::AppError;
 
 const CHECKPOINT_PENDING: &str = "pending";
 const CHECKPOINT_CONSUMED: &str = "consumed";
@@ -43,6 +47,14 @@ where
             ttl: Duration::seconds(ttl_seconds),
             state: PhantomData,
         }
+    }
+
+    /// 构造仅用于待审批查询的适配器实例。
+    ///
+    /// 查询适配器不会被当作 `CheckpointStore` 使用，TTL 传 0 使误用的
+    /// `save` 立即过期，便于尽早暴露装配错误。
+    pub fn for_approval_query(db: DatabaseConnection) -> Self {
+        Self::new(db, 0)
     }
 
     async fn load_pending<C>(
@@ -230,6 +242,109 @@ fn store_error(operation: &'static str, error: sea_orm::DbErr) -> CheckpointErro
     CheckpointError::StoreUnavailable
 }
 
+#[async_trait]
+impl<B> ChatApprovalQueryT for MySqlCheckpointStore<B>
+where
+    B: AgentBusinessState + CheckpointIdentity + Serialize + DeserializeOwned,
+    B::Effect: AgentEffect<Update = B::Update>,
+    B::SuspendData: ChatApprovalPreviewSource + Serialize + DeserializeOwned,
+    <B::Effect as AgentEffect>::Receipt: Serialize + DeserializeOwned,
+{
+    /// 复用现有 `(user_id, status, expires_at)` 索引的非消费式查询。
+    ///
+    /// 每一行都经过与 `take` 相同的 payload/元数据一致性校验：数据损坏时
+    /// 失败关闭并记录安全日志，绝不返回未经校验的数据。
+    async fn list_pending_approvals(
+        &self,
+        user_id: u64,
+        conversation_id: Option<u64>,
+        limit: u32,
+    ) -> Result<PendingApprovalPage, AppError> {
+        let mut query = agent_checkpoints::Entity::find()
+            .filter(agent_checkpoints::Column::UserId.eq(user_id))
+            .filter(agent_checkpoints::Column::Status.eq(CHECKPOINT_PENDING))
+            .filter(agent_checkpoints::Column::ExpiresAt.gt(Utc::now().naive_utc()));
+        if let Some(conversation_id) = conversation_id {
+            query = query.filter(agent_checkpoints::Column::ConversationId.eq(conversation_id));
+        }
+        let rows = query
+            .order_by_desc(agent_checkpoints::Column::CreatedAt)
+            .order_by_desc(agent_checkpoints::Column::CheckpointId)
+            .limit(u64::from(limit))
+            .all(&self.db)
+            .await
+            .map_err(|error| approval_query_error("list pending approvals", error))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for model in rows {
+            let created_at = model.created_at.and_utc();
+            let expires_at = model.expires_at.and_utc();
+            let checkpoint = Self::decode(model).map_err(approval_data_error)?;
+            // 非工具审批的暂停不属于待审批收件箱，跳过即可；payload 本身已通过校验。
+            if let Some(approval) = checkpoint.suspend().data.approval_preview() {
+                items.push(PendingChatApproval {
+                    checkpoint_id: checkpoint.id(),
+                    run_id: checkpoint.run_id(),
+                    conversation_id: checkpoint.state().business().checkpoint_conversation_id(),
+                    reason: checkpoint.suspend().reason,
+                    created_at,
+                    expires_at,
+                    approval,
+                });
+            }
+        }
+        Ok(PendingApprovalPage { items })
+    }
+
+    async fn get_pending_approval(
+        &self,
+        user_id: u64,
+        checkpoint_id: CheckpointId,
+    ) -> Result<Option<PendingChatApproval>, AppError> {
+        let Some(model) = self
+            .load_pending(&self.db, checkpoint_id)
+            .await
+            .map_err(approval_data_error)?
+        else {
+            return Ok(None);
+        };
+        // 其他用户的 Checkpoint 与不存在一样返回 None，避免 ID 枚举。
+        if model.user_id != user_id {
+            return Ok(None);
+        }
+        let created_at = model.created_at.and_utc();
+        let expires_at = model.expires_at.and_utc();
+        let checkpoint = Self::decode(model).map_err(approval_data_error)?;
+        Ok(checkpoint
+            .suspend()
+            .data
+            .approval_preview()
+            .map(|approval| PendingChatApproval {
+                checkpoint_id: checkpoint.id(),
+                run_id: checkpoint.run_id(),
+                conversation_id: checkpoint.state().business().checkpoint_conversation_id(),
+                reason: checkpoint.suspend().reason,
+                created_at,
+                expires_at,
+                approval,
+            }))
+    }
+}
+
+fn approval_query_error(operation: &'static str, error: sea_orm::DbErr) -> AppError {
+    error!(operation, %error, "pending approval query failed");
+    AppError::Infrastructure("Checkpoint Store 暂时不可用".into())
+}
+
+fn approval_data_error(error: CheckpointError) -> AppError {
+    match error {
+        CheckpointError::NotFound { .. } => AppError::NotFound("Checkpoint 不存在或已失效".into()),
+        CheckpointError::Duplicate { .. } | CheckpointError::StoreUnavailable => {
+            AppError::Infrastructure("Checkpoint Store 暂时不可用".into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -243,6 +358,7 @@ mod tests {
     use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
 
     use super::*;
+    use crate::domain::agent::{ChatApprovalPreview, ChatApprovalToolCallPreview};
 
     #[derive(Clone, Serialize, serde::Deserialize)]
     struct TestState {
@@ -264,10 +380,31 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Serialize, serde::Deserialize)]
+    struct TestSuspendData {
+        approval_id: uuid::Uuid,
+        prompt: String,
+        tool_name: String,
+    }
+
+    impl ChatApprovalPreviewSource for TestSuspendData {
+        fn approval_preview(&self) -> Option<ChatApprovalPreview> {
+            Some(ChatApprovalPreview {
+                approval_id: self.approval_id,
+                prompt: self.prompt.clone(),
+                tool_calls: vec![ChatApprovalToolCallPreview {
+                    id: "call-1".into(),
+                    name: self.tool_name.clone(),
+                    arguments: serde_json::json!({"value": 7}),
+                }],
+            })
+        }
+    }
+
     impl AgentBusinessState for TestState {
         type Update = ();
         type Effect = TestEffect;
-        type SuspendData = String;
+        type SuspendData = TestSuspendData;
         type ResumeInput = ();
 
         fn resume_updates(_input: Self::ResumeInput) -> Vec<AgentUpdate<Self::Update>> {
@@ -311,7 +448,14 @@ mod tests {
             },
             vec![NodeId::try_from("reasoning.approval_gate").unwrap()],
             vec![],
-            SuspendRequest::new(SuspendReason::Approval, "approve".into()),
+            SuspendRequest::new(
+                SuspendReason::Approval,
+                TestSuspendData {
+                    approval_id: uuid::Uuid::new_v4(),
+                    prompt: "approve".into(),
+                    tool_name: "controlled_tool".into(),
+                },
+            ),
             RunTrace::default(),
         )
     }
@@ -391,5 +535,137 @@ mod tests {
         let sql = format!("{:?}", log_connection.into_transaction_log());
         assert!(sql.contains("ROLLBACK"), "{sql}");
         assert!(!sql.contains("COMMIT"), "{sql}");
+    }
+
+    #[tokio::test]
+    async fn list_pending_approvals_filters_owner_and_never_consumes() {
+        let checkpoint = checkpoint();
+        let model = checkpoint_model(&checkpoint);
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([[model]])
+            .into_connection();
+        let log_connection = db.clone();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        let page = store
+            .list_pending_approvals(7, Some(9), 20)
+            .await
+            .expect("list pending approvals");
+
+        assert_eq!(page.items.len(), 1);
+        let item = &page.items[0];
+        assert_eq!(item.checkpoint_id, checkpoint.id());
+        assert_eq!(item.run_id, checkpoint.run_id());
+        assert_eq!(item.conversation_id, 9);
+        assert_eq!(item.reason, SuspendReason::Approval);
+        assert_eq!(item.approval.tool_calls[0].name, "controlled_tool");
+
+        let sql = format!("{:?}", log_connection.into_transaction_log());
+        // 归属、状态、过期与会话过滤都必须在 SQL 层完成
+        assert!(sql.contains("`user_id` = ?"), "{sql}");
+        assert!(sql.contains("`status` = ?"), "{sql}");
+        assert!(sql.contains("`expires_at` > ?"), "{sql}");
+        assert!(sql.contains("`conversation_id` = ?"), "{sql}");
+        assert!(sql.contains("LIMIT"), "{sql}");
+        // 稳定排序：created_at DESC, checkpoint_id DESC
+        let order_at = sql.find("ORDER BY").expect("ORDER BY 必须存在");
+        let order_clause = &sql[order_at..];
+        assert!(order_clause.contains("`created_at` DESC"), "{sql}");
+        assert!(order_clause.contains("`checkpoint_id` DESC"), "{sql}");
+        assert!(
+            order_clause.find("`created_at` DESC") < order_clause.find("`checkpoint_id` DESC"),
+            "{sql}"
+        );
+        // 非消费式查询：绝不能出现 UPDATE/DELETE
+        assert!(!sql.contains("UPDATE"), "{sql}");
+        assert!(!sql.contains("DELETE"), "{sql}");
+    }
+
+    #[tokio::test]
+    async fn list_pending_approvals_without_conversation_keeps_owner_scope() {
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([Vec::<agent_checkpoints::Model>::new()])
+            .into_connection();
+        let log_connection = db.clone();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        let page = store.list_pending_approvals(7, None, 5).await.unwrap();
+
+        assert!(page.items.is_empty());
+        let sql = format!("{:?}", log_connection.into_transaction_log());
+        assert!(sql.contains("`user_id` = ?"), "{sql}");
+        assert!(!sql.contains("`conversation_id` = ?"), "{sql}");
+        assert!(sql.contains("ORDER BY"), "{sql}");
+        assert!(sql.contains("DESC"), "{sql}");
+    }
+
+    #[tokio::test]
+    async fn list_pending_approvals_fails_closed_on_corrupted_payload() {
+        let checkpoint = checkpoint();
+        let mut model = checkpoint_model(&checkpoint);
+        // 元数据与 payload 不一致：篡改 run_id 列
+        model.run_id = RunId::new().to_string();
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([[model]])
+            .into_connection();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        let error = store.list_pending_approvals(7, None, 20).await.unwrap_err();
+
+        assert!(matches!(error, AppError::Infrastructure(_)));
+    }
+
+    #[tokio::test]
+    async fn get_pending_approval_returns_the_owner_scoped_row() {
+        let checkpoint = checkpoint();
+        let checkpoint_id = checkpoint.id();
+        let model = checkpoint_model(&checkpoint);
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([[model]])
+            .into_connection();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        let item = store
+            .get_pending_approval(7, checkpoint_id)
+            .await
+            .unwrap()
+            .expect("pending approval exists");
+
+        assert_eq!(item.checkpoint_id, checkpoint_id);
+        assert_eq!(item.approval.prompt, "approve");
+    }
+
+    #[tokio::test]
+    async fn get_pending_approval_hides_other_users_rows() {
+        let checkpoint = checkpoint();
+        let checkpoint_id = checkpoint.id();
+        let model = checkpoint_model(&checkpoint);
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([[model]])
+            .into_connection();
+        let log_connection = db.clone();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        // 行的属主是 7，查询者是 8：必须返回 None 且不得消费
+        let result = store.get_pending_approval(8, checkpoint_id).await.unwrap();
+
+        assert!(result.is_none());
+        let sql = format!("{:?}", log_connection.into_transaction_log());
+        assert!(!sql.contains("UPDATE"), "{sql}");
+    }
+
+    #[tokio::test]
+    async fn get_pending_approval_returns_none_for_missing_rows() {
+        let db = MockDatabase::new(DatabaseBackend::MySql)
+            .append_query_results([Vec::<agent_checkpoints::Model>::new()])
+            .into_connection();
+        let store = MySqlCheckpointStore::<TestState>::for_approval_query(db);
+
+        let result = store
+            .get_pending_approval(7, CheckpointId::new())
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
     }
 }
