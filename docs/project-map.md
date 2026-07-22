@@ -23,7 +23,7 @@
 ## 二、项目长什么样？—— 目录结构总览
 
 ```
-D:\WorkSpace\ServerRS/
+/
 ├── Cargo.toml            # Cargo workspace 与统一依赖版本
 ├── config.toml           # 服务器配置文件（数据库/Ollama/JWT 等）
 ├── .env                  # 环境变量（密钥、数据库密码等）
