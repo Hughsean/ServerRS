@@ -1,8 +1,9 @@
 use crate::AgentToolCall;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A provider-neutral action selected during an Agent run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AgentAction {
     Respond(String),
     UseTool(String, Value),
@@ -11,7 +12,7 @@ pub enum AgentAction {
     Clarify(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentPolicy {
     Normal,
     SafetyBlocked,

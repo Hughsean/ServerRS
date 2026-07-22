@@ -141,8 +141,14 @@ impl AgentNode<ChatTurnState> for BuildContextNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         let turn = state.business();
         if !turn.messages_prepared() {
             return Err(NodeError::new(
@@ -204,8 +210,14 @@ impl AgentNode<ChatTurnState> for BuildPromptNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         if !state.messages().is_empty() {
             return Err(NodeError::new(
                 NodeErrorKind::Invariant,

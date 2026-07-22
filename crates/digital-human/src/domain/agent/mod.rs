@@ -39,7 +39,7 @@ pub struct NewAgentEvent {
 // ── Agent context ──
 
 /// 代理处理单轮所需的所有上下文信息。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentContext {
     pub user_id: u64,
     pub conversation_id: Option<u64>,
@@ -89,6 +89,14 @@ impl ToolDefinition {
 pub trait AgentEventRepoT: Send + Sync {
     /// 持久化新代理事件并返回完整填充的记录。
     async fn log_event(&self, event: NewAgentEvent) -> AgentEvent;
+}
+
+/// 持久化 Checkpoint 的最小归属元数据。
+///
+/// 基础设施适配器只依赖这个领域接口，不需要了解具体应用状态。
+pub trait CheckpointIdentity {
+    fn checkpoint_user_id(&self) -> u64;
+    fn checkpoint_conversation_id(&self) -> u64;
 }
 
 #[cfg(test)]

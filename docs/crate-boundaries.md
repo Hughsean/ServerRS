@@ -1,6 +1,6 @@
 # ServerRS Cargo Workspace 与 crate 边界
 
-> 最后核对：2026-07-21
+> 最后核对：2026-07-22
 
 后端包含 6 个 workspace member：
 
@@ -71,7 +71,12 @@ tokio = { workspace = true, features = ["io-util"] }
 
 ## 数据库和配置
 
-- 此次代码调整不连接、不迁移、不删除 MySQL 实例中的任何表或数据。
+- 代码调整本身不连接、不自动迁移、不删除 MySQL 实例中的任何表或数据。
+- 数字人启用工具审批前，已有数据库需要应用
+  `database/sql/migrations/20260722_agent_checkpoints.sql`；新库的 `init.sql` 已包含
+  `agent_checkpoints`。
+- Checkpoint MySQL 适配器是泛型 infra 实现，只依赖 `agent-core` 与领域层的归属元数据；
+  `ChatTurnState` 在 repository/bootstrap 装配边界绑定，未形成 `infra -> app` 反向依赖。
 - 源码中的 QQ Repository、SeaORM entity 与 `database/sql/QQ_init.sql` 已删除。
 - 物理数据库中可能仍存在的旧 `qq_*` 表暂时保留，但当前代码不会读写它们。
 - 数字人继续读取根目录 `config.toml`/`CONFIG_PATH`。

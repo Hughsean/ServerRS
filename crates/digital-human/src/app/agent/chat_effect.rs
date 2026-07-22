@@ -9,6 +9,7 @@ use crate::domain::conversation::conversation_message::NewConversationMessage;
 use crate::domain::conversation::conversation_repo::ConversationRepoT;
 use crate::shared::error::AppError;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -25,7 +26,7 @@ pub struct PersistTurnEffect {
     pub assistant: NewConversationMessage,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChatEffectReceipt {
     TurnPersisted(PersistedTurn),
     MemoryExtractionDispatched(MemoryExtractionDispatch),

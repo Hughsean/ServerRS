@@ -35,8 +35,14 @@ impl AgentNode<ChatTurnState> for PrepareTurnNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         let turn = state.business();
         let messages = prepare_recent_messages(
             turn.recent_messages().to_vec(),
@@ -73,8 +79,14 @@ impl AgentNode<ChatTurnState> for NormalizeReplyNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         let content = state
             .messages()
             .iter()
@@ -118,8 +130,14 @@ impl AgentNode<ChatTurnState> for ScheduleMemoryExtractionNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         if !self.enabled {
             return Ok(NodeResult::empty());
         }
@@ -172,8 +190,14 @@ impl AgentNode<ChatTurnState> for PersistTurnNode {
         &self,
         state: &AgentState<ChatTurnState>,
         _context: &RunContext,
-    ) -> Result<NodeResult<ChatTurnUpdate, <ChatTurnState as AgentBusinessState>::Effect>, NodeError>
-    {
+    ) -> Result<
+        NodeResult<
+            ChatTurnUpdate,
+            <ChatTurnState as AgentBusinessState>::Effect,
+            <ChatTurnState as AgentBusinessState>::SuspendData,
+        >,
+        NodeError,
+    > {
         let turn = state.business();
         let reply = state
             .outcome()

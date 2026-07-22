@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_checkpoint;
 pub mod community;
 pub mod conversation;
 pub mod conversation_summary;

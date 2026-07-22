@@ -1,9 +1,9 @@
 use crate::app::agent::graph::{
     AgentNode, NodeError, NodeErrorKind, NodeId, NodeResult, RouteKey, Router, RunContext,
-    UsageDelta,
+    SuspendReason, SuspendRequest, UsageDelta,
 };
 use crate::app::agent::message_adapter::chat_message_from_agent;
-use crate::app::agent::reasoning_state::ReasoningState;
+use crate::app::agent::reasoning_state::{ReasoningState, ToolApprovalStatus};
 use crate::app::agent::response::fallback_reply;
 use crate::app::agent::tool::{
     AgentTool, is_tool_call_argument_error, normalize_tool_arguments, truncate_for_event,
@@ -20,6 +20,7 @@ use crate::domain::llm::{
 use crate::shared::error::AppError;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -230,6 +231,62 @@ pub struct ExecuteToolsNode {
     event_repo: Arc<dyn AgentEventRepoT>,
 }
 
+/// 在受控工具真正执行前建立明确的节点边界，并由节点主动请求暂停。
+pub struct ApprovalGateNode {
+    id: NodeId,
+    approval_required_tools: BTreeSet<String>,
+}
+
+impl ApprovalGateNode {
+    pub fn new(id: NodeId, approval_required_tools: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            id,
+            approval_required_tools: approval_required_tools.into_iter().collect(),
+        }
+    }
+}
+
+#[async_trait]
+impl<B: ReasoningState> AgentNode<B> for ApprovalGateNode {
+    fn id(&self) -> &NodeId {
+        &self.id
+    }
+
+    async fn execute(
+        &self,
+        state: &AgentState<B>,
+        _context: &RunContext,
+    ) -> Result<NodeResult<B::Update, B::Effect, B::SuspendData>, NodeError> {
+        let calls = pending_tool_calls(state)?;
+        if !calls
+            .iter()
+            .any(|call| self.approval_required_tools.contains(&call.name))
+        {
+            return Ok(NodeResult::empty());
+        }
+        if state.business().tool_approval_status() != ToolApprovalStatus::NotRequired {
+            return Err(NodeError::new(
+                NodeErrorKind::Invariant,
+                "审批门控节点执行前已经存在工具审批状态",
+            ));
+        }
+        let (update, suspend_data) =
+            state
+                .business()
+                .request_tool_approval(&calls)
+                .ok_or_else(|| {
+                    NodeError::new(NodeErrorKind::Invariant, "业务状态未提供工具审批暂停数据")
+                })?;
+
+        Ok(NodeResult::suspend(
+            vec![AgentUpdate::Business(update)],
+            Vec::new(),
+            UsageDelta::default(),
+            SuspendRequest::new(SuspendReason::Approval, suspend_data),
+        ))
+    }
+}
+
 impl ExecuteToolsNode {
     pub fn new(
         id: NodeId,
@@ -269,23 +326,24 @@ impl<B: ReasoningState> AgentNode<B> for ExecuteToolsNode {
         state: &AgentState<B>,
         context: &RunContext,
     ) -> Result<NodeResult<B::Update, B::Effect, B::SuspendData>, NodeError> {
-        let calls: Vec<AgentToolCall> = state
-            .pending_actions()
-            .iter()
-            .map(|action| match action {
-                AgentAction::CallTool(call) => Ok(call.clone()),
-                _ => Err(NodeError::new(
-                    NodeErrorKind::Invariant,
-                    "工具节点收到非 CallTool 动作",
-                )),
-            })
-            .collect::<Result<_, _>>()?;
+        let calls = pending_tool_calls(state)?;
         if calls.is_empty() {
             return Err(NodeError::new(
                 NodeErrorKind::Invariant,
                 "工具节点没有待执行调用",
             ));
         }
+        let approval_status = state.business().tool_approval_status();
+        if approval_status == ToolApprovalStatus::Pending {
+            return Err(NodeError::new(
+                NodeErrorKind::Invariant,
+                "工具审批尚未完成，禁止执行工具",
+            ));
+        }
+        if approval_status == ToolApprovalStatus::Rejected {
+            return self.reject_tools(state, calls).await;
+        }
+
         let call_count = u32::try_from(calls.len())
             .map_err(|_| NodeError::new(NodeErrorKind::Invariant, "单节点工具调用数量溢出"))?;
         context
@@ -355,16 +413,92 @@ impl<B: ReasoningState> AgentNode<B> for ExecuteToolsNode {
             });
         }
 
+        let mut updates = vec![
+            AgentUpdate::AppendMessages(messages),
+            AgentUpdate::AppendObservations(observations),
+            AgentUpdate::ReplacePendingActions(Vec::new()),
+            AgentUpdate::Business(B::increment_reasoning_tool_depth()),
+        ];
+        if approval_status == ToolApprovalStatus::Approved {
+            let clear = B::clear_tool_approval_update().ok_or_else(|| {
+                NodeError::new(
+                    NodeErrorKind::Invariant,
+                    "业务状态无法清理已经完成的工具审批",
+                )
+            })?;
+            updates.push(AgentUpdate::Business(clear));
+        }
+
+        Ok(NodeResult::new(updates, UsageDelta::default()))
+    }
+}
+
+impl ExecuteToolsNode {
+    async fn reject_tools<B: ReasoningState>(
+        &self,
+        state: &AgentState<B>,
+        calls: Vec<AgentToolCall>,
+    ) -> Result<NodeResult<B::Update, B::Effect, B::SuspendData>, NodeError> {
+        let turn = state.business();
+        let mut messages = Vec::with_capacity(calls.len());
+        let mut observations = Vec::with_capacity(calls.len());
+        for call in calls {
+            let result = "用户拒绝了本次工具执行".to_string();
+            let _ = self
+                .event_repo
+                .log_event(NewAgentEvent {
+                    user_id: turn.reasoning_user_id(),
+                    conversation_id: turn.reasoning_conversation_id(),
+                    event_type: "tool_approval_rejected".into(),
+                    tool_name: Some(call.name.clone()),
+                    payload: serde_json::json!({
+                        "tool": call.name.clone(),
+                        "call_id": call.id.clone(),
+                        "ok": false,
+                    }),
+                })
+                .await;
+            messages.push(AgentMessage::tool(
+                call.id.clone(),
+                call.name.clone(),
+                result.clone(),
+            ));
+            observations.push(AgentObservation {
+                call,
+                result,
+                succeeded: false,
+            });
+        }
+        let clear = B::clear_tool_approval_update().ok_or_else(|| {
+            NodeError::new(NodeErrorKind::Invariant, "业务状态无法清理被拒绝的工具审批")
+        })?;
         Ok(NodeResult::new(
             vec![
                 AgentUpdate::AppendMessages(messages),
                 AgentUpdate::AppendObservations(observations),
                 AgentUpdate::ReplacePendingActions(Vec::new()),
                 AgentUpdate::Business(B::increment_reasoning_tool_depth()),
+                AgentUpdate::Business(clear),
             ],
             UsageDelta::default(),
         ))
     }
+}
+
+fn pending_tool_calls<B: ReasoningState>(
+    state: &AgentState<B>,
+) -> Result<Vec<AgentToolCall>, NodeError> {
+    state
+        .pending_actions()
+        .iter()
+        .map(|action| match action {
+            AgentAction::CallTool(call) => Ok(call.clone()),
+            _ => Err(NodeError::new(
+                NodeErrorKind::Invariant,
+                "工具节点收到非 CallTool 动作",
+            )),
+        })
+        .collect()
 }
 
 pub struct FinalWithoutToolsNode {

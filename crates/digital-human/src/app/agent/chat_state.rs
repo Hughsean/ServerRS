@@ -1,12 +1,57 @@
+use crate::domain::agent::CheckpointIdentity;
 use crate::domain::agent::{AgentBusinessState, AgentContext, AgentStateError};
 use crate::domain::llm::ChatMessage;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::chat_effect::ChatEffect;
-use super::reasoning_state::ReasoningState;
+use super::reasoning_state::{ReasoningState, ToolApprovalStatus};
+
+pub(crate) const CHECKPOINT_OWNER_MISMATCH: &str = "Checkpoint 不属于当前用户";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolApprovalRequest {
+    pub approval_id: Uuid,
+    pub prompt: String,
+    pub tools: Vec<ApprovalToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum ChatSuspendData {
+    ToolApproval(ToolApprovalRequest),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApprovalDecision {
+    Approve,
+    Reject,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatResumeInput {
+    pub user_id: u64,
+    pub approval_id: Uuid,
+    pub decision: ToolApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingToolApproval {
+    request: ToolApprovalRequest,
+    decision: Option<ToolApprovalDecision>,
+}
 
 /// HTTP Chat 图的业务扩展状态。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatTurnState {
     user_id: u64,
     conversation_id: u64,
@@ -19,6 +64,7 @@ pub struct ChatTurnState {
     context_version: Option<u64>,
     tool_depth: usize,
     persisted_turn: Option<PersistedTurn>,
+    pending_tool_approval: Option<PendingToolApproval>,
 }
 
 impl ChatTurnState {
@@ -42,6 +88,7 @@ impl ChatTurnState {
             context_version: None,
             tool_depth: 0,
             persisted_turn: None,
+            pending_tool_approval: None,
         }
     }
 
@@ -88,6 +135,12 @@ impl ChatTurnState {
     pub fn persisted_turn(&self) -> Option<&PersistedTurn> {
         self.persisted_turn.as_ref()
     }
+
+    pub fn pending_tool_approval(&self) -> Option<&ToolApprovalRequest> {
+        self.pending_tool_approval
+            .as_ref()
+            .map(|approval| &approval.request)
+    }
 }
 
 #[derive(Debug)]
@@ -99,18 +152,35 @@ pub enum ChatTurnUpdate {
     },
     IncrementToolDepth,
     SetPersistedTurn(PersistedTurn),
+    SetPendingToolApproval(PendingToolApproval),
+    ResolveToolApproval {
+        user_id: u64,
+        approval_id: Uuid,
+        decision: ToolApprovalDecision,
+    },
+    ClearToolApproval,
 }
 
 impl AgentBusinessState for ChatTurnState {
     type Update = ChatTurnUpdate;
     type Effect = ChatEffect;
-    type SuspendData = ();
-    type ResumeInput = ();
+    type SuspendData = ChatSuspendData;
+    type ResumeInput = ChatResumeInput;
+
+    fn state_schema_version() -> crate::domain::agent::StateSchemaVersion {
+        crate::domain::agent::StateSchemaVersion::try_from(2).expect("static schema version")
+    }
 
     fn resume_updates(
-        _input: Self::ResumeInput,
+        input: Self::ResumeInput,
     ) -> Vec<crate::domain::agent::AgentUpdate<Self::Update>> {
-        Vec::new()
+        vec![crate::domain::agent::AgentUpdate::Business(
+            ChatTurnUpdate::ResolveToolApproval {
+                user_id: input.user_id,
+                approval_id: input.approval_id,
+                decision: input.decision,
+            },
+        )]
     }
 
     fn apply_update(&mut self, update: Self::Update) -> Result<(), AgentStateError> {
@@ -153,6 +223,38 @@ impl AgentBusinessState for ChatTurnState {
                 }
                 self.persisted_turn = Some(persisted);
             }
+            ChatTurnUpdate::SetPendingToolApproval(approval) => {
+                if self.pending_tool_approval.is_some() {
+                    return Err(AgentStateError::Business(
+                        "当前运行已经存在待处理的工具审批".into(),
+                    ));
+                }
+                self.pending_tool_approval = Some(approval);
+            }
+            ChatTurnUpdate::ResolveToolApproval {
+                user_id,
+                approval_id,
+                decision,
+            } => {
+                if user_id != self.user_id {
+                    return Err(AgentStateError::Business(CHECKPOINT_OWNER_MISMATCH.into()));
+                }
+                let approval = self.pending_tool_approval.as_mut().ok_or_else(|| {
+                    AgentStateError::Business("Checkpoint 不包含待处理的工具审批".into())
+                })?;
+                if approval.request.approval_id != approval_id {
+                    return Err(AgentStateError::Business("审批标识不匹配".into()));
+                }
+                if approval.decision.is_some() {
+                    return Err(AgentStateError::Business("工具审批已经处理".into()));
+                }
+                approval.decision = Some(decision);
+            }
+            ChatTurnUpdate::ClearToolApproval => {
+                if self.pending_tool_approval.take().is_none() {
+                    return Err(AgentStateError::Business("当前没有可清理的工具审批".into()));
+                }
+            }
         }
         Ok(())
     }
@@ -178,9 +280,62 @@ impl ReasoningState for ChatTurnState {
     fn increment_reasoning_tool_depth() -> Self::Update {
         ChatTurnUpdate::IncrementToolDepth
     }
+
+    fn request_tool_approval(
+        &self,
+        calls: &[crate::domain::agent::AgentToolCall],
+    ) -> Option<(Self::Update, Self::SuspendData)> {
+        let request = ToolApprovalRequest {
+            approval_id: Uuid::new_v4(),
+            prompt: "模型请求执行受控工具，请确认是否允许。".into(),
+            tools: calls
+                .iter()
+                .map(|call| ApprovalToolCall {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                })
+                .collect(),
+        };
+        let pending = PendingToolApproval {
+            request: request.clone(),
+            decision: None,
+        };
+        Some((
+            ChatTurnUpdate::SetPendingToolApproval(pending),
+            ChatSuspendData::ToolApproval(request),
+        ))
+    }
+
+    fn tool_approval_status(&self) -> ToolApprovalStatus {
+        match self
+            .pending_tool_approval
+            .as_ref()
+            .and_then(|approval| approval.decision)
+        {
+            None if self.pending_tool_approval.is_some() => ToolApprovalStatus::Pending,
+            None => ToolApprovalStatus::NotRequired,
+            Some(ToolApprovalDecision::Approve) => ToolApprovalStatus::Approved,
+            Some(ToolApprovalDecision::Reject) => ToolApprovalStatus::Rejected,
+        }
+    }
+
+    fn clear_tool_approval_update() -> Option<Self::Update> {
+        Some(ChatTurnUpdate::ClearToolApproval)
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl CheckpointIdentity for ChatTurnState {
+    fn checkpoint_user_id(&self) -> u64 {
+        self.user_id()
+    }
+
+    fn checkpoint_conversation_id(&self) -> u64 {
+        self.conversation_id()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedTurn {
     user_message_id: u64,
     assistant_message_id: u64,

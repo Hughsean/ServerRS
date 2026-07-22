@@ -10,11 +10,12 @@ import type {
   Article,
   AuthUser,
   Category,
+  ChatCheckpointResumeRequest,
   ChatHistoryResponse,
-  ChatMessageResponse,
   ChatMemoryResponse,
   ChatOpenResponse,
   ChatPersonaResponse,
+  ChatTurnResponse,
   CommunityComment,
   CommunityPage,
   CommunityPost,
@@ -207,8 +208,19 @@ export class ChatApi {
     text: string
     emotion?: string
     location?: Record<string, unknown>
-  }): Promise<ChatMessageResponse> {
+  }): Promise<ChatTurnResponse> {
     return this.http.request('POST', '/api/v1/chat/messages', { body: payload })
+  }
+
+  resumeCheckpoint(
+    checkpointId: string,
+    payload: ChatCheckpointResumeRequest,
+  ): Promise<ChatTurnResponse> {
+    return this.http.request(
+      'POST',
+      `/api/v1/chat/checkpoints/${encodeURIComponent(checkpointId)}/resume`,
+      { body: payload },
+    )
   }
 
   history(query?: { beforeId?: number; limit?: number }): Promise<ChatHistoryResponse> {

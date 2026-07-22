@@ -10,6 +10,6 @@ pub use chat_turn::{
     NormalizeReplyNode, PersistTurnNode, PrepareTurnNode, ScheduleMemoryExtractionNode,
 };
 pub use reasoning::{
-    CompletionNode, ExecuteToolsNode, FinalResponseRouter, FinalWithoutToolsNode, LlmCallNode,
-    LlmResultRouter, ReasoningSettings, ToolDepthRouter,
+    ApprovalGateNode, CompletionNode, ExecuteToolsNode, FinalResponseRouter, FinalWithoutToolsNode,
+    LlmCallNode, LlmResultRouter, ReasoningSettings, ToolDepthRouter,
 };

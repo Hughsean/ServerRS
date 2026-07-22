@@ -1,7 +1,7 @@
 use crate::app::agent::graph::{GraphBuildError, GraphFragment, NodeId, RouteKey, TransitionRule};
 use crate::app::agent::nodes::reasoning::{
-    CompletionNode, ExecuteToolsNode, FinalResponseRouter, FinalWithoutToolsNode, LlmCallNode,
-    LlmResultRouter, ReasoningSettings, ToolDepthRouter,
+    ApprovalGateNode, CompletionNode, ExecuteToolsNode, FinalResponseRouter, FinalWithoutToolsNode,
+    LlmCallNode, LlmResultRouter, ReasoningSettings, ToolDepthRouter,
 };
 use crate::app::agent::reasoning_state::ReasoningState;
 use crate::app::agent::tool::AgentTool;
@@ -15,6 +15,7 @@ pub struct ReasoningLoopDeps {
     pub event_repo: Arc<dyn AgentEventRepoT>,
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub settings: ReasoningSettings,
+    pub approval_required_tools: Vec<String>,
 }
 
 pub fn build_reasoning_loop<B: ReasoningState>(
@@ -41,6 +42,10 @@ pub fn build_reasoning_loop<B: ReasoningState>(
         dependencies.tools,
         dependencies.event_repo,
     )))?;
+    fragment.add_node(Arc::new(ApprovalGateNode::new(
+        node("approval_gate"),
+        dependencies.approval_required_tools,
+    )))?;
     fragment.add_node(Arc::new(FinalWithoutToolsNode::new(
         node("final_without_tools"),
         dependencies.llm,
@@ -54,11 +59,12 @@ pub fn build_reasoning_loop<B: ReasoningState>(
         TransitionRule::Branch {
             router: Arc::new(LlmResultRouter),
             targets: BTreeMap::from([
-                (route("tools_requested"), node("tools")),
+                (route("tools_requested"), node("approval_gate")),
                 (route("final_response"), node("complete")),
             ]),
         },
     )?;
+    fragment.set_transition(node("approval_gate"), TransitionRule::Goto(node("tools")))?;
     fragment.set_transition(
         node("tools"),
         TransitionRule::Branch {
@@ -318,6 +324,7 @@ mod tests {
             event_repo: events.clone(),
             tools,
             settings,
+            approval_required_tools: Vec::new(),
         })
         .unwrap();
 
@@ -432,6 +439,7 @@ mod tests {
                     top_p: 0.8,
                     reasoning: None,
                 },
+                approval_required_tools: Vec::new(),
             })
             .unwrap();
         let mut graph = GraphDefinition::new(GraphId::try_from("alternate-reasoning").unwrap());

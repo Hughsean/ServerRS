@@ -3,8 +3,14 @@ use tracing::trace;
 
 pub use super::chat_graph::AgentRuntimeSettings;
 use super::chat_graph::ChatAgentGraph;
-use super::chat_state::{ChatTurnState, PersistedTurn as GraphPersistedTurn};
-use super::graph::GraphRunError;
+use super::chat_state::{
+    CHECKPOINT_OWNER_MISMATCH, ChatResumeInput, ChatSuspendData, ChatTurnState,
+    PersistedTurn as GraphPersistedTurn,
+};
+use super::graph::{
+    CheckpointError, CheckpointId, CheckpointRunError, GraphExecutionResult, GraphRunError,
+    ResumeError, RunId, SuspendReason,
+};
 #[cfg(test)]
 use super::response::{fallback_reply, normalize_final_content};
 pub use super::tool::{
@@ -28,6 +34,23 @@ pub struct AgentResponse {
     /// 已持久化消息的 ID，在图持久化节点成功后可用。
     pub user_message_id: Option<u64>,
     pub assistant_message_id: Option<u64>,
+    /// 当前轮所属对话；恢复完成后由此发布 TurnClosedEvent。
+    pub conversation_id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentSuspension {
+    pub checkpoint_id: CheckpointId,
+    pub run_id: RunId,
+    pub conversation_id: u64,
+    pub reason: SuspendReason,
+    pub data: ChatSuspendData,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentRunOutcome {
+    Completed(AgentResponse),
+    Suspended(AgentSuspension),
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +110,46 @@ impl AgentRuntime {
         );
         Ok(completed.response)
     }
+
+    /// 运行可暂停的对话图；命中审批门时返回可持久恢复的 Checkpoint。
+    pub async fn respond_checkpointed(
+        &self,
+        user_id: u64,
+        conversation_id: Option<u64>,
+        user_message: String,
+        emotion: Option<String>,
+        location: Option<Value>,
+        recent_messages: Vec<ChatMessage>,
+    ) -> Result<AgentRunOutcome, AppError> {
+        let state = build_initial_chat_state(
+            user_id,
+            conversation_id,
+            user_message,
+            emotion,
+            location,
+            recent_messages,
+        )?;
+        let result = self
+            .chat_graph
+            .run_checkpointed(state)
+            .await
+            .map_err(map_checkpoint_run_error)?;
+        map_agent_run_outcome(result)
+    }
+
+    /// 消费持久化 Checkpoint，并以原 RunId 从暂停点之后继续执行。
+    pub async fn resume(
+        &self,
+        checkpoint_id: CheckpointId,
+        input: ChatResumeInput,
+    ) -> Result<AgentRunOutcome, AppError> {
+        let result = self
+            .chat_graph
+            .resume(checkpoint_id, input)
+            .await
+            .map_err(map_resume_error)?;
+        map_agent_run_outcome(result)
+    }
 }
 
 fn build_initial_chat_state(
@@ -121,6 +184,74 @@ fn map_graph_run_error(error: GraphRunError) -> AppError {
     AppError::Internal(format!("Agent 图运行失败: {error}"))
 }
 
+fn map_checkpoint_run_error(error: CheckpointRunError<ChatTurnState>) -> AppError {
+    match error {
+        CheckpointRunError::Graph(error) => map_graph_run_error(error),
+        CheckpointRunError::MissingStore => {
+            AppError::Internal("Agent 图未配置 Checkpoint Store".into())
+        }
+        CheckpointRunError::SaveFailed { source, .. } => map_checkpoint_store_error(source),
+    }
+}
+
+fn map_resume_error(error: ResumeError<ChatTurnState>) -> AppError {
+    match error {
+        ResumeError::CheckpointLoad { source } => map_checkpoint_load_error(source),
+        ResumeError::GraphIdMismatch { .. }
+        | ResumeError::GraphVersionMismatch { .. }
+        | ResumeError::StateSchemaVersionMismatch { .. }
+        | ResumeError::RunPositionMismatch { .. }
+        | ResumeError::MissingNode { .. } => {
+            AppError::Gone("Checkpoint 与当前 Agent 图版本不兼容".into())
+        }
+        ResumeError::ResumeInputRejected { error } => match error {
+            crate::domain::agent::AgentStateError::Business(message)
+                if message == CHECKPOINT_OWNER_MISMATCH =>
+            {
+                AppError::NotFound("Checkpoint 不存在或已失效".into())
+            }
+            _ => AppError::Conflict("恢复请求与当前暂停状态不匹配".into()),
+        },
+        ResumeError::CheckpointAlreadyConsumed { .. } => {
+            AppError::Conflict("Checkpoint 已被消费".into())
+        }
+        ResumeError::RunFailed { source } => map_checkpoint_run_error(*source),
+    }
+}
+
+fn map_checkpoint_load_error(error: CheckpointError) -> AppError {
+    match error {
+        CheckpointError::NotFound { .. } => AppError::NotFound("Checkpoint 不存在或已失效".into()),
+        CheckpointError::Duplicate { .. } | CheckpointError::StoreUnavailable => {
+            map_checkpoint_store_error(error)
+        }
+    }
+}
+
+fn map_checkpoint_store_error(_error: CheckpointError) -> AppError {
+    AppError::Infrastructure("Checkpoint Store 暂时不可用".into())
+}
+
+fn map_agent_run_outcome(
+    result: GraphExecutionResult<ChatTurnState>,
+) -> Result<AgentRunOutcome, AppError> {
+    match result {
+        GraphExecutionResult::Completed(result) => Ok(AgentRunOutcome::Completed(
+            map_completed_chat_turn(result.state)?.response,
+        )),
+        GraphExecutionResult::Suspended(suspended) => {
+            let checkpoint = suspended.checkpoint();
+            Ok(AgentRunOutcome::Suspended(AgentSuspension {
+                checkpoint_id: checkpoint.id(),
+                run_id: checkpoint.run_id(),
+                conversation_id: checkpoint.state().business().conversation_id(),
+                reason: checkpoint.suspend().reason,
+                data: checkpoint.suspend().data.clone(),
+            }))
+        }
+    }
+}
+
 struct CompletedChatTurn {
     response: AgentResponse,
 }
@@ -148,6 +279,7 @@ fn map_completed_chat_turn(
         .collect();
     let user_message_id = persisted.user_message_id();
     let assistant_message_id = persisted.assistant_message_id();
+    let conversation_id = state.business().conversation_id();
 
     Ok(CompletedChatTurn {
         response: AgentResponse {
@@ -155,6 +287,7 @@ fn map_completed_chat_turn(
             tool_calls,
             user_message_id: Some(user_message_id),
             assistant_message_id: Some(assistant_message_id),
+            conversation_id,
         },
     })
 }
@@ -281,6 +414,7 @@ mod tests {
         assert_eq!(completed.response.reply, "done");
         assert_eq!(completed.response.user_message_id, Some(101));
         assert_eq!(completed.response.assistant_message_id, Some(102));
+        assert_eq!(completed.response.conversation_id, 9);
         assert_eq!(completed.response.tool_calls[0].tool_name, "clock");
     }
 

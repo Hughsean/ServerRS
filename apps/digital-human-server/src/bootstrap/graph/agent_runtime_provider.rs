@@ -7,6 +7,7 @@ use crate::app::agent::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
 use crate::app::agent::memory_extraction::AsyncMemoryExtractionScheduler;
 use crate::app::agent::nodes::DefaultChatContextProvider;
 use crate::app::memory::memory_service::MemoryService;
+use crate::bootstrap::repos::build_chat_checkpoint_store;
 
 use super::BootstrapContext;
 
@@ -27,12 +28,15 @@ pub(crate) fn build_agent_runtime(
         &ctx.repos.conv_repo,
     )));
     let memory_extraction_scheduler = Arc::new(AsyncMemoryExtractionScheduler::new(memory));
+    let checkpoint_store =
+        build_chat_checkpoint_store(&ctx.infra.db, ctx.config.agent.checkpoint_ttl_secs);
     let chat_graph = ChatAgentGraph::new(ChatAgentGraphDeps {
         llm: Arc::clone(&ctx.infra.ollama_provider),
         event_repo: Arc::clone(&ctx.repos.agent_event_repo),
         context_provider,
         turn_writer,
         memory_extraction_scheduler,
+        checkpoint_store,
         tools,
         settings,
     })
@@ -55,5 +59,6 @@ fn agent_runtime_settings(ctx: &BootstrapContext<'_>) -> AgentRuntimeSettings {
         temperature: ctx.config.llm.temperature,
         top_p: ctx.config.llm.top_p,
         enable_reasoning: ctx.config.llm.enable_reasoning,
+        approval_required_tools: ctx.config.agent.approval_required_tools.clone(),
     }
 }

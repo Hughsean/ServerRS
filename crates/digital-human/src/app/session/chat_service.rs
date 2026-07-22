@@ -5,8 +5,11 @@ use dashmap::DashMap;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::app::agent::agent_runtime::ToolTrace;
-use crate::app::agent::agent_runtime::{AgentResponse, AgentRuntime};
+use crate::app::agent::agent_runtime::{
+    AgentResponse, AgentRunOutcome, AgentRuntime, AgentSuspension, ToolTrace,
+};
+use crate::app::agent::chat_state::{ChatResumeInput, ToolApprovalDecision};
+use crate::app::agent::graph::CheckpointId;
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::vector_index_service::VectorIndexService;
 use crate::domain::conversation::conversation::Conversation;
@@ -58,6 +61,12 @@ pub struct ChatTurnResponse {
     pub reply: String,
     pub conversation_id: u64,
     pub tool_calls: Vec<ToolTrace>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ChatTurnOutcome {
+    Completed(ChatTurnResponse),
+    Suspended(AgentSuspension),
 }
 
 impl ChatService {
@@ -126,6 +135,25 @@ impl ChatService {
         emotion: Option<String>,
         location: Option<HashMap<String, Value>>,
     ) -> Result<ChatTurnResponse, AppError> {
+        match self
+            .send_message_checkpointed(user_id, text, emotion, location)
+            .await?
+        {
+            ChatTurnOutcome::Completed(response) => Ok(response),
+            ChatTurnOutcome::Suspended(_) => Err(AppError::Conflict(
+                "该请求已暂停，调用方需要使用 Checkpoint 响应协议".into(),
+            )),
+        }
+    }
+
+    /// 处理支持暂停的用户消息。只有完整结束的轮次才发布 TurnClosedEvent。
+    pub async fn send_message_checkpointed(
+        &self,
+        user_id: u64,
+        text: String,
+        emotion: Option<String>,
+        location: Option<HashMap<String, Value>>,
+    ) -> Result<ChatTurnOutcome, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
@@ -142,10 +170,10 @@ impl ChatService {
         // 并应用最终的上下文长度限制。
         let recent_messages = self.load_recent_chat_messages(conversation_id).await?;
 
-        // 4. 调用 AgentRuntime::respond
-        let response: AgentResponse = self
+        // 4. 调用可持久暂停的 Agent Runtime。
+        let outcome = self
             .agent_runtime
-            .respond(
+            .respond_checkpointed(
                 user_id,
                 Some(conversation_id),
                 text,
@@ -154,6 +182,49 @@ impl ChatService {
                 recent_messages,
             )
             .await?;
+
+        self.map_runtime_outcome(user_id, outcome).await
+    }
+
+    /// 恢复一个待审批的 Chat Checkpoint。
+    pub async fn resume_checkpoint(
+        &self,
+        user_id: u64,
+        checkpoint_id: CheckpointId,
+        approval_id: uuid::Uuid,
+        decision: ToolApprovalDecision,
+    ) -> Result<ChatTurnOutcome, AppError> {
+        let lock = self.user_lock(user_id);
+        let _guard = lock.lock().await;
+        let outcome = self
+            .agent_runtime
+            .resume(
+                checkpoint_id,
+                ChatResumeInput {
+                    user_id,
+                    approval_id,
+                    decision,
+                },
+            )
+            .await?;
+        self.map_runtime_outcome(user_id, outcome).await
+    }
+
+    async fn map_runtime_outcome(
+        &self,
+        user_id: u64,
+        outcome: AgentRunOutcome,
+    ) -> Result<ChatTurnOutcome, AppError> {
+        match outcome {
+            AgentRunOutcome::Completed(response) => Ok(ChatTurnOutcome::Completed(
+                self.complete_turn(user_id, response).await,
+            )),
+            AgentRunOutcome::Suspended(suspension) => Ok(ChatTurnOutcome::Suspended(suspension)),
+        }
+    }
+
+    async fn complete_turn(&self, user_id: u64, response: AgentResponse) -> ChatTurnResponse {
+        let conversation_id = response.conversation_id;
 
         // 5. 发布 TurnClosedEvent，供后处理使用
         let event = TaskEvent::TurnClosed(TurnClosedEvent {
@@ -168,11 +239,11 @@ impl ChatService {
             tracing::warn!(error = %e, "failed to publish TurnClosedEvent");
         }
 
-        Ok(ChatTurnResponse {
+        ChatTurnResponse {
             reply: response.reply,
             conversation_id,
             tool_calls: response.tool_calls,
-        })
+        }
     }
 
     /// 为 admin / lifecycle 操作锁定该用户。

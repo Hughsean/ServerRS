@@ -91,6 +91,12 @@ pub struct AgentConfig {
     pub memory_extraction_async: bool,
     #[serde(default = "default_agent_summary_async")]
     pub summary_async: bool,
+    /// 这些工具在执行前必须由调用方显式批准；空列表保持旧行为。
+    #[serde(default)]
+    pub approval_required_tools: Vec<String>,
+    /// 暂停快照在数据库中的有效期。
+    #[serde(default = "default_agent_checkpoint_ttl_secs")]
+    pub checkpoint_ttl_secs: u64,
 }
 
 impl Default for AgentConfig {
@@ -105,6 +111,8 @@ impl Default for AgentConfig {
             max_rag_chunks: default_agent_max_rag_chunks(),
             memory_extraction_async: default_agent_memory_extraction_async(),
             summary_async: default_agent_summary_async(),
+            approval_required_tools: Vec::new(),
+            checkpoint_ttl_secs: default_agent_checkpoint_ttl_secs(),
         }
     }
 }
@@ -135,6 +143,9 @@ fn default_agent_memory_extraction_async() -> bool {
 }
 fn default_agent_summary_async() -> bool {
     true
+}
+fn default_agent_checkpoint_ttl_secs() -> u64 {
+    86_400
 }
 
 // ── RagConfig ──
@@ -237,4 +248,34 @@ fn default_embedding_batch_size() -> usize {
 }
 fn default_embedding_timeout_secs() -> u64 {
     120
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_suspend_defaults_preserve_automatic_tool_execution() {
+        let config = AgentConfig::default();
+
+        assert!(config.approval_required_tools.is_empty());
+        assert_eq!(config.checkpoint_ttl_secs, 86_400);
+    }
+
+    #[test]
+    fn agent_suspend_fields_deserialize_from_toml() {
+        let config: AgentConfig = toml::from_str(
+            r#"
+                approval_required_tools = ["fetch_web_content", "web_search"]
+                checkpoint_ttl_secs = 3600
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.approval_required_tools,
+            ["fetch_web_content", "web_search"]
+        );
+        assert_eq!(config.checkpoint_ttl_secs, 3_600);
+    }
 }
