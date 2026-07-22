@@ -6,6 +6,7 @@ use crate::app::agent::agent_context::AgentContextBuilder;
 use crate::app::agent::agent_runtime::{AgentRuntime, AgentRuntimeSettings, AgentTool};
 use crate::app::agent::chat_effect::ConversationTurnWriter;
 use crate::app::agent::chat_graph::{ChatAgentGraph, ChatAgentGraphDeps};
+use crate::app::agent::graph::InMemoryCheckpointStore;
 use crate::app::agent::memory_extraction::AsyncMemoryExtractionScheduler;
 use crate::app::agent::nodes::DefaultChatContextProvider;
 use crate::app::agent::tools::get_time_tool::GetTimeTool;
@@ -107,6 +108,7 @@ pub async fn chat_service_with_time_tool(
         temperature: 0.0,
         top_p: 1.0,
         enable_reasoning: false,
+        approval_required_tools: Vec::new(),
     };
 
     let agent_runtime = agent_runtime(
@@ -187,6 +189,7 @@ pub async fn chat_service_with_core_test_tools(
         temperature: 0.0,
         top_p: 1.0,
         enable_reasoning: false,
+        approval_required_tools: Vec::new(),
     };
 
     let agent_runtime = agent_runtime(
@@ -237,6 +240,7 @@ fn agent_runtime(
         context_provider,
         turn_writer,
         memory_extraction_scheduler,
+        checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
         tools,
         settings,
     })

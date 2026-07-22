@@ -26,7 +26,13 @@ const client = createUserClient({
 })
 
 await client.auth.login({ username: 'user', password: 'password123' })
-await client.chat.sendMessage({ text: '你好' })
+const turn = await client.chat.sendMessage({ text: '你好' })
+if ('status' in turn && turn.status === 'suspended') {
+  await client.chat.resumeCheckpoint(turn.checkpoint_id, {
+    approval_id: turn.approval.approval_id,
+    decision: 'approve',
+  })
+}
 await client.diaries.list()
 ```
 

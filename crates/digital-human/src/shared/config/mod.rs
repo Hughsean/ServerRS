@@ -193,6 +193,27 @@ impl AppConfig {
         if self.llm.timeout_secs == 0 {
             return Err("llm.timeout_secs must be greater than zero".into());
         }
+        if self.agent.checkpoint_ttl_secs == 0 || self.agent.checkpoint_ttl_secs > 30 * 24 * 60 * 60
+        {
+            return Err("agent.checkpoint_ttl_secs must be between 1 and 2592000 seconds".into());
+        }
+        let mut approval_tools = BTreeSet::new();
+        for tool in &self.agent.approval_required_tools {
+            let normalized = tool.trim();
+            if normalized.is_empty() {
+                return Err("agent.approval_required_tools cannot contain empty names".into());
+            }
+            if normalized != tool {
+                return Err(
+                    "agent.approval_required_tools names cannot have surrounding whitespace".into(),
+                );
+            }
+            if !approval_tools.insert(normalized) {
+                return Err(format!(
+                    "agent.approval_required_tools contains duplicate tool: {normalized}"
+                ));
+            }
+        }
         validate_required_url(&self.embedding.base_url, "embedding.base_url")?;
         if self.embedding.batch_size == 0 || self.embedding.timeout_secs == 0 {
             return Err(
@@ -421,6 +442,19 @@ impl AppConfig {
         if let Ok(val) = std::env::var("AGENT_HTTP_PROXY") {
             self.plugins.fetch_web_content.proxy_url = val.clone();
             self.plugins.baidu_baike.proxy_url = val;
+        }
+        if let Ok(val) = std::env::var("AGENT_CHECKPOINT_TTL_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.agent.checkpoint_ttl_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("AGENT_APPROVAL_REQUIRED_TOOLS") {
+            self.agent.approval_required_tools = val
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
         }
         if let Ok(val) = std::env::var("JWT_SECRET") {
             if !val.is_empty() {
@@ -845,6 +879,34 @@ mod tests {
 
     fn test_secret() -> String {
         "01234567890123456789012345678901".into()
+    }
+
+    fn config_valid_until_agent_validation() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.jwt.secret = test_secret();
+        config.database.url = "mysql://root:password@127.0.0.1:3306/db".into();
+        config.llm.base_url = "http://127.0.0.1:11434/v1".into();
+        config
+    }
+
+    #[test]
+    fn rejects_checkpoint_ttl_outside_supported_range() {
+        let mut config = config_valid_until_agent_validation();
+        config.agent.checkpoint_ttl_secs = 0;
+
+        let error = config.validate().unwrap_err();
+
+        assert!(error.contains("agent.checkpoint_ttl_secs"));
+    }
+
+    #[test]
+    fn rejects_duplicate_approval_required_tools() {
+        let mut config = config_valid_until_agent_validation();
+        config.agent.approval_required_tools = vec!["web_search".into(), "web_search".into()];
+
+        let error = config.validate().unwrap_err();
+
+        assert!(error.contains("duplicate tool"));
     }
 
     #[test]

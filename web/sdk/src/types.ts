@@ -117,6 +117,34 @@ export interface ChatMessageResponse {
   tool_calls: ChatToolCallItem[]
 }
 
+export interface ChatApprovalToolCallItem {
+  id: string
+  name: string
+  arguments: JsonValue
+}
+
+export interface ChatToolApprovalInfo {
+  approval_id: string
+  prompt: string
+  tool_calls: ChatApprovalToolCallItem[]
+}
+
+export interface ChatSuspendedResponse {
+  status: 'suspended'
+  conversation_id: number
+  checkpoint_id: string
+  run_id: string
+  reason: 'approval' | 'external_input' | 'external_event' | 'business'
+  approval: ChatToolApprovalInfo
+}
+
+export type ChatTurnResponse = ChatMessageResponse | ChatSuspendedResponse
+
+export interface ChatCheckpointResumeRequest {
+  approval_id: string
+  decision: 'approve' | 'reject'
+}
+
 export interface ChatHistoryQuery {
   before_id?: number
   limit?: number

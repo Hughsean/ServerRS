@@ -46,6 +46,46 @@ pub struct ChatToolCallItem {
     pub arguments: serde_json::Value,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ChatSuspendedResponse {
+    pub status: &'static str,
+    pub conversation_id: u64,
+    pub checkpoint_id: String,
+    pub run_id: String,
+    pub reason: &'static str,
+    pub approval: ChatToolApprovalInfo,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatToolApprovalInfo {
+    pub approval_id: String,
+    pub prompt: String,
+    pub tool_calls: Vec<ChatApprovalToolCallItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatApprovalToolCallItem {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+// ── POST /api/v1/chat/checkpoints/{checkpoint_id}/resume ──
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ChatCheckpointResumeRequest {
+    #[validate(length(equal = 36))]
+    pub approval_id: String,
+    pub decision: ChatApprovalDecisionRequest,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatApprovalDecisionRequest {
+    Approve,
+    Reject,
+}
+
 // ── GET /api/v1/chat/history ──
 
 #[derive(Debug, Deserialize)]

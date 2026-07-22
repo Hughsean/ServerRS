@@ -1,6 +1,6 @@
 # ServerRS 项目地图 — 从入门到精通
 
-> **Workspace 路径提示（2026-07-21）**：后端包含 6 个 package。本文后续出现的
+> **Workspace 路径提示（2026-07-22）**：后端包含 6 个 package。本文后续出现的
 > `src/api`、`src/bootstrap` 路径位于 `apps/digital-human-server/src`；数字人
 > `src/app`、`src/domain`、`src/infra` 位于 `crates/digital-human/src`；NapCat
 > 适配器位于 `crates/qqbot/src/napcat`；通用 Agent Runtime 位于
@@ -222,6 +222,7 @@ src/api/
 | PATCH     | /api/v1/users/me               | 改自己信息                       |
 | POST      | /api/v1/chat/open              | 开始聊天                         |
 | POST      | /api/v1/chat/messages          | 发消息给 AI                      |
+| POST      | /api/v1/chat/checkpoints/{checkpoint_id}/resume | 批准或拒绝并恢复暂停的 Agent 运行 |
 | GET       | /api/v1/chat/history           | 看聊天历史                       |
 | GET       | /api/v1/chat/memories          | 看 AI 记住了什么                 |
 | GET       | /api/v1/chat/persona           | 看当前用户画像快照               |
@@ -860,7 +861,7 @@ Dependency direction:
 | `[jwt]`             | secret, access_ttl_secs, refresh_ttl_secs                                                               | CHANGE_ME..., 900, 2592000                                                 | JWT 密钥与 TTL                                                                                                            |
 | `[llm]`             | provider, base_url, chat_model, enable_reasoning, tunnel                                                | openai, 配置段内必填, qwen2.5:14b, true, none                              | 聊天模型；有 tunnel 时 base_url 必须使用 `{ip}` / `{port}` 模板                                                           |
 | `[embedding]`       | provider, base_url, model, dimension, tunnel                                                            | ollama, 配置段内必填, nomic-embed-text, 768, none                          | 向量嵌入；有 tunnel 时 base_url 必须使用 `{ip}` / `{port}` 模板；dimension 会作为 `dimensions` 请求字段                   |
-| `[agent]`           | enabled, memory_enabled, max_context_messages                                                           | false, true, 50                                                            | Agent 开关与上下文窗口                                                                                                    |
+| `[agent]`           | enabled, memory_enabled, max_context_messages, approval_required_tools, checkpoint_ttl_secs              | false, true, 50, [], 86400                                                 | Agent 开关、上下文窗口与工具审批 Checkpoint；详见 [digital-human-suspend-resume.md](digital-human-suspend-resume.md)       |
 | `[qdrant]`          | enabled, url, tunnel, rag/memory/summary collection                                                     | false, 配置段内必填, none, rag_chunks/user_memories/conversation_summaries | 向量数据库；有 tunnel 时 url 必须使用 `{ip}` / `{port}` 模板                                                              |
 | `[web_ingestion]`   | enabled, scheduler_enabled, dispatcher_enabled, outbox_batch_size, dispatcher_parallelism, auto_publish | false, false, false, 20, 1, false                                          | 知识摄入；蒸馏 base_url 有 tunnel 时必须使用 `{ip}` / `{port}` 模板；dispatcher 按 handler 配额领取 outbox 事件并并发处理 |
 | `[tts]`             | provider, api_key, resource_id, model                                                                   | volcengine, "", "", seed-tts-2.0-standard                                  | 语音合成                                                                                                                  |

@@ -1,4 +1,5 @@
 use super::{BudgetResource, GraphRunError, RunId, RunStep};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -21,7 +22,7 @@ impl GraphPolicy {
 }
 
 /// 单次图运行的硬资源限制。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RunBudget {
     max_steps: NonZeroU32,
     max_llm_calls: Option<u32>,
@@ -85,12 +86,12 @@ impl RunBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageDelta {
     pub tokens: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     pub steps: u32,
     pub llm_calls: u32,
@@ -228,7 +229,7 @@ fn check_optional_limit(
     Ok(attempted)
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunTrace {
     pub trace_id: Option<String>,
     pub attributes: BTreeMap<String, String>,

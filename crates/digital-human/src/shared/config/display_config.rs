@@ -67,11 +67,13 @@ impl fmt::Display for AppConfig {
 
         writeln!(
             f,
-            "agent    → enabled={}, memory={}, rag={}, summary={}",
+            "agent    → enabled={}, memory={}, rag={}, summary={}, approval_tools={}, checkpoint_ttl={}s",
             self.agent.enabled,
             self.agent.memory_enabled,
             self.agent.rag_enabled,
-            self.agent.summary_enabled
+            self.agent.summary_enabled,
+            self.agent.approval_required_tools.len(),
+            self.agent.checkpoint_ttl_secs
         )?;
 
         writeln!(

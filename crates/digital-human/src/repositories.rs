@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
+use crate::app::agent::chat_state::ChatTurnState;
+use crate::app::agent::graph::CheckpointStore;
 use crate::domain::agent::AgentEventRepoT;
 use crate::domain::auth::refresh_token_store::RefreshTokenStoreT;
 use crate::domain::community::CommunityRepoT;
@@ -28,6 +30,7 @@ use crate::domain::user::user_profile_repo::UserProfileRepoT;
 use crate::domain::user::user_repo::UserRepoT;
 use crate::domain::vector_index::VectorIndexRepoT;
 use crate::infra::repo::seaorm_impl::agent::AgentEventRepo;
+use crate::infra::repo::seaorm_impl::agent_checkpoint::MySqlCheckpointStore;
 use crate::infra::repo::seaorm_impl::community::CommunityRepo;
 use crate::infra::repo::seaorm_impl::conversation::ConversationRepo;
 use crate::infra::repo::seaorm_impl::conversation_summary::ConversationSummaryRepo;
@@ -108,4 +111,14 @@ pub fn build_fresh_context_repository(db: &DatabaseConnection) -> Arc<dyn FreshC
 
 pub fn build_vector_index_repository(db: &DatabaseConnection) -> Arc<dyn VectorIndexRepoT> {
     Arc::new(VectorIndexRepo::new(db.clone()))
+}
+
+pub fn build_chat_checkpoint_store(
+    db: &DatabaseConnection,
+    ttl_secs: u64,
+) -> Arc<dyn CheckpointStore<ChatTurnState>> {
+    Arc::new(MySqlCheckpointStore::<ChatTurnState>::new(
+        db.clone(),
+        ttl_secs,
+    ))
 }

@@ -2,6 +2,7 @@ use crate::app::memory::memory_service::MemoryService;
 use crate::domain::llm::ChatMessage;
 use crate::shared::error::AppError;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -9,7 +10,7 @@ use tracing::{debug, warn};
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryExtractionRequest {
     pub user_id: u64,
     pub conversation_id: u64,
@@ -19,7 +20,7 @@ pub struct MemoryExtractionRequest {
     pub context_version: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemoryExtractionDispatch {
     Scheduled,
     SkippedRecentFailure,

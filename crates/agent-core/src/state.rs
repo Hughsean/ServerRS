@@ -50,7 +50,8 @@ impl PromptSection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct StateSchemaVersion(NonZeroU32);
 
 impl StateSchemaVersion {
@@ -98,7 +99,8 @@ pub enum AgentStateError {
 }
 
 /// 标准 Agent 状态与类型化业务扩展。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "B: Serialize", deserialize = "B: Deserialize<'de>"))]
 pub struct AgentState<B: AgentBusinessState> {
     messages: Vec<AgentMessage>,
     prompt_sections: Vec<PromptSection>,

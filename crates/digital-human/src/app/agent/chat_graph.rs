@@ -1,8 +1,9 @@
 use crate::app::agent::chat_effect::{ChatEffectExecutor, TurnWriterT};
-use crate::app::agent::chat_state::ChatTurnState;
+use crate::app::agent::chat_state::{ChatResumeInput, ChatTurnState};
 use crate::app::agent::graph::{
-    GraphBuildError, GraphCompileError, GraphDefinition, GraphId, GraphPolicy, GraphRunError,
-    GraphRunResult, GraphRuntime, GraphVersion, NodeId, RunBudget, TransitionRule,
+    CheckpointId, CheckpointRunError, CheckpointStore, GraphBuildError, GraphCompileError,
+    GraphDefinition, GraphExecutionResult, GraphId, GraphPolicy, GraphRunError, GraphRunResult,
+    GraphRuntime, GraphVersion, NodeId, ResumeError, RunBudget, TransitionRule,
 };
 use crate::app::agent::memory_extraction::MemoryExtractionSchedulerT;
 use crate::app::agent::nodes::{
@@ -14,6 +15,7 @@ use crate::app::agent::subgraphs::{ReasoningLoopDeps, build_reasoning_loop};
 use crate::app::agent::tool::AgentTool;
 use crate::domain::agent::{AgentEventRepoT, AgentState, ToolDefinition};
 use crate::domain::llm::{LlmProvider, ReasoningConfig};
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,6 +35,7 @@ pub struct AgentRuntimeSettings {
     pub temperature: f64,
     pub top_p: f64,
     pub enable_reasoning: bool,
+    pub approval_required_tools: Vec<String>,
 }
 
 impl AgentRuntimeSettings {
@@ -63,6 +66,7 @@ impl Default for AgentRuntimeSettings {
             temperature: 0.7,
             top_p: 0.9,
             enable_reasoning: true,
+            approval_required_tools: Vec::new(),
         }
     }
 }
@@ -73,6 +77,7 @@ pub struct ChatAgentGraphDeps {
     pub context_provider: Arc<dyn ChatContextProviderT>,
     pub turn_writer: Arc<dyn TurnWriterT>,
     pub memory_extraction_scheduler: Arc<dyn MemoryExtractionSchedulerT>,
+    pub checkpoint_store: Arc<dyn CheckpointStore<ChatTurnState>>,
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub settings: AgentRuntimeSettings,
 }
@@ -84,6 +89,10 @@ pub struct ChatAgentGraph {
 
 impl ChatAgentGraph {
     pub fn new(dependencies: ChatAgentGraphDeps) -> Result<Self, ChatGraphBuildError> {
+        validate_approval_required_tools(
+            &dependencies.tools,
+            &dependencies.settings.approval_required_tools,
+        )?;
         let effect_executor = Arc::new(ChatEffectExecutor::new(
             Arc::clone(&dependencies.turn_writer),
             Arc::clone(&dependencies.memory_extraction_scheduler),
@@ -118,7 +127,7 @@ impl ChatAgentGraph {
 
         let mut definition = GraphDefinition::new_versioned(
             GraphId::try_from("http_chat_agent").expect("static GraphId"),
-            GraphVersion::try_from(2).expect("static graph version"),
+            GraphVersion::try_from(3).expect("static graph version"),
         );
         definition.add_node(Arc::new(PrepareTurnNode::new(
             node("prepare_turn"),
@@ -147,6 +156,7 @@ impl ChatAgentGraph {
             event_repo: dependencies.event_repo,
             tools: dependencies.tools,
             settings: reasoning_settings,
+            approval_required_tools: dependencies.settings.approval_required_tools,
         })?;
         let mounted = definition.mount("reasoning", reasoning)?;
         definition.connect_exit(
@@ -186,7 +196,8 @@ impl ChatAgentGraph {
             .with_tool_calls(u32::MAX)
             .with_tokens(u64::MAX);
         Ok(Self {
-            runtime: GraphRuntime::with_effect_executor(compiled, effect_executor),
+            runtime: GraphRuntime::with_effect_executor(compiled, effect_executor)
+                .with_checkpoint_store(dependencies.checkpoint_store),
             budget,
         })
     }
@@ -196,6 +207,21 @@ impl ChatAgentGraph {
         state: AgentState<ChatTurnState>,
     ) -> Result<GraphRunResult<ChatTurnState>, GraphRunError> {
         self.runtime.run(state, self.budget).await
+    }
+
+    pub async fn run_checkpointed(
+        &self,
+        state: AgentState<ChatTurnState>,
+    ) -> Result<GraphExecutionResult<ChatTurnState>, CheckpointRunError<ChatTurnState>> {
+        self.runtime.run_checkpointed(state, self.budget).await
+    }
+
+    pub async fn resume(
+        &self,
+        checkpoint_id: CheckpointId,
+        input: ChatResumeInput,
+    ) -> Result<GraphExecutionResult<ChatTurnState>, ResumeError<ChatTurnState>> {
+        self.runtime.resume(checkpoint_id, input).await
     }
 
     pub fn node_ids(&self) -> impl Iterator<Item = &NodeId> {
@@ -210,10 +236,26 @@ impl ChatAgentGraph {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatGraphBuildError {
+    #[error("受控工具未注册: {name}")]
+    UnknownApprovalTool { name: String },
     #[error("构建 Chat Agent 图失败: {0}")]
     Build(#[from] GraphBuildError),
     #[error("编译 Chat Agent 图失败: {0}")]
     Compile(#[from] GraphCompileError),
+}
+
+fn validate_approval_required_tools(
+    tools: &[Arc<dyn AgentTool>],
+    approval_required_tools: &[String],
+) -> Result<(), ChatGraphBuildError> {
+    let registered: BTreeSet<&str> = tools.iter().map(|tool| tool.name()).collect();
+    if let Some(name) = approval_required_tools
+        .iter()
+        .find(|name| !registered.contains(name.as_str()))
+    {
+        return Err(ChatGraphBuildError::UnknownApprovalTool { name: name.clone() });
+    }
+    Ok(())
 }
 
 struct ChatGraphLimits {
@@ -242,21 +284,27 @@ fn node(value: &str) -> NodeId {
 mod tests {
     use super::*;
     use crate::app::agent::chat_effect::TurnWriterT;
-    use crate::app::agent::chat_state::{ChatTurnState, PersistedTurn};
+    use crate::app::agent::chat_state::{
+        ChatResumeInput, ChatSuspendData, ChatTurnState, PersistedTurn, ToolApprovalDecision,
+    };
+    use crate::app::agent::graph::{GraphExecutionResult, InMemoryCheckpointStore, ResumeError};
     use crate::app::agent::memory_extraction::{
         MemoryExtractionDispatch, MemoryExtractionRequest, MemoryExtractionSchedulerT,
     };
     use crate::app::agent::nodes::{ChatContextProviderT, ChatContextRequest, LoadedChatContext};
+    use crate::app::agent::tool::AgentTool;
     use crate::domain::agent::{
         AgentContext, AgentEvent, AgentEventRepoT, AgentOutcome, AgentState, NewAgentEvent,
     };
     use crate::domain::conversation::conversation_message::NewConversationMessage;
     use crate::domain::llm::{
-        ChatCompletionRequest, ChatCompletionResponse, LlmError, LlmProvider, ToolDefinition,
+        ChatCompletionRequest, ChatCompletionResponse, LlmError, LlmProvider, ToolCall,
+        ToolDefinition,
     };
     use crate::shared::error::AppError;
     use async_trait::async_trait;
     use chrono::Utc;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     struct FakeContextProvider;
@@ -338,6 +386,90 @@ mod tests {
         }
     }
 
+    struct ScriptedToolLlm {
+        responses: Mutex<VecDeque<ChatCompletionResponse>>,
+    }
+
+    impl ScriptedToolLlm {
+        fn approval_flow() -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from([
+                    ChatCompletionResponse {
+                        content: String::new(),
+                        tool_calls: vec![ToolCall {
+                            id: "call-approval-1".into(),
+                            name: "controlled_tool".into(),
+                            arguments: serde_json::json!({"value": 7}),
+                        }],
+                        finish_reason: "tool_calls".into(),
+                        usage: None,
+                    },
+                    ChatCompletionResponse {
+                        content: "approval flow complete".into(),
+                        tool_calls: vec![],
+                        finish_reason: "stop".into(),
+                        usage: None,
+                    },
+                ])),
+            }
+        }
+
+        fn next(&self) -> Result<ChatCompletionResponse, LlmError> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::InvalidResponse("script exhausted".into()))
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedToolLlm {
+        async fn chat(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, LlmError> {
+            self.next()
+        }
+
+        async fn chat_with_tools(
+            &self,
+            _request: ChatCompletionRequest,
+            _tools: Vec<ToolDefinition>,
+        ) -> Result<ChatCompletionResponse, LlmError> {
+            self.next()
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingTool {
+        calls: Mutex<Vec<serde_json::Value>>,
+    }
+
+    #[async_trait]
+    impl AgentTool for RecordingTool {
+        fn name(&self) -> &str {
+            "controlled_tool"
+        }
+
+        fn description(&self) -> &str {
+            "test controlled tool"
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _context: &AgentContext,
+            args: serde_json::Value,
+        ) -> Result<String, AppError> {
+            self.calls.lock().unwrap().push(args);
+            Ok("controlled result".into())
+        }
+    }
+
     struct FakeEventRepo;
 
     #[async_trait]
@@ -378,6 +510,7 @@ mod tests {
             temperature: 0.0,
             top_p: 1.0,
             enable_reasoning: false,
+            approval_required_tools: Vec::new(),
         };
         let graph = ChatAgentGraph::new(ChatAgentGraphDeps {
             llm: Arc::new(TextLlm),
@@ -385,11 +518,44 @@ mod tests {
             context_provider: Arc::new(FakeContextProvider),
             turn_writer: writer.clone(),
             memory_extraction_scheduler: memory_scheduler.clone(),
+            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             tools: vec![],
             settings,
         })
         .unwrap();
         (graph, writer, memory_scheduler)
+    }
+
+    fn approval_graph() -> (
+        ChatAgentGraph,
+        Arc<InMemoryCheckpointStore<ChatTurnState>>,
+        Arc<RecordingTool>,
+        Arc<FakeTurnWriter>,
+    ) {
+        let writer = Arc::new(FakeTurnWriter::default());
+        let tool = Arc::new(RecordingTool::default());
+        let checkpoint_store = Arc::new(InMemoryCheckpointStore::new());
+        let settings = AgentRuntimeSettings {
+            approval_required_tools: vec!["controlled_tool".into()],
+            memory_extraction_async: false,
+            max_tool_depth: 2,
+            temperature: 0.0,
+            top_p: 1.0,
+            enable_reasoning: false,
+            ..AgentRuntimeSettings::default()
+        };
+        let graph = ChatAgentGraph::new(ChatAgentGraphDeps {
+            llm: Arc::new(ScriptedToolLlm::approval_flow()),
+            event_repo: Arc::new(FakeEventRepo),
+            context_provider: Arc::new(FakeContextProvider),
+            turn_writer: writer.clone(),
+            memory_extraction_scheduler: Arc::new(RecordingMemoryScheduler::default()),
+            checkpoint_store: checkpoint_store.clone(),
+            tools: vec![tool.clone()],
+            settings,
+        })
+        .unwrap();
+        (graph, checkpoint_store, tool, writer)
     }
 
     #[test]
@@ -405,6 +571,7 @@ mod tests {
                 "normalize_reply",
                 "persist_turn",
                 "prepare_turn",
+                "reasoning.approval_gate",
                 "reasoning.complete",
                 "reasoning.final_without_tools",
                 "reasoning.llm",
@@ -412,7 +579,7 @@ mod tests {
                 "schedule_memory_extraction",
             ]
         );
-        assert_eq!(graph.graph_version().get(), 2);
+        assert_eq!(graph.graph_version().get(), 3);
     }
 
     #[tokio::test]
@@ -460,5 +627,120 @@ mod tests {
             result.visited.last(),
             Some(&node("schedule_memory_extraction"))
         );
+    }
+
+    #[tokio::test]
+    async fn controlled_tool_suspends_before_execution_and_resumes_with_same_run_id() {
+        let (graph, store, tool, writer) = approval_graph();
+        let state = AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
+
+        let suspended = match graph.run_checkpointed(state).await.unwrap() {
+            GraphExecutionResult::Suspended(suspended) => suspended,
+            GraphExecutionResult::Completed(_) => panic!("controlled tool should suspend"),
+        };
+        let checkpoint = suspended.checkpoint();
+        let checkpoint_id = checkpoint.id();
+        let run_id = checkpoint.run_id();
+        let approval_id = match &checkpoint.suspend().data {
+            ChatSuspendData::ToolApproval(request) => {
+                assert_eq!(request.tools.len(), 1);
+                assert_eq!(request.tools[0].name, "controlled_tool");
+                request.approval_id
+            }
+        };
+        assert_eq!(checkpoint.position().next_node(), &node("reasoning.tools"));
+        assert!(tool.calls.lock().unwrap().is_empty());
+        assert_eq!(*writer.calls.lock().unwrap(), 0);
+
+        let wrong_owner = graph
+            .resume(
+                checkpoint_id,
+                ChatResumeInput {
+                    user_id: 8,
+                    approval_id,
+                    decision: ToolApprovalDecision::Approve,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            wrong_owner,
+            ResumeError::ResumeInputRejected { .. }
+        ));
+        assert!(!store.is_empty().unwrap());
+
+        let completed = match graph
+            .resume(
+                checkpoint_id,
+                ChatResumeInput {
+                    user_id: 7,
+                    approval_id,
+                    decision: ToolApprovalDecision::Approve,
+                },
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Completed(completed) => completed,
+            GraphExecutionResult::Suspended(_) => panic!("approval flow should complete"),
+        };
+        assert_eq!(completed.run_id, run_id);
+        assert_eq!(
+            tool.calls.lock().unwrap().as_slice(),
+            &[serde_json::json!({"value": 7})]
+        );
+        assert_eq!(*writer.calls.lock().unwrap(), 1);
+        assert!(store.is_empty().unwrap());
+    }
+
+    #[tokio::test]
+    async fn rejected_tool_resume_never_executes_the_tool() {
+        let (graph, _store, tool, writer) = approval_graph();
+        let state = AgentState::new(ChatTurnState::new(7, 9, "hello".into(), None, None, vec![]));
+        let suspended = match graph.run_checkpointed(state).await.unwrap() {
+            GraphExecutionResult::Suspended(suspended) => suspended,
+            GraphExecutionResult::Completed(_) => panic!("controlled tool should suspend"),
+        };
+        let checkpoint_id = suspended.checkpoint().id();
+        let approval_id = match &suspended.checkpoint().suspend().data {
+            ChatSuspendData::ToolApproval(request) => request.approval_id,
+        };
+
+        let completed = match graph
+            .resume(
+                checkpoint_id,
+                ChatResumeInput {
+                    user_id: 7,
+                    approval_id,
+                    decision: ToolApprovalDecision::Reject,
+                },
+            )
+            .await
+            .unwrap()
+        {
+            GraphExecutionResult::Completed(completed) => completed,
+            GraphExecutionResult::Suspended(_) => panic!("rejected flow should complete"),
+        };
+
+        assert!(tool.calls.lock().unwrap().is_empty());
+        assert_eq!(*writer.calls.lock().unwrap(), 1);
+        assert!(
+            completed.state.observations()[0]
+                .result
+                .contains("用户拒绝")
+        );
+    }
+
+    #[test]
+    fn unknown_approval_tool_is_rejected_during_graph_build() {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![Arc::new(RecordingTool::default())];
+        let configured = vec!["missing_tool".to_string()];
+
+        let result = validate_approval_required_tools(&tools, &configured);
+
+        assert!(matches!(
+            result,
+            Err(ChatGraphBuildError::UnknownApprovalTool { name }) if name == "missing_tool"
+        ));
     }
 }

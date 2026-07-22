@@ -3,11 +3,14 @@ use super::{
     RunStep, RunTrace, UsageSnapshot,
 };
 use crate::{AgentBusinessState, AgentState, AgentStateError, StateSchemaVersion};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::num::NonZeroU32;
+use std::str::FromStr;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct CheckpointId(Uuid);
 
 impl CheckpointId {
@@ -17,6 +20,10 @@ impl CheckpointId {
 
     pub fn as_uuid(&self) -> &Uuid {
         &self.0
+    }
+
+    pub const fn from_uuid(value: Uuid) -> Self {
+        Self(value)
     }
 }
 
@@ -32,7 +39,16 @@ impl Display for CheckpointId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+impl FromStr for CheckpointId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct GraphVersion(NonZeroU32);
 
 impl GraphVersion {
@@ -55,7 +71,8 @@ impl TryFrom<u32> for GraphVersion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SuspendReason {
     ExternalInput,
     Approval,
@@ -63,7 +80,7 @@ pub enum SuspendReason {
     Business,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SuspendRequest<S> {
     pub reason: SuspendReason,
     pub data: S,
@@ -75,7 +92,7 @@ impl<S> SuspendRequest<S> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunPosition {
     completed_step: RunStep,
     next_node: NodeId,
@@ -98,6 +115,11 @@ impl RunPosition {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "B: Serialize, B::SuspendData: Serialize, <B::Effect as AgentEffect>::Receipt: Serialize",
+    deserialize = "B: Deserialize<'de>, B::SuspendData: Deserialize<'de>, <B::Effect as AgentEffect>::Receipt: Deserialize<'de>"
+))]
 pub struct AgentCheckpoint<B>
 where
     B: AgentBusinessState,

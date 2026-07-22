@@ -1,13 +1,18 @@
 use axum::{
     Json,
     extract::{Extension, Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use validator::Validate;
 
 use crate::api::dto::chat_dto::*;
 use crate::api::error::ApiError as AppError;
 use crate::api::state::{ChatState, InternalState};
+use crate::app::agent::chat_state::{ChatSuspendData, ToolApprovalDecision};
+use crate::app::agent::graph::{CheckpointId, SuspendReason};
 use crate::app::auth::auth_service::AuthenticatedUser;
+use crate::app::session::chat_service::{ChatTurnOutcome, ChatTurnResponse};
 
 /// POST /api/v1/chat/open
 pub async fn chat_open(
@@ -33,14 +38,77 @@ pub async fn chat_send_message(
     State(state): State<ChatState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     Json(body): Json<ChatMessageRequest>,
-) -> Result<Json<ChatMessageResponse>, AppError> {
+) -> Result<Response, AppError> {
     // 校验请求参数
     body.validate().map_err(AppError::validation)?;
     let result = state
         .chat
-        .send_message(auth_user.user_id, body.text, body.emotion, body.location)
+        .send_message_checkpointed(auth_user.user_id, body.text, body.emotion, body.location)
         .await?;
-    Ok(Json(ChatMessageResponse {
+    Ok(chat_turn_response(result))
+}
+
+/// POST /api/v1/chat/checkpoints/{checkpoint_id}/resume
+pub async fn chat_resume_checkpoint(
+    State(state): State<ChatState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    Path(checkpoint_id): Path<String>,
+    Json(body): Json<ChatCheckpointResumeRequest>,
+) -> Result<Response, AppError> {
+    body.validate().map_err(AppError::validation)?;
+    let checkpoint_id = checkpoint_id
+        .parse::<CheckpointId>()
+        .map_err(|_| AppError::Validation("checkpoint_id must be a UUID".into()))?;
+    let approval_id = uuid::Uuid::parse_str(&body.approval_id)
+        .map_err(|_| AppError::Validation("approval_id must be a UUID".into()))?;
+    let decision = match body.decision {
+        ChatApprovalDecisionRequest::Approve => ToolApprovalDecision::Approve,
+        ChatApprovalDecisionRequest::Reject => ToolApprovalDecision::Reject,
+    };
+    let result = state
+        .chat
+        .resume_checkpoint(auth_user.user_id, checkpoint_id, approval_id, decision)
+        .await?;
+    Ok(chat_turn_response(result))
+}
+
+fn chat_turn_response(outcome: ChatTurnOutcome) -> Response {
+    match outcome {
+        ChatTurnOutcome::Completed(response) => {
+            (StatusCode::OK, Json(completed_response(response))).into_response()
+        }
+        ChatTurnOutcome::Suspended(suspension) => {
+            let ChatSuspendData::ToolApproval(approval) = suspension.data;
+            (
+                StatusCode::ACCEPTED,
+                Json(ChatSuspendedResponse {
+                    status: "suspended",
+                    conversation_id: suspension.conversation_id,
+                    checkpoint_id: suspension.checkpoint_id.to_string(),
+                    run_id: suspension.run_id.to_string(),
+                    reason: suspend_reason_name(suspension.reason),
+                    approval: ChatToolApprovalInfo {
+                        approval_id: approval.approval_id.to_string(),
+                        prompt: approval.prompt,
+                        tool_calls: approval
+                            .tools
+                            .into_iter()
+                            .map(|tool| ChatApprovalToolCallItem {
+                                id: tool.id,
+                                name: tool.name,
+                                arguments: tool.arguments,
+                            })
+                            .collect(),
+                    },
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+fn completed_response(result: ChatTurnResponse) -> ChatMessageResponse {
+    ChatMessageResponse {
         conversation_id: result.conversation_id,
         reply: result.reply,
         tool_calls: result
@@ -51,7 +119,87 @@ pub async fn chat_send_message(
                 arguments: tool.arguments,
             })
             .collect(),
-    }))
+    }
+}
+
+fn suspend_reason_name(reason: SuspendReason) -> &'static str {
+    match reason {
+        SuspendReason::ExternalInput => "external_input",
+        SuspendReason::Approval => "approval",
+        SuspendReason::ExternalEvent => "external_event",
+        SuspendReason::Business => "business",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::agent::agent_runtime::{AgentSuspension, ToolTrace};
+    use crate::app::agent::chat_state::{ApprovalToolCall, ChatSuspendData, ToolApprovalRequest};
+    use crate::app::agent::graph::RunId;
+
+    #[tokio::test]
+    async fn completed_chat_keeps_the_existing_json_shape() {
+        let response = chat_turn_response(ChatTurnOutcome::Completed(ChatTurnResponse {
+            reply: "done".into(),
+            conversation_id: 9,
+            tool_calls: vec![ToolTrace {
+                tool_name: "clock".into(),
+                arguments: serde_json::json!({"zone": "Asia/Shanghai"}),
+                result: "12:00".into(),
+            }],
+        }));
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "conversation_id": 9,
+                "reply": "done",
+                "tool_calls": [{
+                    "name": "clock",
+                    "arguments": {"zone": "Asia/Shanghai"}
+                }]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn suspended_chat_returns_accepted_with_resume_identifiers() {
+        let checkpoint_id = CheckpointId::new();
+        let run_id = RunId::new();
+        let approval_id = uuid::Uuid::new_v4();
+        let response = chat_turn_response(ChatTurnOutcome::Suspended(AgentSuspension {
+            checkpoint_id,
+            run_id,
+            conversation_id: 9,
+            reason: SuspendReason::Approval,
+            data: ChatSuspendData::ToolApproval(ToolApprovalRequest {
+                approval_id,
+                prompt: "approve".into(),
+                tools: vec![ApprovalToolCall {
+                    id: "call-1".into(),
+                    name: "controlled_tool".into(),
+                    arguments: serde_json::json!({"value": 7}),
+                }],
+            }),
+        }));
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "suspended");
+        assert_eq!(json["checkpoint_id"], checkpoint_id.to_string());
+        assert_eq!(json["run_id"], run_id.to_string());
+        assert_eq!(json["approval"]["approval_id"], approval_id.to_string());
+        assert_eq!(json["approval"]["tool_calls"][0]["name"], "controlled_tool");
+    }
 }
 
 /// GET /api/v1/chat/history

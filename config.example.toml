@@ -115,6 +115,11 @@ max_memory_items = 10
 max_rag_chunks = 5
 memory_extraction_async = true
 summary_async = true
+# 命中这些工具时，Agent 会在实际执行前返回 HTTP 202 等待批准。
+# 空列表保持原有自动执行行为；例如可配置 ["fetch_web_content"]。
+approval_required_tools = []
+# 暂停快照有效期（秒），范围 1..=2592000。
+checkpoint_ttl_secs = 86400
 
 # ── App 层意图路由轻量测试配置 ─────────────────────────────────────────────
 # 用于 cargo test real_env_context_router_routes_lightweight_intent_cases --lib -- --ignored --nocapture

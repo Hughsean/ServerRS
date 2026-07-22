@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -49,7 +50,8 @@ fn validate_id(value: &str, kind: &'static str) -> Result<(), GraphIdError> {
 
 macro_rules! validated_id {
     ($name:ident, $kind:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
         pub struct $name(String);
 
         impl $name {
@@ -102,7 +104,8 @@ validated_id!(GraphId, "GraphId");
 validated_id!(NodeId, "NodeId");
 validated_id!(RouteKey, "RouteKey");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RunId(Uuid);
 
 impl RunId {

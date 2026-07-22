@@ -1,13 +1,15 @@
 use super::{NodeId, RunContext, RunId};
 use crate::AgentUpdate;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RunStep(NonZeroU32);
 
 impl RunStep {
@@ -26,7 +28,7 @@ impl TryFrom<u32> for RunStep {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EffectId {
     run_id: RunId,
     step: RunStep,
@@ -87,7 +89,7 @@ pub struct EffectEnvelope<E> {
     pub effect: E,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectReceipt<R> {
     pub effect_id: EffectId,
     pub value: R,
