@@ -40,6 +40,9 @@ import type {
   MusicTrackPage,
   Paginated,
   PatchMeRequest,
+  PendingChatApproval,
+  PendingChatApprovalListResponse,
+  PendingApprovalQuery,
   PersonaRebuildResponse,
   PersonaResetResponse,
   PsychologyResource,
@@ -220,6 +223,30 @@ export class ChatApi {
       'POST',
       `/api/v1/chat/checkpoints/${encodeURIComponent(checkpointId)}/resume`,
       { body: payload },
+    )
+  }
+
+  /**
+   * 列出当前用户的待审批 Checkpoint（非消费式查询）。
+   *
+   * 页面刷新或客户端重启后，用它重新发现待审批任务；查询不会消费
+   * Checkpoint，也不会触发工具执行。
+   */
+  listPendingApprovals(query?: PendingApprovalQuery): Promise<PendingChatApprovalListResponse> {
+    return this.http.request('GET', '/api/v1/chat/checkpoints/pending', {
+      query: { conversation_id: query?.conversationId, limit: query?.limit },
+    })
+  }
+
+  /**
+   * 读取当前用户的单个待审批 Checkpoint（非消费式查询）。
+   *
+   * 其他用户、已过期、已消费或不存在的 Checkpoint 统一返回 404。
+   */
+  getCheckpoint(checkpointId: string): Promise<PendingChatApproval> {
+    return this.http.request(
+      'GET',
+      `/api/v1/chat/checkpoints/${encodeURIComponent(checkpointId)}`,
     )
   }
 

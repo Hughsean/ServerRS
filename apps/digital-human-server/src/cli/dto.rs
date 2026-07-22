@@ -87,6 +87,72 @@ pub struct ChatToolCallItem {
     pub arguments: serde_json::Value,
 }
 
+// ── 工具审批（202 suspended 与待审批收件箱）──
+
+/// 审批提示信息，与后端 `ChatToolApprovalInfo` 对应。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatToolApprovalInfo {
+    pub approval_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub tool_calls: Vec<ChatApprovalToolCallItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatApprovalToolCallItem {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+}
+
+/// `202 Accepted` 的暂停响应。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatSuspendedResponse {
+    pub status: String,
+    pub conversation_id: u64,
+    pub checkpoint_id: String,
+    pub run_id: String,
+    pub reason: String,
+    pub approval: ChatToolApprovalInfo,
+}
+
+/// 聊天联合响应：正常完成（200）或工具审批暂停（202）。
+///
+/// untagged 区分是安全的：Suspended 必须有 `approval`，Completed 必须有
+/// `reply`，两个形状互不包含。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ChatTurnResponse {
+    Suspended(ChatSuspendedResponse),
+    Completed(ChatMessageResponse),
+}
+
+/// 待审批列表项，与后端 `PendingChatApprovalItem` 对应。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PendingApprovalItem {
+    pub status: String,
+    pub checkpoint_id: String,
+    pub run_id: String,
+    pub conversation_id: u64,
+    pub reason: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub approval: ChatToolApprovalInfo,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PendingApprovalsResponse {
+    pub items: Vec<PendingApprovalItem>,
+}
+
+/// POST /checkpoints/{id}/resume 请求体。
+#[derive(Debug, serde::Serialize)]
+pub struct ChatResumeRequest {
+    pub approval_id: String,
+    pub decision: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatHistoryResponse {
     pub messages: Vec<ChatMessageItem>,
@@ -221,6 +287,93 @@ mod tests {
         let r: ChatMessageResponse = serde_json::from_str(json).unwrap();
         assert_eq!(r.reply, "hi");
         assert!(r.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn chat_turn_response_deserializes_completed() {
+        let json = r#"{"conversation_id":7,"reply":"hi","tool_calls":[{"name":"clock","arguments":{"zone":"Asia/Shanghai"}}]}"#;
+        let turn: ChatTurnResponse = serde_json::from_str(json).unwrap();
+        match turn {
+            ChatTurnResponse::Completed(resp) => {
+                assert_eq!(resp.conversation_id, 7);
+                assert_eq!(resp.reply, "hi");
+                assert_eq!(resp.tool_calls.len(), 1);
+            }
+            ChatTurnResponse::Suspended(_) => panic!("completed JSON 不得解析为 Suspended"),
+        }
+    }
+
+    #[test]
+    fn chat_turn_response_deserializes_suspended() {
+        let json = r#"{
+            "status": "suspended",
+            "conversation_id": 9,
+            "checkpoint_id": "2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760",
+            "run_id": "90b4891f-cf68-4c1a-ad83-32d9d8494d18",
+            "reason": "approval",
+            "approval": {
+                "approval_id": "02f941ab-0fb8-4c44-999c-9ff896ef415a",
+                "prompt": "模型请求执行受控工具，请确认是否允许。",
+                "tool_calls": [
+                    {"id": "call-1", "name": "fetch_web_content", "arguments": {"url": "https://example.com"}}
+                ]
+            }
+        }"#;
+        let turn: ChatTurnResponse = serde_json::from_str(json).unwrap();
+        match turn {
+            ChatTurnResponse::Suspended(resp) => {
+                assert_eq!(resp.status, "suspended");
+                assert_eq!(resp.conversation_id, 9);
+                assert_eq!(resp.checkpoint_id, "2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760");
+                assert_eq!(resp.approval.tool_calls.len(), 1);
+                assert_eq!(resp.approval.tool_calls[0].name, "fetch_web_content");
+            }
+            ChatTurnResponse::Completed(_) => panic!("suspended JSON 不得解析为 Completed"),
+        }
+    }
+
+    #[test]
+    fn pending_approvals_response_deserializes_items() {
+        let json = r#"{
+            "items": [{
+                "status": "pending",
+                "checkpoint_id": "2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760",
+                "run_id": "90b4891f-cf68-4c1a-ad83-32d9d8494d18",
+                "conversation_id": 9,
+                "reason": "approval",
+                "created_at": "2026-07-22T01:00:00+00:00",
+                "expires_at": "2026-07-23T01:00:00+00:00",
+                "approval": {
+                    "approval_id": "02f941ab-0fb8-4c44-999c-9ff896ef415a",
+                    "prompt": "模型请求执行受控工具，请确认是否允许。",
+                    "tool_calls": [
+                        {"id": "call-1", "name": "fetch_web_content", "arguments": {"url": "https://example.com"}}
+                    ]
+                }
+            }]
+        }"#;
+        let resp: PendingApprovalsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.items.len(), 1);
+        let item = &resp.items[0];
+        assert_eq!(item.status, "pending");
+        assert_eq!(item.expires_at, "2026-07-23T01:00:00+00:00");
+        assert_eq!(
+            item.approval.approval_id,
+            "02f941ab-0fb8-4c44-999c-9ff896ef415a"
+        );
+    }
+
+    #[test]
+    fn resume_request_serializes_decision() {
+        let req = ChatResumeRequest {
+            approval_id: "a".into(),
+            decision: "approve",
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"approval_id": "a", "decision": "approve"})
+        );
     }
 
     #[test]

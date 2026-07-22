@@ -145,6 +145,73 @@ pub fn banner(base_url: &str, username: &str, personalization_enabled: bool) -> 
     )
 }
 
+// ── 工具审批收件箱 ──
+
+/// 收到 202 suspended 时的提示。不自动批准,只展示信息并引导用户决策。
+pub fn suspended_notice(item: &PendingApprovalItem) -> String {
+    format!(
+        "{SEP}\n⚠ 助手请求执行受控工具,运行已暂停,等待你的审批\n{}\n使用 /approve 批准执行,或 /reject 拒绝。\n{SEP}",
+        approval_summary(item)
+    )
+}
+
+/// 待审批任务列表。
+pub fn approvals_list(items: &[PendingApprovalItem]) -> String {
+    if items.is_empty() {
+        return "没有待审批的任务。".into();
+    }
+    let mut s = format!("待审批任务 ({}):\n", items.len());
+    for item in items {
+        let tools = item
+            .approval
+            .tool_calls
+            .iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        s.push_str(&format!(
+            "  {} 工具: {} | 过期: {}\n",
+            item.checkpoint_id,
+            tools,
+            short_time(&item.expires_at)
+        ));
+    }
+    s.push_str("使用 /approve <checkpoint_id> 或 /reject <checkpoint_id> 处理。");
+    s
+}
+
+/// 单个待审批任务的工具摘要(批准/拒绝前展示)。
+pub fn approval_summary(item: &PendingApprovalItem) -> String {
+    let mut s = format!(
+        "Checkpoint: {}\n审批提示: {}\n工具调用:",
+        item.checkpoint_id, item.approval.prompt
+    );
+    if item.approval.tool_calls.is_empty() {
+        s.push_str("\n  (无)");
+    }
+    for call in &item.approval.tool_calls {
+        let args = if call.arguments.is_null() {
+            String::new()
+        } else {
+            call.arguments
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| call.arguments.to_string())
+        };
+        s.push_str(&format!("\n  - {}({})", call.name, args));
+    }
+    s.push_str(&format!("\n过期时间: {}", short_time(&item.expires_at)));
+    s
+}
+
+/// RFC3339 时间取前 19 位;空串(202 响应降级)显示未知。
+fn short_time(value: &str) -> String {
+    if value.is_empty() {
+        return "(未知)".into();
+    }
+    value.chars().take(19).collect()
+}
+
 /// 提示符。
 pub fn prompt(personalization_enabled: bool) -> String {
     format!(
@@ -172,6 +239,9 @@ pub fn help() -> String {
   /profile             查询手填画像
   /rebuild             强制重建画像快照并开启个性化
   /reset               重置个性化(需确认)
+  /approvals [limit]   查询当前待审批的工具任务(默认 20)
+  /approve [checkpoint_id]  批准并恢复待审批任务(需确认;缺省用最近一次暂停)
+  /reject [checkpoint_id]   拒绝并恢复待审批任务(需确认;缺省用最近一次暂停)
 直接输入文本即可与助手对话。"
         .to_string()
 }
@@ -302,8 +372,79 @@ mod tests {
             "/profile",
             "/rebuild",
             "/reset",
+            "/approvals",
+            "/approve",
+            "/reject",
         ] {
             assert!(h.contains(cmd), "help 缺少命令 {cmd}");
         }
+    }
+
+    fn pending_item(checkpoint_id: &str, tool: &str) -> PendingApprovalItem {
+        PendingApprovalItem {
+            status: "pending".into(),
+            checkpoint_id: checkpoint_id.into(),
+            run_id: "90b4891f-cf68-4c1a-ad83-32d9d8494d18".into(),
+            conversation_id: 9,
+            reason: "approval".into(),
+            created_at: "2026-07-22T01:00:00+00:00".into(),
+            expires_at: "2026-07-23T01:00:00+00:00".into(),
+            approval: ChatToolApprovalInfo {
+                approval_id: "02f941ab-0fb8-4c44-999c-9ff896ef415a".into(),
+                prompt: "模型请求执行受控工具，请确认是否允许。".into(),
+                tool_calls: vec![ChatApprovalToolCallItem {
+                    id: "call-1".into(),
+                    name: tool.into(),
+                    arguments: serde_json::json!({"url": "https://example.com"}),
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn suspended_notice_shows_checkpoint_tool_and_decision_hint() {
+        let item = pending_item("2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760", "fetch_web_content");
+        let s = suspended_notice(&item);
+
+        assert!(s.contains("2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760"));
+        assert!(s.contains("fetch_web_content"));
+        assert!(s.contains("2026-07-23T01:00:00"));
+        assert!(s.contains("/approve"));
+        assert!(s.contains("/reject"));
+        assert!(s.contains("等待你的审批"));
+    }
+
+    #[test]
+    fn approvals_list_renders_items_and_empty_state() {
+        assert!(approvals_list(&[]).contains("没有待审批"));
+
+        let items = vec![
+            pending_item("2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760", "fetch_web_content"),
+            pending_item("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb", "web_search"),
+        ];
+        let s = approvals_list(&items);
+        assert!(s.contains("待审批任务 (2)"));
+        assert!(s.contains("fetch_web_content"));
+        assert!(s.contains("web_search"));
+        assert!(s.contains("/approve <checkpoint_id>"));
+    }
+
+    #[test]
+    fn approval_summary_formats_tool_arguments() {
+        let item = pending_item("2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760", "fetch_web_content");
+        let s = approval_summary(&item);
+
+        assert!(s.contains("模型请求执行受控工具"));
+        assert!(s.contains(r#"fetch_web_content({"url":"https://example.com"})"#));
+        assert!(s.contains("过期时间: 2026-07-23T01:00:00"));
+    }
+
+    #[test]
+    fn approval_summary_handles_unknown_expiry() {
+        let mut item = pending_item("2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760", "fetch_web_content");
+        item.expires_at = String::new();
+        let s = approval_summary(&item);
+
+        assert!(s.contains("过期时间: (未知)"));
     }
 }

@@ -36,6 +36,40 @@ if ('status' in turn && turn.status === 'suspended') {
 await client.diaries.list()
 ```
 
+### 页面刷新后重新发现待审批任务
+
+`sendMessage` 返回的 `202 suspended` 响应如果因页面刷新、客户端重启或
+网络中断而丢失，可以用 `listPendingApprovals` 重新找回当前用户的待审批
+Checkpoint，再继续批准或拒绝。查询是非消费式的：不会消耗 Checkpoint，
+也不会触发工具执行。
+
+```ts
+// 刷新后重新进入页面：先找回待审批任务
+const { items } = await client.chat.listPendingApprovals({ limit: 20 })
+for (const pending of items) {
+  console.log(pending.checkpoint_id, pending.expires_at, pending.approval.prompt)
+}
+
+// 也可以用 conversationId 过滤某个会话的待审批任务
+const scoped = await client.chat.listPendingApprovals({ conversationId: 9 })
+
+// 用户确认后恢复；approval_id 来自列表/详情，不需要用户手工输入
+const pending = items[0]
+if (pending) {
+  const detail = await client.chat.getCheckpoint(pending.checkpoint_id)
+  const result = await client.chat.resumeCheckpoint(detail.checkpoint_id, {
+    approval_id: detail.approval.approval_id,
+    decision: 'approve', // 或 'reject'
+  })
+  // result 可能是正常回复，也可能是新的 suspended（再次遇到受控工具）
+}
+```
+
+注意：列表/详情只能看到当前登录用户自己的待审批任务；已过期或已被其他
+恢复请求消费的 Checkpoint 会返回 404，此时重新调用
+`listPendingApprovals` 即可拿到最新状态。
+
+
 ```ts
 // 管理员客户端（仅包含管理接口，不暴露聊天/日记等普通 API）
 import { createAdminClient } from '@serverrs/sdk'

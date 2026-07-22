@@ -1,5 +1,7 @@
-use crate::domain::agent::CheckpointIdentity;
-use crate::domain::agent::{AgentBusinessState, AgentContext, AgentStateError};
+use crate::domain::agent::{
+    AgentBusinessState, AgentContext, AgentStateError, ChatApprovalPreview,
+    ChatApprovalPreviewSource, ChatApprovalToolCallPreview, CheckpointIdentity,
+};
 use crate::domain::llm::ChatMessage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -335,6 +337,30 @@ impl CheckpointIdentity for ChatTurnState {
     }
 }
 
+impl ChatApprovalPreviewSource for ChatSuspendData {
+    /// 把暂停数据映射为可安全暴露给当前用户的审批预览。
+    ///
+    /// 预览只含审批 ID、提示文案和工具调用参数；不包含完整 Checkpoint
+    /// payload、消息历史或内部 Trace。
+    fn approval_preview(&self) -> Option<ChatApprovalPreview> {
+        match self {
+            ChatSuspendData::ToolApproval(request) => Some(ChatApprovalPreview {
+                approval_id: request.approval_id,
+                prompt: request.prompt.clone(),
+                tool_calls: request
+                    .tools
+                    .iter()
+                    .map(|tool| ChatApprovalToolCallPreview {
+                        id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        arguments: tool.arguments.clone(),
+                    })
+                    .collect(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedTurn {
     user_message_id: u64,
@@ -445,5 +471,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.recent_messages()[0].content, "hello");
+    }
+
+    #[test]
+    fn tool_approval_suspend_data_exposes_a_safe_preview() {
+        let approval_id = Uuid::new_v4();
+        let data = ChatSuspendData::ToolApproval(ToolApprovalRequest {
+            approval_id,
+            prompt: "模型请求执行受控工具，请确认是否允许。".into(),
+            tools: vec![
+                ApprovalToolCall {
+                    id: "call-1".into(),
+                    name: "fetch_web_content".into(),
+                    arguments: serde_json::json!({"url": "https://example.com"}),
+                },
+                ApprovalToolCall {
+                    id: "call-2".into(),
+                    name: "get_time".into(),
+                    arguments: serde_json::json!({}),
+                },
+            ],
+        });
+
+        let preview = data.approval_preview().expect("tool approval preview");
+
+        assert_eq!(preview.approval_id, approval_id);
+        assert_eq!(preview.prompt, "模型请求执行受控工具，请确认是否允许。");
+        assert_eq!(preview.tool_calls.len(), 2);
+        assert_eq!(preview.tool_calls[0].id, "call-1");
+        assert_eq!(preview.tool_calls[0].name, "fetch_web_content");
+        assert_eq!(
+            preview.tool_calls[0].arguments,
+            serde_json::json!({"url": "https://example.com"})
+        );
+        assert_eq!(preview.tool_calls[1].name, "get_time");
     }
 }

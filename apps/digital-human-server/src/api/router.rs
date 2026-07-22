@@ -16,9 +16,9 @@ use super::handlers::admin_handler::{
 };
 use super::handlers::auth_handler::{health, login, logout, me, refresh_token, register};
 use super::handlers::chat_handler::{
-    chat_disable_memory, chat_forget, chat_history, chat_memories, chat_open, chat_persona,
-    chat_persona_rebuild, chat_persona_reset, chat_resume_checkpoint, chat_send_message,
-    chat_transcript_clear,
+    chat_disable_memory, chat_forget, chat_get_checkpoint, chat_history,
+    chat_list_pending_approvals, chat_memories, chat_open, chat_persona, chat_persona_rebuild,
+    chat_persona_reset, chat_resume_checkpoint, chat_send_message, chat_transcript_clear,
 };
 use super::handlers::community_handler::{
     create_comment, create_post, delete_comment, delete_post, get_post, like_comment, like_post,
@@ -77,6 +77,14 @@ pub fn build_router_with_origins(
         // Chat API (new — sessionless, per-user conversation)
         .route("/api/v1/chat/open", post(chat_open))
         .route("/api/v1/chat/messages", post(chat_send_message))
+        .route(
+            "/api/v1/chat/checkpoints/pending",
+            get(chat_list_pending_approvals),
+        )
+        .route(
+            "/api/v1/chat/checkpoints/{checkpoint_id}",
+            get(chat_get_checkpoint),
+        )
         .route(
             "/api/v1/chat/checkpoints/{checkpoint_id}/resume",
             post(chat_resume_checkpoint),

@@ -13,6 +13,7 @@ use crate::app::agent::chat_state::{ChatSuspendData, ToolApprovalDecision};
 use crate::app::agent::graph::{CheckpointId, SuspendReason};
 use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::app::session::chat_service::{ChatTurnOutcome, ChatTurnResponse};
+use crate::domain::agent::PendingChatApproval;
 
 /// POST /api/v1/chat/open
 pub async fn chat_open(
@@ -70,6 +71,69 @@ pub async fn chat_resume_checkpoint(
         .resume_checkpoint(auth_user.user_id, checkpoint_id, approval_id, decision)
         .await?;
     Ok(chat_turn_response(result))
+}
+
+/// GET /api/v1/chat/checkpoints/pending
+///
+/// 当前用户的待审批列表（非消费式查询）。只返回 pending 且未过期、
+/// 属于当前用户的 Checkpoint；不包含完整 payload 或消息历史。
+pub async fn chat_list_pending_approvals(
+    State(state): State<ChatState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    Query(query): Query<PendingApprovalsQuery>,
+) -> Result<Json<PendingChatApprovalListResponse>, AppError> {
+    let page = state
+        .chat
+        .list_pending_approvals(auth_user.user_id, query.conversation_id, query.limit)
+        .await?;
+    Ok(Json(PendingChatApprovalListResponse {
+        items: page.items.into_iter().map(pending_approval_item).collect(),
+    }))
+}
+
+/// GET /api/v1/chat/checkpoints/{checkpoint_id}
+///
+/// 当前用户的单个待审批详情（非消费式查询）。其他用户、已过期、已消费
+/// 或不存在的 Checkpoint 统一返回 404，避免 ID 枚举。
+pub async fn chat_get_checkpoint(
+    State(state): State<ChatState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    Path(checkpoint_id): Path<String>,
+) -> Result<Json<PendingChatApprovalItem>, AppError> {
+    let checkpoint_id = checkpoint_id
+        .parse::<CheckpointId>()
+        .map_err(|_| AppError::NotFound("Checkpoint 不存在或已失效".into()))?;
+    let pending = state
+        .chat
+        .get_pending_approval(auth_user.user_id, checkpoint_id)
+        .await?;
+    Ok(Json(pending_approval_item(pending)))
+}
+
+fn pending_approval_item(pending: PendingChatApproval) -> PendingChatApprovalItem {
+    PendingChatApprovalItem {
+        status: "pending",
+        checkpoint_id: pending.checkpoint_id.to_string(),
+        run_id: pending.run_id.to_string(),
+        conversation_id: pending.conversation_id,
+        reason: suspend_reason_name(pending.reason),
+        created_at: pending.created_at.to_rfc3339(),
+        expires_at: pending.expires_at.to_rfc3339(),
+        approval: ChatToolApprovalInfo {
+            approval_id: pending.approval.approval_id.to_string(),
+            prompt: pending.approval.prompt,
+            tool_calls: pending
+                .approval
+                .tool_calls
+                .into_iter()
+                .map(|tool| ChatApprovalToolCallItem {
+                    id: tool.id,
+                    name: tool.name,
+                    arguments: tool.arguments,
+                })
+                .collect(),
+        },
+    }
 }
 
 fn chat_turn_response(outcome: ChatTurnOutcome) -> Response {
@@ -137,12 +201,14 @@ mod tests {
     use crate::app::agent::agent_runtime::{AgentSuspension, ToolTrace};
     use crate::app::agent::chat_state::{ApprovalToolCall, ChatSuspendData, ToolApprovalRequest};
     use crate::app::agent::graph::RunId;
+    use crate::domain::agent::{ChatApprovalPreview, ChatApprovalToolCallPreview};
 
     #[tokio::test]
     async fn completed_chat_keeps_the_existing_json_shape() {
         let response = chat_turn_response(ChatTurnOutcome::Completed(ChatTurnResponse {
             reply: "done".into(),
             conversation_id: 9,
+            run_id: RunId::new(),
             tool_calls: vec![ToolTrace {
                 tool_name: "clock".into(),
                 arguments: serde_json::json!({"zone": "Asia/Shanghai"}),
@@ -199,6 +265,75 @@ mod tests {
         assert_eq!(json["run_id"], run_id.to_string());
         assert_eq!(json["approval"]["approval_id"], approval_id.to_string());
         assert_eq!(json["approval"]["tool_calls"][0]["name"], "controlled_tool");
+    }
+
+    fn pending() -> PendingChatApproval {
+        PendingChatApproval {
+            checkpoint_id: CheckpointId::new(),
+            run_id: RunId::new(),
+            conversation_id: 9,
+            reason: SuspendReason::Approval,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-07-22T01:00:00Z")
+                .unwrap()
+                .to_utc(),
+            expires_at: chrono::DateTime::parse_from_rfc3339("2026-07-23T01:00:00Z")
+                .unwrap()
+                .to_utc(),
+            approval: ChatApprovalPreview {
+                approval_id: uuid::Uuid::parse_str("02f941ab-0fb8-4c44-999c-9ff896ef415a").unwrap(),
+                prompt: "模型请求执行受控工具，请确认是否允许。".into(),
+                tool_calls: vec![ChatApprovalToolCallPreview {
+                    id: "call-1".into(),
+                    name: "fetch_web_content".into(),
+                    arguments: serde_json::json!({"url": "https://example.com"}),
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn pending_approval_item_exposes_only_safe_fields() {
+        let item = pending_approval_item(pending());
+        let json = serde_json::to_value(&item).unwrap();
+
+        assert_eq!(json["status"], "pending");
+        assert_eq!(json["conversation_id"], 9);
+        assert_eq!(json["reason"], "approval");
+        assert_eq!(json["created_at"], "2026-07-22T01:00:00+00:00");
+        assert_eq!(json["expires_at"], "2026-07-23T01:00:00+00:00");
+        assert_eq!(
+            json["approval"]["approval_id"],
+            "02f941ab-0fb8-4c44-999c-9ff896ef415a"
+        );
+        assert_eq!(
+            json["approval"]["tool_calls"][0]["arguments"],
+            serde_json::json!({"url": "https://example.com"})
+        );
+        // 安全边界：不得出现完整 Checkpoint payload、消息历史或内部 Trace 字段
+        for forbidden in [
+            "payload",
+            "state",
+            "messages",
+            "recent_messages",
+            "memories",
+            "user_profile",
+            "trace",
+            "effect_receipts",
+            "visited",
+        ] {
+            assert!(json.get(forbidden).is_none(), "响应不得包含 {forbidden}");
+        }
+    }
+
+    #[test]
+    fn pending_approval_list_wraps_items() {
+        let response = PendingChatApprovalListResponse {
+            items: vec![pending_approval_item(pending())],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(json["items"][0]["status"], "pending");
     }
 }
 

@@ -36,6 +36,8 @@ pub struct AgentResponse {
     pub assistant_message_id: Option<u64>,
     /// 当前轮所属对话；恢复完成后由此发布 TurnClosedEvent。
     pub conversation_id: u64,
+    /// 本轮运行的 RunId；恢复完成时保留暂停前的原始 RunId，用于审计关联。
+    pub run_id: RunId,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +101,7 @@ impl AgentRuntime {
             .run(state)
             .await
             .map_err(map_graph_run_error)?;
-        let completed = map_completed_chat_turn(result.state)?;
+        let completed = map_completed_chat_turn(result.state, result.run_id)?;
 
         trace!(
             conversation_id,
@@ -236,9 +238,12 @@ fn map_agent_run_outcome(
     result: GraphExecutionResult<ChatTurnState>,
 ) -> Result<AgentRunOutcome, AppError> {
     match result {
-        GraphExecutionResult::Completed(result) => Ok(AgentRunOutcome::Completed(
-            map_completed_chat_turn(result.state)?.response,
-        )),
+        GraphExecutionResult::Completed(result) => {
+            let run_id = result.run_id;
+            Ok(AgentRunOutcome::Completed(
+                map_completed_chat_turn(result.state, run_id)?.response,
+            ))
+        }
         GraphExecutionResult::Suspended(suspended) => {
             let checkpoint = suspended.checkpoint();
             Ok(AgentRunOutcome::Suspended(AgentSuspension {
@@ -258,6 +263,7 @@ struct CompletedChatTurn {
 
 fn map_completed_chat_turn(
     state: AgentState<ChatTurnState>,
+    run_id: RunId,
 ) -> Result<CompletedChatTurn, AppError> {
     let reply = state
         .outcome()
@@ -288,6 +294,7 @@ fn map_completed_chat_turn(
             user_message_id: Some(user_message_id),
             assistant_message_id: Some(assistant_message_id),
             conversation_id,
+            run_id,
         },
     })
 }
@@ -409,7 +416,7 @@ mod tests {
             ])
             .unwrap();
 
-        let completed = map_completed_chat_turn(state).unwrap();
+        let completed = map_completed_chat_turn(state, RunId::new()).unwrap();
 
         assert_eq!(completed.response.reply, "done");
         assert_eq!(completed.response.user_message_id, Some(101));

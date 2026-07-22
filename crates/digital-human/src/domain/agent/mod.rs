@@ -1,7 +1,15 @@
+mod approval_inbox;
+
 pub use agent_core::{
     AgentAction, AgentBusinessState, AgentMessage, AgentObservation, AgentOutcome, AgentPolicy,
     AgentState, AgentStateError, AgentToolCall, AgentUpdate, PromptSection, PromptSource,
     PromptTrust, StateSchemaVersion,
+};
+pub use approval_inbox::{
+    CHAT_APPROVAL_DECISION_EVENT, ChatApprovalAuditT, ChatApprovalDecision,
+    ChatApprovalDecisionEvent, ChatApprovalPreview, ChatApprovalPreviewSource, ChatApprovalQueryT,
+    ChatApprovalToolCallPreview, PENDING_APPROVAL_DEFAULT_LIMIT, PENDING_APPROVAL_MAX_LIMIT,
+    PendingApprovalPage, PendingChatApproval,
 };
 
 use crate::domain::llm::tools::LlmTool;
