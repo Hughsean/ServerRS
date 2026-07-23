@@ -968,11 +968,13 @@ web/sdk/src/
 NapCat 适配器使用独立配置启动：
 
 ```powershell
-copy apps/qqbot-server/config.example.toml qqbot.toml
+copy apps/qqbot-server/config/qqbot.example.toml apps/qqbot-server/config/qqbot.toml
 cargo run -p qqbot-server
 ```
 
-当前 `qqbot-server` 只接收并记录协议事件元数据，不运行 QQ 业务，也不访问数据库。
+当前 `qqbot-server` 已把 NapCat 群聊、私聊和本人消息映射到个人秘书统一身份边界，但仍不
+回复消息、不持久化正文，也不访问数据库。开发状态和后续规划见
+[`docs/qq-personal-secretary/`](qq-personal-secretary/README.md)。
 
 1.  **访问**：`http://localhost:8080/health`
 

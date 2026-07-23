@@ -39,7 +39,26 @@ pub struct GroupMessageEvent {
     pub at_bot: bool,
     pub time: i64,
     pub sender: Option<SenderInfo>,
+    /// 该消息是否由当前登录的个人 QQ 账号发出。
+    pub is_self: bool,
     /// 保留完整协议载荷，供未来业务按需解析未建模字段。
+    pub raw_event: Value,
+}
+
+/// 已解析但尚未进入任何业务流程的私聊消息事件。
+#[derive(Debug, Clone)]
+pub struct PrivateMessageEvent {
+    pub message_id: String,
+    /// 协议载荷中的发送者 ID。
+    pub user_id: i64,
+    /// 当前个人账号正在与谁对话；对本人发出的消息优先取 target_id。
+    pub peer_id: i64,
+    pub raw_message: String,
+    pub normalized_text: String,
+    pub segments: Vec<MessageSegment>,
+    pub time: i64,
+    pub sender: Option<SenderInfo>,
+    pub is_self: bool,
     pub raw_event: Value,
 }
 
@@ -75,6 +94,7 @@ pub struct PokeEvent {
 #[derive(Debug, Clone)]
 pub enum NapCatEvent {
     GroupMessage(GroupMessageEvent),
+    PrivateMessage(PrivateMessageEvent),
     GroupMemberIncrease(GroupMemberIncreaseEvent),
     GroupMemberDecrease(GroupMemberDecreaseEvent),
     Poke(PokeEvent),
@@ -84,4 +104,10 @@ pub enum NapCatEvent {
 #[async_trait]
 pub trait NapCatEventHandler: Send + Sync {
     async fn handle(&self, event: NapCatEvent) -> Result<(), NapCatError>;
+}
+
+/// 传输层在 WebSocket 握手完成后通知宿主；宿主可在接收事件前持久化连接状态。
+#[async_trait]
+pub trait NapCatConnectionObserver: Send + Sync {
+    async fn connected(&self) -> Result<(), NapCatError>;
 }

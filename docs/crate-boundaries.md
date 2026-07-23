@@ -1,17 +1,18 @@
 # ServerRS Cargo Workspace 与 crate 边界
 
-> 最后核对：2026-07-22
+> 最后核对：2026-07-23
 
-后端包含 6 个 workspace member：
+后端包含 7 个 workspace member：
 
 | package | 路径 | 职责 |
 |---|---|---|
 | `agent-core` | `crates/agent-core` | 通用 Agent Graph、Effect、Checkpoint、Suspend/Resume、状态机 |
 | `ai-core` | `crates/ai-core` | Provider 中立的 LLM、Embedding、TTS 与工具协议 |
 | `digital-human` | `crates/digital-human` | 聊天、记忆、RAG、画像、工具和数字人业务持久化 |
+| `personal-secretary` | `crates/personal-secretary` | 协议无关的个人秘书身份、消息、后续上下文/日程/提醒业务 |
 | `qqbot` | `crates/qqbot` | 仅保留 NapCat/OneBot HTTP、WebSocket、CQ 解析与协议事件接口 |
 | `digital-human-server` | `apps/digital-human-server` | 数字人 Axum API、配置、数据库连接、依赖装配和启动 |
-| `qqbot-server` | `apps/qqbot-server` | NapCat 独立进程、配置、重连、退出与待接入业务回调 |
+| `qqbot-server` | `apps/qqbot-server` | NapCat 独立进程、配置、重连、统一身份映射与后续 Worker 装配 |
 
 ## 依赖方向
 
@@ -24,18 +25,20 @@ agent-core       ai-core
               |
   digital-human-server
 
-qqbot <--- qqbot-server
+qqbot --------------+
+                    +--- qqbot-server
+personal-secretary -+
 ```
 
 - `digital-human -> agent-core, ai-core`
 - `digital-human-server -> agent-core, ai-core, digital-human`
-- `qqbot-server -> qqbot`
+- `qqbot-server -> qqbot, personal-secretary`
 - `qqbot` 不依赖数字人、AI Core、ORM 或数据库驱动
 - 两个应用不互相依赖，也不在同一进程中装配
 
 ## QQBot 当前边界
 
-现阶段 QQBot 业务等待重新设计。`crates/qqbot` 只保留：
+`crates/qqbot` 仍是纯 NapCat 协议适配器，只保留：
 
 - NapCat HTTP API 客户端
 - NapCat 正向 WebSocket 监听器
@@ -43,9 +46,12 @@ qqbot <--- qqbot-server
 - 类型化 `NapCatEvent`
 - 未来业务需要实现的 `NapCatEventHandler`
 
-画像、关系、群记忆、主动回复、Outbox、领域服务、Repository、SeaORM entity 和旧
-QQ 建表 SQL 均不再属于当前代码基线。`qqbot-server` 的占位 handler 只记录事件元数据，
-不会回复消息、写数据库或改变外部状态。
+画像、关系、群记忆、主动回复、Outbox、Repository、SeaORM entity 和旧 QQ 建表 SQL 均不
+属于 `qqbot`。新的 `personal-secretary` 已接管协议无关的身份与消息角色；`qqbot-server`
+只执行 NapCat 到统一信封的映射和元数据观测，尚不会回复消息或写数据库。
+
+QQ 智能秘书的能力审计、Todo 和历史统一维护在
+[`docs/qq-personal-secretary/`](qq-personal-secretary/README.md)。
 
 ## 依赖版本统一
 
@@ -80,8 +86,9 @@ tokio = { workspace = true, features = ["io-util"] }
 - 源码中的 QQ Repository、SeaORM entity 与 `database/sql/QQ_init.sql` 已删除。
 - 物理数据库中可能仍存在的旧 `qq_*` 表暂时保留，但当前代码不会读写它们。
 - 数字人继续读取根目录 `config.toml`/`CONFIG_PATH`。
-- QQBot 独立读取 `qqbot.toml`/`QQBOT_CONFIG_PATH`，配置只包含 NapCat 连接与重连参数，
-  不接受数据库或旧业务配置。
+- QQBot 只读取 `apps/qqbot-server/config/qqbot.toml`/`QQBOT_CONFIG_PATH` 和同目录 `.env`，
+  不读取数字人的根配置、`CONFIG_PATH`、根 `.env` 或 `DATABASE_URL`。QQBot 数据库只使用
+  自己的 `[database]`/`QQBOT_DATABASE_URL`，迁移位于 `apps/qqbot-server/database/`。
 
 ## 验证命令
 
@@ -91,6 +98,7 @@ cargo check -p digital-human-server --no-default-features
 cargo check -p digital-human-server
 cargo check -p qqbot
 cargo check -p qqbot-server
+cargo test -p personal-secretary -p qqbot -p qqbot-server
 cargo test --workspace --all-features --no-fail-fast
 ```
 

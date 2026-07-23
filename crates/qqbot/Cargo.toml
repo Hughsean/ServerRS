@@ -15,4 +15,5 @@ tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tracing.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }

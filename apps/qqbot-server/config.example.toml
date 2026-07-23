@@ -1,7 +1,0 @@
-[napcat]
-ws_url = "ws://127.0.0.1:6700"
-http_base_url = "http://127.0.0.1:3000"
-http_token = ""
-self_qq_id = 123456789
-reconnect_initial_secs = 1
-reconnect_max_secs = 60

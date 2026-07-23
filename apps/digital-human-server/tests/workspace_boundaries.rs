@@ -48,7 +48,7 @@ fn collect_rs_files(path: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn workspace_has_exactly_the_six_intended_members() {
+fn workspace_has_exactly_the_seven_intended_members() {
     let root = manifest("Cargo.toml");
     let members = root["workspace"]["members"]
         .as_array()
@@ -65,6 +65,7 @@ fn workspace_has_exactly_the_six_intended_members() {
             "crates/agent-core".to_owned(),
             "crates/ai-core".to_owned(),
             "crates/digital-human".to_owned(),
+            "crates/personal-secretary".to_owned(),
             "crates/qqbot".to_owned(),
         ])
     );
@@ -73,6 +74,7 @@ fn workspace_has_exactly_the_six_intended_members() {
 #[test]
 fn the_two_applications_have_independent_dependency_graphs() {
     let digital = dependencies(&manifest("crates/digital-human/Cargo.toml"));
+    let personal_secretary = dependencies(&manifest("crates/personal-secretary/Cargo.toml"));
     let qq = dependencies(&manifest("crates/qqbot/Cargo.toml"));
     let digital_server = dependencies(&manifest("apps/digital-human-server/Cargo.toml"));
     let qq_server = dependencies(&manifest("apps/qqbot-server/Cargo.toml"));
@@ -81,10 +83,23 @@ fn the_two_applications_have_independent_dependency_graphs() {
     assert!(digital.contains("ai-core"));
     assert!(!digital.contains("qqbot"));
 
-    for forbidden in ["agent-core", "ai-core", "digital-human", "sea-orm", "sqlx"] {
+    for forbidden in [
+        "agent-core",
+        "ai-core",
+        "digital-human",
+        "personal-secretary",
+        "sea-orm",
+        "sqlx",
+    ] {
         assert!(
             !qq.contains(forbidden),
             "qqbot must not depend on {forbidden}"
+        );
+    }
+    for forbidden in ["axum", "digital-human", "qqbot"] {
+        assert!(
+            !personal_secretary.contains(forbidden),
+            "personal-secretary must not depend on {forbidden}"
         );
     }
 
@@ -95,8 +110,130 @@ fn the_two_applications_have_independent_dependency_graphs() {
         );
     }
     assert!(!digital_server.contains("qqbot"));
+    assert!(!digital_server.contains("personal-secretary"));
     assert!(qq_server.contains("qqbot"));
+    assert!(qq_server.contains("personal-secretary"));
     assert!(!qq_server.contains("digital-human"));
+}
+
+#[test]
+fn personal_secretary_domain_is_qq_protocol_neutral() {
+    let sources = rust_sources("crates/personal-secretary/src");
+    for forbidden in [
+        "qqbot::",
+        "napcat::",
+        "qq_open_platform::",
+        "digital_human::",
+    ] {
+        assert!(
+            !sources.contains(forbidden),
+            "personal-secretary source contains concrete QQ/Digital Human marker {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn qqbot_server_does_not_send_through_the_local_qq_account() {
+    let sources = rust_sources("apps/qqbot-server/src");
+    for forbidden in ["send_group_msg", "send_private_msg"] {
+        assert!(
+            !sources.contains(forbidden),
+            "qqbot-server must not call NapCat mutation {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn napcat_callback_does_not_wait_for_mysql() {
+    let runtime = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime.rs"))
+        .expect("qqbot-server runtime must be readable");
+    let worker =
+        fs::read_to_string(workspace_root().join("apps/qqbot-server/src/ingestion_worker.rs"))
+            .expect("qqbot-server ingestion worker must be readable");
+
+    assert!(runtime.contains("try_enqueue"));
+    assert!(runtime.contains("spawn_ingestion_worker"));
+    assert!(!runtime.contains("insert_message_if_absent"));
+    assert!(worker.contains("mpsc::channel"));
+    assert!(worker.contains("insert_message_if_absent"));
+}
+
+#[test]
+fn napcat_adapter_exposes_no_personal_account_mutations() {
+    let api = fs::read_to_string(workspace_root().join("crates/qqbot/src/napcat/api.rs"))
+        .expect("NapCat API source must be readable");
+    for forbidden in [
+        "send_group_msg",
+        "send_private_msg",
+        "group_poke",
+        "friend_poke",
+        "delete_msg",
+    ] {
+        assert!(
+            !api.contains(forbidden),
+            "NapCat personal-account adapter must not expose mutation {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn qqbot_database_is_owned_by_the_qqbot_application() {
+    let digital_init = fs::read_to_string(workspace_root().join("database/sql/init.sql"))
+        .expect("digital-human init.sql must be readable");
+    assert!(!digital_init.contains("secretary_"));
+    assert!(!digital_init.contains("personal_secretary"));
+
+    let digital_migrations = workspace_root().join("database/sql/migrations");
+    let leaked = fs::read_dir(digital_migrations)
+        .expect("digital-human migrations must be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("secretary") || name.contains("qqbot"))
+        .collect::<Vec<_>>();
+    assert!(
+        leaked.is_empty(),
+        "QQBot migrations leaked into Digital Human database: {leaked:?}"
+    );
+
+    assert!(
+        workspace_root()
+            .join("apps/qqbot-server/database/migrations/20260723_personal_secretary_ingestion.sql")
+            .is_file(),
+        "QQBot migration must live under apps/qqbot-server/database"
+    );
+    assert!(
+        workspace_root()
+            .join(
+                "apps/qqbot-server/database/migrations/20260723_personal_secretary_continuity.sql"
+            )
+            .is_file(),
+        "QQBot continuity migration must live under apps/qqbot-server/database"
+    );
+}
+
+#[test]
+fn qqbot_configuration_is_owned_by_the_qqbot_application() {
+    let config_source =
+        fs::read_to_string(workspace_root().join("apps/qqbot-server/src/config.rs"))
+            .expect("QQBot config source must be readable");
+
+    assert!(
+        workspace_root()
+            .join("apps/qqbot-server/config/qqbot.example.toml")
+            .is_file(),
+        "QQBot TOML example must live under apps/qqbot-server/config"
+    );
+    assert!(
+        workspace_root()
+            .join("apps/qqbot-server/config/.env.example")
+            .is_file(),
+        "QQBot environment example must live under apps/qqbot-server/config"
+    );
+    assert!(config_source.contains("QQBOT_CONFIG_PATH"));
+    assert!(config_source.contains("QQBOT_DATABASE_URL"));
+    assert!(!config_source.contains("dotenvy::dotenv()"));
+    assert!(!config_source.contains("std::env::var(\"DATABASE_URL\")"));
+    assert!(!config_source.contains("std::env::var_os(\"CONFIG_PATH\")"));
 }
 
 #[test]
