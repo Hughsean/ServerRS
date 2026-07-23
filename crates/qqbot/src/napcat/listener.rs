@@ -7,16 +7,17 @@ use tracing::{debug, info, warn};
 
 use super::message_parser::{normalize_text, parse_message_segments};
 use super::{
-    GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupMessageEvent, NapCatError,
-    NapCatEvent, NapCatEventHandler, PokeEvent, SenderInfo,
+    GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupMessageEvent,
+    NapCatConnectionObserver, NapCatError, NapCatEvent, NapCatEventHandler, PokeEvent,
+    PrivateMessageEvent, SenderInfo,
 };
 
-/// NapCat 上报的原始群消息。
+/// NapCat 上报的原始消息。
 ///
 /// 所有非关键字段均允许缺失，以兼容 OneBot 实现之间的载荷差异；在转成公开事件前
-/// 会验证群号、用户号和消息 ID。
+/// 会按照群聊或私聊语义验证关键身份字段。
 #[derive(Debug, serde::Deserialize)]
-struct OneBotGroupMessageEvent {
+struct OneBotMessageEvent {
     #[serde(default)]
     message_type: String,
     #[serde(default, rename = "sub_type")]
@@ -27,6 +28,8 @@ struct OneBotGroupMessageEvent {
     group_id: i64,
     #[serde(default)]
     user_id: i64,
+    #[serde(default)]
+    target_id: Option<i64>,
     #[serde(default, rename = "message")]
     _message: Value,
     #[serde(default)]
@@ -111,6 +114,7 @@ pub struct NapCatListener {
     ws_url: String,
     self_qq_id: i64,
     handler: Arc<dyn NapCatEventHandler>,
+    connection_observer: Option<Arc<dyn NapCatConnectionObserver>>,
 }
 
 impl NapCatListener {
@@ -119,7 +123,13 @@ impl NapCatListener {
             ws_url,
             self_qq_id,
             handler,
+            connection_observer: None,
         }
+    }
+
+    pub fn with_connection_observer(mut self, observer: Arc<dyn NapCatConnectionObserver>) -> Self {
+        self.connection_observer = Some(observer);
+        self
     }
 
     /// 连接一次并持续读取，连接关闭后返回，由宿主决定是否重连。
@@ -128,6 +138,10 @@ impl NapCatListener {
         let (mut stream, _) = connect_async(self.ws_url.as_str()).await.map_err(|error| {
             NapCatError::Connection(format!("WebSocket connect failed: {error}"))
         })?;
+
+        if let Some(observer) = &self.connection_observer {
+            observer.connected().await?;
+        }
 
         info!("NapCat WebSocket 已连接");
         while let Some(message) = stream.next().await {
@@ -168,7 +182,8 @@ impl NapCatListener {
 
         match post_type {
             "notice" => self.handle_notice(raw_event).await,
-            "message" => self.handle_message(raw_event).await,
+            "message" => self.handle_message(raw_event, false).await,
+            "message_sent" => self.handle_message(raw_event, true).await,
             _ => {
                 debug!(post_type, "忽略尚未建模的 OneBot 事件");
                 Ok(())
@@ -213,44 +228,99 @@ impl NapCatListener {
         self.handler.handle(event).await
     }
 
-    async fn handle_message(&self, raw_event: Value) -> Result<(), NapCatError> {
-        let event: OneBotGroupMessageEvent = serde_json::from_value(raw_event.clone())
+    async fn handle_message(
+        &self,
+        raw_event: Value,
+        sent_by_self: bool,
+    ) -> Result<(), NapCatError> {
+        let event: OneBotMessageEvent = serde_json::from_value(raw_event.clone())
             .map_err(|error| NapCatError::Protocol(format!("invalid message event: {error}")))?;
-        if event.message_type != "group" {
-            debug!(message_type = %event.message_type, "忽略非群聊消息");
+        if !matches!(event.message_type.as_str(), "group" | "private") {
+            debug!(message_type = %event.message_type, "忽略尚未建模的消息类型");
             return Ok(());
         }
-        validate_actor_ids(event.group_id, event.user_id, "group message")?;
         if event.message_id.trim().is_empty() {
             return Err(NapCatError::Protocol(
-                "group message requires a non-empty message_id".into(),
+                "message requires a non-empty message_id".into(),
+            ));
+        }
+        if event.user_id <= 0 {
+            return Err(NapCatError::Protocol(
+                "message requires a positive user_id".into(),
             ));
         }
 
         let (normalized_text, at_bot) = normalize_text(&event.raw_message, self.self_qq_id);
-        let group_id = event.group_id;
-        let user_id = event.user_id;
-        let message = GroupMessageEvent {
-            message_id: event.message_id,
-            group_id,
-            user_id,
-            segments: parse_message_segments(&event.raw_message),
-            raw_message: event.raw_message,
-            normalized_text,
-            at_bot,
-            time: event.time,
-            sender: event.sender.map(|sender| SenderInfo {
-                nickname: sender.nickname,
-                card: sender.card,
-                role: sender.role,
-            }),
-            raw_event,
-        };
+        let segments = parse_message_segments(&event.raw_message);
+        let is_self = sent_by_self || event.user_id == self.self_qq_id;
 
-        info!(group_id, user_id, at_bot, "收到 NapCat 群消息事件");
-        self.handler
-            .handle(NapCatEvent::GroupMessage(message))
-            .await
+        match event.message_type.as_str() {
+            "group" => {
+                validate_actor_ids(event.group_id, event.user_id, "group message")?;
+                let group_id = event.group_id;
+                let user_id = event.user_id;
+                let message = GroupMessageEvent {
+                    message_id: event.message_id,
+                    group_id,
+                    user_id,
+                    segments,
+                    raw_message: event.raw_message,
+                    normalized_text,
+                    at_bot,
+                    time: event.time,
+                    sender: event.sender.map(map_sender),
+                    is_self,
+                    raw_event,
+                };
+
+                info!(group_id, user_id, at_bot, is_self, "收到 NapCat 群消息事件");
+                self.handler
+                    .handle(NapCatEvent::GroupMessage(message))
+                    .await
+            }
+            "private" => {
+                let peer_id = if is_self {
+                    event
+                        .target_id
+                        .filter(|target_id| *target_id > 0)
+                        .or_else(|| (event.user_id != self.self_qq_id).then_some(event.user_id))
+                        .ok_or_else(|| {
+                            NapCatError::Protocol(
+                                "self-sent private message requires a positive target_id".into(),
+                            )
+                        })?
+                } else {
+                    event.user_id
+                };
+                let user_id = event.user_id;
+                let message = PrivateMessageEvent {
+                    message_id: event.message_id,
+                    user_id,
+                    peer_id,
+                    segments,
+                    raw_message: event.raw_message,
+                    normalized_text,
+                    time: event.time,
+                    sender: event.sender.map(map_sender),
+                    is_self,
+                    raw_event,
+                };
+
+                info!(user_id, peer_id, is_self, "收到 NapCat 私聊消息事件");
+                self.handler
+                    .handle(NapCatEvent::PrivateMessage(message))
+                    .await
+            }
+            _ => unreachable!("message type was checked before validation"),
+        }
+    }
+}
+
+fn map_sender(sender: OneBotSender) -> SenderInfo {
+    SenderInfo {
+        nickname: sender.nickname,
+        card: sender.card,
+        role: sender.role,
     }
 }
 
@@ -305,10 +375,52 @@ mod tests {
         assert_eq!(message.message_id, "42");
         assert_eq!(message.normalized_text, "你好");
         assert!(message.at_bot);
+        assert!(!message.is_self);
         assert!(matches!(
             message.segments[0],
             super::super::MessageSegment::At { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn incoming_private_message_is_forwarded_with_peer_identity() {
+        let handler = Arc::new(RecordingHandler::default());
+        let listener = listener(Arc::clone(&handler));
+
+        listener
+            .handle_ws_message(
+                r#"{"post_type":"message","message_type":"private","message_id":"p-1","user_id":20002,"target_id":10001,"raw_message":"明天下午开会","time":9}"#,
+            )
+            .await
+            .unwrap();
+
+        let events = handler.events.lock().unwrap();
+        let NapCatEvent::PrivateMessage(message) = &events[0] else {
+            panic!("expected private message");
+        };
+        assert_eq!(message.peer_id, 20002);
+        assert_eq!(message.normalized_text, "明天下午开会");
+        assert!(!message.is_self);
+    }
+
+    #[tokio::test]
+    async fn self_sent_private_message_uses_target_as_peer() {
+        let handler = Arc::new(RecordingHandler::default());
+        let listener = listener(Arc::clone(&handler));
+
+        listener
+            .handle_ws_message(
+                r#"{"post_type":"message_sent","message_type":"private","message_id":"p-2","user_id":10001,"target_id":20002,"raw_message":"我确认一下","time":10}"#,
+            )
+            .await
+            .unwrap();
+
+        let events = handler.events.lock().unwrap();
+        let NapCatEvent::PrivateMessage(message) = &events[0] else {
+            panic!("expected private message");
+        };
+        assert_eq!(message.peer_id, 20002);
+        assert!(message.is_self);
     }
 
     #[tokio::test]
@@ -343,6 +455,21 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, NapCatError::Protocol(_)));
+        assert!(handler.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsupported_message_type_is_ignored_before_identity_validation() {
+        let handler = Arc::new(RecordingHandler::default());
+        let listener = listener(Arc::clone(&handler));
+
+        listener
+            .handle_ws_message(
+                r#"{"post_type":"message","message_type":"guild","raw_message":"ignored"}"#,
+            )
+            .await
+            .unwrap();
+
         assert!(handler.events.lock().unwrap().is_empty());
     }
 }

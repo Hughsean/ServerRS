@@ -2624,6 +2624,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "personal-secretary"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "pgvector"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2918,6 +2933,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2926,8 +2942,11 @@ version = "1.0.0"
 dependencies = [
  "async-trait",
  "dotenvy",
+ "personal-secretary",
  "qqbot",
+ "sea-orm",
  "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "toml",
@@ -4001,6 +4020,7 @@ dependencies = [
  "memchr",
  "percent-encoding",
  "rust_decimal",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4012,6 +4032,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]

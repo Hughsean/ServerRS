@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!(error = %error, "QQBot 适配器配置加载失败");
         error
     })?;
-    runtime::run(config).await;
+    runtime::run(config).await?;
     Ok(())
 }
 

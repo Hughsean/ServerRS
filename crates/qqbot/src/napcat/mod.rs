@@ -9,6 +9,7 @@ pub mod message_parser;
 pub use error::NapCatError;
 pub use event::{
     GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupMessageEvent, MessageSegment,
-    NapCatEvent, NapCatEventHandler, PokeEvent, SenderInfo,
+    NapCatConnectionObserver, NapCatEvent, NapCatEventHandler, PokeEvent, PrivateMessageEvent,
+    SenderInfo,
 };
 pub use listener::NapCatListener;
