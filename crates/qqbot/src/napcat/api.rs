@@ -149,6 +149,10 @@ pub struct VersionInfoData {
     pub protocol_version: Option<String>,
 }
 
+/// 单次 NapCat HTTP 请求的超时上限。防止 NapCat 卡住时回补 Worker 或实时读取永久挂起。
+/// 此值独立于回补租约（`lease_secs`）：租约覆盖整个运行生命周期，本超时只保护单次 HTTP 调用。
+const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// NapCat 只读 HTTP 客户端。个人秘书不得通过本类型执行发送、撤回或群管理操作。
 pub struct NapCatApiClient {
     /// Base URL for OneBot HTTP API, e.g. "http://127.0.0.1:3000".
@@ -163,7 +167,11 @@ impl NapCatApiClient {
         Self {
             base_url,
             token,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(HTTP_REQUEST_TIMEOUT)
+                .connect_timeout(HTTP_REQUEST_TIMEOUT)
+                .build()
+                .expect("NapCat HTTP client uses a statically valid timeout configuration"),
         }
     }
 
@@ -192,10 +200,12 @@ impl NapCatApiClient {
             .map_err(|e| NapCatError::Protocol(format!("parse response failed: {e}")))?;
 
         if body.retcode != 0 {
+            // 错误响应 data 可能包含消息、联系人或其它敏感载荷。只记录其存在性，禁止
+            // 把完整响应传播到日志或回补证据 JSON。
             let data_detail = body
                 .data
                 .as_ref()
-                .map(|data| format!("; data={data}"))
+                .map(|_| "; data_present=true")
                 .unwrap_or_default();
             return Err(NapCatError::Api {
                 action: action.into(),

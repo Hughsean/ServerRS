@@ -57,6 +57,8 @@ pub enum InboundEventStoreError {
     Unavailable,
     #[error("inbound event database operation failed: {0}")]
     Database(String),
+    #[error("backfill lease ownership was lost")]
+    LeaseLost,
 }
 
 #[async_trait]
@@ -100,3 +102,18 @@ pub trait IngestionContinuityStoreT: Send + Sync {
 pub trait PersonalSecretaryStoreT: InboundEventStoreT + IngestionContinuityStoreT {}
 
 impl<T> PersonalSecretaryStoreT for T where T: InboundEventStoreT + IngestionContinuityStoreT {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerBinding {
+    pub managed_account: SourceAccountRef,
+    pub command_account: SourceAccountRef,
+    pub owner_actor_id: String,
+}
+
+#[async_trait]
+pub trait OwnerBindingStoreT: Send + Sync {
+    async fn ensure_owner_binding(
+        &self,
+        binding: &OwnerBinding,
+    ) -> Result<(), InboundEventStoreError>;
+}

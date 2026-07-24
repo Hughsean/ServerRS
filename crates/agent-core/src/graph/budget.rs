@@ -1,3 +1,8 @@
+// GraphRunError intentionally preserves complete typed Effect failure context for checkpoint and
+// UnknownCommit diagnosis. Boxing it would be an API/storage compatibility change, so budget
+// guards accept the larger cold-path error value.
+#![allow(clippy::result_large_err)]
+
 use super::{BudgetResource, GraphRunError, RunId, RunStep};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

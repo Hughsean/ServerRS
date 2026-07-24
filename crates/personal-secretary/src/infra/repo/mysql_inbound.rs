@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::sea_query::OnConflict;
+use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
     QueryFilter, Set, TransactionTrait,
@@ -26,11 +26,20 @@ const PROCESSING_PENDING: &str = "pending";
 
 pub(crate) struct MySqlInboundEventStore {
     pub(super) db: DatabaseConnection,
+    /// 回补运行续租秒数。仅 `record_scope_progress` 使用；实时/连续性路径不读取。
+    /// 由 `build_mysql_backfill_store` 按配置注入，`build_mysql_inbound_event_store` 用默认值。
+    pub(super) lease_secs: u64,
 }
 
 impl MySqlInboundEventStore {
+    /// 构造实时入库/连续性仓储。不参与回补租约，使用默认值。
     pub(crate) fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self { db, lease_secs: 60 }
+    }
+
+    /// 构造回补状态仓储，注入配置的租约秒数。
+    pub(crate) fn new_for_backfill(db: DatabaseConnection, lease_secs: u64) -> Self {
+        Self { db, lease_secs }
     }
 }
 
@@ -152,6 +161,10 @@ impl InboundEventStoreT for MySqlInboundEventStore {
             )
             .await?;
         }
+
+        // 父消息后到回填：本消息作为父消息，把同账号内此前因父消息尚未入库而未解析的
+        // 子消息 reply_to_event_id 回填为当前事件。不跨账号、幂等。
+        backfill_child_reply_edges(&transaction, account_id, &source_event_id, message).await?;
 
         transaction.commit().await.map_err(store_error)?;
         tracing::debug!(
@@ -389,6 +402,38 @@ async fn resolve_reply(
         .map_err(store_error)?
         .map(|model| SourceEventId::new(model.source_event_id))
         .transpose()
+}
+
+/// 父消息后到回填：当一条消息被接受入库时，把它作为父消息，把同账号内所有引用其
+/// 平台消息 ID、但当时因父消息尚未入库而 `reply_to_event_id` 为空的子消息回填。
+///
+/// 不变规则：
+/// - 只回填同一账号主体（`account_id`），绝不跨账号绑定 Reply；
+/// - 幂等：再次执行只更新仍为空的行，已回填的行保持不变；
+/// - 在父消息插入事务内完成，保证原子可见性。
+async fn backfill_child_reply_edges(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    parent_event_id: &SourceEventId,
+    parent: &InboundMessageEnvelope,
+) -> Result<(), InboundEventStoreError> {
+    // 把同账号内 reply_to_platform_event_id = 父平台消息 ID 且 reply_to_event_id 为空
+    // 的子消息批量回填。不依赖子消息是否已入库，缺失时自然不影响。
+    secretary_source_events::Entity::update_many()
+        .col_expr(
+            secretary_source_events::Column::ReplyToEventId,
+            Expr::value(parent_event_id.as_str()),
+        )
+        .filter(secretary_source_events::Column::AccountId.eq(account_id))
+        .filter(
+            secretary_source_events::Column::ReplyToPlatformEventId
+                .eq(parent.source.message_id.clone()),
+        )
+        .filter(secretary_source_events::Column::ReplyToEventId.is_null())
+        .exec(db)
+        .await
+        .map_err(store_error)?;
+    Ok(())
 }
 
 pub(super) fn store_error(error: sea_orm::DbErr) -> InboundEventStoreError {

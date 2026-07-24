@@ -8,6 +8,7 @@ members = [
     "crates/digital-human",
     "crates/personal-secretary",
     "crates/qqbot",
+    "crates/qq-open-platform",
 ]
 default-members = ["apps/digital-human-server", "apps/qqbot-server"]
 
@@ -22,6 +23,7 @@ ai-core = { path = "crates/ai-core" }
 digital-human = { path = "crates/digital-human", default-features = false }
 personal-secretary = { path = "crates/personal-secretary" }
 qqbot = { path = "crates/qqbot" }
+qq-open-platform = { path = "crates/qq-open-platform" }
 
 # Async
 async-trait = "0.1.89"

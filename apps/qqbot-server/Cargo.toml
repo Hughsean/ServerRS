@@ -5,14 +5,17 @@ edition.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 dotenvy.workspace = true
 personal-secretary.workspace = true
 qqbot.workspace = true
+qq-open-platform.workspace = true
 sea-orm = { workspace = true, features = [
     "runtime-tokio-rustls",
     "sqlx-mysql",
 ] }
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = [
     "macros",

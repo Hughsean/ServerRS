@@ -1,8 +1,8 @@
 # ServerRS Cargo Workspace 与 crate 边界
 
-> 最后核对：2026-07-23
+> 最后核对：2026-07-24
 
-后端包含 7 个 workspace member：
+后端包含 8 个 workspace member：
 
 | package | 路径 | 职责 |
 |---|---|---|
@@ -11,6 +11,7 @@
 | `digital-human` | `crates/digital-human` | 聊天、记忆、RAG、画像、工具和数字人业务持久化 |
 | `personal-secretary` | `crates/personal-secretary` | 协议无关的个人秘书身份、消息、后续上下文/日程/提醒业务 |
 | `qqbot` | `crates/qqbot` | 仅保留 NapCat/OneBot HTTP、WebSocket、CQ 解析与协议事件接口 |
+| `qq-open-platform` | `crates/qq-open-platform` | QQ 开放平台鉴权、HTTP 消息 API、Gateway 与类型化协议事件 |
 | `digital-human-server` | `apps/digital-human-server` | 数字人 Axum API、配置、数据库连接、依赖装配和启动 |
 | `qqbot-server` | `apps/qqbot-server` | NapCat 独立进程、配置、重连、统一身份映射与后续 Worker 装配 |
 
@@ -25,20 +26,24 @@ agent-core       ai-core
               |
   digital-human-server
 
-qqbot --------------+
-                    +--- qqbot-server
-personal-secretary -+
+qqbot ------------------+
+qq-open-platform -------+--- qqbot-server
+personal-secretary -----+
 ```
 
 - `digital-human -> agent-core, ai-core`
 - `digital-human-server -> agent-core, ai-core, digital-human`
-- `qqbot-server -> qqbot, personal-secretary`
-- `qqbot` 不依赖数字人、AI Core、ORM 或数据库驱动
+- `qqbot-server -> qqbot, qq-open-platform, personal-secretary`
+- `qqbot` 与 `qq-open-platform` 均不依赖数字人、个人秘书、AI Core、ORM 或数据库驱动
 - 两个应用不互相依赖，也不在同一进程中装配
 
 ## QQBot 当前边界
 
-`crates/qqbot` 仍是纯 NapCat 协议适配器，只保留：
+`crates/qqbot` 仍是纯 NapCat 协议适配器。`crates/qq-open-platform` 是另一个独立协议适配器，
+只负责 App 凭据换取、Gateway 会话、C2C/群事件和官方消息 API；两者不互相依赖。NapCat
+业务路径保持只读，Owner 通知只能由官方通道经持久化 Outbox 发送。
+
+NapCat 适配器只保留：
 
 - NapCat HTTP API 客户端
 - NapCat 正向 WebSocket 监听器
@@ -48,7 +53,11 @@ personal-secretary -+
 
 画像、关系、群记忆、主动回复、Outbox、Repository、SeaORM entity 和旧 QQ 建表 SQL 均不
 属于 `qqbot`。新的 `personal-secretary` 已接管协议无关的身份与消息角色；`qqbot-server`
-只执行 NapCat 到统一信封的映射和元数据观测，尚不会回复消息或写数据库。
+执行 NapCat 到统一信封的映射、实时幂等落库、连接周期/游标/空窗审计，以及独立历史回补
+Worker（实时与历史消息走同一幂等入口 `insert_message_if_absent`）和确定性线程批量投影
+Worker，不会发送消息；线程领域类型与用例位于 `personal-secretary`，SQL 和运行调度分别位于
+基础设施层和 `qqbot-server`。类型化语义提取同样通过协议无关端口进入，只生成带原始事件
+来源的候选补丁；当前保守规则适配器不依赖数字人 LLM 实现。
 
 QQ 智能秘书的能力审计、Todo 和历史统一维护在
 [`docs/qq-personal-secretary/`](qq-personal-secretary/README.md)。

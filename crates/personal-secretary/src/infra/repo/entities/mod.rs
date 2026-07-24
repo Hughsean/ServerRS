@@ -1,8 +1,14 @@
 pub mod secretary_accounts;
+pub mod secretary_backfill_runs;
+pub mod secretary_backfill_scopes;
 pub mod secretary_connection_epochs;
 pub mod secretary_conversations;
 pub mod secretary_event_ingestion;
+pub mod secretary_gap_boundaries;
+pub mod secretary_gap_reclaim_schedule;
 pub mod secretary_ingestion_cursors;
 pub mod secretary_ingestion_gaps;
 pub mod secretary_message_contents;
 pub mod secretary_source_events;
+pub mod secretary_thread_link_candidates;
+pub mod secretary_thread_link_reviews;

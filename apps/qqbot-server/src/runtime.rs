@@ -3,18 +3,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use personal_secretary::{
-    ConnectionEndReason, ConnectionEpochId, InboundEventStoreError, InboundIdentityError,
-    MessageSource, PersonalSecretaryStoreT, SourceAccountRef, build_mysql_inbound_event_store,
+    BackfillGapUseCase, ConnectionEndReason, ConnectionEpochId,
+    ConservativeThreadSemanticExtractor, DeterministicThreadPlanner, DeterministicThreadPolicy,
+    FollowUpUseCase, InboundEventStoreError, InboundIdentityError, MessageSource,
+    PersonalSecretaryStoreT, SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase,
+    ThreadSemanticUseCase, build_mysql_backfill_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::{
-    NapCatConnectionObserver, NapCatError, NapCatEvent, NapCatEventHandler, NapCatListener,
+    NapCatApiClient, NapCatConnectionObserver, NapCatError, NapCatEvent, NapCatEventHandler,
+    NapCatListener,
 };
 use sea_orm::{ConnectOptions, Database};
 use thiserror::Error;
 
+use crate::backfill::spawn_backfill_worker;
 use crate::config::AppConfig;
+use crate::follow_up_worker::spawn_follow_up_worker;
 use crate::inbound::NapCatInboundMapper;
 use crate::ingestion_worker::{IngestionQueue, WorkerReport, spawn_ingestion_worker};
+use crate::qq_open_platform::spawn_official_platform;
+use crate::thread_links::spawn_thread_links_worker;
+use crate::thread_projection::spawn_thread_projection_worker;
+use crate::thread_semantics::spawn_thread_semantics_worker;
 
 /// 个人秘书入站边界：统一身份后先幂等落库，只有新事件才允许进入后续处理。
 struct PersonalSecretaryInboundHandler {
@@ -26,6 +38,23 @@ struct ConnectionObserver {
     store: Arc<dyn PersonalSecretaryStoreT>,
     connection_epoch_id: ConnectionEpochId,
     connected: AtomicBool,
+    backfill_wake: Option<Arc<BackfillWake>>,
+}
+
+/// 供 ConnectionObserver 和 runtime 共享的回补唤醒句柄。
+/// 实际持有 `BackfillHandle` 的唤醒通知；避免在观察者中持有整个 JoinHandle。
+pub(crate) struct BackfillWake {
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl BackfillWake {
+    pub(crate) fn new(notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { notify }
+    }
+
+    pub(crate) fn wake(&self) {
+        self.notify.notify_one();
+    }
 }
 
 impl ConnectionObserver {
@@ -42,6 +71,11 @@ impl NapCatConnectionObserver for ConnectionObserver {
             .await
             .map_err(|error| NapCatError::Handler(error.to_string()))?;
         self.connected.store(true, Ordering::Release);
+        // 重连成功不等于历史已补齐：仅唤醒回补 Worker 尽快扫描 uncertain Gap。
+        // Gap 是否转为 verified_complete 由回补用例的证据判定决定，不由重连决定。
+        if let Some(wake) = &self.backfill_wake {
+            wake.wake();
+        }
         Ok(())
     }
 }
@@ -86,6 +120,10 @@ pub enum RuntimeError {
     Store(#[from] InboundEventStoreError),
     #[error(transparent)]
     Identity(#[from] InboundIdentityError),
+    #[error("invalid qqbot configuration: {0}")]
+    Config(String),
+    #[error("QQ Open Platform runtime failed: {0}")]
+    OfficialPlatform(String),
 }
 
 pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
@@ -94,9 +132,163 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
     let db = Database::connect(database_options).await?;
     tracing::info!("个人秘书数据库已连接");
 
-    let store = build_mysql_inbound_event_store(db);
+    let store = build_mysql_inbound_event_store(db.clone());
     let account =
         SourceAccountRef::new(MessageSource::NapCat, config.napcat.self_qq_id.to_string())?;
+
+    let follow_up_use_case = Arc::new(FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        build_mysql_memory_store(db.clone()),
+    ));
+    let follow_up_handle = if config.follow_up.enabled {
+        tracing::info!(
+            scan_interval_ms = config.follow_up.scan_interval_ms,
+            horizon_secs = config.follow_up.horizon_secs,
+            batch_size = config.follow_up.batch_size,
+            "结构化记忆维护与承诺提醒调度已启用；通知仅写入 Outbox"
+        );
+        Some(spawn_follow_up_worker(
+            Arc::clone(&follow_up_use_case),
+            config.follow_up.clone(),
+        ))
+    } else {
+        tracing::info!("承诺提醒调度已禁用（follow_up.enabled=false）");
+        None
+    };
+
+    let official_platform_handle = if config.qq_open_platform.enabled {
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let handle = spawn_official_platform(
+            config.qq_open_platform.clone(),
+            db.clone(),
+            inbound,
+            Arc::clone(&follow_up_use_case),
+            account.clone(),
+        )
+        .await
+        .map_err(|error| RuntimeError::OfficialPlatform(error.to_string()))?;
+        tracing::info!(
+            app_id = config.qq_open_platform.app_id,
+            "QQ Open Platform Gateway 与 Owner-only Outbox 投递已启动"
+        );
+        Some(handle)
+    } else {
+        tracing::info!("QQ Open Platform 已禁用（qq_open_platform.enabled=false）");
+        None
+    };
+
+    let thread_projection_handle = if config.thread_projection.enabled {
+        let policy =
+            DeterministicThreadPolicy::new(config.thread_projection.same_conversation_window_secs)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let use_case = Arc::new(
+            ThreadProjectionUseCase::new(
+                build_mysql_thread_projection_store(db.clone()),
+                DeterministicThreadPlanner::new(policy),
+                config.thread_projection.batch_size,
+                config.thread_projection.lease_secs,
+                config.thread_projection.same_conversation_window_secs,
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        Some(spawn_thread_projection_worker(
+            use_case,
+            config.thread_projection.clone(),
+        ))
+    } else {
+        tracing::info!("确定性线程投影已禁用（thread_projection.enabled=false）");
+        None
+    };
+
+    let thread_semantics_handle = if config.thread_semantics.enabled {
+        let extractor = Arc::new(
+            ConservativeThreadSemanticExtractor::new(config.thread_semantics.max_event_chars)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        let use_case = Arc::new(
+            ThreadSemanticUseCase::new(
+                build_mysql_thread_semantic_store(db.clone()),
+                extractor,
+                config.thread_semantics.max_events,
+                config.thread_semantics.max_total_chars,
+                config.thread_semantics.lease_secs,
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        Some(spawn_thread_semantics_worker(
+            use_case,
+            config.thread_semantics.clone(),
+        ))
+    } else {
+        tracing::info!("线程类型化语义已禁用（thread_semantics.enabled=false）");
+        None
+    };
+
+    let thread_links_handle = if config.thread_links.enabled {
+        let use_case = Arc::new(
+            ThreadLinkUseCase::new(
+                build_mysql_thread_link_store(db.clone()),
+                config.thread_links.max_events,
+                config.thread_links.max_total_chars,
+                config.thread_links.lease_secs,
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        Some(spawn_thread_links_worker(
+            use_case,
+            config.thread_links.clone(),
+        ))
+    } else {
+        tracing::info!("跨会话线程关联候选已禁用（thread_links.enabled=false）");
+        None
+    };
+
+    // 装配历史回补：只读 NapCat 客户端 + 回补状态仓储 + 协议无关用例 + 独立 Worker。
+    // 分页算法、Gap 完整性判定和 SQL 不在 runtime 内，而分别在领域层与 MySQL 仓储。
+    let backfill_handle = if config.backfill.enabled {
+        let backfill_store = build_mysql_backfill_store(db.clone(), config.backfill.lease_secs);
+        let napcat_readonly = Arc::new(NapCatApiClient::new(
+            config.napcat.http_base_url.clone(),
+            if config.napcat.http_token.trim().is_empty() {
+                None
+            } else {
+                Some(config.napcat.http_token.clone())
+            },
+        ));
+        let history_source = Arc::new(
+            crate::backfill::napcat_history_source::NapCatHistorySource::new(
+                napcat_readonly,
+                account.clone(),
+                config.napcat.self_qq_id,
+            ),
+        );
+        let budget = config
+            .backfill
+            .budget()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let use_case = Arc::new(BackfillGapUseCase::new(
+            backfill_store,
+            history_source,
+            budget,
+        ));
+        let handle = spawn_backfill_worker(use_case, config.backfill.clone());
+        tracing::info!(
+            page_size = config.backfill.page_size,
+            max_pages_per_scope = config.backfill.max_pages_per_scope,
+            max_events_per_run = config.backfill.max_events_per_run,
+            max_concurrency = config.backfill.max_concurrency,
+            lease_secs = config.backfill.lease_secs,
+            "历史回补 Worker 已装配，与实时 WebSocket 接收解耦"
+        );
+        Some(handle)
+    } else {
+        tracing::info!("历史回补已禁用（backfill.enabled=false）");
+        None
+    };
+    let backfill_wake = backfill_handle
+        .as_ref()
+        .map(|handle| Arc::new(BackfillWake::new(handle.wake_notifier())));
+
     let mut backoff = config.napcat.reconnect_initial_secs;
     tracing::info!(
         queue_capacity = config.ingestion.queue_capacity,
@@ -121,6 +313,7 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
             store: Arc::clone(&store),
             connection_epoch_id: connection_epoch_id.clone(),
             connected: AtomicBool::new(false),
+            backfill_wake: backfill_wake.clone(),
         });
         let connection_observer: Arc<dyn NapCatConnectionObserver> = observer.clone();
         let listener = NapCatListener::new(
@@ -170,9 +363,31 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
                 reason = reason.as_str(),
                 "NapCat 连接结束，已创建待历史回补验证的不确定空窗"
             );
+            // 连接结束产生新的 uncertain Gap，唤醒回补 Worker 尽快处理。
+            if let Some(wake) = &backfill_wake {
+                wake.wake();
+            }
         }
         if shutting_down {
             tracing::info!("QQBot NapCat 适配器正在退出");
+            if let Some(handle) = backfill_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = thread_projection_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = thread_semantics_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = thread_links_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = follow_up_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = official_platform_handle {
+                handle.shutdown().await;
+            }
             return Ok(());
         }
         if observer.was_connected() {
@@ -181,7 +396,27 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
 
         tracing::info!(backoff_secs = backoff, "等待后重新连接 NapCat");
         tokio::select! {
-            _ = shutdown_signal() => return Ok(()),
+            _ = shutdown_signal() => {
+                if let Some(handle) = backfill_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = thread_projection_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = thread_semantics_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = thread_links_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = follow_up_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = official_platform_handle {
+                    handle.shutdown().await;
+                }
+                return Ok(());
+            }
             _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
         }
         backoff = backoff

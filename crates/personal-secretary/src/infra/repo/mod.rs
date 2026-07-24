@@ -1,5 +1,20 @@
 mod entities;
+mod mysql_backfill;
 mod mysql_continuity;
+mod mysql_follow_up;
 mod mysql_inbound;
+mod mysql_memory;
+mod mysql_owner_binding;
+mod mysql_thread_links;
+mod mysql_thread_mutations;
+mod mysql_thread_semantics;
+mod mysql_threading;
 
+pub(crate) use mysql_follow_up::MySqlFollowUpStore;
 pub(crate) use mysql_inbound::MySqlInboundEventStore;
+pub(crate) use mysql_memory::MySqlMemoryStore;
+pub(crate) use mysql_owner_binding::MySqlOwnerBindingStore;
+pub(crate) use mysql_thread_links::MySqlThreadLinkStore;
+pub(crate) use mysql_thread_mutations::MySqlThreadMutationStore;
+pub(crate) use mysql_thread_semantics::MySqlThreadSemanticStore;
+pub(crate) use mysql_threading::MySqlThreadProjectionStore;

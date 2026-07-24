@@ -1,9 +1,10 @@
 # ServerRS 项目地图 — 从入门到精通
 
-> **Workspace 路径提示（2026-07-22）**：后端包含 6 个 package。本文后续出现的
+> **Workspace 路径提示（2026-07-24）**：后端包含 8 个 package。本文后续出现的
 > `src/api`、`src/bootstrap` 路径位于 `apps/digital-human-server/src`；数字人
 > `src/app`、`src/domain`、`src/infra` 位于 `crates/digital-human/src`；NapCat
-> 适配器位于 `crates/qqbot/src/napcat`；通用 Agent Runtime 位于
+> 适配器位于 `crates/qqbot/src/napcat`；QQ 开放平台适配器位于
+> `crates/qq-open-platform`；通用 Agent Runtime 位于
 > `crates/agent-core/src`。依赖边界和
 > 最新目录以 [crate-boundaries.md](crate-boundaries.md) 为准。
 
@@ -15,7 +16,7 @@
 
 ## 一、这个项目到底是干啥的？
 
-**一句话版**：这是一个 AI 聊天伴侣后端服务器。用户注册后，可以跟 AI 聊天，AI 会维护长期记忆和用户画像，支持 RAG 知识检索、音乐、抑郁评估、日记、社区、Web 知识摄入与后台审核；QQBot 当前只保留独立 NapCat 适配器，业务等待重新设计。
+**一句话版**：这是一个数字人后端与独立个人 QQ 智能秘书组成的 Rust workspace；两条业务线使用不同应用、配置和数据库边界。
 **正经版**：ServerRS（代号 Digital Companion）是一个用 **Rust** 写的 **Web 后端服务**，使用 Axum 提供 HTTP API，MySQL 存业务数据，Ollama/OpenAI-compatible Provider 做对话和结构化提取，Qdrant 做向量搜索。
 
 ---
@@ -30,11 +31,13 @@
 │
 ├── apps/
 │   ├── digital-human-server/ # Axum、数字人配置、数据库连接与进程入口
-│   └── qqbot-server/          # 独立 NapCat 进程；当前无业务与数据库
+│   └── qqbot-server/          # 个人 QQ 秘书独立进程、Worker、配置与数据库装配
 ├── crates/
 │   ├── agent-core/       # 通用 Agent Runtime / Effect / Checkpoint
 │   ├── ai-core/          # Provider 中立 AI 接口
 │   ├── digital-human/    # 数字人业务与其持久化适配器
+│   ├── personal-secretary/ # 协议无关个人秘书领域/应用/仓储
+│   ├── qq-open-platform/ # QQ 开放平台 Token/API/Gateway 适配
 │   └── qqbot/            # 仅 NapCat/OneBot 协议适配
 │
 ├── database/
@@ -559,6 +562,10 @@ napcat/
 └── error.rs           传输/协议错误
 ```
 
+官方 Bot 也不放进 NapCat crate。`crates/qq-open-platform` 只实现 QQ 开放平台协议，
+`crates/personal-secretary` 承载类型化线程、记忆、跟进和 Agent Action，`qqbot-server` 在最外层
+完成 MySQL/Worker 装配。NapCat 路径保持只读，Owner 通知只经官方通道的持久化 Outbox 发送。
+
 ---
 
 ### 4.7 胶水层 `src/bootstrap/` —— 组装车间
@@ -972,8 +979,9 @@ copy apps/qqbot-server/config/qqbot.example.toml apps/qqbot-server/config/qqbot.
 cargo run -p qqbot-server
 ```
 
-当前 `qqbot-server` 已把 NapCat 群聊、私聊和本人消息映射到个人秘书统一身份边界，但仍不
-回复消息、不持久化正文，也不访问数据库。开发状态和后续规划见
+当前 `qqbot-server` 已把 NapCat 群聊、私聊和本人消息映射到个人秘书统一身份边界并持久化，
+支持空窗回补、因果线程、结构记忆和跟进 Outbox。QQ 开放平台 Gateway/Owner-only 通知代码已
+接入，但真实凭据轮换后的联机验收尚未执行。开发状态和后续规划见
 [`docs/qq-personal-secretary/`](qq-personal-secretary/README.md)。
 
 1.  **访问**：`http://localhost:8080/health`
@@ -1006,16 +1014,16 @@ A：为了"解耦"。业务代码（app/）不需要知道数据存在 MySQL 还
 **Q：有哪些外部依赖？**
 A：MySQL（数据存储）、Ollama（AI 推理）、Qdrant（向量搜索，可选），
 以及和风天气（查天气）、中国新闻网 RSS（新闻）、火山引擎豆包语音（TTS 语音合成）、
-以及独立进程使用的 NapCat（OneBot 11 协议适配）等外部 API。
+以及独立进程使用的 NapCat（OneBot 11 协议适配）和 QQ 开放平台等外部 API。
 
 **Q：TTS（文字转语音）功能是怎么实现的？**
 A：通过火山引擎（豆包语音）v3 API 将文字合成为语音（WAV/MP3/OGG 格式），
 提供 13 种音色（中/英/日文），支持语速、音量、音调调节。
 
 **Q：QQ 机器人（QQ Bot）是什么？**
-A：当前只保留独立的 NapCat/OneBot 11 协议适配器，包括 HTTP API、正向 WebSocket、
-CQ 消息解析和类型化事件回调。旧 QQBot 业务、Repository、SeaORM entity 和建表 SQL
-已经删除；新的业务线和数据库模型将在后续需求明确后重新设计。
+A：个人秘书是完全独立于数字人的业务线。NapCat/OneBot 负责个人账号只读感知与历史回补，
+QQ 开放平台负责 Owner 控制和通知；协议 crate 不含业务或数据库，个人秘书领域与 QQBot 独立
+MySQL 迁移位于各自目录。当前仍需轮换并安全配置官方 Bot 凭据后完成实机联机。
 
 **Q：什么是向量搜索？为什么需要 Qdrant？**
 A：传统搜索是"关键字匹配"（搜"苹果"只能找到有"苹果"二字的文章），
@@ -1032,5 +1040,5 @@ A：有一个 Vue 3 写的内容管理后台（管理用户、审核风险、管
 
 ---
 
-_最后核对时间：2026-07-02_
+_最后核对时间：2026-07-24_
 _基于当前工作区代码同步_

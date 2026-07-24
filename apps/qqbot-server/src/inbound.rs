@@ -71,22 +71,47 @@ impl NapCatInboundMapper {
             VerifiedActorKind::External
         };
 
-        InboundMessageEnvelope::new(
-            SourceMessageRef::new(
-                MessageSource::NapCat,
-                self.self_qq_id.to_string(),
-                message_id,
-            )
-            .map_err(map_identity_error)?,
-            ConversationRef::new(conversation_kind, conversation_id.to_string())
-                .map_err(map_identity_error)?,
-            VerifiedActor::new(actor_kind, actor_id.to_string()).map_err(map_identity_error)?,
+        map_core(
+            self.self_qq_id,
+            message_id,
+            conversation_kind,
+            conversation_id,
+            actor_kind,
+            actor_id,
             occurred_at_unix_secs,
             normalized_text,
-            map_segments(segments),
+            segments,
         )
-        .map_err(map_identity_error)
     }
+}
+
+/// 实时消息和历史消息共用的身份与消息段映射核心。
+///
+/// 历史回补必须与实时入库使用同一套身份、角色和消息段规则，避免历史事件与实时事件
+/// 产生不一致的 SourceEvent。历史消息的 `connection_epoch_id` 为空（非实时观测）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn map_core(
+    self_qq_id: i64,
+    message_id: String,
+    conversation_kind: ConversationKind,
+    conversation_id: i64,
+    actor_kind: VerifiedActorKind,
+    actor_id: i64,
+    occurred_at_unix_secs: i64,
+    normalized_text: String,
+    segments: Vec<NapCatMessageSegment>,
+) -> Result<InboundMessageEnvelope, NapCatError> {
+    InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, self_qq_id.to_string(), message_id)
+            .map_err(map_identity_error)?,
+        ConversationRef::new(conversation_kind, conversation_id.to_string())
+            .map_err(map_identity_error)?,
+        VerifiedActor::new(actor_kind, actor_id.to_string()).map_err(map_identity_error)?,
+        occurred_at_unix_secs,
+        normalized_text,
+        map_segments(segments),
+    )
+    .map_err(map_identity_error)
 }
 
 fn map_segments(segments: Vec<NapCatMessageSegment>) -> Vec<ContentSegment> {
