@@ -4,8 +4,8 @@
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
 > 当前开发阶段：阶段 6「Owner 控制与官方 QQ 通道」正在推进；官方协议适配、Gateway 入站、
-> Owner 绑定、可靠通知 Outbox 和类型化 Agent 动作安全底座已完成，真实凭据轮换后的联机验收、
-> 自然语言规划节点与控制交互仍待实现。
+> Owner 绑定、可靠通知 Outbox、类型化 Agent 动作安全底座和首条有界 LLM 线程语义切片已完成，
+> 真实凭据轮换后的联机验收、Owner 自然语言 Action Planner 与控制交互仍待实现。
 
 ## 0. 当前完成与阻塞
 
@@ -17,6 +17,15 @@
 - [x] `DONE ING-003` 保留 CQ `Reply`、`At`、文本和常见媒体消息段。
 - [x] `DONE ARCH-001` QQ 协议、个人秘书业务和数字人业务保持 crate/进程隔离。
 - [x] `DONE ENV-001` 使用隔离 Docker MySQL 完成独立 QQBot 数据库集成验收。
+- [x] `DONE ENV-005` 已按本地 QQBot 配置建立持久化 MySQL 8.4 运行容器
+  `serverrs-qqbot-mysql`、数据库 `qq_personal_secretary` 和独立 Docker 卷；只绑定
+  `127.0.0.1:3306`，强制 TLS，11 个迁移按依赖顺序执行并通过幂等复跑，项目自身已完成真实
+  连接验收。未修改数字人 `docker-compose`、`init.sql` 或数据库。
+- [x] `DONE LLM-001` 已建立 QQBot 独立 `[llm]` 配置、OpenAI-compatible/Ollama 客户端和有界
+  线程语义提取垂直切片。API Key 不进入 TOML；远程端点强制 HTTPS；输入字符、输出 Token、
+  响应字节、超时和候选数均有上限。模型只能产生引用当前批次 `source_event_id` 的候选 DTO，
+  不能直接读写数据库、调用工具或发送消息。本机 Ollama `qwen3:14b` 已通过正常中文请求和
+  提示注入正文实机测试；Qwen3 使用显式 `qwen_no_think` 方言避免思考内容耗尽 JSON 输出预算。
 - [ ] `BLOCKED ENV-002` 用户提供的 QQ 开放平台凭据已暴露，禁止用于上线；先在平台轮换 Secret，
   再通过本地环境变量或忽略文件配置替换凭据，不得写入文档或 Git。
 - [ ] `PARTIAL ENV-003` 两个 NapCat 测试账号均在线；已在唯一获批测试群实测未 @、@、本人
@@ -85,9 +94,10 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [x] `DONE THR-003` 独立有界 Worker 按 Reply 链/会话/短时间窗口批量投影，拥有独立消费
   租约、扫描上限、错误退避和可取消关闭；默认路径不调用 LLM，也不复用通用
   `processing_status`。
-- [ ] `PARTIAL THR-004` 已实现协议无关提取端口、保守批量提取器和 MySQL 候选闭环；明确的
-  请求/反对/确认前缀会生成 `proposed` 类型化候选，保存参与者、置信度和来源事件。模糊语义、
-  上下文指代和未来 LLM 提取仍待实现，任何提取器输出都必须经过同一来源/身份/数量校验。
+- [ ] `PARTIAL THR-004` 已实现协议无关提取端口、保守批量提取器、可选 LLM 批量提取器和 MySQL
+  候选闭环。模型只消费有界线程事件，不接收完整历史；返回的发言人和来源必须映射到当前批次，
+  再经过领域来源/身份/数量/修订链校验后形成 `proposed` 候选。本机 Qwen3 单请求质量冒烟已
+  通过；跨线程检索、复杂指代和成组质量基准仍待实现。
 - [ ] `PARTIAL THR-005` 已持久化结论与 `supersedes_id` 唯一修订链，并禁止候选引用本线程外
   或非 confirmed 旧结论；Owner 确认、撤销和查看完整修订链的控制面仍待实现。
 - [ ] `PARTIAL THR-006` 已实现 `open/waiting/resolved/closed/reopened` 状态机、不可变状态历史和
@@ -180,16 +190,18 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   语言控制入口尚未开发，进入 `CMD-001/CMD-002` 前仍须先通知用户并配置本地凭据。
 - [ ] `PARTIAL CMD-009` 已建立无完整思维文本的有界结构状态：固定目标/约束、最多 8 条近期事件
   引用、最多 100 条证据引用和单一待处理 Proposal；检索装配器与模型 Prompt 尚未接入。
-- [ ] `TODO CMD-010` 增加自然语言歧义、越权、Prompt 注入和跨会话泄露测试。
+- [ ] `PARTIAL CMD-010` LLM 语义切片已把聊天正文标记为不可信输入，并覆盖越界来源、隐私省略
+  正文不入模、未知字段拒绝和候选数量上限；真实 Qwen3 提示注入正文也只能得到领域校验通过的
+  当前批次候选或安全拒绝。Owner Action Planner 的歧义、越权、Prompt 注入和跨会话泄露矩阵
+  仍待实现。
 
 ## 7. 控制面、可观测性和生产强化
 
 - [ ] `TODO OPS-001` 展示 NapCat/官方 Bot/MySQL/Worker 健康状态。
 - [ ] `PARTIAL OPS-002` 已为连接周期、入队、幂等结果、重试、溢出 Gap、Worker 排空、官方
-  Gateway/Token/Outbox、线程
-  Effect/撤销、结构记忆写入/过期/来源回读/删除和跟进扫描增加 `trace/debug/info/warn` 结构化
-  日志；控制面展示、队列
-  积压指标和回补进度仍待实现。
+  Gateway/Token/Outbox、线程 Effect/撤销、LLM 输入/响应预算与 Token Usage、结构记忆写入/
+  过期/来源回读/删除和跟进扫描增加 `trace/debug/info/warn` 结构化日志；控制面展示、队列积压
+  指标和回补进度仍待实现。
 - [ ] `TODO OPS-003` 展示线程、记忆、承诺、提醒、Outbox 和来源。
 - [ ] `TODO OPS-004` 提供修正、删除、策略和重新处理入口，所有操作审计。
 - [ ] `TODO OPS-005` 建立吞吐、延迟、LLM 调用率、误关联和提醒误报指标。

@@ -10,6 +10,21 @@ reconnect_max_secs = 60
 url = "mysql://serverrs:change_me@127.0.0.1:3306/qq_personal_secretary?ssl-mode=required"
 max_connections = 5
 
+[llm]
+enabled = false
+base_url = "http://127.0.0.1:11434/v1"
+model = ""
+reasoning_mode = "provider_default"
+# API Key 不写入 TOML；使用 QQBOT_LLM_API_KEY，或取消下一行注释指向本地文件。
+# api_key_file = "D:/private/qqbot-llm-api-key.txt"
+connect_timeout_secs = 10
+request_timeout_secs = 60
+max_input_chars = 60000
+max_output_tokens = 2000
+max_response_bytes = 1048576
+temperature = 0.1
+max_candidates_per_kind = 20
+
 [ingestion]
 queue_capacity = 1024
 retry_initial_ms = 100

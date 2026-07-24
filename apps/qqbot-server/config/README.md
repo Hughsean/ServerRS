@@ -27,11 +27,23 @@ Worker 只批量读取已经落库的 `SourceEvent`，不调用 LLM：结构化 
 合并。`batch_size` 与 `max_batches_per_scan` 限制单轮工作量，租约避免多进程重复提交，数据库
 错误按 `retry_initial_ms..retry_max_ms` 指数退避。
 
-线程类型化语义配置位于 `[thread_semantics]`。当前内置保守提取器仅识别明确的请求、反对、
-确认、决定前缀和问句，输出始终是带来源的 `proposed` 候选；模糊消息不会被编造为事实。
+线程类型化语义配置位于 `[thread_semantics]`。`[llm].enabled=false` 时，内置保守提取器仅识别
+明确的请求、反对、确认、决定前缀和问句；启用 LLM 后，同一个 Worker 会改用有界模型提取器。
+两条路径输出始终是带来源的 `proposed` 候选；模糊消息不会被直接确认为事实。
 `max_events`、`max_total_chars`、`max_event_chars` 和 `max_batches_per_scan` 同时限制输入与单轮
-工作量。超预算正文整条跳过推断，不基于截断文本猜测。未来接入 LLM 时仍必须经过相同的
-来源、身份、候选数量、修订链和生命周期校验。
+工作量。超预算正文整条跳过推断，不基于截断文本猜测。LLM 只能返回不含领域 ID 的候选 DTO；
+适配层按批次中的 `source_event_id` 映射发言人并生成领域 ID，最后仍必须经过相同的来源、身份、
+候选数量、修订链和生命周期校验。模型不能关闭/合并/拆分线程，也不能调用任何工具。
+
+OpenAI-compatible/Ollama 配置位于 `[llm]`，对应 `QQBOT_LLM_*`。默认端点为本机
+`http://127.0.0.1:11434/v1`，只有 loopback 允许明文 HTTP，远程端点必须使用 HTTPS；URL 禁止
+携带用户名、密码、查询参数或片段。`model` 在启用时必填。API Key 只能来自
+`QQBOT_LLM_API_KEY` 或本地 `api_key_file`，TOML 中的 `api_key` 会被拒绝。输入字符、输出 Token、
+响应字节、超时和每类候选数量均有硬上限；失败由语义 Worker 指数退避，不会静默绕过策略门或
+退回不受审计的模型调用。当前 LLM 只用于线程语义候选提取，尚未接入 Owner 自然语言 Action
+Planner。普通模型使用 `reasoning_mode = "provider_default"`；Ollama 的 Qwen3 可显式配置
+`reasoning_mode = "qwen_no_think"`，适配器会在用户输入末尾添加 `/no_think` 并同时发送
+`think=false`，避免思考内容耗尽结构化输出预算。该设置不会修改聊天事件原文。
 
 跨会话线程关联配置位于 `[thread_links]`，对应 `QQBOT_THREAD_LINKS_*`。Worker 只识别严格格式
 项目 ID 与精确文件 `source_key`，数据库仅保存 SHA-256 指纹；同名人物、相似话题和相同文件名
@@ -67,6 +79,7 @@ RUST_LOG=qqbot_server=debug,qqbot=debug,qq_open_platform=debug,personal_secretar
 RUST_LOG=qqbot_server=trace,qqbot=debug,qq_open_platform=debug,personal_secretary=trace
 ```
 
-`trace/debug` 会包含连接周期、平台消息 ID、会话/参与者 ID、重试次数、队列状态和线程批次
-数量，但不会记录聊天正文、媒体内容、Token、数据库密码或 QQ 开放平台 Secret。日志文件仍应
-按个人数据妥善保护。
+`trace/debug` 会包含连接周期、平台消息 ID、会话/参与者 ID、重试次数、队列状态、线程批次、
+LLM 输入字符数、响应字节数、耗时和 Provider 返回的 Token Usage，但不会记录聊天正文、Prompt、
+模型原始输出、媒体内容、API Key、数据库密码或 QQ 开放平台 Secret。日志文件仍应按个人数据
+妥善保护。

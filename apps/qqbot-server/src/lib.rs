@@ -3,6 +3,7 @@ pub mod config;
 mod follow_up_worker;
 mod inbound;
 mod ingestion_worker;
+mod llm;
 mod qq_open_platform;
 pub mod runtime;
 mod thread_links;

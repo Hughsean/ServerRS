@@ -7,9 +7,10 @@ use personal_secretary::{
     ConservativeThreadSemanticExtractor, DeterministicThreadPlanner, DeterministicThreadPolicy,
     FollowUpUseCase, InboundEventStoreError, InboundIdentityError, MessageSource,
     PersonalSecretaryStoreT, SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase,
-    ThreadSemanticUseCase, build_mysql_backfill_store, build_mysql_follow_up_store,
-    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_thread_link_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    ThreadSemanticExtractorT, ThreadSemanticUseCase, build_mysql_backfill_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_thread_link_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::{
     NapCatApiClient, NapCatConnectionObserver, NapCatError, NapCatEvent, NapCatEventHandler,
@@ -23,6 +24,7 @@ use crate::config::AppConfig;
 use crate::follow_up_worker::spawn_follow_up_worker;
 use crate::inbound::NapCatInboundMapper;
 use crate::ingestion_worker::{IngestionQueue, WorkerReport, spawn_ingestion_worker};
+use crate::llm::{LlmThreadSemanticExtractor, OpenAiCompatibleClient};
 use crate::qq_open_platform::spawn_official_platform;
 use crate::thread_links::spawn_thread_links_worker;
 use crate::thread_projection::spawn_thread_projection_worker;
@@ -124,6 +126,8 @@ pub enum RuntimeError {
     Config(String),
     #[error("QQ Open Platform runtime failed: {0}")]
     OfficialPlatform(String),
+    #[error("LLM runtime failed: {0}")]
+    Llm(String),
 }
 
 pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
@@ -201,10 +205,30 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
     };
 
     let thread_semantics_handle = if config.thread_semantics.enabled {
-        let extractor = Arc::new(
-            ConservativeThreadSemanticExtractor::new(config.thread_semantics.max_event_chars)
-                .map_err(|error| RuntimeError::Config(error.to_string()))?,
-        );
+        let extractor: Arc<dyn ThreadSemanticExtractorT> = if config.llm.enabled {
+            let client = Arc::new(
+                OpenAiCompatibleClient::new(&config.llm)
+                    .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+            );
+            tracing::info!(
+                model = config.llm.model,
+                endpoint_host = client.endpoint_host(),
+                max_input_chars = config.llm.max_input_chars,
+                max_output_tokens = config.llm.max_output_tokens,
+                max_candidates_per_kind = config.llm.max_candidates_per_kind,
+                "LLM 有界线程语义提取已启用；模型输出仍须通过来源与领域策略校验"
+            );
+            Arc::new(
+                LlmThreadSemanticExtractor::from_openai(client, config.llm.max_candidates_per_kind)
+                    .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+            )
+        } else {
+            tracing::info!("LLM 已禁用；线程语义使用保守零模型提取器");
+            Arc::new(
+                ConservativeThreadSemanticExtractor::new(config.thread_semantics.max_event_chars)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))?,
+            )
+        };
         let use_case = Arc::new(
             ThreadSemanticUseCase::new(
                 build_mysql_thread_semantic_store(db.clone()),

@@ -276,6 +276,37 @@ fn qqbot_server_does_not_send_through_the_local_qq_account() {
 }
 
 #[test]
+fn qqbot_llm_adapter_only_produces_bounded_semantic_candidates() {
+    let source = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/llm.rs"))
+        .expect("QQBot LLM adapter must be readable");
+    for forbidden in [
+        "sea_orm",
+        "sqlx",
+        "send_group_msg",
+        "send_private_msg",
+        "std::process",
+        "Command::new",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "QQBot LLM adapter contains forbidden direct infrastructure marker {forbidden}"
+        );
+    }
+    for required in [
+        "max_input_chars",
+        "max_response_bytes",
+        "source_event_ids",
+        "validate_semantic_patch",
+        "ThreadSemanticExtractorT",
+    ] {
+        assert!(
+            source.contains(required),
+            "QQBot LLM adapter is missing bounded semantic marker {required}"
+        );
+    }
+}
+
+#[test]
 fn napcat_callback_does_not_wait_for_mysql() {
     let runtime = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime.rs"))
         .expect("qqbot-server runtime must be readable");

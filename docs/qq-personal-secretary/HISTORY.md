@@ -5,16 +5,19 @@
 
 ## 当前阶段
 
-- 开发来源分支：`claude/qqbot-history-backfill`，安全检查点为 `995e291`；后续提交与 Main 合并
-  状态以 Git 历史为准。
+- 当前分支：`Main`，当前提交为 `23c3333`；QQBot 运行数据库使用独立容器、独立数据库和
+  独立持久化卷，不复用数字人数据库。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
-  协议适配与类型化 Agent 动作策略门。
-- 当前边界：NapCat 保持只读；QQ 开放平台代码已接入但未使用真实凭据联机。已暴露的旧 Secret
-  必须轮换，App ID/新 Secret/Owner OpenID 尚未安全配置。
-- 下一开发项：轮换并本地配置 QQ 开放平台凭据，完成 Owner-only 联机冒烟；随后接入受约束的
-  Planner/Retriever/Executor 节点与自然语言控制。
+  协议适配、类型化 Agent 动作策略门，以及可选 OpenAI-compatible/Ollama 有界线程语义提取。
+- 当前边界：NapCat 保持只读；本地 QQBot MySQL 8.4 运行库已建成并通过 TLS、迁移幂等和应用
+  连接验收。QQ 开放平台本地凭据可以完成鉴权和 Gateway 地址读取，但官方通道仍关闭，Owner
+  OpenID 尚未通过真实 C2C 入站事件确认；本机 Ollama `qwen3:14b` 已完成真实结构化补全与提示
+  注入边界验收。NapCat HTTP `3000` 在监听，但 WebSocket `6700` 当前未监听；已在聊天中暴露的
+  Secret 仍应轮换后再上线。
+- 下一开发项：恢复 NapCat WebSocket 后完成组合入站冒烟；随后接入受约束的
+  Planner/Retriever/Executor 节点与 Owner 自然语言控制。
 
 ## 历史分块
 
@@ -24,6 +27,9 @@
 
 ## 最近事件
 
+- `2026-07-24 22:42（Asia/Shanghai）`：Ollama Qwen3 实机语义与提示注入边界验收通过。
+- `2026-07-24 22:29（Asia/Shanghai）`：完成 QQBot 独立有界 LLM 线程语义提取垂直切片。
+- `2026-07-24 22:11（Asia/Shanghai）`：建立独立持久化 QQBot MySQL 运行库并完成 45 表验收。
 - `2026-07-24 21:37（Asia/Shanghai）`：OpenClaw QQBot 参考适配、账号隔离 Outbox 与 Agent Runtime 安全骨架。
 - `2026-07-24 21:00（Asia/Shanghai）`：记忆控制、冲突回读与承诺提醒 Scheduler/Outbox 闭环。
 - `2026-07-24 16:54（Asia/Shanghai）`：线程撤销、语义失效与来源化结构记忆多维批次。

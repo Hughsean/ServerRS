@@ -23,6 +23,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub follow_up: FollowUpConfig,
     #[serde(default)]
+    pub llm: LlmConfig,
+    #[serde(default)]
     pub qq_open_platform: QqOpenPlatformConfig,
 }
 
@@ -399,6 +401,142 @@ impl FollowUpConfig {
     }
 }
 
+/// QQBot 独立 LLM 配置。API Key 只允许来自进程环境或本地文件，禁止写入 TOML。
+/// 当前垂直切片仅用于有界线程语义提取，不允许模型直接访问数据库、网络工具或消息发送。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LlmConfig {
+    pub enabled: bool,
+    pub base_url: String,
+    pub model: String,
+    pub api_key_file: Option<PathBuf>,
+    pub connect_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub max_input_chars: usize,
+    pub max_output_tokens: u32,
+    pub max_response_bytes: usize,
+    pub temperature: f64,
+    pub max_candidates_per_kind: usize,
+    pub reasoning_mode: LlmReasoningMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmReasoningMode {
+    #[default]
+    ProviderDefault,
+    QwenNoThink,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            model: String::new(),
+            api_key_file: None,
+            connect_timeout_secs: 10,
+            request_timeout_secs: 60,
+            max_input_chars: 60_000,
+            max_output_tokens: 2_000,
+            max_response_bytes: 1_048_576,
+            temperature: 0.1,
+            max_candidates_per_kind: 20,
+            reasoning_mode: LlmReasoningMode::ProviderDefault,
+        }
+    }
+}
+
+impl LlmConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.model.trim().is_empty() || self.model.len() > 191 {
+            return Err(ConfigError::Invalid(
+                "llm.model must contain 1..=191 bytes when enabled".into(),
+            ));
+        }
+        let url = url::Url::parse(&self.base_url).map_err(|error| {
+            ConfigError::Invalid(format!("llm.base_url must be an absolute URL: {error}"))
+        })?;
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ConfigError::Invalid(
+                "llm.base_url must not contain credentials, query, or fragment".into(),
+            ));
+        }
+        match url.scheme() {
+            "https" => {}
+            "http" if url.host_str().is_some_and(is_loopback_host) => {}
+            _ => {
+                return Err(ConfigError::Invalid(
+                    "llm.base_url must use HTTPS; plain HTTP is allowed only on loopback".into(),
+                ));
+            }
+        }
+        if !(1..=300).contains(&self.connect_timeout_secs)
+            || !(1..=600).contains(&self.request_timeout_secs)
+        {
+            return Err(ConfigError::Invalid(
+                "llm timeouts must be positive and bounded".into(),
+            ));
+        }
+        if !(1_000..=1_000_000).contains(&self.max_input_chars) {
+            return Err(ConfigError::Invalid(
+                "llm.max_input_chars must be in 1000..=1000000".into(),
+            ));
+        }
+        if !(1..=32_768).contains(&self.max_output_tokens) {
+            return Err(ConfigError::Invalid(
+                "llm.max_output_tokens must be in 1..=32768".into(),
+            ));
+        }
+        if !(1_024..=10_485_760).contains(&self.max_response_bytes) {
+            return Err(ConfigError::Invalid(
+                "llm.max_response_bytes must be in 1024..=10485760".into(),
+            ));
+        }
+        if !self.temperature.is_finite() || !(0.0..=2.0).contains(&self.temperature) {
+            return Err(ConfigError::Invalid(
+                "llm.temperature must be finite and in 0..=2".into(),
+            ));
+        }
+        if !(1..=100).contains(&self.max_candidates_per_kind) {
+            return Err(ConfigError::Invalid(
+                "llm.max_candidates_per_kind must be in 1..=100".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn api_key(&self) -> Result<Option<String>, ConfigError> {
+        if let Ok(value) = std::env::var("QQBOT_LLM_API_KEY")
+            && !value.trim().is_empty()
+        {
+            return Ok(Some(value));
+        }
+        let Some(path) = &self.api_key_file else {
+            return Ok(None);
+        };
+        let value = std::fs::read_to_string(path).map_err(|error| {
+            ConfigError::Invalid(format!("failed to read llm.api_key_file: {error}"))
+        })?;
+        let value = value.trim().to_owned();
+        if value.is_empty() {
+            return Err(ConfigError::Invalid("llm.api_key_file is empty".into()));
+        }
+        Ok(Some(value))
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
 /// 官方 QQ Bot 通道。Secret 只允许来自进程环境或本地文件，不接受 TOML 明文字段。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -580,6 +718,7 @@ impl AppConfig {
         apply_thread_semantics_env(&mut self.thread_semantics)?;
         apply_thread_links_env(&mut self.thread_links)?;
         apply_follow_up_env(&mut self.follow_up)?;
+        apply_llm_env(&mut self.llm)?;
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         Ok(())
     }
@@ -632,6 +771,7 @@ impl AppConfig {
         self.thread_semantics.validate()?;
         self.thread_links.validate()?;
         self.follow_up.validate()?;
+        self.llm.validate()?;
         self.qq_open_platform.validate()?;
         Ok(())
     }
@@ -839,6 +979,63 @@ fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn apply_llm_env(config: &mut LlmConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_LLM_ENABLED") {
+        config.enabled = parse_bool("QQBOT_LLM_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config.base_url = value;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_MODEL")
+        && !value.trim().is_empty()
+    {
+        config.model = value;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_API_KEY_FILE")
+        && !value.trim().is_empty()
+    {
+        config.api_key_file = Some(PathBuf::from(value));
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_CONNECT_TIMEOUT_SECS") {
+        config.connect_timeout_secs = parse_positive("QQBOT_LLM_CONNECT_TIMEOUT_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_REQUEST_TIMEOUT_SECS") {
+        config.request_timeout_secs = parse_positive("QQBOT_LLM_REQUEST_TIMEOUT_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_INPUT_CHARS") {
+        config.max_input_chars = parse_positive("QQBOT_LLM_MAX_INPUT_CHARS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_OUTPUT_TOKENS") {
+        config.max_output_tokens = parse_positive("QQBOT_LLM_MAX_OUTPUT_TOKENS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_RESPONSE_BYTES") {
+        config.max_response_bytes = parse_positive("QQBOT_LLM_MAX_RESPONSE_BYTES", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_TEMPERATURE") {
+        config.temperature = value
+            .parse()
+            .map_err(|_| ConfigError::Invalid("QQBOT_LLM_TEMPERATURE must be a number".into()))?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_CANDIDATES_PER_KIND") {
+        config.max_candidates_per_kind =
+            parse_positive("QQBOT_LLM_MAX_CANDIDATES_PER_KIND", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_LLM_REASONING_MODE") {
+        config.reasoning_mode = match value.trim().to_ascii_lowercase().as_str() {
+            "provider_default" => LlmReasoningMode::ProviderDefault,
+            "qwen_no_think" => LlmReasoningMode::QwenNoThink,
+            _ => {
+                return Err(ConfigError::Invalid(
+                    "QQBOT_LLM_REASONING_MODE must be provider_default or qwen_no_think".into(),
+                ));
+            }
+        };
+    }
+    Ok(())
+}
+
 fn apply_qq_open_platform_env(config: &mut QqOpenPlatformConfig) -> Result<(), ConfigError> {
     if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_ENABLED") {
         config.enabled = parse_bool("QQBOT_OPEN_PLATFORM_ENABLED", &value)?;
@@ -923,6 +1120,78 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
         assert!(config.thread_links.enabled);
         assert_eq!(config.thread_links.max_events, 100);
         assert_eq!(config.thread_links.max_total_chars, 100_000);
+        assert!(!config.llm.enabled);
+        assert_eq!(config.llm.base_url, "http://127.0.0.1:11434/v1");
+    }
+
+    #[test]
+    fn accepts_bounded_loopback_llm_configuration() {
+        let config = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3:8b"
+reasoning_mode = "qwen_no_think"
+max_input_chars = 50000
+max_output_tokens = 1500
+max_candidates_per_kind = 10
+"#,
+        )
+        .unwrap();
+        assert!(config.llm.enabled);
+        assert_eq!(config.llm.model, "qwen3:8b");
+        assert_eq!(config.llm.reasoning_mode, LlmReasoningMode::QwenNoThink);
+    }
+
+    #[test]
+    fn rejects_llm_secret_in_toml_and_remote_plain_http() {
+        let secret_error = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "https://api.example.com/v1"
+model = "model"
+api_key = "must-not-be-accepted"
+"#,
+        )
+        .unwrap_err();
+        assert!(secret_error.to_string().contains("unknown field"));
+
+        let transport_error = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "http://192.0.2.10:8000/v1"
+model = "model"
+"#,
+        )
+        .unwrap_err();
+        assert!(transport_error.to_string().contains("loopback"));
     }
 
     #[test]
