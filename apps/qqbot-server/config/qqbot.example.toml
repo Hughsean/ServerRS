@@ -56,3 +56,21 @@ lease_secs = 60
 scan_interval_ms = 1500
 retry_initial_ms = 500
 retry_max_ms = 10000
+
+[follow_up]
+enabled = true
+scan_interval_ms = 30000
+horizon_secs = 604800
+batch_size = 200
+retry_initial_ms = 1000
+retry_max_ms = 60000
+
+[qq_open_platform]
+enabled = false
+app_id = ""
+owner_openid = ""
+# Secret 不写入此文件；使用 QQBOT_OPEN_PLATFORM_CLIENT_SECRET，或取消下一行注释指向本地文件。
+# client_secret_file = "D:/private/qqbot-secret.txt"
+reconnect_initial_ms = 1000
+reconnect_max_ms = 60000
+notification_lease_secs = 60

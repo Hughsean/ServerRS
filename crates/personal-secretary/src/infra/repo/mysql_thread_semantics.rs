@@ -168,8 +168,12 @@ LIMIT ?
 
         let confirmed_decision_ids = ValueRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            "SELECT decision_id AS value FROM secretary_thread_decisions \
-             WHERE thread_id = ? AND status = 'confirmed' ORDER BY created_at, decision_id",
+            "SELECT decision.decision_id AS value FROM secretary_thread_decisions decision \
+             WHERE decision.thread_id = ? AND decision.status = 'confirmed' \
+             AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_invalidations invalidation \
+                 WHERE invalidation.thread_id = decision.thread_id \
+                 AND invalidation.created_at >= decision.updated_at) \
+             ORDER BY decision.created_at, decision.decision_id",
             [thread.thread_id.clone().into()],
         ))
         .all(&transaction)
@@ -183,8 +187,12 @@ LIMIT ?
         .collect::<Result<Vec<_>, _>>()?;
         let open_question_ids = ValueRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            "SELECT question_id AS value FROM secretary_thread_open_questions \
-             WHERE thread_id = ? AND status = 'open' ORDER BY created_at, question_id",
+            "SELECT question.question_id AS value FROM secretary_thread_open_questions question \
+             WHERE question.thread_id = ? AND question.status = 'open' \
+             AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_invalidations invalidation \
+                 WHERE invalidation.thread_id = question.thread_id \
+                 AND invalidation.created_at >= question.updated_at) \
+             ORDER BY question.created_at, question.question_id",
             [thread.thread_id.clone().into()],
         ))
         .all(&transaction)

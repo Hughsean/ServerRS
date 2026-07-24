@@ -5,9 +5,10 @@ use std::time::Duration;
 use personal_secretary::{
     BackfillGapUseCase, ConnectionEndReason, ConnectionEpochId,
     ConservativeThreadSemanticExtractor, DeterministicThreadPlanner, DeterministicThreadPolicy,
-    InboundEventStoreError, InboundIdentityError, MessageSource, PersonalSecretaryStoreT,
-    SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase,
-    build_mysql_backfill_store, build_mysql_inbound_event_store, build_mysql_thread_link_store,
+    FollowUpUseCase, InboundEventStoreError, InboundIdentityError, MessageSource,
+    PersonalSecretaryStoreT, SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase,
+    ThreadSemanticUseCase, build_mysql_backfill_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_thread_link_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::{
@@ -19,8 +20,10 @@ use thiserror::Error;
 
 use crate::backfill::spawn_backfill_worker;
 use crate::config::AppConfig;
+use crate::follow_up_worker::spawn_follow_up_worker;
 use crate::inbound::NapCatInboundMapper;
 use crate::ingestion_worker::{IngestionQueue, WorkerReport, spawn_ingestion_worker};
+use crate::qq_open_platform::spawn_official_platform;
 use crate::thread_links::spawn_thread_links_worker;
 use crate::thread_projection::spawn_thread_projection_worker;
 use crate::thread_semantics::spawn_thread_semantics_worker;
@@ -119,6 +122,8 @@ pub enum RuntimeError {
     Identity(#[from] InboundIdentityError),
     #[error("invalid qqbot configuration: {0}")]
     Config(String),
+    #[error("QQ Open Platform runtime failed: {0}")]
+    OfficialPlatform(String),
 }
 
 pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
@@ -130,6 +135,47 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
     let store = build_mysql_inbound_event_store(db.clone());
     let account =
         SourceAccountRef::new(MessageSource::NapCat, config.napcat.self_qq_id.to_string())?;
+
+    let follow_up_use_case = Arc::new(FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        build_mysql_memory_store(db.clone()),
+    ));
+    let follow_up_handle = if config.follow_up.enabled {
+        tracing::info!(
+            scan_interval_ms = config.follow_up.scan_interval_ms,
+            horizon_secs = config.follow_up.horizon_secs,
+            batch_size = config.follow_up.batch_size,
+            "结构化记忆维护与承诺提醒调度已启用；通知仅写入 Outbox"
+        );
+        Some(spawn_follow_up_worker(
+            Arc::clone(&follow_up_use_case),
+            config.follow_up.clone(),
+        ))
+    } else {
+        tracing::info!("承诺提醒调度已禁用（follow_up.enabled=false）");
+        None
+    };
+
+    let official_platform_handle = if config.qq_open_platform.enabled {
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let handle = spawn_official_platform(
+            config.qq_open_platform.clone(),
+            db.clone(),
+            inbound,
+            Arc::clone(&follow_up_use_case),
+            account.clone(),
+        )
+        .await
+        .map_err(|error| RuntimeError::OfficialPlatform(error.to_string()))?;
+        tracing::info!(
+            app_id = config.qq_open_platform.app_id,
+            "QQ Open Platform Gateway 与 Owner-only Outbox 投递已启动"
+        );
+        Some(handle)
+    } else {
+        tracing::info!("QQ Open Platform 已禁用（qq_open_platform.enabled=false）");
+        None
+    };
 
     let thread_projection_handle = if config.thread_projection.enabled {
         let policy =
@@ -336,6 +382,12 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
             if let Some(handle) = thread_links_handle {
                 handle.shutdown().await;
             }
+            if let Some(handle) = follow_up_handle {
+                handle.shutdown().await;
+            }
+            if let Some(handle) = official_platform_handle {
+                handle.shutdown().await;
+            }
             return Ok(());
         }
         if observer.was_connected() {
@@ -355,6 +407,12 @@ pub async fn run(config: AppConfig) -> Result<(), RuntimeError> {
                     handle.shutdown().await;
                 }
                 if let Some(handle) = thread_links_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = follow_up_handle {
+                    handle.shutdown().await;
+                }
+                if let Some(handle) = official_platform_handle {
                     handle.shutdown().await;
                 }
                 return Ok(());

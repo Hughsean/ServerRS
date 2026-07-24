@@ -5,11 +5,16 @@
 
 ## 当前阶段
 
-- 当前分支/工作区：`claude/qqbot-history-backfill`，隔离工作树，尚未提交或合并 Main。
+- 开发来源分支：`claude/qqbot-history-backfill`，安全检查点为 `995e291`；后续提交与 Main 合并
+  状态以 Git 历史为准。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
-  关联审核、高影响线程变更的持久化 Suspend/Resume 与幂等逻辑执行。
-- 当前边界：NapCat 保持只读；QQ 开放平台尚未连接；App ID、Secret、Owner OpenID 尚未配置。
-- 下一开发项：Owner 撤销/反向线程变更、既有语义修订迁移，以及人物/项目/承诺记忆模型。
+  关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
+  项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
+  协议适配与类型化 Agent 动作策略门。
+- 当前边界：NapCat 保持只读；QQ 开放平台代码已接入但未使用真实凭据联机。已暴露的旧 Secret
+  必须轮换，App ID/新 Secret/Owner OpenID 尚未安全配置。
+- 下一开发项：轮换并本地配置 QQ 开放平台凭据，完成 Owner-only 联机冒烟；随后接入受约束的
+  Planner/Retriever/Executor 节点与自然语言控制。
 
 ## 历史分块
 
@@ -19,6 +24,9 @@
 
 ## 最近事件
 
+- `2026-07-24 21:37（Asia/Shanghai）`：OpenClaw QQBot 参考适配、账号隔离 Outbox 与 Agent Runtime 安全骨架。
+- `2026-07-24 21:00（Asia/Shanghai）`：记忆控制、冲突回读与承诺提醒 Scheduler/Outbox 闭环。
+- `2026-07-24 16:54（Asia/Shanghai）`：线程撤销、语义失效与来源化结构记忆多维批次。
 - `2026-07-24 16:24（Asia/Shanghai）`：线程变更持久化 Checkpoint/Suspend/Resume 与逻辑执行闭环。
 - `2026-07-24 14:33（Asia/Shanghai）`：历史分块、SeaORM 审核 CRUD 与线程变更 Suspend 预览。
 - `2026-07-24 14:19（Asia/Shanghai）`：Owner 关联审核与跨主体授权闭环。

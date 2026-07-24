@@ -38,6 +38,18 @@ Worker 只批量读取已经落库的 `SourceEvent`，不调用 LLM：结构化 
 不会生成候选。所有命中只写入 `proposed` 候选、类型化理由与来源，不会自动合并线程。
 `max_events`、`max_total_chars` 和 `max_batches_per_scan` 保证每轮有界，失败指数退避且关闭可取消。
 
+承诺跟进配置位于 `[follow_up]`，对应 `QQBOT_FOLLOW_UP_*`。Worker 每轮先有界标记到期记忆，
+再把已确认且有期限的承诺物化为跟进事项；到期事项只进入
+`secretary_notification_outbox`。启用 `[qq_open_platform]` 后，官方通道 Worker 按被管理账号
+隔离领取通知，只向配置的 Owner OpenID 发送；租约、幂等回执、退避和 `unknown_commit`
+会阻止提交结果不明时盲目重发。NapCat 仍不提供业务发送能力。
+
+QQ 开放平台配置位于 `[qq_open_platform]`，参考 OpenClaw QQBot 通道的协议实现，但保持本项目
+的独立洋葱边界。组合 Token 的含义是 `AppID:AppSecret`；只把 `app_id` 和 `owner_openid`
+写入本地忽略的 `qqbot.toml`，Secret 必须来自 `QQBOT_OPEN_PLATFORM_CLIENT_SECRET` 或
+`client_secret_file`。TOML 中的 `client_secret` 字段会被拒绝。不要把真实组合 Token 写进命令
+历史、文档或 Git；已经在聊天或终端暴露的 Secret 必须先轮换。
+
 生产环境建议在 MySQL URL 中使用 `ssl-mode=required`；QQBot 的独立 SeaORM 依赖已启用
 Rustls。若本地数据库不支持 TLS，应显式评估认证方式，不要为了联通而关闭服务端安全控制。
 
@@ -46,13 +58,13 @@ Rustls。若本地数据库不支持 TLS，应显式评估认证方式，不要�
 默认日志级别为 `info`。排查队列、重试、幂等和连接周期时可在 QQBot 自己的 `.env` 中设置：
 
 ```dotenv
-RUST_LOG=qqbot_server=debug,qqbot=debug,personal_secretary=debug
+RUST_LOG=qqbot_server=debug,qqbot=debug,qq_open_platform=debug,personal_secretary=debug
 ```
 
 需要逐条观察入队和幂等路径时，可临时提升到：
 
 ```dotenv
-RUST_LOG=qqbot_server=trace,qqbot=debug,personal_secretary=trace
+RUST_LOG=qqbot_server=trace,qqbot=debug,qq_open_platform=debug,personal_secretary=trace
 ```
 
 `trace/debug` 会包含连接周期、平台消息 ID、会话/参与者 ID、重试次数、队列状态和线程批次

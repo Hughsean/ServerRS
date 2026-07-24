@@ -2,7 +2,7 @@
 
 > 文档入口版本：V1.0
 > 最后更新：2026-07-24
-> 当前开发工作树：`claude/qqbot-history-backfill`（尚未提交或合并 Main）
+> 当前开发来源分支：`claude/qqbot-history-backfill`；具体合并状态以 Git 历史为准。
 
 本目录是个人 QQ 智能秘书业务的长期文档入口，用于保留需求演进、能力审计、开发
 Todo、历史记录和未来规划。后续新增的 QQBot/个人秘书项目文档应放在本目录或其子目录，
@@ -16,6 +16,7 @@ Todo、历史记录和未来规划。后续新增的 QQBot/个人秘书项目文
 | [TODO.md](TODO.md) | 唯一执行清单；记录优先级、依赖、状态和验收标准 |
 | [HISTORY.md](HISTORY.md) | 已完成开发、重要验证、数据库影响和 Git 落点 |
 | [napcat-history-contract.md](napcat-history-contract.md) | NapCat 历史接口、双账号测试群主动契约、真实入库证据和未决风险 |
+| [openclaw-qqbot-adapter.md](openclaw-qqbot-adapter.md) | OpenClaw QQBot 参考实现、项目内适配决策、凭据与运行时安全边界 |
 
 仓库根目录现有的 `qq_*requirements*.md` 是用户创建且尚未纳入 Git 的需求草案。本次不
 移动、不删除、不覆盖；待用户确认归档策略后，再复制到本目录的 `requirements/` 子目录。

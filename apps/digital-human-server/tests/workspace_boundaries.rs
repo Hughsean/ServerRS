@@ -48,7 +48,7 @@ fn collect_rs_files(path: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn workspace_has_exactly_the_seven_intended_members() {
+fn workspace_has_exactly_the_eight_intended_members() {
     let root = manifest("Cargo.toml");
     let members = root["workspace"]["members"]
         .as_array()
@@ -67,6 +67,7 @@ fn workspace_has_exactly_the_seven_intended_members() {
             "crates/digital-human".to_owned(),
             "crates/personal-secretary".to_owned(),
             "crates/qqbot".to_owned(),
+            "crates/qq-open-platform".to_owned(),
         ])
     );
 }
@@ -76,6 +77,7 @@ fn the_two_applications_have_independent_dependency_graphs() {
     let digital = dependencies(&manifest("crates/digital-human/Cargo.toml"));
     let personal_secretary = dependencies(&manifest("crates/personal-secretary/Cargo.toml"));
     let qq = dependencies(&manifest("crates/qqbot/Cargo.toml"));
+    let official_qq = dependencies(&manifest("crates/qq-open-platform/Cargo.toml"));
     let digital_server = dependencies(&manifest("apps/digital-human-server/Cargo.toml"));
     let qq_server = dependencies(&manifest("apps/qqbot-server/Cargo.toml"));
 
@@ -102,6 +104,20 @@ fn the_two_applications_have_independent_dependency_graphs() {
             "personal-secretary must not depend on {forbidden}"
         );
     }
+    for forbidden in [
+        "agent-core",
+        "ai-core",
+        "digital-human",
+        "personal-secretary",
+        "qqbot",
+        "sea-orm",
+        "sqlx",
+    ] {
+        assert!(
+            !official_qq.contains(forbidden),
+            "qq-open-platform must not depend on {forbidden}"
+        );
+    }
 
     for required in ["agent-core", "ai-core", "digital-human"] {
         assert!(
@@ -113,7 +129,36 @@ fn the_two_applications_have_independent_dependency_graphs() {
     assert!(!digital_server.contains("personal-secretary"));
     assert!(qq_server.contains("qqbot"));
     assert!(qq_server.contains("personal-secretary"));
+    assert!(qq_server.contains("qq-open-platform"));
     assert!(!qq_server.contains("digital-human"));
+    assert!(!digital_server.contains("qq-open-platform"));
+    assert!(!digital.contains("qq-open-platform"));
+    assert!(!personal_secretary.contains("qq-open-platform"));
+    assert!(!qq.contains("qq-open-platform"));
+}
+
+#[test]
+fn qq_open_platform_is_a_protocol_adapter_without_business_or_database_code() {
+    let sources = rust_sources("crates/qq-open-platform/src");
+    for forbidden in [
+        "personal_secretary",
+        "sea_orm",
+        "sqlx",
+        "DatabaseConnection",
+        "send_private_msg",
+        "send_group_msg",
+    ] {
+        assert!(
+            !sources.contains(forbidden),
+            "QQ Open Platform adapter contains forbidden marker {forbidden}"
+        );
+    }
+    for required in ["QqBotCredentials", "TokenManager", "QqGatewayClient"] {
+        assert!(
+            sources.contains(required),
+            "QQ Open Platform adapter is missing {required}"
+        );
+    }
 }
 
 #[test]
@@ -121,10 +166,15 @@ fn personal_secretary_domain_is_qq_protocol_neutral() {
     // 只检查领域层和应用层文件（排除 infra 仓储实现，它合理使用数据库/SeaORM）。
     let domain_root = workspace_root().join("crates/personal-secretary/src");
     let domain_files = [
+        "agent_runtime.rs",
         "backfill.rs",
         "backfill_service.rs",
         "continuity.rs",
+        "follow_up.rs",
+        "follow_up_service.rs",
         "inbound.rs",
+        "memory.rs",
+        "memory_service.rs",
         "store.rs",
         "thread_service.rs",
         "thread_semantic_service.rs",
@@ -358,6 +408,19 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
             .is_file(),
         "QQBot thread links migration must live under apps/qqbot-server/database"
     );
+    for migration in [
+        "20260724_personal_secretary_memory.sql",
+        "20260724_personal_secretary_memory_controls_followups.sql",
+        "20260724_personal_secretary_qq_open_platform.sql",
+    ] {
+        assert!(
+            workspace_root()
+                .join("apps/qqbot-server/database/migrations")
+                .join(migration)
+                .is_file(),
+            "QQBot-owned migration is missing: {migration}"
+        );
+    }
 }
 
 #[test]

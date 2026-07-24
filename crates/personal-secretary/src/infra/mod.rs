@@ -57,3 +57,20 @@ pub fn build_mysql_thread_mutation_checkpoint_store(
 ) -> Arc<dyn agent_core::graph::CheckpointStore<crate::ThreadMutationAgentState>> {
     Arc::new(repo::MySqlThreadMutationStore::new(db))
 }
+
+/// 构造来源化结构记忆仓储；人物、项目和承诺只保存有界类型化状态与 SourceEvent 引用。
+pub fn build_mysql_memory_store(db: DatabaseConnection) -> Arc<dyn crate::MemoryStoreT> {
+    Arc::new(repo::MySqlMemoryStore::new(db))
+}
+
+/// 构造承诺跟进调度仓储；仅生成持久化待发送项，不直接调用任何消息平台。
+pub fn build_mysql_follow_up_store(db: DatabaseConnection) -> Arc<dyn crate::FollowUpStoreT> {
+    Arc::new(repo::MySqlFollowUpStore::new(db))
+}
+
+/// 构造本地 Owner 身份绑定仓储；绑定由本地配置建立，不从聊天正文推断。
+pub fn build_mysql_owner_binding_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::OwnerBindingStoreT> {
+    Arc::new(repo::MySqlOwnerBindingStore::new(db))
+}

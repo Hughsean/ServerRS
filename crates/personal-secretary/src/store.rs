@@ -102,3 +102,18 @@ pub trait IngestionContinuityStoreT: Send + Sync {
 pub trait PersonalSecretaryStoreT: InboundEventStoreT + IngestionContinuityStoreT {}
 
 impl<T> PersonalSecretaryStoreT for T where T: InboundEventStoreT + IngestionContinuityStoreT {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerBinding {
+    pub managed_account: SourceAccountRef,
+    pub command_account: SourceAccountRef,
+    pub owner_actor_id: String,
+}
+
+#[async_trait]
+pub trait OwnerBindingStoreT: Send + Sync {
+    async fn ensure_owner_binding(
+        &self,
+        binding: &OwnerBinding,
+    ) -> Result<(), InboundEventStoreError>;
+}

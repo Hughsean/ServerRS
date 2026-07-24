@@ -1,7 +1,9 @@
 mod backfill;
 pub mod config;
+mod follow_up_worker;
 mod inbound;
 mod ingestion_worker;
+mod qq_open_platform;
 pub mod runtime;
 mod thread_links;
 mod thread_projection;

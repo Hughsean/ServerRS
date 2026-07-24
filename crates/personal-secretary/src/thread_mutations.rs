@@ -137,6 +137,19 @@ pub struct ThreadMutationEffectReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadMutationRevertInput {
+    pub proposal_id: ThreadMutationProposalId,
+    pub command_source_event_id: SourceEventId,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadMutationRevertReceipt {
+    pub proposal_id: ThreadMutationProposalId,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThreadMutationUpdate {
     OwnerDecision(ThreadMutationResumeInput),
     Rejected,
@@ -288,6 +301,17 @@ pub fn validate_thread_mutation_impact(
     Ok(())
 }
 
+pub fn validate_thread_mutation_revert(
+    input: &ThreadMutationRevertInput,
+) -> Result<(), ThreadMutationError> {
+    if input.reason.trim().is_empty() || input.reason.chars().count() > 1000 {
+        return Err(ThreadMutationError::InvalidRevert(
+            "revert reason must contain 1..=1000 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// 高影响线程操作只能从节点主动返回类型化 Suspend；此函数绝不产生执行 Effect。
 pub fn suspend_thread_mutation_for_approval(
     impact: ThreadMutationImpact,
@@ -325,6 +349,8 @@ pub fn suspend_thread_mutation_for_approval(
 pub enum ThreadMutationError {
     #[error("invalid thread mutation impact: {0}")]
     InvalidImpact(String),
+    #[error("invalid thread mutation revert: {0}")]
+    InvalidRevert(String),
 }
 
 #[cfg(test)]
@@ -373,5 +399,18 @@ mod tests {
             suspend_thread_mutation_for_approval(impact(ThreadMutationKind::Merge, &["thread-a"]))
                 .unwrap_err();
         assert!(matches!(error, ThreadMutationError::InvalidImpact(_)));
+    }
+
+    #[test]
+    fn revert_requires_a_bounded_reason() {
+        let input = ThreadMutationRevertInput {
+            proposal_id: ThreadMutationProposalId::new("proposal").unwrap(),
+            command_source_event_id: SourceEventId::new("command").unwrap(),
+            reason: " ".into(),
+        };
+        assert!(matches!(
+            validate_thread_mutation_revert(&input),
+            Err(ThreadMutationError::InvalidRevert(_))
+        ));
     }
 }

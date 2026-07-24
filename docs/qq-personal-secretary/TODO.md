@@ -3,8 +3,9 @@
 > 最后更新：2026-07-24
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
-> 当前开发阶段：阶段 3「跨会话因果线程」正在推进；历史回补 Worker、Gap 状态机、线程
-> 投影、Owner 关联审核和高影响线程变更后端闭环已完成，控制面和长期记忆仍待实现。
+> 当前开发阶段：阶段 6「Owner 控制与官方 QQ 通道」正在推进；官方协议适配、Gateway 入站、
+> Owner 绑定、可靠通知 Outbox 和类型化 Agent 动作安全底座已完成，真实凭据轮换后的联机验收、
+> 自然语言规划节点与控制交互仍待实现。
 
 ## 0. 当前完成与阻塞
 
@@ -16,7 +17,8 @@
 - [x] `DONE ING-003` 保留 CQ `Reply`、`At`、文本和常见媒体消息段。
 - [x] `DONE ARCH-001` QQ 协议、个人秘书业务和数字人业务保持 crate/进程隔离。
 - [x] `DONE ENV-001` 使用隔离 Docker MySQL 完成独立 QQBot 数据库集成验收。
-- [ ] `BLOCKED ENV-002` 在本地环境配置 QQ 开放平台 App ID/Secret；不得写入文档或 Git。
+- [ ] `BLOCKED ENV-002` 用户提供的 QQ 开放平台凭据已暴露，禁止用于上线；先在平台轮换 Secret，
+  再通过本地环境变量或忽略文件配置替换凭据，不得写入文档或 Git。
 - [ ] `PARTIAL ENV-003` 两个 NapCat 测试账号均在线；已在唯一获批测试群实测未 @、@、本人
   消息、跨账号 Reply、撤回通知、双 WebSocket 和主动重连。测试临时开启的本人消息上报与第二
   实例 WebSocket 已逐字恢复，未测试私聊主动发送；群免打扰状态是否影响上报仍需单独取证。
@@ -102,40 +104,57 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   `Proposal -> 持久化 Checkpoint -> NodeResult::Suspend(Approval) -> Owner Resume 验权 ->
   类型化 Effect/Receipt` 闭环。Merge 使用 canonical alias，Split 使用事件 override，原始
   `secretary_thread_events` 不搬移；有效线程视图已接入后续 Reply 投影、语义和跨会话扫描，
-  Effect ID 重复执行幂等，提交结果不明不得自动重放。Owner 撤销/反向操作、既有已确认语义的
-  修订迁移和重新打开话题仍待实现。
+  Effect ID 重复执行幂等，提交结果不明不得自动重放。现已增加 Owner 授权撤销、不可变撤销
+  审计、Alias/Override 停用、关联提示刷新、旧 proposed 候选过期、语义失效证据和游标重置。
+  已确认语义的人工迁移/重新确认与重新打开话题仍待实现。
 
 验收：给定多群和私聊的同一项目消息，系统能输出来源明确的要求、分歧、结论和未决问题；
 错误关联可撤销，且不会向第三方会话泄露内容。
 
 ## 4. 人物、项目与承诺记忆（P0）
 
-- [ ] `TODO MEM-001` 定义 `MemoryFact` 公共字段：类型、值、状态、置信度、来源、有效期和版本。
-- [ ] `TODO MEM-002` 定义 `PersonMemory`：稳定身份、别名、关系、职责、权限和沟通偏好。
-- [ ] `TODO MEM-003` 定义 `ProjectMemory`：目标、成员、进展、决定、风险、阻塞和文件版本。
-- [ ] `TODO MEM-004` 定义 `Commitment`：承诺人、受益人、动作、期限、状态和完成证据。
-- [ ] `TODO MEM-005` 建立原始事件、线程状态和长期记忆的来源引用。
-- [ ] `TODO MEM-006` 实现查看来源和按来源回读最小原文片段。
-- [ ] `TODO MEM-007` 实现记忆修正，保留修订链并重新计算受影响状态。
-- [ ] `TODO MEM-008` 实现删除派生记忆、原始内容删除和检索索引清理的不同确认流程。
-- [ ] `TODO MEM-009` 实现 TTL/到期清理和“永不进入长期记忆”会话策略。
-- [ ] `TODO MEM-010` 实现冲突驱动回读，不用滚动摘要直接覆盖冲突事实。
+- [x] `DONE MEM-001` 定义 `MemoryFact` 公共字段：类型化 Payload、状态、置信度、来源、TTL 和版本。
+- [ ] `PARTIAL MEM-002` 已定义 `PersonMemory` 的稳定 Actor、关系、职责和沟通偏好；别名与权限
+  仍待 ParticipantIdentity/Owner 控制面接入。
+- [ ] `PARTIAL MEM-003` 已定义 `ProjectMemory` 的目标、成员、进展、决定引用、风险、阻塞和
+  Artifact 引用；自动提取与项目查询仍待实现。
+- [ ] `PARTIAL MEM-004` 已定义 `CommitmentMemory` 的承诺人、受益人、动作、期限、状态和完成
+  来源证据；已确认且有期限的承诺会进入持久化 Scheduler，自动提取/确认入口仍待实现。
+- [x] `DONE MEM-005` 长期记忆版本通过 `secretary_memory_fact_sources` 引用无损 SourceEvent，
+  不把完整聊天轨迹复制进事实 JSON。
+- [x] `DONE MEM-006` Owner/控制面可按 Fact ID 有界回读原始事件最小片段、会话、Actor 和时间；
+  正文策略不允许时不返回片段。
+- [x] `DONE MEM-007` 同账号、同类型、同 subject 使用不可变单向修订链；旧版本标记为
+  `superseded`，跟进 Scheduler 会重算并抑制旧通知。
+- [ ] `PARTIAL MEM-008` 已实现经本地绑定授权的 `OwnerCommand` 删除派生记忆及不可变审计；原始
+  内容彻底删除和未来检索索引清理仍须单独确认流程。
+- [x] `DONE MEM-009` TTL 查询过滤、有界到期标记、常驻周期清理 Worker 与
+  `never_long_term`/`envelope_only` 写边界均已实现。
+- [x] `DONE MEM-010` 同 subject 出现并行新事实时拒绝静默覆盖，必须先回读来源并显式提供
+  `supersedes_fact_id`，形成可审计冲突修订。
 
 验收：人物、项目和承诺均为结构化状态；每项事实可查来源、可修正、可删除、可过期；设置为
 `never_long_term` 的会话不会生成长期记忆。
 
 ## 5. 主动跟进和提醒（P0）
 
-- [ ] `TODO FUP-001` 定义 `ResponseExpectation`、`FollowUpRule`、`FollowUpOccurrence`。
-- [ ] `TODO FUP-002` 从明确要求和承诺中生成待确认候选，而不是直接生效。
-- [ ] `TODO FUP-003` 持久化 Scheduler 查询临近截止、逾期、长期无人回复和阻塞事项。
-- [ ] `TODO FUP-004` 识别“是否已回复/完成”的证据，不能只按时间机械提醒。
+- [ ] `PARTIAL FUP-001` 已定义承诺跟进状态、扫描报告、持久化 Item 和 Notification
+  Occurrence；`ResponseExpectation` 与通用规则仍待实现。
+- [ ] `PARTIAL FUP-002` 已确认承诺可生成幂等跟进事项；要求候选和显式待确认交互仍待实现。
+- [ ] `PARTIAL FUP-003` 常驻 Scheduler 已支持有界查询临近/逾期承诺、指数退避和快速关闭；
+  长期无人回复与阻塞事项仍待实现。
+- [ ] `PARTIAL FUP-004` 承诺完成、取消、事实删除/到期/修订会终止事项并抑制未发通知；实际回复
+  证据关联仍待实现。
 - [ ] `TODO FUP-005` 支持工作时间、静默时段、重要联系人、群策略和升级规则。
-- [ ] `TODO FUP-006` 每次跟进生成唯一 occurrence，重复扫描不重复提醒。
-- [ ] `TODO FUP-007` 通过 Outbox 和官方 Bot 只提醒 Owner；失败重试和 UnknownCommit 可观察。
+- [x] `DONE FUP-006` 每个来源承诺/理由只生成一个 FollowUp，每个 FollowUp/通知类型只生成一个
+  Outbox occurrence，重复扫描不重复入队。
+- [ ] `PARTIAL FUP-007` 平台无关 Outbox 已接入按账号隔离领取、租约 fencing、指数退避、送达
+  回执和 `unknown_commit`；官方 Bot 只向配置的 Owner OpenID 发送。隔离 MySQL 已覆盖跨账号、
+  错误租约、重试、送达和提交结果不明；真实 QQ 投递仍待替换凭据后的联机验收。
 - [ ] `TODO FUP-008` 支持 Owner 确认、稍后提醒、完成、忽略、改期和关闭线程。
 - [ ] `TODO FUP-009` 记录“为何提醒”和“为何未提醒”，支持重要/不重要反馈。
-- [ ] `TODO FUP-010` 明确禁止 MVP 通过 NapCat 自动催促客户、负责人或群成员。
+- [x] `DONE FUP-010` NapCat 业务路径不含主动发送；官方通道也只消费 Owner 通知 Outbox，禁止
+  自动催促客户、负责人或群成员。
 
 验收：服务重启后提醒不丢不重；报价截止、客户久未回复等场景能依据结构化证据提醒 Owner，
 并且不会自动代表 Owner 联系第三方。
@@ -145,11 +164,13 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 > 进入 `CMD-001/CMD-002`、开始连接 QQ 开放平台前，必须先明确通知用户并等待其提供/确认
 > 本地凭据配置；禁止把 App ID、Secret 或 Owner OpenID 写入 Git。
 
-- [ ] `TODO CMD-001` 新增独立 `qq-open-platform` 协议 crate。
-- [ ] `TODO CMD-002` 实现 App 凭证、Webhook/WebSocket、事件幂等和 Owner OpenID 绑定。
+- [x] `DONE CMD-001` 新增独立 `qq-open-platform` 协议 crate，与 NapCat、个人秘书和数字人隔离。
+- [ ] `PARTIAL CMD-002` 已实现 App 凭据换取、Gateway Identify/Resume/Heartbeat、C2C/群事件映射、
+  原始信封持久化后推进 sequence、Owner OpenID 绑定和官方 C2C 通知；真实联机和交互回执待验收。
 - [ ] `PARTIAL CMD-003` 线程关联审核已强制验证 `OwnerCommand`、本地 Owner 账号绑定及同一
   被管理账号；普通观察、未绑定和跨账号命令默认拒绝。其余命令类型仍须逐项接入同一边界。
-- [ ] `TODO CMD-004` 定义类型化查询 Action：事件搜索、讨论总结、待回复和承诺列表。
+- [ ] `PARTIAL CMD-004` 已定义事件检索、来源回读、线程检索、指代解析、近期事项、日程、任务、
+  提醒、Owner 消息和澄清的类型化 Action 白名单；具体查询/日程执行器与 LLM 规划节点待接入。
 - [ ] `TODO CMD-005` 定义类型化策略 Action：群提醒、重要联系人、静默时间和自动回复禁用。
 - [ ] `TODO CMD-006` 定义反馈 Action：重要、不重要、类似消息规则和联系人策略。
 - [ ] `TODO CMD-007` 定义记忆 Action：查看来源、修正、删除、TTL 和会话长期记忆开关。
@@ -157,14 +178,18 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   `NodeResult::Suspend(Approval)`；Proposal、QQBot 独立 MySQL Checkpoint、进程重启后 Resume、
   `OwnerCommand`/本地绑定验权、Effect Receipt 和拒绝零 Effect 均已接入。QQ 开放平台自然
   语言控制入口尚未开发，进入 `CMD-001/CMD-002` 前仍须先通知用户并配置本地凭据。
-- [ ] `TODO CMD-009` 查询 Prompt 只包含有界状态、最近窗口和按需来源证据。
+- [ ] `PARTIAL CMD-009` 已建立无完整思维文本的有界结构状态：固定目标/约束、最多 8 条近期事件
+  引用、最多 100 条证据引用和单一待处理 Proposal；检索装配器与模型 Prompt 尚未接入。
 - [ ] `TODO CMD-010` 增加自然语言歧义、越权、Prompt 注入和跨会话泄露测试。
 
 ## 7. 控制面、可观测性和生产强化
 
 - [ ] `TODO OPS-001` 展示 NapCat/官方 Bot/MySQL/Worker 健康状态。
-- [ ] `PARTIAL OPS-002` 已为连接周期、入队、幂等结果、重试、溢出 Gap 和 Worker 排空增加
-  `trace/debug/warn` 结构化日志；控制面展示、队列积压指标和回补进度仍待实现。
+- [ ] `PARTIAL OPS-002` 已为连接周期、入队、幂等结果、重试、溢出 Gap、Worker 排空、官方
+  Gateway/Token/Outbox、线程
+  Effect/撤销、结构记忆写入/过期/来源回读/删除和跟进扫描增加 `trace/debug/info/warn` 结构化
+  日志；控制面展示、队列
+  积压指标和回补进度仍待实现。
 - [ ] `TODO OPS-003` 展示线程、记忆、承诺、提醒、Outbox 和来源。
 - [ ] `TODO OPS-004` 提供修正、删除、策略和重新处理入口，所有操作审计。
 - [ ] `TODO OPS-005` 建立吞吐、延迟、LLM 调用率、误关联和提醒误报指标。

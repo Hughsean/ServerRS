@@ -8,12 +8,14 @@ use sea_orm::{
     TransactionTrait,
 };
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use crate::{
     InboundEventStoreError, ThreadMutationAgentState, ThreadMutationDecision, ThreadMutationEffect,
     ThreadMutationEffectReceipt, ThreadMutationImpact, ThreadMutationKind,
-    ThreadMutationProposalStatus, ThreadMutationResumeInput, ThreadMutationStoreT,
-    validate_thread_mutation_impact,
+    ThreadMutationProposalStatus, ThreadMutationResumeInput, ThreadMutationRevertInput,
+    ThreadMutationRevertReceipt, ThreadMutationStoreT, validate_thread_mutation_impact,
+    validate_thread_mutation_revert,
 };
 
 use super::mysql_inbound::store_error;
@@ -362,6 +364,8 @@ impl ThreadMutationStoreT for MySqlThreadMutationStore {
             ThreadMutationKind::Merge => apply_merge(&transaction, &impact).await?,
             ThreadMutationKind::Split => apply_split(&transaction, &impact).await?,
         }
+        refresh_link_hints_and_candidates(&transaction, &impact).await?;
+        record_semantic_invalidations(&transaction, &impact, "mutation_applied").await?;
 
         let applied = transaction
             .execute_raw(Statement::from_sql_and_values(
@@ -385,6 +389,127 @@ impl ThreadMutationStoreT for MySqlThreadMutationStore {
             proposal_id: effect.proposal_id.clone(),
             effect_id: effect_id.into(),
             status: ThreadMutationProposalStatus::Applied,
+            changed: true,
+        })
+    }
+
+    async fn revert_applied(
+        &self,
+        input: &ThreadMutationRevertInput,
+    ) -> Result<ThreadMutationRevertReceipt, InboundEventStoreError> {
+        validate_thread_mutation_revert(input)
+            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+        let transaction = self.db.begin().await.map_err(store_error)?;
+        let row = RevertAuthorizationRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT proposal.proposal_status,
+                      CAST(proposal.impact_json AS CHAR) AS impact_json,
+                      reversion.command_source_event_id AS reversion_command_source_event_id,
+                      reversion.reason AS reversion_reason
+               FROM secretary_thread_mutation_proposals proposal
+               JOIN secretary_source_events command ON command.source_event_id = ?
+               JOIN secretary_accounts command_account ON command_account.id = command.account_id
+               JOIN secretary_owner_bindings binding
+                 ON binding.managed_account_id = proposal.account_id
+                AND binding.command_account_id = command.account_id
+                AND binding.owner_actor_id = command.actor_platform_id
+                AND binding.status = 'active'
+               LEFT JOIN secretary_thread_mutation_reversions reversion
+                 ON reversion.proposal_id = proposal.proposal_id
+               WHERE proposal.proposal_id = ?
+                 AND command.message_role = 'owner_command'
+                 AND command_account.source_channel = 'qq_open_platform'
+               FOR UPDATE"#,
+            [
+                input.command_source_event_id.as_str().into(),
+                input.proposal_id.as_str().into(),
+            ],
+        ))
+        .one(&transaction)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            InboundEventStoreError::InvalidData(
+                "applied proposal or authorized revert OwnerCommand was not found".into(),
+            )
+        })?;
+        if parse_status(&row.proposal_status)? != ThreadMutationProposalStatus::Applied {
+            return Err(InboundEventStoreError::InvalidData(
+                "only an applied thread mutation can be reverted".into(),
+            ));
+        }
+        if let Some(existing_command) = row.reversion_command_source_event_id {
+            if existing_command == input.command_source_event_id.as_str()
+                && row.reversion_reason.as_deref() == Some(input.reason.as_str())
+            {
+                transaction.commit().await.map_err(store_error)?;
+                return Ok(ThreadMutationRevertReceipt {
+                    proposal_id: input.proposal_id.clone(),
+                    changed: false,
+                });
+            }
+            return Err(InboundEventStoreError::InvalidData(
+                "thread mutation was already reverted by a different immutable command".into(),
+            ));
+        }
+
+        let impact: ThreadMutationImpact =
+            serde_json::from_str(&row.impact_json).map_err(|error| {
+                InboundEventStoreError::InvalidData(format!(
+                    "stored proposal impact is invalid: {error}"
+                ))
+            })?;
+        validate_thread_mutation_impact(&impact)
+            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"INSERT INTO secretary_thread_mutation_reversions
+                   (reversion_id, proposal_id, command_source_event_id, reason)
+                   VALUES (?, ?, ?, ?)"#,
+                [
+                    Uuid::new_v4().to_string().into(),
+                    input.proposal_id.as_str().into(),
+                    input.command_source_event_id.as_str().into(),
+                    input.reason.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        let deactivated = match impact.kind {
+            ThreadMutationKind::Merge => transaction
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "UPDATE secretary_thread_merge_aliases SET active = FALSE WHERE proposal_id = ? AND active = TRUE",
+                    [input.proposal_id.as_str().into()],
+                ))
+                .await
+                .map_err(store_error)?
+                .rows_affected(),
+            ThreadMutationKind::Split => transaction
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "UPDATE secretary_thread_split_overrides SET active = FALSE WHERE proposal_id = ? AND active = TRUE",
+                    [input.proposal_id.as_str().into()],
+                ))
+                .await
+                .map_err(store_error)?
+                .rows_affected(),
+        };
+        if deactivated == 0 {
+            return Err(InboundEventStoreError::InvalidData(
+                "applied mutation has no active logical overlay to revert".into(),
+            ));
+        }
+        refresh_link_hints_and_candidates(&transaction, &impact).await?;
+        record_semantic_invalidations(&transaction, &impact, "mutation_reverted").await?;
+        transaction.commit().await.map_err(store_error)?;
+        info!(
+            proposal_id = input.proposal_id.as_str(),
+            "thread mutation reverted and downstream projections invalidated"
+        );
+        Ok(ThreadMutationRevertReceipt {
+            proposal_id: input.proposal_id.clone(),
             changed: true,
         })
     }
@@ -503,6 +628,80 @@ fn deserialize_checkpoint(
 fn checkpoint_store_error(error: sea_orm::DbErr, checkpoint_id: CheckpointId) -> CheckpointError {
     tracing::error!(%error, %checkpoint_id, "thread mutation checkpoint store operation failed");
     CheckpointError::StoreUnavailable
+}
+
+async fn refresh_link_hints_and_candidates<C: ConnectionTrait>(
+    connection: &C,
+    impact: &ThreadMutationImpact,
+) -> Result<(), InboundEventStoreError> {
+    for event_id in &impact.affected_source_event_ids {
+        connection
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"UPDATE secretary_thread_link_hints hint
+                   JOIN secretary_effective_thread_events effective
+                     ON effective.source_event_id = hint.source_event_id
+                   SET hint.thread_id = effective.thread_id
+                   WHERE hint.source_event_id = ?"#,
+                [event_id.as_str().into()],
+            ))
+            .await
+            .map_err(store_error)?;
+        connection
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"UPDATE secretary_thread_link_candidates candidate
+                   JOIN secretary_thread_link_candidate_sources source
+                     ON source.candidate_id = candidate.candidate_id
+                   SET candidate.status = 'expired'
+                   WHERE source.source_event_id = ? AND candidate.status = 'proposed'"#,
+                [event_id.as_str().into()],
+            ))
+            .await
+            .map_err(store_error)?;
+    }
+    Ok(())
+}
+
+async fn record_semantic_invalidations<C: ConnectionTrait>(
+    connection: &C,
+    impact: &ThreadMutationImpact,
+    kind: &str,
+) -> Result<(), InboundEventStoreError> {
+    let mut thread_ids = impact
+        .thread_ids
+        .iter()
+        .map(|thread_id| thread_id.as_str().to_owned())
+        .collect::<HashSet<_>>();
+    if impact.kind == ThreadMutationKind::Split {
+        thread_ids.insert(impact.proposal_id.as_str().to_owned());
+    }
+    for thread_id in thread_ids {
+        connection
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"INSERT IGNORE INTO secretary_thread_semantic_invalidations
+                   (invalidation_id, proposal_id, thread_id, invalidation_kind)
+                   VALUES (?, ?, ?, ?)"#,
+                [
+                    Uuid::new_v4().to_string().into(),
+                    impact.proposal_id.as_str().into(),
+                    thread_id.clone().into(),
+                    kind.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        connection
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "DELETE FROM secretary_thread_semantic_state WHERE thread_id = ?",
+                [thread_id.into()],
+            ))
+            .await
+            .map_err(store_error)?;
+    }
+    Ok(())
 }
 
 async fn apply_merge<C: ConnectionTrait>(
@@ -698,6 +897,14 @@ struct ProposalEffectRow {
     mutation_kind: String,
     impact_json: String,
     effect_id: Option<String>,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct RevertAuthorizationRow {
+    proposal_status: String,
+    impact_json: String,
+    reversion_command_source_event_id: Option<String>,
+    reversion_reason: Option<String>,
 }
 
 #[derive(Debug, FromQueryResult)]

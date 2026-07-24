@@ -12,7 +12,8 @@ use crate::{
     InboundEventStoreError, ThreadMutationAgentState, ThreadMutationApprovalRequest,
     ThreadMutationDecision, ThreadMutationEffect, ThreadMutationEffectReceipt,
     ThreadMutationImpact, ThreadMutationProposalStatus, ThreadMutationResumeInput,
-    ThreadMutationUpdate, validate_thread_mutation_impact,
+    ThreadMutationRevertInput, ThreadMutationRevertReceipt, ThreadMutationUpdate,
+    validate_thread_mutation_impact, validate_thread_mutation_revert,
 };
 
 #[async_trait]
@@ -32,10 +33,33 @@ pub trait ThreadMutationStoreT: Send + Sync {
         effect: &ThreadMutationEffect,
         effect_id: &str,
     ) -> Result<ThreadMutationEffectReceipt, InboundEventStoreError>;
+
+    async fn revert_applied(
+        &self,
+        input: &ThreadMutationRevertInput,
+    ) -> Result<ThreadMutationRevertReceipt, InboundEventStoreError>;
 }
 
 pub struct ThreadMutationUseCase {
     store: Arc<dyn ThreadMutationStoreT>,
+}
+
+pub struct ThreadMutationRevertUseCase {
+    store: Arc<dyn ThreadMutationStoreT>,
+}
+
+impl ThreadMutationRevertUseCase {
+    pub fn new(store: Arc<dyn ThreadMutationStoreT>) -> Self {
+        Self { store }
+    }
+
+    pub async fn revert(
+        &self,
+        input: &ThreadMutationRevertInput,
+    ) -> Result<ThreadMutationRevertReceipt, ThreadMutationUseCaseError> {
+        validate_thread_mutation_revert(input)?;
+        Ok(self.store.revert_applied(input).await?)
+    }
 }
 
 impl ThreadMutationUseCase {
@@ -292,6 +316,16 @@ mod tests {
                 proposal_id: effect.proposal_id.clone(),
                 effect_id: effect_id.into(),
                 status: ThreadMutationProposalStatus::Applied,
+                changed: true,
+            })
+        }
+
+        async fn revert_applied(
+            &self,
+            input: &ThreadMutationRevertInput,
+        ) -> Result<ThreadMutationRevertReceipt, InboundEventStoreError> {
+            Ok(ThreadMutationRevertReceipt {
+                proposal_id: input.proposal_id.clone(),
                 changed: true,
             })
         }

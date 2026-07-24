@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use personal_secretary::BackfillBudget;
+use qq_open_platform::QqBotCredentials;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -19,6 +20,10 @@ pub struct AppConfig {
     pub thread_semantics: ThreadSemanticsConfig,
     #[serde(default)]
     pub thread_links: ThreadLinksConfig,
+    #[serde(default)]
+    pub follow_up: FollowUpConfig,
+    #[serde(default)]
+    pub qq_open_platform: QqOpenPlatformConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -343,6 +348,148 @@ impl ThreadLinksConfig {
     }
 }
 
+/// 结构化记忆维护与承诺提醒调度。只写持久化 Outbox，不直接发送消息。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct FollowUpConfig {
+    pub enabled: bool,
+    pub scan_interval_ms: u64,
+    pub horizon_secs: i64,
+    pub batch_size: u32,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for FollowUpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_interval_ms: 30_000,
+            horizon_secs: 604_800,
+            batch_size: 200,
+            retry_initial_ms: 1_000,
+            retry_max_ms: 60_000,
+        }
+    }
+}
+
+impl FollowUpConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_ms < 1_000 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "follow_up.scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if !(60..=31_536_000).contains(&self.horizon_secs) {
+            return Err(ConfigError::Invalid(
+                "follow_up.horizon_secs must be between 60 and 31536000".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "follow_up.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "follow_up retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 官方 QQ Bot 通道。Secret 只允许来自进程环境或本地文件，不接受 TOML 明文字段。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct QqOpenPlatformConfig {
+    pub enabled: bool,
+    pub app_id: String,
+    pub client_secret_file: Option<PathBuf>,
+    pub owner_openid: String,
+    pub reconnect_initial_ms: u64,
+    pub reconnect_max_ms: u64,
+    pub notification_lease_secs: u64,
+}
+
+impl Default for QqOpenPlatformConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            app_id: String::new(),
+            client_secret_file: None,
+            owner_openid: String::new(),
+            reconnect_initial_ms: 1_000,
+            reconnect_max_ms: 60_000,
+            notification_lease_secs: 60,
+        }
+    }
+}
+
+impl QqOpenPlatformConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.app_id.trim().is_empty() || self.app_id.len() > 191 {
+            return Err(ConfigError::Invalid(
+                "qq_open_platform.app_id must contain 1..=191 bytes when enabled".into(),
+            ));
+        }
+        if self.owner_openid.trim().is_empty() || self.owner_openid.len() > 191 {
+            return Err(ConfigError::Invalid(
+                "qq_open_platform.owner_openid must contain 1..=191 bytes when enabled".into(),
+            ));
+        }
+        if self.reconnect_initial_ms == 0 || self.reconnect_max_ms < self.reconnect_initial_ms {
+            return Err(ConfigError::Invalid(
+                "qq_open_platform reconnect delays must be positive and max >= initial".into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.notification_lease_secs) {
+            return Err(ConfigError::Invalid(
+                "qq_open_platform.notification_lease_secs must be in 1..=3600".into(),
+            ));
+        }
+        if std::env::var("QQBOT_OPEN_PLATFORM_CLIENT_SECRET")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+            && self.client_secret_file.is_none()
+        {
+            return Err(ConfigError::Invalid(
+                "enabled QQ Open Platform requires QQBOT_OPEN_PLATFORM_CLIENT_SECRET or client_secret_file"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn credentials(&self) -> Result<QqBotCredentials, ConfigError> {
+        self.validate()?;
+        let secret = if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_CLIENT_SECRET")
+            && !value.trim().is_empty()
+        {
+            value
+        } else if let Some(path) = &self.client_secret_file {
+            std::fs::read_to_string(path)
+                .map_err(|error| {
+                    ConfigError::Invalid(format!(
+                        "failed to read QQ Open Platform client_secret_file: {error}"
+                    ))
+                })?
+                .trim()
+                .to_owned()
+        } else {
+            return Err(ConfigError::Invalid(
+                "QQ Open Platform client secret is unavailable".into(),
+            ));
+        };
+        QqBotCredentials::new(self.app_id.clone(), secret)
+            .map_err(|error| ConfigError::Invalid(error.to_string()))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read QQBot config {path}: {source}")]
@@ -432,6 +579,8 @@ impl AppConfig {
         apply_thread_projection_env(&mut self.thread_projection)?;
         apply_thread_semantics_env(&mut self.thread_semantics)?;
         apply_thread_links_env(&mut self.thread_links)?;
+        apply_follow_up_env(&mut self.follow_up)?;
+        apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         Ok(())
     }
 
@@ -482,6 +631,8 @@ impl AppConfig {
         self.thread_projection.validate()?;
         self.thread_semantics.validate()?;
         self.thread_links.validate()?;
+        self.follow_up.validate()?;
+        self.qq_open_platform.validate()?;
         Ok(())
     }
 }
@@ -666,6 +817,61 @@ fn apply_thread_links_env(config: &mut ThreadLinksConfig) -> Result<(), ConfigEr
     Ok(())
 }
 
+fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_ENABLED") {
+        config.enabled = parse_bool("QQBOT_FOLLOW_UP_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS") {
+        config.scan_interval_ms = parse_positive("QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_HORIZON_SECS") {
+        config.horizon_secs = parse_positive("QQBOT_FOLLOW_UP_HORIZON_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_BATCH_SIZE") {
+        config.batch_size = parse_positive("QQBOT_FOLLOW_UP_BATCH_SIZE", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_RETRY_INITIAL_MS") {
+        config.retry_initial_ms = parse_positive("QQBOT_FOLLOW_UP_RETRY_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_RETRY_MAX_MS") {
+        config.retry_max_ms = parse_positive("QQBOT_FOLLOW_UP_RETRY_MAX_MS", &value)?;
+    }
+    Ok(())
+}
+
+fn apply_qq_open_platform_env(config: &mut QqOpenPlatformConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_ENABLED") {
+        config.enabled = parse_bool("QQBOT_OPEN_PLATFORM_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_APP_ID")
+        && !value.trim().is_empty()
+    {
+        config.app_id = value;
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_OWNER_OPENID")
+        && !value.trim().is_empty()
+    {
+        config.owner_openid = value;
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_CLIENT_SECRET_FILE")
+        && !value.trim().is_empty()
+    {
+        config.client_secret_file = Some(PathBuf::from(value));
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_RECONNECT_INITIAL_MS") {
+        config.reconnect_initial_ms =
+            parse_positive("QQBOT_OPEN_PLATFORM_RECONNECT_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_RECONNECT_MAX_MS") {
+        config.reconnect_max_ms = parse_positive("QQBOT_OPEN_PLATFORM_RECONNECT_MAX_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_NOTIFICATION_LEASE_SECS") {
+        config.notification_lease_secs =
+            parse_positive("QQBOT_OPEN_PLATFORM_NOTIFICATION_LEASE_SECS", &value)?;
+    }
+    Ok(())
+}
+
 fn parse_bool(name: &str, value: &str) -> Result<bool, ConfigError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Ok(true),
@@ -738,6 +944,43 @@ auto_reply = true
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn official_qq_secret_cannot_be_written_in_toml() {
+        let error = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[qq_open_platform]
+enabled = true
+app_id = "test-app"
+owner_openid = "test-owner"
+client_secret = "must-not-be-accepted"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn official_qq_owner_openid_respects_database_boundary() {
+        let config = QqOpenPlatformConfig {
+            enabled: true,
+            app_id: "test-app".into(),
+            owner_openid: "x".repeat(192),
+            client_secret_file: Some(PathBuf::from("unused-in-validation")),
+            ..QqOpenPlatformConfig::default()
+        };
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("1..=191"));
     }
 
     #[test]
@@ -1008,6 +1251,43 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
 
 [thread_semantics]
 trust_model_output = true
+"#,
+        )
+        .unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn follow_up_bounds_and_unknown_fields_are_rejected() {
+        let invalid = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[follow_up]
+scan_interval_ms = 999
+"#,
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("follow_up.scan_interval_ms"));
+
+        let unknown = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[follow_up]
+send_via_napcat = true
 "#,
         )
         .unwrap_err();

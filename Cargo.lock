@@ -2922,6 +2922,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qq-open-platform"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "qqbot"
 version = "1.0.0"
 dependencies = [
@@ -2943,8 +2959,10 @@ name = "qqbot-server"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "dotenvy",
  "personal-secretary",
+ "qq-open-platform",
  "qqbot",
  "sea-orm",
  "serde",

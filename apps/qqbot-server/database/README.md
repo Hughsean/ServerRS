@@ -7,7 +7,8 @@
 - 新空库按 `migrations/` 依赖顺序执行即可建立当前结构：先 `ingestion`，再
   `continuity`（依赖 ingestion），再执行 `backfill`（依赖 continuity）和 `threads`
   （依赖 ingestion），最后执行 `thread_links`、`thread_semantics` 和
-  `thread_mutations`（依赖 ingestion/threads/thread_links）；
+  `thread_mutations`、`thread_revisions`、`memory`，最后执行 `memory_controls_followups` 和
+  `qq_open_platform`；
 - 运行时只读取 `QQBOT_DATABASE_URL` 或 `qqbot.toml` 的 `[database]`；
 - 所有表使用 `secretary_*` 前缀，后续迁移只在本目录演进。
 
@@ -21,6 +22,10 @@ migrations/20260724_personal_secretary_threads.sql
 migrations/20260724_personal_secretary_thread_semantics.sql
 migrations/20260724_personal_secretary_thread_links.sql
 migrations/20260724_personal_secretary_thread_mutations.sql
+migrations/20260724_personal_secretary_thread_revisions.sql
+migrations/20260724_personal_secretary_memory.sql
+migrations/20260724_personal_secretary_memory_controls_followups.sql
+migrations/20260724_personal_secretary_qq_open_platform.sql
 ```
 
 第一项迁移创建账号、会话、入站事件和消息内容；第二项迁移增加连接周期、事件来源关联、
@@ -57,3 +62,22 @@ Resume 必须由 QQ 开放平台 `OwnerCommand` 与本地 Owner 绑定共同授�
 `secretary_thread_events` 永不物理搬移；第一条 Merge 线程是 canonical thread，Split 生成
 新的逻辑线程。Checkpoint 使用 CAS 单次消费，Effect ID 全局唯一且重复执行返回既有结果；
 提交结果不明由 Agent Runtime 进入 `UnknownCommit`，不得自动重放。
+
+第八项迁移增加线程变更撤销审计和语义失效证据。撤销只停用逻辑 Alias/Override，不删除
+Proposal、Checkpoint、Effect Receipt 或原始成员；应用和撤销都会刷新强提示线程、让仍处于
+`proposed` 的旧关联候选过期、记录受影响线程，并重置语义游标。失效时间之后重新提取的语义
+才能成为当前状态，旧派生记录继续保留用于审计。
+
+第九项迁移增加来源化结构记忆：`secretary_memory_facts` 保存人物、项目、承诺的有界类型化
+状态、置信度、TTL 和单向修订链，`secretary_memory_fact_sources` 保存无损 SourceEvent 引用。
+来源属于 `never_long_term` 会话或 `envelope_only` 内容时拒绝写入；到期事实标记为 `expired`，
+修订将旧版本标记为 `superseded`，不会覆盖或删除历史证据。
+
+第十项迁移增加派生记忆删除审计、承诺跟进事项和平台无关通知 Outbox。派生记忆删除必须引用
+本地显式绑定授权的 QQ 开放平台 `OwnerCommand`，只把事实标为 `deleted`，不会连带删除原始
+SourceEvent。调度 Worker 对每轮数量、时间视野和错误退避均设上限；承诺到期后只生成唯一的
+`pending` 通知。领取按来源账号强隔离；投递结果不明进入 `unknown_commit`，不自动重试。
+
+第十一项迁移增加 QQ 开放平台 Gateway Resume 会话和无损原始入站信封。Resume sequence 只有
+在标准化事件与原始 JSON 均可靠落库后才推进；App ID 是会话主键，避免两个 Bot 账号共用
+Session/OpenID 命名空间。表中不保存 App Secret 或 access token。

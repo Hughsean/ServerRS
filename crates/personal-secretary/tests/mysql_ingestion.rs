@@ -5,20 +5,23 @@ use agent_core::graph::{
 };
 use personal_secretary::{
     BackfillAnchor, BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase,
-    BackfillLease, BackfillOutcome, BackfillScopeStatus, ConnectionEndReason,
-    ConservativeThreadSemanticExtractor, ContentSegment, ConversationKind, ConversationRef,
-    DeterministicThreadPlanner, DeterministicThreadPolicy, EventThreadId, HistoryBackfillSourceT,
-    HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome, IngestionGapReason,
-    IngestionGapStatus, MessageSource, ScopeProgress, SourceAccountRef, SourceMessageRef,
-    ThreadLinkCandidateId, ThreadLinkReviewAction, ThreadLinkReviewUseCase, ThreadLinkUseCase,
-    ThreadMutationApprovalNode, ThreadMutationDecision, ThreadMutationDecisionNode,
-    ThreadMutationEffect, ThreadMutationEffectExecutor, ThreadMutationImpact, ThreadMutationKind,
-    ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationStoreT,
-    ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
-    VerifiedActorKind, build_mysql_backfill_store, build_mysql_inbound_event_store,
-    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
-    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    BackfillLease, BackfillOutcome, BackfillScopeStatus, CommitmentMemory, CommitmentStatus,
+    ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ConversationKind,
+    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, EventThreadId,
+    HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
+    IngestionGapReason, IngestionGapStatus, MemoryDeleteInput, MemoryFact, MemoryFactId,
+    MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource, PersonMemory, ProjectMemory,
+    ScopeProgress, SourceAccountRef, SourceMessageRef, ThreadActorRef, ThreadLinkCandidateId,
+    ThreadLinkReviewAction, ThreadLinkReviewUseCase, ThreadLinkUseCase, ThreadMutationApprovalNode,
+    ThreadMutationDecision, ThreadMutationDecisionNode, ThreadMutationEffect,
+    ThreadMutationEffectExecutor, ThreadMutationImpact, ThreadMutationKind,
+    ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationRevertInput,
+    ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
+    ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor, VerifiedActorKind,
+    build_mysql_backfill_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
+    build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 use std::num::NonZeroU32;
@@ -538,6 +541,57 @@ async fn owner_approved_thread_mutations_are_logical_idempotent_and_account_scop
         "new replies to a merged alias must project directly into the canonical thread"
     );
 
+    let merge_revert_command = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::QqOpenPlatform,
+            format!("mutation-control-{run_id}"),
+            "mutation-revert-merge",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::OwnerControl, "owner-control").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::Owner, "owner").unwrap(),
+        50_100,
+        "撤销线程合并",
+        Vec::new(),
+    )
+    .unwrap();
+    let merge_revert_command_id = inbound
+        .insert_message_if_absent(&merge_revert_command)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let merge_revert = ThreadMutationRevertInput {
+        proposal_id: merge_impact.proposal_id.clone(),
+        command_source_event_id: merge_revert_command_id,
+        reason: "Owner 发现两个会话并非同一事项".into(),
+    };
+    let revert_use_case = ThreadMutationRevertUseCase::new(store.clone());
+    assert!(revert_use_case.revert(&merge_revert).await.unwrap().changed);
+    assert!(!revert_use_case.revert(&merge_revert).await.unwrap().changed);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(DISTINCT thread_id) AS value FROM secretary_effective_thread_events \
+             WHERE source_event_id IN (?, ?)",
+            [event_ids[0].as_str(), event_ids[1].as_str()],
+        )
+        .await,
+        2,
+        "reverting a merge must restore the original affected event threads"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_thread_semantic_invalidations \
+             WHERE proposal_id = ?",
+            [merge_impact.proposal_id.as_str()],
+        )
+        .await,
+        4,
+        "apply and revert must invalidate both merge threads"
+    );
+
     let split_impact = ThreadMutationImpact {
         proposal_id: ThreadMutationProposalId::generate(),
         kind: ThreadMutationKind::Split,
@@ -552,6 +606,13 @@ async fn owner_approved_thread_mutations_are_logical_idempotent_and_account_scop
         .prepare(split_impact.clone())
         .await
         .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_semantic_state (thread_id, attempts) VALUES (?, 1)",
+        [split_thread.clone().into()],
+    ))
+    .await
+    .unwrap();
     store
         .authorize_resume(&ThreadMutationResumeInput {
             proposal_id: split_impact.proposal_id.clone(),
@@ -570,6 +631,16 @@ async fn owner_approved_thread_mutations_are_logical_idempotent_and_account_scop
         )
         .await
         .unwrap();
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_thread_semantic_state WHERE thread_id = ?",
+            [&split_thread],
+        )
+        .await,
+        0,
+        "applying a split must reset stale semantic cursors"
+    );
     let selected_effective = scalar_string(
         &db,
         "SELECT thread_id AS value FROM secretary_effective_thread_events WHERE source_event_id = ?",
@@ -586,6 +657,49 @@ async fn owner_approved_thread_mutations_are_logical_idempotent_and_account_scop
     .unwrap();
     assert_eq!(selected_effective, split_impact.proposal_id.as_str());
     assert_eq!(untouched_effective, split_thread);
+
+    let split_revert_command = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::QqOpenPlatform,
+            format!("mutation-control-{run_id}"),
+            "mutation-revert-split",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::OwnerControl, "owner-control").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::Owner, "owner").unwrap(),
+        50_200,
+        "撤销线程拆分",
+        Vec::new(),
+    )
+    .unwrap();
+    let split_revert_command_id = inbound
+        .insert_message_if_absent(&split_revert_command)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    assert!(
+        revert_use_case
+            .revert(&ThreadMutationRevertInput {
+                proposal_id: split_impact.proposal_id.clone(),
+                command_source_event_id: split_revert_command_id,
+                reason: "Owner 确认原拆分判断错误".into(),
+            })
+            .await
+            .unwrap()
+            .changed
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT thread_id AS value FROM secretary_effective_thread_events WHERE source_event_id = ?",
+            [event_ids[2].as_str()],
+        )
+        .await
+        .unwrap(),
+        split_thread,
+        "reverting a split must restore the original effective thread"
+    );
     assert_eq!(
         scalar_i64(
             &db,
@@ -598,6 +712,577 @@ async fn owner_approved_thread_mutations_are_logical_idempotent_and_account_scop
         .await,
         5,
         "split must preserve every original membership row"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn structured_memory_is_source_backed_versioned_private_and_expirable() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_id = format!("memory-account-{run_id}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+
+    let normal = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "memory-normal").unwrap(),
+        ConversationRef::new(ConversationKind::Group, "memory-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+        60_000,
+        "我负责报价，明天下午发送报价单",
+        Vec::new(),
+    )
+    .unwrap();
+    let normal_id = inbound
+        .insert_message_if_absent(&normal)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let excluded = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "memory-excluded").unwrap(),
+        ConversationRef::new(ConversationKind::Private, "memory-private").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "private-person").unwrap(),
+        60_100,
+        "这条消息永不进入长期记忆",
+        Vec::new(),
+    )
+    .unwrap();
+    let excluded_id = inbound
+        .insert_message_if_absent(&excluded)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_conversations conversation \
+         JOIN secretary_accounts account ON account.id = conversation.account_id \
+         SET conversation.memory_mode = 'never_long_term' \
+         WHERE account.platform_account_id = ? \
+         AND conversation.platform_conversation_id = 'memory-private'",
+        [account_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+
+    let store = build_mysql_memory_store(db.clone());
+    let use_case = MemoryUseCase::new(store.clone());
+    let person = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "person:alice".into(),
+        payload: MemoryPayload::Person(PersonMemory {
+            person: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            relationship: Some("项目协作者".into()),
+            responsibilities: vec!["负责报价".into()],
+            communication_preferences: vec!["使用简短确认".into()],
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_000,
+        source_event_ids: vec![normal_id.clone()],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    assert!(use_case.remember(&person).await.unwrap().changed);
+    assert!(!use_case.remember(&person).await.unwrap().changed);
+    let conflicting_person = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        payload: MemoryPayload::Person(PersonMemory {
+            relationship: Some("客户联系人".into()),
+            ..match &person.payload {
+                MemoryPayload::Person(value) => value.clone(),
+                _ => unreachable!(),
+            }
+        }),
+        ..person.clone()
+    };
+    assert!(
+        use_case.remember(&conflicting_person).await.is_err(),
+        "a conflicting active fact must reread sources and explicitly supersede"
+    );
+
+    let project = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "project:quote".into(),
+        payload: MemoryPayload::Project(ProjectMemory {
+            project_key: "quote".into(),
+            goal: "完成报价单并发送".into(),
+            member_actor_ids: vec!["alice".into()],
+            progress: Some("准备中".into()),
+            decision_ids: Vec::new(),
+            risks: Vec::new(),
+            blockers: Vec::new(),
+            artifact_refs: vec!["artifact:quote-draft".into()],
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 8_500,
+        source_event_ids: vec![normal_id.clone()],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    use_case.remember(&project).await.unwrap();
+    let revised_project = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        payload: MemoryPayload::Project(ProjectMemory {
+            project_key: "quote".into(),
+            goal: "完成报价单并发送".into(),
+            member_actor_ids: vec!["alice".into()],
+            progress: Some("等待 Owner 确认".into()),
+            decision_ids: Vec::new(),
+            risks: Vec::new(),
+            blockers: vec!["等待价格确认".into()],
+            artifact_refs: vec!["artifact:quote-draft".into()],
+        }),
+        supersedes_fact_id: Some(project.fact_id.clone()),
+        ..project.clone()
+    };
+    use_case.remember(&revised_project).await.unwrap();
+
+    let commitment = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "commitment:send-quote".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "发送报价单".into(),
+            due_at_unix_secs: Some(70_000),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![normal_id.clone()],
+        valid_until_unix_secs: Some(80_000),
+        supersedes_fact_id: None,
+    };
+    use_case.remember(&commitment).await.unwrap();
+    assert_eq!(store.expire_due(80_000, 100).await.unwrap(), 1);
+
+    let active = use_case.active(&managed, 20).await.unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(active.iter().any(|fact| fact.fact_id == person.fact_id));
+    assert!(
+        active
+            .iter()
+            .any(|fact| fact.fact_id == revised_project.fact_id)
+    );
+    assert!(!active.iter().any(|fact| fact.fact_id == project.fact_id));
+
+    let private_fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "person:private".into(),
+        payload: MemoryPayload::Person(PersonMemory {
+            person: ThreadActorRef {
+                account: managed,
+                actor_id: "private-person".into(),
+            },
+            relationship: None,
+            responsibilities: Vec::new(),
+            communication_preferences: Vec::new(),
+        }),
+        status: MemoryFactStatus::Proposed,
+        confidence_bps: 5_000,
+        source_event_ids: vec![excluded_id],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    assert!(use_case.remember(&private_fact).await.is_err());
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_memory_fact_sources source \
+             JOIN secretary_memory_facts fact ON fact.fact_id = source.fact_id \
+             JOIN secretary_accounts account ON account.id = fact.account_id \
+             WHERE account.platform_account_id = ?",
+            [&account_id],
+        )
+        .await,
+        4,
+        "every persisted memory version must retain its source event"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_id = format!("follow-up-account-{run_id}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+    let source = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "commitment-source").unwrap(),
+        ConversationRef::new(ConversationKind::Group, "delivery-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+        69_000,
+        "我会在今天发送报价单",
+        Vec::new(),
+    )
+    .unwrap();
+    let source_id = inbound
+        .insert_message_if_absent(&source)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let memory_store = build_mysql_memory_store(db.clone());
+    let memory = MemoryUseCase::new(memory_store.clone());
+    let fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "commitment:quote-delivery".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed,
+                actor_id: "owner".into(),
+            },
+            action: "发送报价单".into(),
+            due_at_unix_secs: Some(70_000),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![source_id],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&fact).await.unwrap();
+    let evidence = memory.evidence(&fact.fact_id, 12).await.unwrap().unwrap();
+    assert_eq!(evidence.sources.len(), 1);
+    assert_eq!(
+        evidence.sources[0].excerpt,
+        "我会在今天发送报价单".chars().take(12).collect::<String>()
+    );
+
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        memory_store,
+    );
+    let report = follow_up.scan(70_000, 86_400, 100).await.unwrap();
+    assert_eq!(report.commitments_materialized, 1);
+    assert_eq!(report.notifications_enqueued, 1);
+    let replay = follow_up.scan(70_000, 86_400, 100).await.unwrap();
+    assert_eq!(replay.commitments_materialized, 0);
+    assert_eq!(replay.notifications_enqueued, 0);
+
+    let command_account = format!("follow-up-control-{run_id}");
+    let owner_command = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::QqOpenPlatform,
+            &command_account,
+            "delete-memory-command",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::OwnerControl, "owner-control").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::Owner, "owner").unwrap(),
+        70_100,
+        "删除这条承诺记忆",
+        Vec::new(),
+    )
+    .unwrap();
+    let command_id = inbound
+        .insert_message_if_absent(&owner_command)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner', 'active' \
+         FROM secretary_accounts managed JOIN secretary_accounts command \
+         WHERE managed.source_channel = 'napcat' AND managed.platform_account_id = ? \
+         AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            account_id.clone().into(),
+            command_account.into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let deletion = MemoryDeleteInput {
+        fact_id: fact.fact_id.clone(),
+        command_source_event_id: command_id,
+        reason: "Owner 确认该承诺无效".into(),
+    };
+    assert!(memory.delete_derived(&deletion).await.unwrap().changed);
+    assert!(!memory.delete_derived(&deletion).await.unwrap().changed);
+    let report = follow_up.scan(70_101, 86_400, 100).await.unwrap();
+    assert_eq!(report.items_reconciled, 1);
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox outbox \
+             JOIN secretary_follow_up_items item ON item.follow_up_id = outbox.follow_up_id \
+             WHERE item.source_memory_fact_id = ?",
+            [fact.fact_id.as_str()],
+        )
+        .await
+        .unwrap(),
+        "suppressed"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_id = format!("outbox-account-{run_id}");
+    let account = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+    let source = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "outbox-source").unwrap(),
+        ConversationRef::new(ConversationKind::Private, "owner-private").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+        80_000,
+        "明天提交材料",
+        Vec::new(),
+    )
+    .unwrap();
+    let source_id = inbound
+        .insert_message_if_absent(&source)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let memory_store = build_mysql_memory_store(db.clone());
+    let memory = MemoryUseCase::new(memory_store.clone());
+    let foreign_account_id = format!("outbox-foreign-{run_id}");
+    let foreign_account =
+        SourceAccountRef::new(MessageSource::NapCat, &foreign_account_id).unwrap();
+    let foreign_source = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::NapCat,
+            &foreign_account_id,
+            "foreign-outbox-source",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::Private, "foreign-private").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "bob").unwrap(),
+        80_000,
+        "明天提交另一份材料",
+        Vec::new(),
+    )
+    .unwrap();
+    let foreign_source_id = inbound
+        .insert_message_if_absent(&foreign_source)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    memory
+        .remember(&MemoryFact {
+            fact_id: MemoryFactId::generate(),
+            account: foreign_account.clone(),
+            subject_key: "commitment:foreign-outbox".into(),
+            payload: MemoryPayload::Commitment(CommitmentMemory {
+                promisor: ThreadActorRef {
+                    account: foreign_account.clone(),
+                    actor_id: "bob".into(),
+                },
+                beneficiary: ThreadActorRef {
+                    account: foreign_account.clone(),
+                    actor_id: "foreign-owner".into(),
+                },
+                action: "提交其他账号材料".into(),
+                due_at_unix_secs: Some(80_100),
+                status: CommitmentStatus::Pending,
+                completion_source_event_id: None,
+            }),
+            status: MemoryFactStatus::Confirmed,
+            confidence_bps: 9_500,
+            source_event_ids: vec![foreign_source_id],
+            valid_until_unix_secs: None,
+            supersedes_fact_id: None,
+        })
+        .await
+        .unwrap();
+    let first_fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: account.clone(),
+        subject_key: "commitment:outbox-unknown".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "提交第一份材料".into(),
+            due_at_unix_secs: Some(80_100),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![source_id.clone()],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&first_fact).await.unwrap();
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        memory_store.clone(),
+    );
+    follow_up.scan(80_100, 86_400, 100).await.unwrap();
+
+    let first = follow_up
+        .claim_due_notification(&account, 80_100, 60)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.attempt, 1);
+    let wrong_lease = personal_secretary::NotificationLeaseToken::generate();
+    assert!(matches!(
+        follow_up
+            .mark_notification_delivered(
+                &first.notification_id,
+                &wrong_lease,
+                "must-not-be-recorded"
+            )
+            .await,
+        Err(personal_secretary::InboundEventStoreError::LeaseLost)
+    ));
+    follow_up
+        .mark_notification_failed(
+            &first.notification_id,
+            &first.lease_token,
+            "rate_limited",
+            personal_secretary::NotificationFailureKind::Retryable,
+        )
+        .await
+        .unwrap();
+    assert!(
+        follow_up
+            .claim_due_notification(&account, 80_100, 60)
+            .await
+            .unwrap()
+            .is_none(),
+        "retryable failure must respect its backoff"
+    );
+    let retried = follow_up
+        .claim_due_notification(&account, 2_000_000_000, 60)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried.notification_id, first.notification_id);
+    assert_eq!(retried.attempt, 2);
+    follow_up
+        .mark_notification_failed(
+            &retried.notification_id,
+            &retried.lease_token,
+            "ambiguous_post",
+            personal_secretary::NotificationFailureKind::UnknownCommit,
+        )
+        .await
+        .unwrap();
+    assert!(
+        follow_up
+            .claim_due_notification(&account, 2_000_000_000, 60)
+            .await
+            .unwrap()
+            .is_none(),
+        "unknown commit must never be retried blindly"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox WHERE notification_id = ?",
+            [first.notification_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("unknown_commit")
+    );
+
+    let delivered_fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: account.clone(),
+        subject_key: "commitment:outbox-delivered".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "提交第二份材料".into(),
+            due_at_unix_secs: Some(100_001),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![source_id],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&delivered_fact).await.unwrap();
+    follow_up.scan(100_001, 86_400, 100).await.unwrap();
+    let delivered = follow_up
+        .claim_due_notification(&account, 100_001, 60)
+        .await
+        .unwrap()
+        .unwrap();
+    follow_up
+        .mark_notification_delivered(
+            &delivered.notification_id,
+            &delivered.lease_token,
+            "platform-message-1",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT platform_message_id AS value FROM secretary_notification_outbox WHERE notification_id = ?",
+            [delivered.notification_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("platform-message-1")
+    );
+    assert!(
+        follow_up
+            .claim_due_notification(&foreign_account, 2_000_000_000, 60)
+            .await
+            .unwrap()
+            .is_some(),
+        "claiming one account must not consume another account's notification"
     );
 }
 
@@ -644,6 +1329,10 @@ async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
             n if n.contains("_thread_links.sql") => 4,
             n if n.contains("_thread_semantics.sql") => 5,
             n if n.contains("_thread_mutations.sql") => 6,
+            n if n.contains("_thread_revisions.sql") => 7,
+            n if n.contains("_memory.sql") => 8,
+            n if n.contains("_memory_controls_followups.sql") => 9,
+            n if n.contains("_qq_open_platform.sql") => 10,
             _ => 99,
         }
     });
