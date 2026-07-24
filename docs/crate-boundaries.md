@@ -48,7 +48,11 @@ personal-secretary -+
 
 画像、关系、群记忆、主动回复、Outbox、Repository、SeaORM entity 和旧 QQ 建表 SQL 均不
 属于 `qqbot`。新的 `personal-secretary` 已接管协议无关的身份与消息角色；`qqbot-server`
-只执行 NapCat 到统一信封的映射和元数据观测，尚不会回复消息或写数据库。
+执行 NapCat 到统一信封的映射、实时幂等落库、连接周期/游标/空窗审计，以及独立历史回补
+Worker（实时与历史消息走同一幂等入口 `insert_message_if_absent`）和确定性线程批量投影
+Worker，不会发送消息；线程领域类型与用例位于 `personal-secretary`，SQL 和运行调度分别位于
+基础设施层和 `qqbot-server`。类型化语义提取同样通过协议无关端口进入，只生成带原始事件
+来源的候选补丁；当前保守规则适配器不依赖数字人 LLM 实现。
 
 QQ 智能秘书的能力审计、Todo 和历史统一维护在
 [`docs/qq-personal-secretary/`](qq-personal-secretary/README.md)。

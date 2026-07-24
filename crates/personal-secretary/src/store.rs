@@ -57,6 +57,8 @@ pub enum InboundEventStoreError {
     Unavailable,
     #[error("inbound event database operation failed: {0}")]
     Database(String),
+    #[error("backfill lease ownership was lost")]
+    LeaseLost,
 }
 
 #[async_trait]

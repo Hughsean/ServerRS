@@ -118,16 +118,98 @@ fn the_two_applications_have_independent_dependency_graphs() {
 
 #[test]
 fn personal_secretary_domain_is_qq_protocol_neutral() {
-    let sources = rust_sources("crates/personal-secretary/src");
+    // 只检查领域层和应用层文件（排除 infra 仓储实现，它合理使用数据库/SeaORM）。
+    let domain_root = workspace_root().join("crates/personal-secretary/src");
+    let domain_files = [
+        "backfill.rs",
+        "backfill_service.rs",
+        "continuity.rs",
+        "inbound.rs",
+        "store.rs",
+        "thread_service.rs",
+        "thread_semantic_service.rs",
+        "thread_semantics.rs",
+        "thread_link_service.rs",
+        "thread_links.rs",
+        "thread_mutations.rs",
+        "threading.rs",
+        "lib.rs",
+    ];
+    let sources = domain_files
+        .iter()
+        .map(|name| {
+            fs::read_to_string(domain_root.join(name))
+                .unwrap_or_else(|error| panic!("failed to read {name}: {error}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     for forbidden in [
         "qqbot::",
         "napcat::",
         "qq_open_platform::",
         "digital_human::",
+        "reqwest",
+        "tokio::spawn",
+        "DatabaseConnection",
+        "sea_orm",
     ] {
         assert!(
             !sources.contains(forbidden),
-            "personal-secretary source contains concrete QQ/Digital Human marker {forbidden}"
+            "personal-secretary domain/app source contains concrete QQ/Digital Human marker {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn personal_secretary_backfill_is_protocol_neutral_and_no_send_calls() {
+    let sources = rust_sources("crates/personal-secretary/src");
+    // 回补领域与应用层不得出现任何发送/撤回调用或 HTTP/数据库实现。
+    for forbidden in [
+        "send_group_msg",
+        "send_private_msg",
+        "group_poke",
+        "delete_msg",
+        "reqwest",
+        "NapCatApiClient",
+    ] {
+        assert!(
+            !sources.contains(forbidden),
+            "personal-secretary backfill source contains forbidden marker {forbidden}"
+        );
+    }
+    // 回补领域模型和用例必须存在。
+    assert!(sources.contains("BackfillGapUseCase"));
+    assert!(sources.contains("HistoryBackfillSourceT"));
+    assert!(sources.contains("BackfillStateStoreT"));
+    assert!(sources.contains("HistoryCompleteness"));
+    assert!(sources.contains("ThreadProjectionUseCase"));
+    assert!(sources.contains("DeterministicThreadPlanner"));
+    assert!(sources.contains("ThreadSemanticUseCase"));
+    assert!(sources.contains("validate_semantic_patch"));
+}
+
+#[test]
+fn qqbot_does_not_depend_on_personal_secretary_or_database() {
+    let qq_manifest = manifest("crates/qqbot/Cargo.toml");
+    let deps = dependencies(&qq_manifest);
+    for forbidden in ["personal-secretary", "sea-orm", "sqlx"] {
+        assert!(
+            !deps.contains(forbidden),
+            "qqbot must not depend on {forbidden}"
+        );
+    }
+    let sources = rust_sources("crates/qqbot/src");
+    for forbidden in [
+        "personal_secretary",
+        "sea_orm",
+        "DatabaseConnection",
+        "BackfillStateStoreT",
+        "HistoryBackfillSourceT",
+    ] {
+        assert!(
+            !sources.contains(forbidden),
+            "qqbot source must not contain personal-secretary/backfill marker {forbidden}"
         );
     }
 }
@@ -156,6 +238,45 @@ fn napcat_callback_does_not_wait_for_mysql() {
     assert!(!runtime.contains("insert_message_if_absent"));
     assert!(worker.contains("mpsc::channel"));
     assert!(worker.contains("insert_message_if_absent"));
+}
+
+#[test]
+fn backfill_worker_is_decoupled_from_realtime_websocket() {
+    let runtime = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime.rs"))
+        .expect("qqbot-server runtime must be readable");
+    let backfill_worker =
+        fs::read_to_string(workspace_root().join("apps/qqbot-server/src/backfill/worker.rs"))
+            .expect("qqbot-server backfill worker must be readable");
+    let napcat_history_source = fs::read_to_string(
+        workspace_root().join("apps/qqbot-server/src/backfill/napcat_history_source.rs"),
+    )
+    .expect("qqbot-server napcat history source must be readable");
+
+    // 回补独立装配在 runtime 中，与实时 WebSocket 接收解耦。
+    assert!(runtime.contains("spawn_backfill_worker"));
+    assert!(backfill_worker.contains("BackfillRunner"));
+    // 必须使用 JoinSet 真正并发，而非串行 await + 信号量假并发。
+    assert!(
+        backfill_worker.contains("JoinSet"),
+        "backfill worker must use JoinSet for real concurrency"
+    );
+    // 关闭必须有取消标志，避免 shutdown 永久挂起。
+    assert!(
+        backfill_worker.contains("AtomicBool"),
+        "backfill worker must have a shutdown cancellation flag"
+    );
+    // 回补不调用 NapCat 发送/撤回，只走只读历史接口与统一幂等入口。
+    for forbidden in [
+        "send_group_msg",
+        "send_private_msg",
+        "group_poke",
+        "delete_msg",
+    ] {
+        assert!(
+            !napcat_history_source.contains(forbidden),
+            "napcat history source must not call mutation {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -208,6 +329,34 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
             )
             .is_file(),
         "QQBot continuity migration must live under apps/qqbot-server/database"
+    );
+    assert!(
+        workspace_root()
+            .join("apps/qqbot-server/database/migrations/20260723_personal_secretary_backfill.sql")
+            .is_file(),
+        "QQBot backfill migration must live under apps/qqbot-server/database"
+    );
+    assert!(
+        workspace_root()
+            .join("apps/qqbot-server/database/migrations/20260724_personal_secretary_threads.sql")
+            .is_file(),
+        "QQBot thread migration must live under apps/qqbot-server/database"
+    );
+    assert!(
+        workspace_root()
+            .join(
+                "apps/qqbot-server/database/migrations/20260724_personal_secretary_thread_semantics.sql"
+            )
+            .is_file(),
+        "QQBot thread semantics migration must live under apps/qqbot-server/database"
+    );
+    assert!(
+        workspace_root()
+            .join(
+                "apps/qqbot-server/database/migrations/20260724_personal_secretary_thread_links.sql"
+            )
+            .is_file(),
+        "QQBot thread links migration must live under apps/qqbot-server/database"
     );
 }
 

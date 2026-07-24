@@ -104,6 +104,12 @@ impl IngestionGapStatus {
     }
 }
 
+impl std::fmt::Display for IngestionGapStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 一次 NapCat/开放平台传输连接结束的可审计原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -264,9 +264,8 @@ fn validate_terminal_paths<B: AgentBusinessState>(
 ) -> Result<(), GraphCompileError> {
     let terminal_nodes: Vec<NodeId> = transitions
         .iter()
-        .filter_map(|(node, transition)| {
-            matches!(transition, TransitionRule::End).then(|| node.clone())
-        })
+        .filter(|(_, transition)| matches!(transition, TransitionRule::End))
+        .map(|(node, _)| node.clone())
         .collect();
     if terminal_nodes.is_empty() {
         return Err(GraphCompileError::NoTerminalPath);

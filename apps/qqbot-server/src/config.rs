@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use personal_secretary::BackfillBudget;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -10,6 +11,14 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub ingestion: IngestionConfig,
+    #[serde(default)]
+    pub backfill: BackfillConfig,
+    #[serde(default)]
+    pub thread_projection: ThreadProjectionConfig,
+    #[serde(default)]
+    pub thread_semantics: ThreadSemanticsConfig,
+    #[serde(default)]
+    pub thread_links: ThreadLinksConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,6 +64,282 @@ impl Default for IngestionConfig {
             retry_max_ms: default_ingestion_retry_max_ms(),
             shutdown_drain_timeout_secs: default_ingestion_shutdown_drain_timeout_secs(),
         }
+    }
+}
+
+/// 历史回补配置。所有历史读取必须有明确上限，禁止无限循环或一次加载全部历史。
+/// 仅属于 `apps/qqbot-server`，不读取数字人的配置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BackfillConfig {
+    pub enabled: bool,
+    pub page_size: u32,
+    pub max_pages_per_scope: u32,
+    pub max_events_per_run: u32,
+    pub max_concurrency: u32,
+    pub lease_secs: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for BackfillConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            page_size: 100,
+            max_pages_per_scope: 20,
+            max_events_per_run: 2000,
+            max_concurrency: 2,
+            lease_secs: 60,
+            retry_initial_ms: 500,
+            retry_max_ms: 10_000,
+        }
+    }
+}
+
+impl BackfillConfig {
+    /// 构造领域层有界预算并校验。配置层只负责填充与校验，业务不变量集中在领域层。
+    pub fn budget(&self) -> Result<BackfillBudget, ConfigError> {
+        self.validate_budget()?;
+        Ok(BackfillBudget {
+            page_size: self.page_size,
+            max_pages_per_scope: self.max_pages_per_scope,
+            max_events_per_run: self.max_events_per_run,
+            max_concurrency: self.max_concurrency,
+            lease_secs: self.lease_secs,
+            retry_initial_ms: self.retry_initial_ms,
+            retry_max_ms: self.retry_max_ms,
+        })
+    }
+
+    fn validate_budget(&self) -> Result<(), ConfigError> {
+        if self.page_size == 0 || self.page_size > 100 {
+            return Err(ConfigError::Invalid(
+                "backfill.page_size must be between 1 and 100".into(),
+            ));
+        }
+        if self.max_pages_per_scope == 0 {
+            return Err(ConfigError::Invalid(
+                "backfill.max_pages_per_scope must be positive".into(),
+            ));
+        }
+        if self.max_events_per_run == 0 {
+            return Err(ConfigError::Invalid(
+                "backfill.max_events_per_run must be positive".into(),
+            ));
+        }
+        if self.max_concurrency == 0 || self.max_concurrency > 64 {
+            return Err(ConfigError::Invalid(
+                "backfill.max_concurrency must be between 1 and 64".into(),
+            ));
+        }
+        if self.lease_secs == 0 || self.lease_secs > 3600 {
+            return Err(ConfigError::Invalid(
+                "backfill.lease_secs must be between 1 and 3600".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 {
+            return Err(ConfigError::Invalid(
+                "backfill.retry_initial_ms must be positive".into(),
+            ));
+        }
+        if self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "backfill.retry_max_ms must be >= retry_initial_ms".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 确定性事件线程投影配置。只消费已持久化事件，不调用 LLM。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ThreadProjectionConfig {
+    pub enabled: bool,
+    pub batch_size: u32,
+    pub max_batches_per_scan: u32,
+    pub same_conversation_window_secs: i64,
+    pub lease_secs: u64,
+    pub scan_interval_ms: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for ThreadProjectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            batch_size: 100,
+            max_batches_per_scan: 10,
+            same_conversation_window_secs: 300,
+            lease_secs: 60,
+            scan_interval_ms: 500,
+            retry_initial_ms: 500,
+            retry_max_ms: 10_000,
+        }
+    }
+}
+
+impl ThreadProjectionConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.batch_size == 0 || self.batch_size > 1000 {
+            return Err(ConfigError::Invalid(
+                "thread_projection.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if self.max_batches_per_scan == 0 || self.max_batches_per_scan > 100 {
+            return Err(ConfigError::Invalid(
+                "thread_projection.max_batches_per_scan must be between 1 and 100".into(),
+            ));
+        }
+        if self.same_conversation_window_secs <= 0 || self.same_conversation_window_secs > 86_400 {
+            return Err(ConfigError::Invalid(
+                "thread_projection.same_conversation_window_secs must be between 1 and 86400"
+                    .into(),
+            ));
+        }
+        if self.lease_secs == 0 || self.lease_secs > 3600 {
+            return Err(ConfigError::Invalid(
+                "thread_projection.lease_secs must be between 1 and 3600".into(),
+            ));
+        }
+        if self.scan_interval_ms == 0 {
+            return Err(ConfigError::Invalid(
+                "thread_projection.scan_interval_ms must be positive".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "thread_projection retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ThreadSemanticsConfig {
+    pub enabled: bool,
+    pub max_events: u32,
+    pub max_total_chars: u32,
+    pub max_event_chars: usize,
+    pub max_batches_per_scan: u32,
+    pub lease_secs: u64,
+    pub scan_interval_ms: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for ThreadSemanticsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_events: 50,
+            max_total_chars: 50_000,
+            max_event_chars: 10_000,
+            max_batches_per_scan: 10,
+            lease_secs: 60,
+            scan_interval_ms: 1000,
+            retry_initial_ms: 500,
+            retry_max_ms: 10_000,
+        }
+    }
+}
+
+impl ThreadSemanticsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_events == 0 || self.max_events > 500 {
+            return Err(ConfigError::Invalid(
+                "thread_semantics.max_events must be between 1 and 500".into(),
+            ));
+        }
+        if self.max_total_chars == 0 || self.max_total_chars > 1_000_000 {
+            return Err(ConfigError::Invalid(
+                "thread_semantics.max_total_chars must be between 1 and 1000000".into(),
+            ));
+        }
+        if self.max_event_chars == 0 || self.max_event_chars > 100_000 {
+            return Err(ConfigError::Invalid(
+                "thread_semantics.max_event_chars must be between 1 and 100000".into(),
+            ));
+        }
+        if self.max_batches_per_scan == 0 || self.max_batches_per_scan > 100 {
+            return Err(ConfigError::Invalid(
+                "thread_semantics.max_batches_per_scan must be between 1 and 100".into(),
+            ));
+        }
+        if self.lease_secs == 0 || self.lease_secs > 3600 || self.scan_interval_ms == 0 {
+            return Err(ConfigError::Invalid(
+                "thread_semantics lease and scan interval must be positive and bounded".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "thread_semantics retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ThreadLinksConfig {
+    pub enabled: bool,
+    pub max_events: u32,
+    pub max_total_chars: u32,
+    pub max_batches_per_scan: u32,
+    pub lease_secs: u64,
+    pub scan_interval_ms: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for ThreadLinksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_events: 100,
+            max_total_chars: 100_000,
+            max_batches_per_scan: 10,
+            lease_secs: 60,
+            scan_interval_ms: 1500,
+            retry_initial_ms: 500,
+            retry_max_ms: 10_000,
+        }
+    }
+}
+
+impl ThreadLinksConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_events == 0 || self.max_events > 1000 {
+            return Err(ConfigError::Invalid(
+                "thread_links.max_events must be between 1 and 1000".into(),
+            ));
+        }
+        if self.max_total_chars == 0 || self.max_total_chars > 2_000_000 {
+            return Err(ConfigError::Invalid(
+                "thread_links.max_total_chars must be between 1 and 2000000".into(),
+            ));
+        }
+        if self.max_batches_per_scan == 0 || self.max_batches_per_scan > 100 {
+            return Err(ConfigError::Invalid(
+                "thread_links.max_batches_per_scan must be between 1 and 100".into(),
+            ));
+        }
+        if self.lease_secs == 0 || self.lease_secs > 3600 || self.scan_interval_ms == 0 {
+            return Err(ConfigError::Invalid(
+                "thread_links lease and scan interval must be positive and bounded".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "thread_links retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -143,6 +428,10 @@ impl AppConfig {
             self.ingestion.shutdown_drain_timeout_secs =
                 parse_positive("QQBOT_INGESTION_SHUTDOWN_DRAIN_TIMEOUT_SECS", &value)?;
         }
+        apply_backfill_env(&mut self.backfill)?;
+        apply_thread_projection_env(&mut self.thread_projection)?;
+        apply_thread_semantics_env(&mut self.thread_semantics)?;
+        apply_thread_links_env(&mut self.thread_links)?;
         Ok(())
     }
 
@@ -188,6 +477,11 @@ impl AppConfig {
                 "ingestion.shutdown_drain_timeout_secs must be positive".into(),
             ));
         }
+        // 回补预算业务不变量在领域层集中定义，配置层调用其校验。
+        self.backfill.budget()?;
+        self.thread_projection.validate()?;
+        self.thread_semantics.validate()?;
+        self.thread_links.validate()?;
         Ok(())
     }
 }
@@ -248,6 +542,140 @@ where
     Ok(parsed)
 }
 
+/// 应用 `QQBOT_BACKFILL_*` 环境变量覆盖。只使用 QQBot 专属前缀，不读取数字人配置。
+fn apply_backfill_env(config: &mut BackfillConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_ENABLED") {
+        config.enabled = parse_bool("QQBOT_BACKFILL_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_PAGE_SIZE") {
+        config.page_size = parse_positive("QQBOT_BACKFILL_PAGE_SIZE", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_PAGES_PER_SCOPE") {
+        config.max_pages_per_scope = parse_positive("QQBOT_BACKFILL_MAX_PAGES_PER_SCOPE", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_EVENTS_PER_RUN") {
+        config.max_events_per_run = parse_positive("QQBOT_BACKFILL_MAX_EVENTS_PER_RUN", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_CONCURRENCY") {
+        config.max_concurrency = parse_positive("QQBOT_BACKFILL_MAX_CONCURRENCY", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_LEASE_SECS") {
+        config.lease_secs = parse_positive("QQBOT_BACKFILL_LEASE_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_RETRY_INITIAL_MS") {
+        config.retry_initial_ms = parse_positive("QQBOT_BACKFILL_RETRY_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_RETRY_MAX_MS") {
+        config.retry_max_ms = parse_positive("QQBOT_BACKFILL_RETRY_MAX_MS", &value)?;
+    }
+    Ok(())
+}
+
+fn apply_thread_projection_env(config: &mut ThreadProjectionConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_ENABLED") {
+        config.enabled = parse_bool("QQBOT_THREAD_PROJECTION_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_BATCH_SIZE") {
+        config.batch_size = parse_positive("QQBOT_THREAD_PROJECTION_BATCH_SIZE", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_MAX_BATCHES_PER_SCAN") {
+        config.max_batches_per_scan =
+            parse_positive("QQBOT_THREAD_PROJECTION_MAX_BATCHES_PER_SCAN", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_WINDOW_SECS") {
+        config.same_conversation_window_secs =
+            parse_positive("QQBOT_THREAD_PROJECTION_WINDOW_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_LEASE_SECS") {
+        config.lease_secs = parse_positive("QQBOT_THREAD_PROJECTION_LEASE_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_SCAN_INTERVAL_MS") {
+        config.scan_interval_ms =
+            parse_positive("QQBOT_THREAD_PROJECTION_SCAN_INTERVAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_RETRY_INITIAL_MS") {
+        config.retry_initial_ms =
+            parse_positive("QQBOT_THREAD_PROJECTION_RETRY_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_RETRY_MAX_MS") {
+        config.retry_max_ms = parse_positive("QQBOT_THREAD_PROJECTION_RETRY_MAX_MS", &value)?;
+    }
+    Ok(())
+}
+
+fn apply_thread_semantics_env(config: &mut ThreadSemanticsConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_ENABLED") {
+        config.enabled = parse_bool("QQBOT_THREAD_SEMANTICS_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_EVENTS") {
+        config.max_events = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_EVENTS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_TOTAL_CHARS") {
+        config.max_total_chars = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_TOTAL_CHARS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_EVENT_CHARS") {
+        config.max_event_chars = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_EVENT_CHARS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_BATCHES_PER_SCAN") {
+        config.max_batches_per_scan =
+            parse_positive("QQBOT_THREAD_SEMANTICS_MAX_BATCHES_PER_SCAN", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_LEASE_SECS") {
+        config.lease_secs = parse_positive("QQBOT_THREAD_SEMANTICS_LEASE_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_SCAN_INTERVAL_MS") {
+        config.scan_interval_ms =
+            parse_positive("QQBOT_THREAD_SEMANTICS_SCAN_INTERVAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS") {
+        config.retry_initial_ms =
+            parse_positive("QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS") {
+        config.retry_max_ms = parse_positive("QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS", &value)?;
+    }
+    Ok(())
+}
+
+fn apply_thread_links_env(config: &mut ThreadLinksConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_ENABLED") {
+        config.enabled = parse_bool("QQBOT_THREAD_LINKS_ENABLED", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_EVENTS") {
+        config.max_events = parse_positive("QQBOT_THREAD_LINKS_MAX_EVENTS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_TOTAL_CHARS") {
+        config.max_total_chars = parse_positive("QQBOT_THREAD_LINKS_MAX_TOTAL_CHARS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_BATCHES_PER_SCAN") {
+        config.max_batches_per_scan =
+            parse_positive("QQBOT_THREAD_LINKS_MAX_BATCHES_PER_SCAN", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_LEASE_SECS") {
+        config.lease_secs = parse_positive("QQBOT_THREAD_LINKS_LEASE_SECS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_SCAN_INTERVAL_MS") {
+        config.scan_interval_ms = parse_positive("QQBOT_THREAD_LINKS_SCAN_INTERVAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_RETRY_INITIAL_MS") {
+        config.retry_initial_ms = parse_positive("QQBOT_THREAD_LINKS_RETRY_INITIAL_MS", &value)?;
+    }
+    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_RETRY_MAX_MS") {
+        config.retry_max_ms = parse_positive("QQBOT_THREAD_LINKS_RETRY_MAX_MS", &value)?;
+    }
+    Ok(())
+}
+
+fn parse_bool(name: &str, value: &str) -> Result<bool, ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => Err(ConfigError::Invalid(format!(
+            "{name} must be a boolean (true/false)"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +708,15 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
         assert_eq!(config.napcat.reconnect_max_secs, 60);
         assert_eq!(config.database.max_connections, 5);
         assert_eq!(config.ingestion.queue_capacity, 1_024);
+        assert!(config.thread_projection.enabled);
+        assert_eq!(config.thread_projection.batch_size, 100);
+        assert_eq!(config.thread_projection.same_conversation_window_secs, 300);
+        assert!(config.thread_semantics.enabled);
+        assert_eq!(config.thread_semantics.max_events, 50);
+        assert_eq!(config.thread_semantics.max_total_chars, 50_000);
+        assert!(config.thread_links.enabled);
+        assert_eq!(config.thread_links.max_events, 100);
+        assert_eq!(config.thread_links.max_total_chars, 100_000);
     }
 
     #[test]
@@ -356,5 +793,253 @@ queue_capacity = 65537
         )
         .unwrap_err();
         assert!(unbounded_capacity.to_string().contains("queue_capacity"));
+    }
+
+    #[test]
+    fn default_backfill_configuration_loads_and_validates() {
+        let config = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.backfill.enabled);
+        assert_eq!(config.backfill.page_size, 100);
+        assert_eq!(config.backfill.max_concurrency, 2);
+        // 默认配置必须能构造出合法的有界预算。
+        assert!(config.backfill.budget().is_ok());
+    }
+
+    #[test]
+    fn backfill_page_size_must_be_between_1_and_100() {
+        let too_small = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+page_size = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(too_small.to_string().contains("page_size"));
+
+        let too_large = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+page_size = 101
+"#,
+        )
+        .unwrap_err();
+        assert!(too_large.to_string().contains("page_size"));
+    }
+
+    #[test]
+    fn backfill_zero_or_over_limit_fields_are_rejected() {
+        let zero_concurrency = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+max_concurrency = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(zero_concurrency.to_string().contains("max_concurrency"));
+
+        let over_limit_concurrency = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+max_concurrency = 65
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            over_limit_concurrency
+                .to_string()
+                .contains("max_concurrency")
+        );
+    }
+
+    #[test]
+    fn backfill_retry_max_below_initial_is_rejected() {
+        let error = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+retry_initial_ms = 1000
+retry_max_ms = 500
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("retry_max_ms"));
+    }
+
+    #[test]
+    fn backfill_unknown_field_is_rejected() {
+        let error = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+auto_mark_complete = true
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn thread_projection_bounds_and_unknown_fields_are_rejected() {
+        let invalid_window = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[thread_projection]
+same_conversation_window_secs = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            invalid_window
+                .to_string()
+                .contains("same_conversation_window_secs")
+        );
+
+        let unknown = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[thread_projection]
+llm_per_message = true
+"#,
+        )
+        .unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn thread_semantics_bounds_and_unknown_fields_are_rejected() {
+        let invalid_budget = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[thread_semantics]
+max_total_chars = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(invalid_budget.to_string().contains("max_total_chars"));
+
+        let unknown = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[thread_semantics]
+trust_model_output = true
+"#,
+        )
+        .unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn backfill_env_overrides_only_use_qqbot_prefix() {
+        // 通过环境变量覆盖 page_size 并校验；保证只使用 QQBOT_BACKFILL_* 前缀。
+        // SAFETY: 单线程单元测试，仅在测试期间临时设置后立即移除。
+        unsafe {
+            std::env::set_var("QQBOT_BACKFILL_PAGE_SIZE", "50");
+        }
+        let config: AppConfig = toml::from_str(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+        )
+        .unwrap();
+        let mut config = config;
+        config.apply_env_overrides().unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.backfill.page_size, 50);
+        // SAFETY: 同上，测试结束清理。
+        unsafe {
+            std::env::remove_var("QQBOT_BACKFILL_PAGE_SIZE");
+        }
     }
 }

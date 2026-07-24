@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
+    QueryFilter, Set, Statement, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -167,6 +168,11 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
         .await
         .map_err(store_error)?;
         let gap = gap_for_epoch(&transaction, connection_epoch_id).await?;
+        // 空窗前稳定边界必须是创建时的快照，而非领取时的实时游标。首写获胜（ON DUPLICATE
+        // KEY 不更新），保证捕获最早连续性中断点；多次结束同一周期不会覆盖已冻结的边界。
+        if let Some(gap_id) = gap.as_ref() {
+            snapshot_gap_boundaries(&transaction, gap_id.as_str(), account_id, now).await?;
+        }
         transaction.commit().await.map_err(store_error)?;
         tracing::debug!(
             connection_epoch_id = %connection_epoch_id.as_str(),
@@ -209,6 +215,8 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
         let gap = gap_for_epoch(&transaction, connection_epoch_id)
             .await?
             .ok_or(InboundEventStoreError::Unavailable)?;
+        // 队列溢出空窗：边界为溢出时刻最后成功落库的消息（首写获胜）。
+        snapshot_gap_boundaries(&transaction, gap.as_str(), epoch.account_id, now).await?;
         transaction.commit().await.map_err(store_error)?;
         tracing::warn!(
             connection_epoch_id = %connection_epoch_id.as_str(),
@@ -265,4 +273,35 @@ async fn gap_for_epoch(
                 .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))
         })
         .transpose()
+}
+
+/// 在 Gap 创建事务内，把账号下所有会话级游标快照到 `secretary_gap_boundaries`。
+///
+/// 首写获胜：`ON DUPLICATE KEY UPDATE gap_id = gap_id` 不更新已存在的行，确保边界冻结在
+/// 最早连续性中断点。回补时 `known_scopes_for_gap` 读取此快照，而非领取时漂移的实时游标。
+async fn snapshot_gap_boundaries(
+    db: &sea_orm::DatabaseTransaction,
+    gap_id: &str,
+    account_id: u64,
+    now: chrono::NaiveDateTime,
+) -> Result<(), InboundEventStoreError> {
+    let values: Vec<sea_orm::Value> =
+        vec![gap_id.into(), now.into(), now.into(), account_id.into()];
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_gap_boundaries \
+            (gap_id, account_id, conversation_id, conversation_kind, platform_conversation_id, \
+             boundary_message_id, boundary_occurred_at_unix_secs, created_at, updated_at) \
+         SELECT ?, cur.account_id, cur.conversation_id, c.conversation_kind, \
+                c.platform_conversation_id, cur.last_platform_event_id, \
+                cur.last_occurred_at_unix_secs, ?, ? \
+         FROM secretary_ingestion_cursors cur \
+         INNER JOIN secretary_conversations c ON c.id = cur.conversation_id \
+         WHERE cur.account_id = ? AND cur.scope_kind = 'conversation' \
+         ON DUPLICATE KEY UPDATE gap_id = gap_id",
+        values,
+    ))
+    .await
+    .map_err(store_error)?;
+    Ok(())
 }

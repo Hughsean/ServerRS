@@ -81,7 +81,21 @@ Reply 1 条；四条均关联连接周期，Reply 的 `reply_to_event_id` 成功
 `crates/qqbot/tests/napcat_active_group_live.rs` 是必须显式配置两个账号和获批群号的主动测试，
 源码只包含 `send_group_msg`，并在统一清理路径撤回自己发送的测试消息。
 
-当前只完成类型化适配器，尚未启动自动回补 Worker。开始回补前仍必须继续验证：
+当前只完成类型化适配器，**已启动自动回补 Worker**。回补 Worker 与实时 WebSocket 接收
+解耦，按 `uncertain -> backfilling` 原子领取 Gap，有界分页读取历史，历史消息经与实时
+相同的 `insert_message_if_absent` 幂等入口落库；分页推进只基于接口实际返回的真实锚点，
+禁止数值加减。完整性判定集中于领域层：真实 NapCat `account_conversation_set_proven()`
+恒为 `false`，因此即使所有已知会话 Scope 回补完成，账号级 Gap 也保持 `uncertain`
+（`known_scopes_complete`），只有确定性 Fake 来源能构造充分证据完成
+`verified_complete`。Gap 生命周期不变量：仅领取空窗已结束（`gap_ended_at IS NOT NULL`）
+的 Gap；回补边界读 Gap 创建时冻结的 `secretary_gap_boundaries` 快照（非领取时漂移游标），
+按平台消息 ID 匹配；证据不足回到 `uncertain` 的 Gap 可再次回补（运行表 gap_id 无唯一键），
+但受 `next_eligible_at` 退避约束避免热循环与饿死后续 Gap；`known_scopes_complete` 自动
+挂起，避免重复读取无新证据的固定边界；`max_concurrency` 经 `JoinSet` 产生真实并发；
+`reclaim_expired` 使用 `FOR UPDATE`、CAS 与每次接管轮换的 fencing token，旧 Worker 无法
+迟到覆盖当前持有者。历史响应同时校验账号主体与群会话身份，缺失稳定 ID/sequence 锚点时
+整页降级为协议异常；NapCat 错误响应的完整 `data` 不进入日志或证据 JSON。开始回补前仍必须
+继续验证：
 
 1. 如何只使用真实存在的包含式锚点稳定翻页，以及何时没有“下一锚点”；
 2. 正序/倒序在更多消息、两个账号视角和跨重启情况下的稳定含义；
