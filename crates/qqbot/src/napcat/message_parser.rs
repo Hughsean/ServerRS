@@ -139,12 +139,29 @@ pub fn normalize_text(raw: &str, self_qq_id: i64) -> (String, bool) {
     let re_cq = regex::Regex::new(r"\[CQ:[^\]]+\]").unwrap();
     normalized = re_cq.replace_all(&normalized, "").to_string();
 
+    // Decode NapCat/OneBot CQ entity escapes for literal characters that would
+    // otherwise be ambiguous inside CQ codes. NapCat sends these as numeric HTML
+    // entities in raw_message: &#91; = [, &#93; = ], &#44; = ,, &#38; = &.
+    // Failing to decode them leaves user-visible text like "&#91;E2E-001&#93;"
+    // instead of "[E2E-001]", which breaks keyword matching and LLM semantics.
+    normalized = decode_cq_entities(&normalized);
+
     // Clean up extra whitespace (collapse multiple spaces)
     let re_spaces = regex::Regex::new(r"  +").unwrap();
     normalized = re_spaces.replace_all(&normalized, " ").to_string();
     normalized = normalized.trim().to_string();
 
     (normalized, at_bot)
+}
+
+/// Decode the four numeric character references that NapCat uses to escape
+/// literal characters inside CQ code payloads. Only these specific entities
+/// are decoded to avoid unintended HTML unescaping of user content.
+fn decode_cq_entities(text: &str) -> String {
+    text.replace("&#91;", "[")
+        .replace("&#93;", "]")
+        .replace("&#44;", ",")
+        .replace("&#38;", "&")
 }
 
 #[cfg(test)]
@@ -206,5 +223,23 @@ mod tests {
         let (text, at_bot) = normalize_text(raw, 10001);
         assert!(at_bot);
         assert_eq!(text, "看看这个 可爱吗？");
+    }
+
+    #[test]
+    fn test_normalize_text_decodes_napcat_entity_escapes() {
+        // NapCat escapes literal [ ] , & as &#91; &#93; &#44; &#38; in raw_message
+        // to disambiguate them from CQ code syntax. normalize_text must decode
+        // them so user-visible text and keyword matching work correctly.
+        let raw = "&#91;E2E-001&#93; 请明天上午十点提醒我发送报价单。";
+        let (text, at_bot) = normalize_text(raw, 10001);
+        assert!(!at_bot);
+        assert_eq!(text, "[E2E-001] 请明天上午十点提醒我发送报价单。");
+    }
+
+    #[test]
+    fn test_normalize_text_decodes_comma_and_ampersand_escapes() {
+        let raw = "价格是5&#44;000元&#44;有折扣&#38;优惠";
+        let (text, _) = normalize_text(raw, 10001);
+        assert_eq!(text, "价格是5,000元,有折扣&优惠");
     }
 }

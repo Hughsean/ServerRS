@@ -5,20 +5,22 @@
 
 ## 当前阶段
 
-- 当前分支：`Main`，当前提交为 `23c3333`；QQBot 运行数据库使用独立容器、独立数据库和
+- 当前分支：`Main`，当前提交为 `be09d6a`；QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
-  协议适配、类型化 Agent 动作策略门，以及可选 OpenAI-compatible/Ollama 有界线程语义提取。
+  协议适配、类型化 Agent 动作策略门、可选 OpenAI-compatible/Ollama 有界线程语义提取、
+  并发优雅关闭（RuntimeWorkers + 25s 全局 deadline）、可编程运行时入口（run_with_cancellation）、
+  群白名单过滤，以及真实消息入站闭环 E2E 验收通过。
 - 当前边界：NapCat 保持只读；本地 QQBot MySQL 8.4 运行库已建成并通过 TLS、迁移幂等和应用
   连接验收。QQ 开放平台本地凭据可以完成鉴权和 Gateway 地址读取，但官方通道仍关闭，Owner
   OpenID 尚未通过真实 C2C 入站事件确认；本机 Ollama `qwen3:14b` 已完成真实结构化补全与提示
   注入边界验收。NapCat 已使用本机无 Token 的 HTTP `13990` 与 WebSocket `13991`，真实状态接口、
   WebSocket 握手和正式服务组合启动均通过；`6099` 仅作为 WebUI。已在聊天中暴露的 QQ 开放平台
   Secret 仍应轮换后再上线。
-- 下一开发项：完成真实消息入站→持久化→线程投影→LLM 候选证据链；随后接入受约束的
-  Planner/Retriever/Executor 节点与 Owner 自然语言控制。
+- 下一开发项：Owner Retriever / Action Planner + 日程提醒闭环；接入受约束的 Planner/Retriever/
+  Executor 节点与 Owner 自然语言控制。
 
 ## 历史分块
 
