@@ -141,14 +141,6 @@ pub struct StatusData {
     pub good: Option<bool>,
 }
 
-/// Data returned by get_version_info.
-#[derive(Debug, Clone, Deserialize)]
-pub struct VersionInfoData {
-    pub app_name: Option<String>,
-    pub app_version: Option<String>,
-    pub protocol_version: Option<String>,
-}
-
 /// 单次 NapCat HTTP 请求的超时上限。防止 NapCat 卡住时回补 Worker 或实时读取永久挂起。
 /// 此值独立于回补租约（`lease_secs`）：租约覆盖整个运行生命周期，本超时只保护单次 HTTP 调用。
 const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -157,16 +149,13 @@ const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 pub struct NapCatApiClient {
     /// Base URL for OneBot HTTP API, e.g. "http://127.0.0.1:3000".
     base_url: String,
-    /// Optional authorization token.
-    token: Option<String>,
     http_client: reqwest::Client,
 }
 
 impl NapCatApiClient {
-    pub fn new(base_url: String, token: Option<String>) -> Self {
+    pub fn new(base_url: String) -> Self {
         Self {
             base_url,
-            token,
             http_client: reqwest::Client::builder()
                 .timeout(HTTP_REQUEST_TIMEOUT)
                 .connect_timeout(HTTP_REQUEST_TIMEOUT)
@@ -177,11 +166,10 @@ impl NapCatApiClient {
 
     async fn call_api(&self, action: &str, params: Value) -> Result<OneBotResponse, NapCatError> {
         let url = format!("{}/{}", self.base_url, action);
-        let mut req = self.http_client.post(&url).json(&params);
-        if let Some(ref token) = self.token {
-            req = req.header("Authorization", format!("Bearer {token}"));
-        }
-        let resp = req
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&params)
             .send()
             .await
             .map_err(|e| NapCatError::Connection(format!("HTTP request failed: {e}")))?;

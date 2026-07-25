@@ -12,10 +12,7 @@ async fn readonly_http_contract_matches_the_local_napcat_instance() {
     let base_url = required_env("NAPCAT_TEST_HTTP_BASE_URL");
     let group_id = required_env("NAPCAT_TEST_GROUP_ID");
     let peer_id = required_env("NAPCAT_TEST_PEER_ID");
-    let token = std::env::var("NAPCAT_TEST_HTTP_TOKEN")
-        .ok()
-        .filter(|value| !value.is_empty());
-    let client = NapCatApiClient::new(base_url, token);
+    let client = NapCatApiClient::new(base_url);
 
     let status = client.get_status().await.unwrap();
     assert_eq!(status.online, Some(true));

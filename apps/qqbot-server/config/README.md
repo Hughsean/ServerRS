@@ -12,6 +12,11 @@ QQBot 不读取数字人的根 `config.toml`、`CONFIG_PATH` 或根 `.env`。
 可使用 `QQBOT_CONFIG_PATH` 指向其他位置。数据库环境变量只使用
 `QQBOT_DATABASE_URL`，不会读取数字人的 `DATABASE_URL`。
 
+NapCat HTTP 与 WebSocket 均按本机无 Token 模式接入，不存在 `http_token`、`ws_token` 或
+`NAPCAT_HTTP_TOKEN` 配置。为补偿无鉴权边界，`napcat.ws_url` 与 `napcat.http_base_url` 必须使用
+`localhost`、`127.0.0.1` 或 `::1`，并禁止在 URL 中嵌入凭据、查询 Token 或片段。NapCat 侧也应
+只监听 loopback，不能暴露到局域网或公网。
+
 历史回补配置位于 `[backfill]` 段，对应 `QQBOT_BACKFILL_*` 环境变量：`page_size` 必须在
 `1..=100`，`max_concurrency` 在 `1..=64`，`lease_secs` 在 `1..=3600`，`retry_max_ms` 不得
 小于 `retry_initial_ms`。所有历史读取有明确上限（页数/事件数/并发），禁止无限循环。回补

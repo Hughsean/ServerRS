@@ -378,6 +378,68 @@ fn napcat_adapter_exposes_no_personal_account_mutations() {
     }
 }
 
+/// Allowlist guard: the public async methods on `NapCatApiClient` must be exactly
+/// the known read-only set. This is stricter than the denylist above and catches
+/// any future addition of an unlisted OneBot mutation (e.g. set_group_kick).
+#[test]
+fn napcat_adapter_only_exposes_readonly_methods() {
+    let api = fs::read_to_string(workspace_root().join("crates/qqbot/src/napcat/api.rs"))
+        .expect("NapCat API source must be readable");
+
+    // Collect every `pub async fn <name>` declared inside `impl NapCatApiClient`.
+    // We look for the impl block to avoid matching methods on other types.
+    let impl_start = api
+        .find("impl NapCatApiClient")
+        .expect("NapCatApiClient impl block must exist");
+    let impl_body = &api[impl_start..];
+
+    let mut methods: Vec<&str> = Vec::new();
+    for line in impl_body.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("pub async fn ") {
+            if let Some(name_end) = rest.find('(') {
+                let name = rest[..name_end].trim();
+                // Skip the constructor `new` (not an API action) and helper methods.
+                if name != "new" {
+                    methods.push(name);
+                }
+            }
+        }
+    }
+
+    let expected = [
+        "get_login_info",
+        "get_group_info",
+        "get_group_member_info",
+        "get_group_list",
+        "get_group_member_list",
+        "get_status",
+        "get_group_msg_history",
+        "get_friend_msg_history",
+        "get_msg",
+    ];
+
+    let mut missing: Vec<&str> = expected
+        .iter()
+        .filter(|expected_name| !methods.contains(expected_name))
+        .copied()
+        .collect();
+    let mut unexpected: Vec<&str> = methods
+        .iter()
+        .filter(|actual| !expected.contains(actual))
+        .copied()
+        .collect();
+    missing.sort();
+    unexpected.sort();
+
+    assert!(
+        missing.is_empty() && unexpected.is_empty(),
+        "NapCatApiClient public async methods must be exactly the read-only allowlist.\n\
+         missing: {missing:?}\n\
+         unexpected: {unexpected:?}"
+    );
+}
+
 #[test]
 fn qqbot_database_is_owned_by_the_qqbot_application() {
     let digital_init = fs::read_to_string(workspace_root().join("database/sql/init.sql"))
