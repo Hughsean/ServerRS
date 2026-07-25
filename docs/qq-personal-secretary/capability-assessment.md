@@ -1,17 +1,19 @@
 # 跨会话因果、主动跟进与结构化记忆能力审计
 
-> 审计日期：2026-07-24
-> 审计基线：`claude/qqbot-history-backfill`（已合并到 Main 的代码 + 本切片历史回补改动）
+> 审计日期：2026-07-25
+> 审计基线：`Main` 提交 `23c3333` + 未提交工作区（并发优雅关闭、可编程运行时入口、E2E 验收通过）
 > 结论：目标可实现；当前已具备消息事实存储、连续性审计、历史回补、线程/结构记忆、承诺
-> 跟进 Outbox、QQ 开放平台协议适配、可选有界 LLM 线程语义提取和类型化 Agent 动作安全底座。
-> Owner 自然语言 Action Planner、跨线程检索与成组模型质量基准尚未完成；本机 Qwen3 单请求
-> 语义抽取及提示注入边界已完成实机验收。
+> 跟进 Outbox、QQ 开放平台协议适配、可选有界 LLM 线程语义提取、类型化 Agent 动作安全底座、
+> 并发优雅关闭（`RuntimeWorkers` + 25s 全局 deadline）和可编程运行时入口（`run_with_cancellation`）。
+> 真实消息 E2E 验收已通过：SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，
+> 重启幂等性验证通过（scoped 计数不增加、游标不回退）。
+> Owner 自然语言 Action Planner、跨线程检索与成组模型质量基准尚未完成。
 
 ## 1. 当前能力结论
 
 | 能力 | 当前状态 | 代码事实 | 结论 |
 |---|---|---|---|
-| 群聊、私聊和本人消息接收 | 基础具备 | NapCat 已建模 `group`、`private`、`message_sent` 并通过有界 Worker 幂等保存 | 群聊/本人消息已实测；私聊主动测试不在本轮授权范围 |
+| 群聊、私聊和本人消息接收 | 基础具备 | NapCat 已建模 `group`、`private`、`message_sent` 并通过有界 Worker 幂等保存；无 Token WebSocket `13991` 组合连接已通过 | 历史群聊/本人消息已实测；仍需一条新消息确认本轮自身消息上报和完整派生链 |
 | NapCat 本地账号只读 | 服务端具备 | 运行时 HTTP Client 只公开读取，架构测试禁止服务端发送；主动发送仅存在于忽略型群测试 | 业务代码不能代表 Owner 发消息 |
 | 判断消息回复了什么 | 已具备 | `Reply` 的账号视角 ID 已实测并解析为 `reply_to_event_id`；历史回补实现“子先父后”同账号回填 | 跨重启更大样本和非消息事件 Reply 路径仍待覆盖 |
 | 讨论前因后果 | 基础具备 | 已有 `EventThread`/Claim/Decision/Question/Relation 类型和批量 MySQL 投影；Reply 优先、同会话短窗口次之 | 当前仅确定性线程骨架，尚未提取要求/分歧/结论 |

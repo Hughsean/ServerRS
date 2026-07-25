@@ -1,11 +1,13 @@
 # 个人 QQ 智能秘书 Todo
 
-> 最后更新：2026-07-24
+> 最后更新：2026-07-25
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
 > 当前开发阶段：阶段 6「Owner 控制与官方 QQ 通道」正在推进；官方协议适配、Gateway 入站、
-> Owner 绑定、可靠通知 Outbox、类型化 Agent 动作安全底座和首条有界 LLM 线程语义切片已完成，
-> 真实凭据轮换后的联机验收、Owner 自然语言 Action Planner 与控制交互仍待实现。
+> Owner 绑定、可靠通知 Outbox、类型化 Agent 动作安全底座、首条有界 LLM 线程语义切片、
+> 并发优雅关闭（`RuntimeWorkers`）和可编程运行时入口（`run_with_cancellation`）已完成；
+> 真实消息 E2E 验收已通过（SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，
+> 重启幂等性验证通过）；真实凭据轮换后的联机验收、Owner 自然语言 Action Planner 与控制交互仍待实现。
 
 ## 0. 当前完成与阻塞
 
@@ -21,6 +23,10 @@
   `serverrs-qqbot-mysql`、数据库 `qq_personal_secretary` 和独立 Docker 卷；只绑定
   `127.0.0.1:3306`，强制 TLS，11 个迁移按依赖顺序执行并通过幂等复跑，项目自身已完成真实
   连接验收。未修改数字人 `docker-compose`、`init.sql` 或数据库。
+- [x] `DONE ENV-006` NapCat HTTP/WebSocket 统一采用本机无 Token 模式。QQBot 已删除
+  `http_token`、`NAPCAT_HTTP_TOKEN` 和 HTTP Authorization 装配；配置层强制两个地址只能使用
+  loopback，并拒绝 URL 凭据、查询 Token 和片段。HTTP `13990` 状态接口、WebSocket `13991`
+  真实握手及 qqbot-server/MySQL/Ollama 组合启动均已通过。
 - [x] `DONE LLM-001` 已建立 QQBot 独立 `[llm]` 配置、OpenAI-compatible/Ollama 客户端和有界
   线程语义提取垂直切片。API Key 不进入 TOML；远程端点强制 HTTPS；输入字符、输出 Token、
   响应字节、超时和候选数均有上限。模型只能产生引用当前批次 `source_event_id` 的候选 DTO，
@@ -31,6 +37,8 @@
 - [ ] `PARTIAL ENV-003` 两个 NapCat 测试账号均在线；已在唯一获批测试群实测未 @、@、本人
   消息、跨账号 Reply、撤回通知、双 WebSocket 和主动重连。测试临时开启的本人消息上报与第二
   实例 WebSocket 已逐字恢复，未测试私聊主动发送；群免打扰状态是否影响上报仍需单独取证。
+  2026-07-25 先确认 `6099` 只是 WebUI，随后当前账号启用无 Token HTTP `13990` 和 WebSocket
+  `13991` 并通过组合连接；仍待用一条新真实消息确认本轮“自身消息上报”配置和完整派生链。
 - [ ] `PARTIAL ENV-004` 双账号群/私聊历史、同参数稳定读取、精确锚点包含语义和同账号
   `get_msg` 已实测；主动样本再次确认跨账号消息 ID 不可互用，正确 Reply 必须使用发送账号
   自己观察到的父消息 ID。多页方向、空页原因、跨重启覆盖和 PacketBackend 兼容性仍待验证。
@@ -45,7 +53,10 @@
 - [x] `DONE EVT-004` 在单事务中执行账号作用域幂等插入，返回 `Accepted/Duplicate`。
 - [x] `DONE EVT-005` `qqbot-server` 先持久化再允许进入后续处理；Duplicate 不重复投递。
 - [ ] `PARTIAL EVT-006` 已增加有界 `mpsc` 队列、非阻塞 `try_send` 背压和独立数据库重试
-  Worker；WebSocket 回调不再等待 MySQL。批处理和 LLM 消费链尚未实现。
+  Worker；WebSocket 回调不再等待 MySQL。批处理和 LLM 消费链已实现（线程投影/语义/关联
+  Worker）。并发优雅关闭（`RuntimeWorkers` + 25s 全局 deadline）和可编程运行时入口
+  （`run_with_cancellation` + watch 信号）已完成；E2E 真实消息验收已通过
+  （SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，重启幂等性验证通过）。
 - [ ] `PARTIAL EVT-007` 已把可命中的 `Reply` 平台 ID 解析为 `reply_to_event_id`；历史回补
   已实现“子先父后”同账号回填（父消息后到时自动回填未解析的 `reply_to_event_id`，幂等且
   不跨账号）。剩余条件：跨重启覆盖更大样本、非消息事件 Reply 路径仍待覆盖。

@@ -14,9 +14,10 @@
 - 当前边界：NapCat 保持只读；本地 QQBot MySQL 8.4 运行库已建成并通过 TLS、迁移幂等和应用
   连接验收。QQ 开放平台本地凭据可以完成鉴权和 Gateway 地址读取，但官方通道仍关闭，Owner
   OpenID 尚未通过真实 C2C 入站事件确认；本机 Ollama `qwen3:14b` 已完成真实结构化补全与提示
-  注入边界验收。NapCat HTTP `3000` 在监听，但 WebSocket `6700` 当前未监听；已在聊天中暴露的
+  注入边界验收。NapCat 已使用本机无 Token 的 HTTP `13990` 与 WebSocket `13991`，真实状态接口、
+  WebSocket 握手和正式服务组合启动均通过；`6099` 仅作为 WebUI。已在聊天中暴露的 QQ 开放平台
   Secret 仍应轮换后再上线。
-- 下一开发项：恢复 NapCat WebSocket 后完成组合入站冒烟；随后接入受约束的
+- 下一开发项：完成真实消息入站→持久化→线程投影→LLM 候选证据链；随后接入受约束的
   Planner/Retriever/Executor 节点与 Owner 自然语言控制。
 
 ## 历史分块
@@ -27,6 +28,13 @@
 
 ## 最近事件
 
+- `2026-07-25 18:17（Asia/Shanghai）`：E2E 最终验收通过（36.54s）；清理非白名单群 338 条历史数据；下一阶段 Owner Retriever / Action Planner。
+- `2026-07-25 17:05（Asia/Shanghai）`：群白名单、E2E RAII 守卫加固、跨扫描周期重启稳定性与文档修正。
+- `2026-07-25 13:27（Asia/Shanghai）`：真实消息入站闭环 E2E 验收通过（187.60s，含 LLM 退避重试）。
+- `2026-07-25 12:47（Asia/Shanghai）`：并发优雅关闭、可编程运行时入口与真实 E2E 验收骨架。
+- `2026-07-25 10:44（Asia/Shanghai）`：QQBot 环境变量覆盖改为四类窄宏，消除配置解析样板代码。
+- `2026-07-25 10:35（Asia/Shanghai）`：移除 NapCat Token 配置，HTTP 13990/WebSocket 13991 无 Token 组合验收通过。
+- `2026-07-25 10:22（Asia/Shanghai）`：NapCat `6099` 端口复验，确认其为 WebUI 而非 OneBot WebSocket；HTTP/Ollama 正常，MySQL 已恢复健康。
 - `2026-07-24 22:42（Asia/Shanghai）`：Ollama Qwen3 实机语义与提示注入边界验收通过。
 - `2026-07-24 22:29（Asia/Shanghai）`：完成 QQBot 独立有界 LLM 线程语义提取垂直切片。
 - `2026-07-24 22:11（Asia/Shanghai）`：建立独立持久化 QQBot MySQL 运行库并完成 45 表验收。
