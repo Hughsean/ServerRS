@@ -10,6 +10,7 @@ mod follow_up_service;
 mod inbound;
 mod memory;
 mod memory_service;
+mod retriever;
 mod store;
 mod thread_link_service;
 mod thread_links;
@@ -53,6 +54,13 @@ pub use memory::{
     validate_memory_fact,
 };
 pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
+pub use retriever::{
+    ContentTrustLevel, EventQuery, EventSearchResult, IdentityTrust, ParticipantIdentity,
+    ParticipantRef, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
+    ReferenceResolution, RetrieverError, RetrieverStoreT, SourceEventDetail, ThreadSearchResult,
+    UpcomingItem, filter_for_model, is_allowed_for_model, resolve_reference_from_candidates,
+    validate_event_query,
+};
 pub use store::{
     InboundEventStoreError, InboundEventStoreT, IngestMessageOutcome, IngestionContinuityStoreT,
     OwnerBinding, OwnerBindingStoreT, PersonalSecretaryStoreT, SourceEventId,
