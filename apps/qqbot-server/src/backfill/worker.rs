@@ -25,6 +25,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::MissedTickBehavior;
 
 use crate::config::BackfillConfig;
+use crate::worker_lifecycle::WorkerHandle;
 
 /// 周期扫描间隔：没有重连唤醒时，定期检查是否有可领取的 uncertain Gap。
 const IDLE_SCAN_INTERVAL: Duration = Duration::from_secs(30);
@@ -74,11 +75,14 @@ impl BackfillHandle {
         Arc::clone(&self.wake)
     }
 
-    /// 服务关闭时优雅等待 Worker 退出。置位取消标志并唤醒，确保循环不会永久挂起。
-    pub(crate) async fn shutdown(self) {
+    /// 发出停止信号并取出 JoinHandle，交由 [`WorkerHandle`] 统一带超时回收。
+    ///
+    /// 内部 `SHUTDOWN_GRACE`（10s）清理发生在 Worker 任务退出过程中；外层全局
+    /// deadline 必须大于 10s，否则会抢先中止内部清理。
+    pub(crate) fn signal_and_detach(self) -> WorkerHandle {
         self.shutdown.store(true, Ordering::Release);
         self.wake.notify_one();
-        let _ = self.join.await;
+        WorkerHandle::new("backfill", self.join)
     }
 }
 
@@ -615,9 +619,14 @@ mod tests {
         cfg.max_concurrency = 2;
         let handle = spawn_backfill_worker(use_case, cfg);
 
-        tokio::time::timeout(Duration::from_secs(2), handle.shutdown())
-            .await
-            .expect("shutdown must not hang");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("shutdown must not hang");
     }
 
     #[tokio::test]
@@ -634,9 +643,14 @@ mod tests {
 
         // SHUTDOWN_GRACE 是 10s；关闭应在远低于此的时间完成（abort 后清理句柄）。
         // 但保留足够余量应对调度延迟。
-        tokio::time::timeout(Duration::from_secs(15), handle.shutdown())
-            .await
-            .expect("shutdown must not hang even when an in-flight task never returns");
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("shutdown must not hang even when an in-flight task never returns");
     }
 
     #[tokio::test]
@@ -661,9 +675,14 @@ mod tests {
         let handle = spawn_backfill_worker(Arc::new(StuckReclaimRunner), config());
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::time::timeout(Duration::from_secs(2), handle.shutdown())
-            .await
-            .expect("shutdown must cancel a stuck expired-run claim");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("shutdown must cancel a stuck expired-run claim");
     }
 
     #[tokio::test]
@@ -730,9 +749,14 @@ mod tests {
         );
 
         // 关闭 Worker。能在期限内退出即证明未卡死。
-        tokio::time::timeout(Duration::from_secs(15), handle.shutdown())
-            .await
-            .expect("worker with backoff must shut down cleanly");
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("worker with backoff must shut down cleanly");
     }
 
     #[tokio::test]
@@ -764,9 +788,14 @@ mod tests {
             "a reconnect wake must not bypass the mandatory error backoff"
         );
 
-        tokio::time::timeout(Duration::from_secs(2), handle.shutdown())
-            .await
-            .expect("worker must remain cancellable during backoff");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("worker must remain cancellable during backoff");
     }
 
     #[tokio::test]
@@ -777,9 +806,14 @@ mod tests {
         cfg.enabled = false;
         let handle = spawn_backfill_worker(use_case, cfg);
         // disabled Worker 不进入循环，shutdown 立即返回。
-        tokio::time::timeout(Duration::from_secs(2), handle.shutdown())
-            .await
-            .expect("disabled worker shutdown must not hang");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            handle
+                .signal_and_detach()
+                .join_with_timeout(Duration::from_secs(12)),
+        )
+        .await
+        .expect("disabled worker shutdown must not hang");
     }
 
     #[test]

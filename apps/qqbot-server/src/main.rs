@@ -4,11 +4,11 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
-    let config = AppConfig::load().map_err(|error| {
+    let (config, config_dir) = AppConfig::load().map_err(|error| {
         tracing::error!(error = %error, "QQBot 适配器配置加载失败");
         error
     })?;
-    runtime::run(config).await?;
+    runtime::run(config, config_dir).await?;
     Ok(())
 }
 

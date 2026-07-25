@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::config::QqOpenPlatformConfig;
+use crate::worker_lifecycle::WorkerHandle;
 
 pub(crate) struct OfficialPlatformHandle {
     shutdown: watch::Sender<bool>,
@@ -24,16 +25,10 @@ pub(crate) struct OfficialPlatformHandle {
 }
 
 impl OfficialPlatformHandle {
-    pub(crate) async fn shutdown(self) {
+    /// 发出停止信号并取出 JoinHandle，交由 [`WorkerHandle`] 统一带超时回收。
+    pub(crate) fn signal_and_detach(self) -> WorkerHandle {
         let _ = self.shutdown.send(true);
-        let mut join = self.join;
-        if tokio::time::timeout(Duration::from_secs(10), &mut join)
-            .await
-            .is_err()
-        {
-            join.abort();
-            let _ = join.await;
-        }
+        WorkerHandle::new("qq_open_platform", self.join)
     }
 }
 

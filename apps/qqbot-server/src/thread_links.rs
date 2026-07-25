@@ -7,6 +7,7 @@ use personal_secretary::{ThreadLinkRun, ThreadLinkUseCase, ThreadLinkUseCaseErro
 use tokio::task::JoinHandle;
 
 use crate::config::ThreadLinksConfig;
+use crate::worker_lifecycle::WorkerHandle;
 
 #[async_trait]
 trait ThreadLinkRunner: Send + Sync {
@@ -27,10 +28,11 @@ pub(crate) struct ThreadLinksHandle {
 }
 
 impl ThreadLinksHandle {
-    pub(crate) async fn shutdown(self) {
+    /// 发出停止信号并取出 JoinHandle，交由 [`WorkerHandle`] 统一带超时回收。
+    pub(crate) fn signal_and_detach(self) -> WorkerHandle {
         self.shutdown.store(true, Ordering::Release);
         self.wake.notify_one();
-        let _ = self.join.await;
+        WorkerHandle::new("thread_links", self.join)
     }
 }
 

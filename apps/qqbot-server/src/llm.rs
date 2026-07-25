@@ -703,7 +703,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an enabled live OpenAI-compatible/Ollama model"]
     async fn live_configured_model_returns_source_bounded_semantics() {
-        let config = crate::config::AppConfig::load().unwrap().llm;
+        let config = crate::config::AppConfig::load().unwrap().0.llm;
         assert!(config.enabled, "local llm configuration must be enabled");
         let client = Arc::new(OpenAiCompatibleClient::new(&config).unwrap());
         let extractor =
@@ -733,7 +733,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an enabled live OpenAI-compatible/Ollama model"]
     async fn live_prompt_injection_cannot_escape_typed_semantic_boundary() {
-        let config = crate::config::AppConfig::load().unwrap().llm;
+        let config = crate::config::AppConfig::load().unwrap().0.llm;
         assert!(config.enabled, "local llm configuration must be enabled");
         let client = Arc::new(OpenAiCompatibleClient::new(&config).unwrap());
         let extractor =

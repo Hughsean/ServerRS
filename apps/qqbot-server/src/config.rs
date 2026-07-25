@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub llm: LlmConfig,
     #[serde(default)]
     pub qq_open_platform: QqOpenPlatformConfig,
+    #[serde(default)]
+    pub whitelist: WhitelistConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -33,8 +35,6 @@ pub struct AppConfig {
 pub struct NapCatConfig {
     pub ws_url: String,
     pub http_base_url: String,
-    #[serde(default)]
-    pub http_token: String,
     pub self_qq_id: i64,
     #[serde(default = "default_reconnect_initial_secs")]
     pub reconnect_initial_secs: u64,
@@ -628,6 +628,100 @@ impl QqOpenPlatformConfig {
     }
 }
 
+/// 群白名单配置。只有白名单内的群消息才会被处理和持久化。
+///
+/// 白名单文件是 JSON 格式：`{"groups": [671260344, ...]}`。
+/// `whitelist_file` 为相对路径时以配置文件目录为基准；不配时表示不启用白名单
+/// （所有群消息都会被处理）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WhitelistConfig {
+    /// 白名单 JSON 文件路径。不配则不启用白名单过滤。
+    pub whitelist_file: Option<PathBuf>,
+}
+
+impl WhitelistConfig {
+    /// 解析白名单文件路径：相对路径以 `config_dir` 为基准，绝对路径直接使用。
+    fn resolve_path(&self, config_dir: &std::path::Path) -> Option<PathBuf> {
+        self.whitelist_file.as_ref().map(|path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                config_dir.join(path)
+            }
+        })
+    }
+
+    fn validate(&self, config_dir: &std::path::Path) -> Result<(), ConfigError> {
+        if let Some(path) = self.resolve_path(config_dir) {
+            if !path.exists() {
+                return Err(ConfigError::Invalid(format!(
+                    "whitelist.whitelist_file 指向的文件不存在: {}",
+                    path.display()
+                )));
+            }
+            // 尝试解析 JSON，确认格式正确。
+            let content = std::fs::read_to_string(&path).map_err(|error| {
+                ConfigError::Invalid(format!("读取白名单文件失败 {}: {error}", path.display()))
+            })?;
+            let parsed: WhitelistFile = serde_json::from_str(&content).map_err(|error| {
+                ConfigError::Invalid(format!(
+                    "白名单文件 JSON 格式错误 {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if parsed.groups.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "白名单文件 groups 不能为空数组；如需放行所有群，请删除 whitelist_file 配置"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 加载白名单群号集合。`whitelist_file` 为 None 时返回空集合（表示不启用过滤）。
+    /// 相对路径以 `config_dir` 为基准。
+    ///
+    /// 拒绝空数组（防止文件被改为空时 fail-open）和非正群号。
+    pub fn load_groups(
+        &self,
+        config_dir: &std::path::Path,
+    ) -> Result<std::collections::HashSet<i64>, ConfigError> {
+        let Some(path) = self.resolve_path(config_dir) else {
+            return Ok(std::collections::HashSet::new());
+        };
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            ConfigError::Invalid(format!("读取白名单文件失败 {}: {error}", path.display()))
+        })?;
+        let parsed: WhitelistFile = serde_json::from_str(&content).map_err(|error| {
+            ConfigError::Invalid(format!(
+                "白名单文件 JSON 格式错误 {}: {error}",
+                path.display()
+            ))
+        })?;
+        if parsed.groups.is_empty() {
+            return Err(ConfigError::Invalid(
+                "白名单文件 groups 不能为空数组；如需放行所有群，请删除 whitelist_file 配置".into(),
+            ));
+        }
+        for group_id in &parsed.groups {
+            if *group_id <= 0 {
+                return Err(ConfigError::Invalid(format!(
+                    "白名单文件包含非法群号 {group_id}；群号必须为正整数"
+                )));
+            }
+        }
+        Ok(parsed.groups.into_iter().collect())
+    }
+}
+
+/// 白名单 JSON 文件结构。
+#[derive(Debug, Deserialize)]
+struct WhitelistFile {
+    groups: Vec<i64>,
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read QQBot config {path}: {source}")]
@@ -646,9 +740,49 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+/// 环境变量覆盖只保留四种常见、类型明确的机械操作。
+/// 特殊枚举和浮点语义仍在调用处显式解析，避免形成难以调试的万能配置 DSL。
+macro_rules! apply_env_field {
+    ($config:expr, $field:ident, $name:literal, bool) => {
+        if let Ok(value) = std::env::var($name) {
+            ($config).$field = parse_bool($name, &value)?;
+        }
+    };
+    ($config:expr, $field:ident, $name:literal, positive) => {
+        if let Ok(value) = std::env::var($name) {
+            ($config).$field = parse_positive($name, &value)?;
+        }
+    };
+    ($config:expr, $field:ident, $name:literal, non_empty) => {
+        if let Ok(value) = std::env::var($name)
+            && !value.trim().is_empty()
+        {
+            ($config).$field = value;
+        }
+    };
+    ($config:expr, $field:ident, $name:literal, path) => {
+        if let Ok(value) = std::env::var($name)
+            && !value.trim().is_empty()
+        {
+            ($config).$field = Some(PathBuf::from(value));
+        }
+    };
+}
+
+macro_rules! apply_env_fields {
+    ($config:expr; $( $kind:ident { $( $field:ident => $name:literal ),* $(,)? } ),* $(,)?) => {
+        $(
+            $(apply_env_field!($config, $field, $name, $kind);)*
+        )*
+    };
+}
+
 impl AppConfig {
     /// QQBot 使用应用目录内的独立配置入口，不读取数字人的根 `.env` 或 `CONFIG_PATH`。
-    pub fn load() -> Result<Self, ConfigError> {
+    ///
+    /// 返回 `(config, config_dir)`，`config_dir` 是配置文件所在目录，
+    /// 用于解析白名单等相对路径。
+    pub fn load() -> Result<(Self, PathBuf), ConfigError> {
         let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config");
         let _ = dotenvy::from_path(config_dir.join(".env"));
         let path = std::env::var_os("QQBOT_CONFIG_PATH")
@@ -663,56 +797,34 @@ impl AppConfig {
             source,
         })?;
         config.apply_env_overrides()?;
-        config.validate()?;
-        Ok(config)
+        let config_dir = path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        config.validate(&config_dir)?;
+        Ok((config, config_dir))
     }
 
     fn apply_env_overrides(&mut self) -> Result<(), ConfigError> {
-        if let Ok(value) = std::env::var("NAPCAT_WS_URL")
-            && !value.trim().is_empty()
-        {
-            self.napcat.ws_url = value;
-        }
-        if let Ok(value) = std::env::var("NAPCAT_HTTP_BASE_URL")
-            && !value.trim().is_empty()
-        {
-            self.napcat.http_base_url = value;
-        }
-        if let Ok(value) = std::env::var("NAPCAT_HTTP_TOKEN") {
-            self.napcat.http_token = value;
-        }
-        if let Ok(value) = std::env::var("NAPCAT_SELF_QQ_ID") {
-            self.napcat.self_qq_id = value.parse().map_err(|_| {
-                ConfigError::Invalid("NAPCAT_SELF_QQ_ID must be a positive integer".into())
-            })?;
-        }
-        if let Ok(value) = std::env::var("QQBOT_DATABASE_URL")
-            && !value.trim().is_empty()
-        {
-            self.database.url = value;
-        }
-        if let Ok(value) = std::env::var("QQBOT_DATABASE_MAX_CONNECTIONS") {
-            self.database.max_connections = value.parse().map_err(|_| {
-                ConfigError::Invalid(
-                    "QQBOT_DATABASE_MAX_CONNECTIONS must be a positive integer".into(),
-                )
-            })?;
-        }
-        if let Ok(value) = std::env::var("QQBOT_INGESTION_QUEUE_CAPACITY") {
-            self.ingestion.queue_capacity =
-                parse_positive("QQBOT_INGESTION_QUEUE_CAPACITY", &value)?;
-        }
-        if let Ok(value) = std::env::var("QQBOT_INGESTION_RETRY_INITIAL_MS") {
-            self.ingestion.retry_initial_ms =
-                parse_positive("QQBOT_INGESTION_RETRY_INITIAL_MS", &value)?;
-        }
-        if let Ok(value) = std::env::var("QQBOT_INGESTION_RETRY_MAX_MS") {
-            self.ingestion.retry_max_ms = parse_positive("QQBOT_INGESTION_RETRY_MAX_MS", &value)?;
-        }
-        if let Ok(value) = std::env::var("QQBOT_INGESTION_SHUTDOWN_DRAIN_TIMEOUT_SECS") {
-            self.ingestion.shutdown_drain_timeout_secs =
-                parse_positive("QQBOT_INGESTION_SHUTDOWN_DRAIN_TIMEOUT_SECS", &value)?;
-        }
+        apply_env_fields!(&mut self.napcat;
+            non_empty {
+                ws_url => "NAPCAT_WS_URL",
+                http_base_url => "NAPCAT_HTTP_BASE_URL",
+            },
+            positive { self_qq_id => "NAPCAT_SELF_QQ_ID" },
+        );
+        apply_env_fields!(&mut self.database;
+            non_empty { url => "QQBOT_DATABASE_URL" },
+            positive { max_connections => "QQBOT_DATABASE_MAX_CONNECTIONS" },
+        );
+        apply_env_fields!(&mut self.ingestion;
+            positive {
+                queue_capacity => "QQBOT_INGESTION_QUEUE_CAPACITY",
+                retry_initial_ms => "QQBOT_INGESTION_RETRY_INITIAL_MS",
+                retry_max_ms => "QQBOT_INGESTION_RETRY_MAX_MS",
+                shutdown_drain_timeout_secs => "QQBOT_INGESTION_SHUTDOWN_DRAIN_TIMEOUT_SECS",
+            },
+        );
         apply_backfill_env(&mut self.backfill)?;
         apply_thread_projection_env(&mut self.thread_projection)?;
         apply_thread_semantics_env(&mut self.thread_semantics)?;
@@ -720,12 +832,13 @@ impl AppConfig {
         apply_follow_up_env(&mut self.follow_up)?;
         apply_llm_env(&mut self.llm)?;
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
+        apply_whitelist_env(&mut self.whitelist)?;
         Ok(())
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_url(&self.napcat.ws_url, &["ws", "wss"], "napcat.ws_url")?;
-        validate_url(
+    fn validate(&self, config_dir: &std::path::Path) -> Result<(), ConfigError> {
+        validate_loopback_url(&self.napcat.ws_url, &["ws", "wss"], "napcat.ws_url")?;
+        validate_loopback_url(
             &self.napcat.http_base_url,
             &["http", "https"],
             "napcat.http_base_url",
@@ -773,6 +886,7 @@ impl AppConfig {
         self.follow_up.validate()?;
         self.llm.validate()?;
         self.qq_open_platform.validate()?;
+        self.whitelist.validate(config_dir)?;
         Ok(())
     }
 }
@@ -785,6 +899,28 @@ fn validate_url(value: &str, schemes: &[&str], field: &str) -> Result<(), Config
         return Err(ConfigError::Invalid(format!(
             "{field} must use one of these schemes: {}",
             schemes.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+fn validate_loopback_url(value: &str, schemes: &[&str], field: &str) -> Result<(), ConfigError> {
+    validate_url(value, schemes, field)?;
+    let url = url::Url::parse(value).map_err(|error| {
+        ConfigError::Invalid(format!("{field} must be an absolute URL: {error}"))
+    })?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::Invalid(format!(
+            "{field} must not contain credentials, query, or fragment"
+        )));
+    }
+    if !url.host_str().is_some_and(is_loopback_host) {
+        return Err(ConfigError::Invalid(format!(
+            "{field} must use a loopback host because NapCat authentication is disabled"
         )));
     }
     Ok(())
@@ -820,12 +956,12 @@ fn default_ingestion_shutdown_drain_timeout_secs() -> u64 {
 
 fn parse_positive<T>(name: &str, value: &str) -> Result<T, ConfigError>
 where
-    T: std::str::FromStr + PartialEq + Default,
+    T: std::str::FromStr + PartialOrd + Default,
 {
     let parsed = value
         .parse::<T>()
         .map_err(|_| ConfigError::Invalid(format!("{name} must be a positive integer")))?;
-    if parsed == T::default() {
+    if parsed <= T::default() {
         return Err(ConfigError::Invalid(format!(
             "{name} must be a positive integer"
         )));
@@ -835,192 +971,105 @@ where
 
 /// 应用 `QQBOT_BACKFILL_*` 环境变量覆盖。只使用 QQBot 专属前缀，不读取数字人配置。
 fn apply_backfill_env(config: &mut BackfillConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_ENABLED") {
-        config.enabled = parse_bool("QQBOT_BACKFILL_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_PAGE_SIZE") {
-        config.page_size = parse_positive("QQBOT_BACKFILL_PAGE_SIZE", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_PAGES_PER_SCOPE") {
-        config.max_pages_per_scope = parse_positive("QQBOT_BACKFILL_MAX_PAGES_PER_SCOPE", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_EVENTS_PER_RUN") {
-        config.max_events_per_run = parse_positive("QQBOT_BACKFILL_MAX_EVENTS_PER_RUN", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_MAX_CONCURRENCY") {
-        config.max_concurrency = parse_positive("QQBOT_BACKFILL_MAX_CONCURRENCY", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_LEASE_SECS") {
-        config.lease_secs = parse_positive("QQBOT_BACKFILL_LEASE_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_RETRY_INITIAL_MS") {
-        config.retry_initial_ms = parse_positive("QQBOT_BACKFILL_RETRY_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_BACKFILL_RETRY_MAX_MS") {
-        config.retry_max_ms = parse_positive("QQBOT_BACKFILL_RETRY_MAX_MS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_BACKFILL_ENABLED" },
+        positive {
+            page_size => "QQBOT_BACKFILL_PAGE_SIZE",
+            max_pages_per_scope => "QQBOT_BACKFILL_MAX_PAGES_PER_SCOPE",
+            max_events_per_run => "QQBOT_BACKFILL_MAX_EVENTS_PER_RUN",
+            max_concurrency => "QQBOT_BACKFILL_MAX_CONCURRENCY",
+            lease_secs => "QQBOT_BACKFILL_LEASE_SECS",
+            retry_initial_ms => "QQBOT_BACKFILL_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_BACKFILL_RETRY_MAX_MS",
+        },
+    );
     Ok(())
 }
 
 fn apply_thread_projection_env(config: &mut ThreadProjectionConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_ENABLED") {
-        config.enabled = parse_bool("QQBOT_THREAD_PROJECTION_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_BATCH_SIZE") {
-        config.batch_size = parse_positive("QQBOT_THREAD_PROJECTION_BATCH_SIZE", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_MAX_BATCHES_PER_SCAN") {
-        config.max_batches_per_scan =
-            parse_positive("QQBOT_THREAD_PROJECTION_MAX_BATCHES_PER_SCAN", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_WINDOW_SECS") {
-        config.same_conversation_window_secs =
-            parse_positive("QQBOT_THREAD_PROJECTION_WINDOW_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_LEASE_SECS") {
-        config.lease_secs = parse_positive("QQBOT_THREAD_PROJECTION_LEASE_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_SCAN_INTERVAL_MS") {
-        config.scan_interval_ms =
-            parse_positive("QQBOT_THREAD_PROJECTION_SCAN_INTERVAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_RETRY_INITIAL_MS") {
-        config.retry_initial_ms =
-            parse_positive("QQBOT_THREAD_PROJECTION_RETRY_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_PROJECTION_RETRY_MAX_MS") {
-        config.retry_max_ms = parse_positive("QQBOT_THREAD_PROJECTION_RETRY_MAX_MS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_THREAD_PROJECTION_ENABLED" },
+        positive {
+            batch_size => "QQBOT_THREAD_PROJECTION_BATCH_SIZE",
+            max_batches_per_scan => "QQBOT_THREAD_PROJECTION_MAX_BATCHES_PER_SCAN",
+            same_conversation_window_secs => "QQBOT_THREAD_PROJECTION_WINDOW_SECS",
+            lease_secs => "QQBOT_THREAD_PROJECTION_LEASE_SECS",
+            scan_interval_ms => "QQBOT_THREAD_PROJECTION_SCAN_INTERVAL_MS",
+            retry_initial_ms => "QQBOT_THREAD_PROJECTION_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_THREAD_PROJECTION_RETRY_MAX_MS",
+        },
+    );
     Ok(())
 }
 
 fn apply_thread_semantics_env(config: &mut ThreadSemanticsConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_ENABLED") {
-        config.enabled = parse_bool("QQBOT_THREAD_SEMANTICS_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_EVENTS") {
-        config.max_events = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_EVENTS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_TOTAL_CHARS") {
-        config.max_total_chars = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_TOTAL_CHARS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_EVENT_CHARS") {
-        config.max_event_chars = parse_positive("QQBOT_THREAD_SEMANTICS_MAX_EVENT_CHARS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_MAX_BATCHES_PER_SCAN") {
-        config.max_batches_per_scan =
-            parse_positive("QQBOT_THREAD_SEMANTICS_MAX_BATCHES_PER_SCAN", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_LEASE_SECS") {
-        config.lease_secs = parse_positive("QQBOT_THREAD_SEMANTICS_LEASE_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_SCAN_INTERVAL_MS") {
-        config.scan_interval_ms =
-            parse_positive("QQBOT_THREAD_SEMANTICS_SCAN_INTERVAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS") {
-        config.retry_initial_ms =
-            parse_positive("QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS") {
-        config.retry_max_ms = parse_positive("QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_THREAD_SEMANTICS_ENABLED" },
+        positive {
+            max_events => "QQBOT_THREAD_SEMANTICS_MAX_EVENTS",
+            max_total_chars => "QQBOT_THREAD_SEMANTICS_MAX_TOTAL_CHARS",
+            max_event_chars => "QQBOT_THREAD_SEMANTICS_MAX_EVENT_CHARS",
+            max_batches_per_scan => "QQBOT_THREAD_SEMANTICS_MAX_BATCHES_PER_SCAN",
+            lease_secs => "QQBOT_THREAD_SEMANTICS_LEASE_SECS",
+            scan_interval_ms => "QQBOT_THREAD_SEMANTICS_SCAN_INTERVAL_MS",
+            retry_initial_ms => "QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS",
+        },
+    );
     Ok(())
 }
 
 fn apply_thread_links_env(config: &mut ThreadLinksConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_ENABLED") {
-        config.enabled = parse_bool("QQBOT_THREAD_LINKS_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_EVENTS") {
-        config.max_events = parse_positive("QQBOT_THREAD_LINKS_MAX_EVENTS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_TOTAL_CHARS") {
-        config.max_total_chars = parse_positive("QQBOT_THREAD_LINKS_MAX_TOTAL_CHARS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_MAX_BATCHES_PER_SCAN") {
-        config.max_batches_per_scan =
-            parse_positive("QQBOT_THREAD_LINKS_MAX_BATCHES_PER_SCAN", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_LEASE_SECS") {
-        config.lease_secs = parse_positive("QQBOT_THREAD_LINKS_LEASE_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_SCAN_INTERVAL_MS") {
-        config.scan_interval_ms = parse_positive("QQBOT_THREAD_LINKS_SCAN_INTERVAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_RETRY_INITIAL_MS") {
-        config.retry_initial_ms = parse_positive("QQBOT_THREAD_LINKS_RETRY_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_THREAD_LINKS_RETRY_MAX_MS") {
-        config.retry_max_ms = parse_positive("QQBOT_THREAD_LINKS_RETRY_MAX_MS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_THREAD_LINKS_ENABLED" },
+        positive {
+            max_events => "QQBOT_THREAD_LINKS_MAX_EVENTS",
+            max_total_chars => "QQBOT_THREAD_LINKS_MAX_TOTAL_CHARS",
+            max_batches_per_scan => "QQBOT_THREAD_LINKS_MAX_BATCHES_PER_SCAN",
+            lease_secs => "QQBOT_THREAD_LINKS_LEASE_SECS",
+            scan_interval_ms => "QQBOT_THREAD_LINKS_SCAN_INTERVAL_MS",
+            retry_initial_ms => "QQBOT_THREAD_LINKS_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_THREAD_LINKS_RETRY_MAX_MS",
+        },
+    );
     Ok(())
 }
 
 fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_ENABLED") {
-        config.enabled = parse_bool("QQBOT_FOLLOW_UP_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS") {
-        config.scan_interval_ms = parse_positive("QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_HORIZON_SECS") {
-        config.horizon_secs = parse_positive("QQBOT_FOLLOW_UP_HORIZON_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_BATCH_SIZE") {
-        config.batch_size = parse_positive("QQBOT_FOLLOW_UP_BATCH_SIZE", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_RETRY_INITIAL_MS") {
-        config.retry_initial_ms = parse_positive("QQBOT_FOLLOW_UP_RETRY_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_FOLLOW_UP_RETRY_MAX_MS") {
-        config.retry_max_ms = parse_positive("QQBOT_FOLLOW_UP_RETRY_MAX_MS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_FOLLOW_UP_ENABLED" },
+        positive {
+            scan_interval_ms => "QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS",
+            horizon_secs => "QQBOT_FOLLOW_UP_HORIZON_SECS",
+            batch_size => "QQBOT_FOLLOW_UP_BATCH_SIZE",
+            retry_initial_ms => "QQBOT_FOLLOW_UP_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_FOLLOW_UP_RETRY_MAX_MS",
+        },
+    );
     Ok(())
 }
 
 fn apply_llm_env(config: &mut LlmConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_LLM_ENABLED") {
-        config.enabled = parse_bool("QQBOT_LLM_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_BASE_URL")
-        && !value.trim().is_empty()
-    {
-        config.base_url = value;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_MODEL")
-        && !value.trim().is_empty()
-    {
-        config.model = value;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_API_KEY_FILE")
-        && !value.trim().is_empty()
-    {
-        config.api_key_file = Some(PathBuf::from(value));
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_CONNECT_TIMEOUT_SECS") {
-        config.connect_timeout_secs = parse_positive("QQBOT_LLM_CONNECT_TIMEOUT_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_REQUEST_TIMEOUT_SECS") {
-        config.request_timeout_secs = parse_positive("QQBOT_LLM_REQUEST_TIMEOUT_SECS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_INPUT_CHARS") {
-        config.max_input_chars = parse_positive("QQBOT_LLM_MAX_INPUT_CHARS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_OUTPUT_TOKENS") {
-        config.max_output_tokens = parse_positive("QQBOT_LLM_MAX_OUTPUT_TOKENS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_RESPONSE_BYTES") {
-        config.max_response_bytes = parse_positive("QQBOT_LLM_MAX_RESPONSE_BYTES", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_LLM_ENABLED" },
+        non_empty {
+            base_url => "QQBOT_LLM_BASE_URL",
+            model => "QQBOT_LLM_MODEL",
+        },
+        path { api_key_file => "QQBOT_LLM_API_KEY_FILE" },
+        positive {
+            connect_timeout_secs => "QQBOT_LLM_CONNECT_TIMEOUT_SECS",
+            request_timeout_secs => "QQBOT_LLM_REQUEST_TIMEOUT_SECS",
+            max_input_chars => "QQBOT_LLM_MAX_INPUT_CHARS",
+            max_output_tokens => "QQBOT_LLM_MAX_OUTPUT_TOKENS",
+            max_response_bytes => "QQBOT_LLM_MAX_RESPONSE_BYTES",
+            max_candidates_per_kind => "QQBOT_LLM_MAX_CANDIDATES_PER_KIND",
+        },
+    );
     if let Ok(value) = std::env::var("QQBOT_LLM_TEMPERATURE") {
         config.temperature = value
             .parse()
             .map_err(|_| ConfigError::Invalid("QQBOT_LLM_TEMPERATURE must be a number".into()))?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_LLM_MAX_CANDIDATES_PER_KIND") {
-        config.max_candidates_per_kind =
-            parse_positive("QQBOT_LLM_MAX_CANDIDATES_PER_KIND", &value)?;
     }
     if let Ok(value) = std::env::var("QQBOT_LLM_REASONING_MODE") {
         config.reasoning_mode = match value.trim().to_ascii_lowercase().as_str() {
@@ -1037,35 +1086,26 @@ fn apply_llm_env(config: &mut LlmConfig) -> Result<(), ConfigError> {
 }
 
 fn apply_qq_open_platform_env(config: &mut QqOpenPlatformConfig) -> Result<(), ConfigError> {
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_ENABLED") {
-        config.enabled = parse_bool("QQBOT_OPEN_PLATFORM_ENABLED", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_APP_ID")
-        && !value.trim().is_empty()
-    {
-        config.app_id = value;
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_OWNER_OPENID")
-        && !value.trim().is_empty()
-    {
-        config.owner_openid = value;
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_CLIENT_SECRET_FILE")
-        && !value.trim().is_empty()
-    {
-        config.client_secret_file = Some(PathBuf::from(value));
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_RECONNECT_INITIAL_MS") {
-        config.reconnect_initial_ms =
-            parse_positive("QQBOT_OPEN_PLATFORM_RECONNECT_INITIAL_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_RECONNECT_MAX_MS") {
-        config.reconnect_max_ms = parse_positive("QQBOT_OPEN_PLATFORM_RECONNECT_MAX_MS", &value)?;
-    }
-    if let Ok(value) = std::env::var("QQBOT_OPEN_PLATFORM_NOTIFICATION_LEASE_SECS") {
-        config.notification_lease_secs =
-            parse_positive("QQBOT_OPEN_PLATFORM_NOTIFICATION_LEASE_SECS", &value)?;
-    }
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_OPEN_PLATFORM_ENABLED" },
+        non_empty {
+            app_id => "QQBOT_OPEN_PLATFORM_APP_ID",
+            owner_openid => "QQBOT_OPEN_PLATFORM_OWNER_OPENID",
+        },
+        path { client_secret_file => "QQBOT_OPEN_PLATFORM_CLIENT_SECRET_FILE" },
+        positive {
+            reconnect_initial_ms => "QQBOT_OPEN_PLATFORM_RECONNECT_INITIAL_MS",
+            reconnect_max_ms => "QQBOT_OPEN_PLATFORM_RECONNECT_MAX_MS",
+            notification_lease_secs => "QQBOT_OPEN_PLATFORM_NOTIFICATION_LEASE_SECS",
+        },
+    );
+    Ok(())
+}
+
+fn apply_whitelist_env(config: &mut WhitelistConfig) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        path { whitelist_file => "QQBOT_WHITELIST_FILE" },
+    );
     Ok(())
 }
 
@@ -1088,7 +1128,7 @@ mod tests {
             path: PathBuf::from("test.toml"),
             source,
         })?;
-        config.validate()?;
+        config.validate(std::path::Path::new("."))?;
         Ok(config)
     }
 
@@ -1122,6 +1162,52 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
         assert_eq!(config.thread_links.max_total_chars, 100_000);
         assert!(!config.llm.enabled);
         assert_eq!(config.llm.base_url, "http://127.0.0.1:11434/v1");
+    }
+
+    #[test]
+    fn unauthenticated_napcat_rejects_token_fields_and_non_loopback_urls() {
+        let token_error = toml::from_str::<AppConfig>(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+http_token = "deprecated"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+        )
+        .unwrap_err();
+        assert!(token_error.to_string().contains("unknown field"));
+
+        let remote_error = parse(
+            r#"
+[napcat]
+ws_url = "ws://192.0.2.10:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+        )
+        .unwrap_err();
+        assert!(remote_error.to_string().contains("loopback host"));
+
+        let query_token_error = parse(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700?access_token=deprecated"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+        )
+        .unwrap_err();
+        assert!(query_token_error.to_string().contains("must not contain"));
     }
 
     #[test]
@@ -1584,11 +1670,131 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
         .unwrap();
         let mut config = config;
         config.apply_env_overrides().unwrap();
-        config.validate().unwrap();
+        config.validate(std::path::Path::new(".")).unwrap();
         assert_eq!(config.backfill.page_size, 50);
         // SAFETY: 同上，测试结束清理。
         unsafe {
             std::env::remove_var("QQBOT_BACKFILL_PAGE_SIZE");
         }
+    }
+
+    // ===== 白名单单元测试 =====
+
+    use std::io::Write;
+
+    /// 创建临时白名单 JSON 文件，返回文件路径。
+    fn write_whitelist_json(groups: &[i64]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("create temp file");
+        let json = serde_json::json!({ "groups": groups });
+        write!(file, "{json}").expect("write temp file");
+        file
+    }
+
+    #[test]
+    fn whitelist_loads_allowed_groups() {
+        let file = write_whitelist_json(&[671260344, 123456]);
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        let groups = config.load_groups(std::path::Path::new(".")).unwrap();
+        assert!(groups.contains(&671260344));
+        assert!(groups.contains(&123456));
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn whitelist_rejects_non_listed_group() {
+        let file = write_whitelist_json(&[671260344]);
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        let groups = config.load_groups(std::path::Path::new(".")).unwrap();
+        assert!(groups.contains(&671260344));
+        // 非白名单群不在集合中
+        assert!(!groups.contains(&999999999));
+    }
+
+    #[test]
+    fn whitelist_empty_config_means_no_filtering() {
+        // 不配 whitelist_file 时返回空集合，表示不启用白名单（放行所有群）。
+        let config = WhitelistConfig::default();
+        let groups = config.load_groups(std::path::Path::new(".")).unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn whitelist_deduplicates_repeated_group_ids() {
+        // 重复群号应该去重。
+        let file = write_whitelist_json(&[671260344, 671260344, 123456]);
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        let groups = config.load_groups(std::path::Path::new(".")).unwrap();
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn whitelist_rejects_empty_groups_array() {
+        let file = write_whitelist_json(&[]);
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        let result = config.validate(std::path::Path::new("."));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("不能为空"));
+    }
+
+    #[test]
+    fn whitelist_rejects_nonexistent_file() {
+        let config = WhitelistConfig {
+            whitelist_file: Some(PathBuf::from("/nonexistent/whitelist.json")),
+        };
+        let result = config.validate(std::path::Path::new("."));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("不存在"));
+    }
+
+    #[test]
+    fn whitelist_rejects_invalid_json() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(file, "{{invalid json}}").unwrap();
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        let result = config.validate(std::path::Path::new("."));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("JSON 格式错误"));
+    }
+
+    #[test]
+    fn whitelist_resolves_relative_path_from_config_dir() {
+        // 相对路径应以 config_dir 为基准。
+        let file = write_whitelist_json(&[671260344]);
+        let file_name = file
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let dir = file.path().parent().unwrap().to_path_buf();
+        let config = WhitelistConfig {
+            whitelist_file: Some(PathBuf::from(file_name)),
+        };
+        let groups = config.load_groups(&dir).unwrap();
+        assert!(groups.contains(&671260344));
+    }
+
+    #[test]
+    fn whitelist_absolute_path_ignores_config_dir() {
+        let file = write_whitelist_json(&[671260344]);
+        let config = WhitelistConfig {
+            whitelist_file: Some(file.path().to_path_buf()),
+        };
+        // 绝对路径不应受 config_dir 影响。
+        let groups = config
+            .load_groups(std::path::Path::new("/some/other/dir"))
+            .unwrap();
+        assert!(groups.contains(&671260344));
     }
 }
