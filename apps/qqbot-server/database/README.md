@@ -8,7 +8,8 @@
   `continuity`（依赖 ingestion），再执行 `backfill`（依赖 continuity）和 `threads`
   （依赖 ingestion），最后执行 `thread_links`、`thread_semantics` 和
   `thread_mutations`、`thread_revisions`、`memory`，最后执行 `memory_controls_followups` 和
-  `qq_open_platform`；
+  `qq_open_platform`，最后执行 `action_planner`；不要按文件名字典序执行，同一天的
+  `backfill` 在字典序上会早于它依赖的 `ingestion`；
 - 运行时只读取 `QQBOT_DATABASE_URL` 或 `qqbot.toml` 的 `[database]`；
 - 所有表使用 `secretary_*` 前缀，后续迁移只在本目录演进。
 
@@ -26,6 +27,8 @@ migrations/20260724_personal_secretary_thread_revisions.sql
 migrations/20260724_personal_secretary_memory.sql
 migrations/20260724_personal_secretary_memory_controls_followups.sql
 migrations/20260724_personal_secretary_qq_open_platform.sql
+migrations/20260725_personal_secretary_action_planner.sql
+migrations/20260726_personal_secretary_action_planner_hardening.sql
 ```
 
 第一项迁移创建账号、会话、入站事件和消息内容；第二项迁移增加连接周期、事件来源关联、
@@ -81,3 +84,12 @@ SourceEvent。调度 Worker 对每轮数量、时间视野和错误退避均设�
 第十一项迁移增加 QQ 开放平台 Gateway Resume 会话和无损原始入站信封。Resume sequence 只有
 在标准化事件与原始 JSON 均可靠落库后才推进；App ID 是会话主键，避免两个 Bot 账号共用
 Session/OpenID 命名空间。表中不保存 App Secret 或 access token。
+
+第十二项迁移增加 Owner Action Planner 运行、完整 Agent Checkpoint、Effect Receipt、响应产物
+与不可变审计。OwnerCommand 的 run ID 使用来源事件和 Planner 版本派生的稳定 UUIDv5，严格
+匹配 `CHAR(36)`；挂起会将 run 转为 `suspended` 并释放 Worker 租约，Resume 必须同时匹配
+run、checkpoint、proposal 和 command source，并通过 CAS 获取新的恢复租约。响应草稿与 run
+完成状态在同一事务中提交。
+
+第十三项迁移补齐消息级 `never_long_term` 数据库约束，使会话级与消息级内容策略都能按
+`never_long_term > envelope_only > local_only > normal` 取最严格值。
