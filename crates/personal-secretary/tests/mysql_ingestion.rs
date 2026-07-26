@@ -1333,6 +1333,8 @@ async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
             n if n.contains("_memory.sql") => 8,
             n if n.contains("_memory_controls_followups.sql") => 9,
             n if n.contains("_qq_open_platform.sql") => 10,
+            n if n.contains("_action_planner.sql") => 11,
+            n if n.contains("_action_planner_hardening.sql") => 12,
             _ => 99,
         }
     });
