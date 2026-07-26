@@ -74,3 +74,23 @@ pub fn build_mysql_owner_binding_store(
 ) -> Arc<dyn crate::OwnerBindingStoreT> {
     Arc::new(repo::MySqlOwnerBindingStore::new(db))
 }
+
+/// 构造 Owner Retriever 仓储。查询严格限定在账号作用域内，跨账号查询被 SQL 拒绝。
+pub fn build_mysql_retriever_store(db: DatabaseConnection) -> Arc<dyn crate::RetrieverStoreT> {
+    Arc::new(repo::MySqlRetrieverStore::new(db))
+}
+
+/// 构造 Action Planner 运行仓储。CAS 领取 + lease fencing + 幂等 Effect。
+pub fn build_mysql_action_store(db: DatabaseConnection) -> Arc<dyn crate::ActionStoreT> {
+    Arc::new(repo::MySqlActionStore::new(db))
+}
+
+/// 构造绑定业务 ActionRunId 的持久化 Graph Checkpoint 仓储。
+/// P0 修复：checkpoint.run_id() 是 Graph 内部 RunId，不是业务 run_id；
+/// 此工厂接收业务 ActionRunId，确保 FK 引用 secretary_action_runs.run_id。
+pub fn build_bound_action_checkpoint_store(
+    db: DatabaseConnection,
+    action_run_id: crate::ActionRunId,
+) -> Arc<dyn agent_core::graph::CheckpointStore<crate::SecretaryAgentState>> {
+    Arc::new(repo::BoundActionCheckpointStore::new(db, action_run_id))
+}
