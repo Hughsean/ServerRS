@@ -124,6 +124,21 @@
 - 批量删除数据时，历史文档必须记录：操作时间、操作者、删除条件、删除数量、级联删除明细、删除后聚合结果。
 - MySQL binlog 状态（`log_bin`、`binlog_expire_logs_seconds`）应记录，但不要声称已验证恢复，除非真正做过恢复演练。
 
+### 业务完整性与"为过测写代码"的教训
+
+**核心准则：测试全绿不等于功能完成。单元测试只能验证孤立逻辑，不能证明运行链路接通。**
+
+- 每个环节必须真正接通，不能有断点。如果 PlannerInput 中 `retrieved` 恒为空，检索型 Action 永远没有数据库证据输入，"闭环"就是假的。
+- 标识符不能混用。`proposal_id`、`run_id`、`effect_id` 是不同标识，类型系统应防止误用。把 `proposal_id` 当 `run_id` 插入会违反外键。
+- 生产路径不能用内存存储。跨进程恢复必须用持久化 `CheckpointStore`；`InMemoryCheckpointStore` 只能用于测试。MySQL 中保存的最小指针 JSON 无法用于 `GraphRuntime::resume`。
+- 幂等键要基于业务语义。`INSERT IGNORE` 按随机 `run_id` 主键去重毫无意义；真正的幂等键是 `(account_id, command_source_event_id, planner_version)`。
+- 错误分类要精确。`Database/Unavailable` 不等于 `UnknownCommit`：连接前失败、参数错误、事务明确回滚是可重试或永久失败；只有"可能已提交但没拿到结果"才是 `UnknownCommit`。不能为了简单而统一映射。
+- LLM/检索型 Action 必须有真实数据输入。`retrieved: Vec::new()` 是自欺欺人；Retriever 必须接入 Planner，让 L0 Action 真正查询并生成有界响应。
+- 租约过期必须有回收查询，否则一次错误就永久卡住。Worker 收到错误必须调用 `handle_failure()` 更新对应 Run，而非只做全局退避。
+- `take_checkpoint()` 必须 CAS 单次消费，不能只是读取 JSON。Resume 并发双击只应成功一次。
+- `OwnerResponseDraft` 必须用 Action 的真实结果构建，不能只取第一条近期事件摘要。
+- 必须有真实 MySQL 集成测试覆盖完整链路：`OwnerCommand -> action_run -> claim -> Retriever -> Planner -> Effect -> OwnerResponseDraft -> restart -> 不重复`。被 `#[ignore]` 的 MySQL 测试不算覆盖。
+
 ### 交付前自检清单
 
 每次声称完成前，逐条确认：
@@ -134,3 +149,10 @@
 5. 相对路径是否以正确的基准目录解析？
 6. 文档结论是否与代码实际行为一致？
 7. 是否有旧结论残留与新状态矛盾？
+8. **生产运行链路的每个环节是否真正接通？**（不能只靠单元测试，必须有真实 DB 集成测试覆盖完整路径）
+9. **标识符是否正确区分？**（`proposal_id`/`run_id`/`effect_id` 不能混用，类型系统应防止）
+10. **生产路径是否用了内存存储？**（`InMemoryCheckpointStore` 等只能用于测试）
+11. **幂等键是否基于业务语义？**（不能只靠随机主键去重）
+12. **错误分类是否精确？**（`Database` ≠ `UnknownCommit`，需区分连接前失败/事务回滚/可能已提交）
+13. **租约过期是否有回收？**（否则一次错误永久卡住）
+14. **`.zcode/` 是否在提交前清理？**（不应进入版本控制）

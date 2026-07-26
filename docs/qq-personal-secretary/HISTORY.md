@@ -5,22 +5,22 @@
 
 ## 当前阶段
 
-- 当前分支：`Main`，当前提交为 `be09d6a`；QQBot 运行数据库使用独立容器、独立数据库和
+- 当前分支：`Main`，当前提交为 `5d3ca2b`，工作区含待提交的 Owner Retriever/Action Planner；QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
   协议适配、类型化 Agent 动作策略门、可选 OpenAI-compatible/Ollama 有界线程语义提取、
   并发优雅关闭（RuntimeWorkers + 25s 全局 deadline）、可编程运行时入口（run_with_cancellation）、
-  群白名单过滤，以及真实消息入站闭环 E2E 验收通过。
+  群白名单过滤、Owner Retriever、受约束 Action Planner、真实 Effect Receipt、响应产物，
+  以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
 - 当前边界：NapCat 保持只读；本地 QQBot MySQL 8.4 运行库已建成并通过 TLS、迁移幂等和应用
   连接验收。QQ 开放平台本地凭据可以完成鉴权和 Gateway 地址读取，但官方通道仍关闭，Owner
-  OpenID 尚未通过真实 C2C 入站事件确认；本机 Ollama `qwen3:14b` 已完成真实结构化补全与提示
-  注入边界验收。NapCat 已使用本机无 Token 的 HTTP `13990` 与 WebSocket `13991`，真实状态接口、
-  WebSocket 握手和正式服务组合启动均通过；`6099` 仅作为 WebUI。已在聊天中暴露的 QQ 开放平台
-  Secret 仍应轮换后再上线。
-- 下一开发项：Owner Retriever / Action Planner + 日程提醒闭环；接入受约束的 Planner/Retriever/
-  Executor 节点与 Owner 自然语言控制。
+  OpenID 尚未通过真实 C2C 入站事件确认。NapCat HTTP `13990`、WebSocket `13991` 和 Ollama
+  `11434` 曾完成实机验收，但在 2026-07-26 00:50 当前复验中均未监听，不能视为当前在线；
+  MySQL 容器保持健康。已在聊天中暴露的 QQ 开放平台 Secret 仍应轮换后再上线。
+- 下一开发项：恢复 NapCat/Ollama 后重跑真实入站 E2E；随后接通 Owner 审批入口、响应投递和
+  日程/提醒执行器。QQ 开放平台通道保持关闭，启用前必须再次通知并确认本地凭据。
 
 ## 历史分块
 
@@ -30,6 +30,7 @@
 
 ## 最近事件
 
+- `2026-07-26 00:50（Asia/Shanghai）`：Owner Retriever/Action Planner 第五轮修复与全板块完整性验收；修复稳定 run ID、Suspend/Resume 租约、响应事务、Effect 幂等、信任矩阵和迁移约束。
 - `2026-07-25 18:17（Asia/Shanghai）`：E2E 最终验收通过（36.54s）；清理非白名单群 338 条历史数据；下一阶段 Owner Retriever / Action Planner。
 - `2026-07-25 17:05（Asia/Shanghai）`：群白名单、E2E RAII 守卫加固、跨扫描周期重启稳定性与文档修正。
 - `2026-07-25 13:27（Asia/Shanghai）`：真实消息入站闭环 E2E 验收通过（187.60s，含 LLM 退避重试）。

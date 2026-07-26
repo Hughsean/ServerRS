@@ -1,13 +1,14 @@
 # 个人 QQ 智能秘书 Todo
 
-> 最后更新：2026-07-25
+> 最后更新：2026-07-26
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
 > 当前开发阶段：阶段 6「Owner 控制与官方 QQ 通道」正在推进；官方协议适配、Gateway 入站、
 > Owner 绑定、可靠通知 Outbox、类型化 Agent 动作安全底座、首条有界 LLM 线程语义切片、
 > 并发优雅关闭（`RuntimeWorkers`）和可编程运行时入口（`run_with_cancellation`）已完成；
 > 真实消息 E2E 验收已通过（SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，
-> 重启幂等性验证通过）；真实凭据轮换后的联机验收、Owner 自然语言 Action Planner 与控制交互仍待实现。
+> 重启幂等性验证通过）；Owner Retriever/Action Planner 的数据库闭环已通过隔离 MySQL 验收；
+> 真实凭据轮换后的联机验收、Owner 审批/响应投递和日程执行仍待实现。
 
 ## 0. 当前完成与阻塞
 
@@ -190,8 +191,9 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   原始信封持久化后推进 sequence、Owner OpenID 绑定和官方 C2C 通知；真实联机和交互回执待验收。
 - [ ] `PARTIAL CMD-003` 线程关联审核已强制验证 `OwnerCommand`、本地 Owner 账号绑定及同一
   被管理账号；普通观察、未绑定和跨账号命令默认拒绝。其余命令类型仍须逐项接入同一边界。
-- [ ] `PARTIAL CMD-004` 已定义事件检索、来源回读、线程检索、指代解析、近期事项、日程、任务、
-  提醒、Owner 消息和澄清的类型化 Action 白名单；具体查询/日程执行器与 LLM 规划节点待接入。
+- [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿和
+  Owner 澄清的受约束 LLM Planner、Retriever 与 L0 Effect；结果使用来源化有界摘要并持久化
+  Receipt/Response。日程、任务、真实提醒创建和 Owner 消息仍未进入可执行白名单。
 - [ ] `TODO CMD-005` 定义类型化策略 Action：群提醒、重要联系人、静默时间和自动回复禁用。
 - [ ] `TODO CMD-006` 定义反馈 Action：重要、不重要、类似消息规则和联系人策略。
 - [ ] `TODO CMD-007` 定义记忆 Action：查看来源、修正、删除、TTL 和会话长期记忆开关。
@@ -200,11 +202,13 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   `OwnerCommand`/本地绑定验权、Effect Receipt 和拒绝零 Effect 均已接入。QQ 开放平台自然
   语言控制入口尚未开发，进入 `CMD-001/CMD-002` 前仍须先通知用户并配置本地凭据。
 - [ ] `PARTIAL CMD-009` 已建立无完整思维文本的有界结构状态：固定目标/约束、最多 8 条近期事件
-  引用、最多 100 条证据引用和单一待处理 Proposal；检索装配器与模型 Prompt 尚未接入。
+  引用、最多 100 条证据引用和单一待处理 Proposal；Owner Planner 已接入 24 小时有界检索，
+  但跨阶段检查点摘要、长期事件检索排序和冲突驱动回读仍待实现。
 - [ ] `PARTIAL CMD-010` LLM 语义切片已把聊天正文标记为不可信输入，并覆盖越界来源、隐私省略
   正文不入模、未知字段拒绝和候选数量上限；真实 Qwen3 提示注入正文也只能得到领域校验通过的
-  当前批次候选或安全拒绝。Owner Action Planner 的歧义、越权、Prompt 注入和跨会话泄露矩阵
-  仍待实现。
+  当前批次候选或安全拒绝。Owner Action Retriever 已覆盖账号隔离和
+  `normal/local_only/envelope_only/never_long_term` 严格度矩阵；Owner 身份越权、Prompt 注入、
+  跨会话指代歧义的端到端矩阵仍待实现。
 
 ## 7. 控制面、可观测性和生产强化
 
