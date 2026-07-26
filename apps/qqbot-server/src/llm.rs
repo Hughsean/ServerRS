@@ -31,20 +31,20 @@ const SEMANTIC_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的语义候
 没有充分证据时返回空数组。confidence_bps 范围为 0 到 10000。"#;
 
 #[derive(Debug, Clone, Default)]
-struct LlmUsage {
+pub(crate) struct LlmUsage {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
-struct StructuredLlmResponse {
-    value: Value,
-    usage: LlmUsage,
+pub(crate) struct StructuredLlmResponse {
+    pub(crate) value: Value,
+    pub(crate) usage: LlmUsage,
 }
 
 #[async_trait]
-trait StructuredLlmClientT: Send + Sync {
+pub(crate) trait StructuredLlmClientT: Send + Sync {
     async fn complete_json(
         &self,
         system_prompt: &str,

@@ -3,14 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use personal_secretary::{
-    BackfillGapUseCase, ConnectionEndReason, ConnectionEpochId,
+    ActionPlannerT, BackfillGapUseCase, ConnectionEndReason, ConnectionEpochId,
     ConservativeThreadSemanticExtractor, DeterministicThreadPlanner, DeterministicThreadPolicy,
     FollowUpUseCase, InboundEventStoreError, InboundIdentityError, MessageSource,
-    PersonalSecretaryStoreT, SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase,
-    ThreadSemanticExtractorT, ThreadSemanticUseCase, build_mysql_backfill_store,
-    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_thread_link_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    PersonalSecretaryStoreT, PlannerError, PlannerInput, PlannerOutput, SourceAccountRef,
+    ThreadLinkUseCase, ThreadProjectionUseCase, ThreadSemanticExtractorT, ThreadSemanticUseCase,
+    build_mysql_action_store, build_mysql_backfill_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::{
     NapCatApiClient, NapCatConnectionObserver, NapCatError, NapCatEvent, NapCatEventHandler,
@@ -203,6 +203,7 @@ struct WorkerHandles {
     thread_links: Option<ThreadLinksHandle>,
     follow_up: Option<FollowUpHandle>,
     official_platform: Option<OfficialPlatformHandle>,
+    action_planner: Option<crate::action_planner_worker::ActionPlannerHandle>,
 }
 
 impl WorkerHandles {
@@ -214,6 +215,7 @@ impl WorkerHandles {
             thread_links: None,
             follow_up: None,
             official_platform: None,
+            action_planner: None,
         }
     }
 
@@ -236,6 +238,9 @@ impl WorkerHandles {
             workers.push(handle.signal_and_detach());
         }
         if let Some(handle) = self.official_platform {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.action_planner {
             workers.push(handle.signal_and_detach());
         }
         workers.shutdown_all(WORKER_SHUTDOWN_DEADLINE).await;
@@ -295,6 +300,20 @@ async fn run_with_shutdown(
         tracing::info!("承诺提醒调度已禁用（follow_up.enabled=false）");
     }
 
+    // P0 修复：Action Planner 必须在 QQ Open Platform 之前装配，
+    // 因为 OwnerCommand 入站时需要 PlannerUseCase 创建 action_run。
+    let action_planner_use_case = assemble_action_planner(&mut handles, db.clone(), &config)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = %error, "Action Planner 装配失败，正在回收已启动的任务");
+            let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
+            // 不能在闭包中 await，所以用 spawn
+            tokio::spawn(async move {
+                handles_to_clean.shutdown_all().await;
+            });
+            error
+        })?;
+
     if config.qq_open_platform.enabled {
         let inbound = build_mysql_inbound_event_store(db.clone());
         let official_handle = spawn_official_platform(
@@ -303,6 +322,7 @@ async fn run_with_shutdown(
             inbound,
             Arc::clone(&follow_up_use_case),
             account.clone(),
+            action_planner_use_case.clone(),
         )
         .await
         .map_err(|error| RuntimeError::OfficialPlatform(error.to_string()));
@@ -460,6 +480,19 @@ async fn run_with_shutdown(
 }
 
 /// 装配线程投影、线程语义、跨会话关联和历史回补 Worker。
+/// LLM 禁用时的保守 Action Planner：总是返回 NoAction，不执行任何动作。
+struct NoopActionPlanner;
+
+#[async_trait::async_trait]
+impl ActionPlannerT for NoopActionPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::NoAction {
+            reason: "LLM 已禁用，不执行动作规划".into(),
+        })
+    }
+}
+
+/// 装配线程相关 Worker（投影、语义、关联、回补、Action Planner）。
 ///
 /// 这些装配步骤可能因配置或 LLM 客户端构造失败而返回错误；调用方在错误路径
 /// 必须回收此前已启动的 Worker（见 `run_with_shutdown` 中的 `shutdown_all`）。
@@ -586,7 +619,67 @@ async fn assemble_thread_workers(
     } else {
         tracing::info!("历史回补已禁用（backfill.enabled=false）");
     }
+
     Ok(())
+}
+
+/// 装配 Action Planner。必须在 QQ Open Platform 之前装配，因为 OwnerCommand
+/// 入站时需要 PlannerUseCase 创建 action_run。返回 use_case 供 official_platform 注入。
+async fn assemble_action_planner(
+    handles: &mut WorkerHandles,
+    db: sea_orm::DatabaseConnection,
+    config: &AppConfig,
+) -> Result<Option<Arc<personal_secretary::PlannerUseCase>>, RuntimeError> {
+    if !config.action_planner.enabled {
+        tracing::info!("Action Planner 已禁用（action_planner.enabled=false）");
+        return Ok(None);
+    }
+    let action_store = build_mysql_action_store(db.clone());
+    let planner: Arc<dyn personal_secretary::ActionPlannerT> = if config.llm.enabled {
+        let client = Arc::new(
+            OpenAiCompatibleClient::new(&config.llm)
+                .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+        );
+        Arc::new(
+            crate::action_planner::LlmActionPlanner::from_openai(client)
+                .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+        )
+    } else {
+        tracing::info!("LLM 已禁用；Action Planner 使用空 NoAction 规划器");
+        Arc::new(NoopActionPlanner)
+    };
+    // P0-3 修复：注入 DatabaseConnection，per-run 构造绑定业务 ActionRunId 的 CheckpointStore。
+    // P0-2 修复：接入 RetrieverUseCase，让 PlanNode 检索数据库证据 + EffectExecutor 执行真实查询。
+    let retriever_store = personal_secretary::build_mysql_retriever_store(db.clone());
+    let retriever = Arc::new(personal_secretary::RetrieverUseCase::new(
+        retriever_store,
+        personal_secretary::RetrieverPolicy::default(),
+    ));
+    // checkpoint_store 参数仅为满足签名；生产用 with_checkpoint_db 注入 MySQL。
+    let placeholder_checkpoint: Arc<
+        dyn personal_secretary::CheckpointStore<personal_secretary::SecretaryAgentState>,
+    > = Arc::new(personal_secretary::InMemoryCheckpointStore::new());
+    let use_case = Arc::new(
+        personal_secretary::PlannerUseCase::new(
+            action_store,
+            planner,
+            placeholder_checkpoint,
+            config.action_planner.lease_secs,
+        )
+        .with_retriever(retriever)
+        .with_checkpoint_db(db),
+    );
+    let handle = crate::action_planner_worker::spawn_action_planner_worker(
+        Arc::clone(&use_case),
+        config.action_planner.clone(),
+    );
+    tracing::info!(
+        lease_secs = config.action_planner.lease_secs,
+        scan_interval_ms = config.action_planner.scan_interval_ms,
+        "Action Planner Worker 已装配"
+    );
+    handles.action_planner = Some(handle);
+    Ok(Some(use_case))
 }
 
 async fn drain_ingestion_worker(

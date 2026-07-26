@@ -38,6 +38,7 @@ pub(crate) async fn spawn_official_platform(
     inbound: Arc<dyn InboundEventStoreT>,
     follow_up: Arc<FollowUpUseCase>,
     managed_account: SourceAccountRef,
+    action_planner: Option<Arc<personal_secretary::PlannerUseCase>>,
 ) -> Result<OfficialPlatformHandle, GatewayRunError> {
     let credentials = config
         .credentials()
@@ -49,7 +50,7 @@ pub(crate) async fn spawn_official_platform(
     owner_bindings
         .ensure_owner_binding(&OwnerBinding {
             managed_account: managed_account.clone(),
-            command_account,
+            command_account: command_account.clone(),
             owner_actor_id: config.owner_openid.clone(),
         })
         .await
@@ -60,6 +61,9 @@ pub(crate) async fn spawn_official_platform(
         inbound,
         raw_events: MySqlRawEventStore::new(db),
         owner_openid: config.owner_openid.clone(),
+        action_planner,
+        managed_account: managed_account.clone(),
+        command_account,
     });
     let gateway = Arc::new(QqGatewayClient::new(
         Arc::clone(&api),
@@ -246,6 +250,54 @@ struct OfficialInboundHandler {
     inbound: Arc<dyn InboundEventStoreT>,
     raw_events: MySqlRawEventStore,
     owner_openid: String,
+    /// Action Planner 用例。OwnerCommand 入库后调用 ensure_action_run 创建运行。
+    /// 为 Option 以支持 action_planner.enabled=false 的场景。
+    action_planner: Option<Arc<personal_secretary::PlannerUseCase>>,
+    /// P0 修复：被管理账号（NapCat 等），用于 ActionRun 检索数据范围。
+    /// 区别于 command_account（QQ 开放平台 Bot 自身）。
+    managed_account: personal_secretary::SourceAccountRef,
+    /// OwnerCommand 来源账号（QQ 开放平台 Bot），仅供审计。
+    #[allow(dead_code)]
+    command_account: personal_secretary::SourceAccountRef,
+}
+
+impl OfficialInboundHandler {
+    /// OwnerCommand 入库后幂等创建 action_run。
+    /// run_id 从 source_event_id 派生（非随机 UUID），保证重复投递不创建多个运行。
+    async fn ensure_action_run_for_owner_command(
+        &self,
+        envelope: &InboundMessageEnvelope,
+        source_event_id: &personal_secretary::SourceEventId,
+    ) {
+        let Some(planner) = &self.action_planner else {
+            return;
+        };
+        // 稳定 UUIDv5 同时满足幂等与数据库 CHAR(36) 边界。
+        let run_id = personal_secretary::ActionRunId::for_owner_command(source_event_id, "v1");
+        // P0 修复：用 managed_account（NapCat 被管理账号）作为数据检索范围，
+        // 而非 command_account（QQ 开放平台 Bot）。两者通过 OwnerBinding 验证。
+        let seed = personal_secretary::ActionRunSeed {
+            account: self.managed_account.clone(),
+            command_source_event_id: source_event_id.clone(),
+            command_text: envelope.normalized_text.clone(),
+            conversation_id: envelope.conversation.id.clone(),
+            occurred_at_unix_secs: envelope.occurred_at_unix_secs,
+            timezone_offset_secs: 0,
+            recent_events: Vec::new(),
+        };
+        match planner.ensure_action_run(&run_id, &seed).await {
+            Ok(created) => tracing::info!(
+                run_id = run_id.as_str(),
+                created,
+                "action_run ensured for OwnerCommand"
+            ),
+            Err(error) => tracing::error!(
+                run_id = run_id.as_str(),
+                error = %error,
+                "failed to ensure action_run; OwnerCommand will not be planned"
+            ),
+        }
+    }
 }
 
 #[async_trait]
@@ -314,6 +366,14 @@ impl GatewayEventHandlerT for OfficialInboundHandler {
         self.raw_events
             .persist(outcome.source_event_id().as_str(), &event)
             .await?;
+        // P0 修复：OwnerCommand 入库后幂等创建 action_run。
+        // Accepted 和 Duplicate 都执行 ensure_action_run，防止首次入库后
+        // ensure_action_run 短暂失败导致命令永久没有 Run（双写丢失窗口）。
+        // ensure_action_run 本身是幂等的（INSERT IGNORE + 业务唯一键）。
+        if envelope.accepts_instructions() {
+            self.ensure_action_run_for_owner_command(&envelope, outcome.source_event_id())
+                .await;
+        }
         tracing::info!(
             app_id = event.app_id,
             message_id = event.platform_message_id,
