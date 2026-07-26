@@ -9,6 +9,27 @@
 > 真实消息 E2E 验收已通过（SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，
 > 重启幂等性验证通过）；Owner Retriever/Action Planner 的数据库闭环已通过隔离 MySQL 验收；
 > 真实凭据轮换后的联机验收、Owner 审批/响应投递和日程执行仍待实现。
+>
+> NapCat Adapter Hardening v1 + 分层合理化（分支 `glm/qqbot-napcat-hardening-v1`，未提交待第三轮评审）：
+> 阶段 A 行为保持拆分已完成（config/runtime+bootstrap/agent_runtime+action_graph/mysql_action_store）；
+> 阶段 B **PARTIAL**（第三轮评审修复后）：
+> - B1 Heartbeat/Lifecycle - PARTIAL（三态状态机 Disabled/Waiting/Expired 已修复；mock WebSocket 集成测试
+>   已证明 run_forward() 在无 Heartbeat 时返回 HeartbeatTimeout、禁用时正常关闭；HeartbeatConfig validate
+>   限制异常值、默认 grace 300s；**HeartbeatConfig 已进入 TOML `[napcat.heartbeat]` 与
+>   `NAPCAT_HEARTBEAT_*` 环境变量**（评审第三轮 P1-3），可按 NapCat 实现调整或禁用 watchdog；
+>   仍待实机验收）。
+> - B2 结构化消息段优先+CQ 回退 - PARTIAL（normalized_text/at_bot/reply/mention 从 canonical segments 生成；
+>   结构化段总字节数预算在加入前检查（P1-1）；CQ 回退前 raw_message 有界截断（P1-3）；
+>   WS 文本帧上限 MAX_WS_TEXT_BYTES 在反序列化前检查、raw_event 超限时替换为有界摘要（P1-4）；
+>   历史 Unknown UTF-8 安全截断（P1-2）；待实机验证）。
+> - B5 能力版本探测 - PARTIAL（探测并发执行+整体 5s 超时+不阻塞 WS（P0-2）；**探测只调用轻量接口
+>   version_info+status，不拉取完整列表**（评审第三轮 P1-1）；**HTTP 响应流式限流 1MiB**（评审第四轮 P1：
+>   先检查 Content-Length，再用 bytes_stream() 分块累计，超限立即停止）；探测任务纳入 single-flight 去重与
+>   关闭回收（P1-2）；**Deferred 状态明确区分"未验证"与"已确认不可用"**（评审第四轮 P2）；
+>   RecentContactData DTO 修正为字符串 peerUin/msgTime 无精度损失（P0-1）；HTTP mock 测试已验证真实 DTO
+>   形状、超时降级与流式限流；heartbeat/structured_message 能力仍标记为需运行时验证；待实机验收）。
+> 待续：B4 账号会话目录与历史完整性证据、B3 消息撤回闭环、B6 富消息 Artifact 引用、B7 健康状态与日志、
+> MySQL 集成测试与实机 NapCat 验收真实运行、剩余仓储拆分（listener.rs 仍 ~990 行）。
 
 ## 0. 当前完成与阻塞
 

@@ -118,6 +118,9 @@ pub enum ConnectionEndReason {
     TransportError,
     ProcessShutdown,
     ObserverRejected,
+    /// OneBot 应用层 Heartbeat 超时：连接因长时间未收到 Heartbeat 而结束，
+    /// 区别于网络关闭与协议错误，仍需进入 Backfill 验证空窗完整性。
+    HeartbeatTimeout,
 }
 
 impl ConnectionEndReason {
@@ -127,6 +130,7 @@ impl ConnectionEndReason {
             Self::TransportError => "transport_error",
             Self::ProcessShutdown => "process_shutdown",
             Self::ObserverRejected => "observer_rejected",
+            Self::HeartbeatTimeout => "heartbeat_timeout",
         }
     }
 }

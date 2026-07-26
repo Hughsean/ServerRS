@@ -4,19 +4,72 @@ use serde_json::Value;
 
 use super::NapCatError;
 
+/// 富消息 envelope 类型。只保存有限描述，不保存完整载荷（B2 约束）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RichKind {
+    Json,
+    Xml,
+    Card,
+    Other,
+}
+
 /// OneBot 消息中的单个协议段。
+///
+/// 变体与 NapCat.Onebot.yaml 段类型对齐。未知段保留类型名与有界原始 JSON，
+/// 不静默删除；不允许无限大小未知 JSON 进入业务层（B2 约束）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageSegment {
-    Text { content: String },
-    Face { id: i32, text: Option<String> },
-    Image { file: String, url: Option<String> },
-    At { qq: String },
-    Reply { id: String },
-    Record { file: String },
-    Video { file: String },
-    File { file: String, name: Option<String> },
-    Unknown { raw: String },
+    Text {
+        content: String,
+    },
+    Face {
+        id: i32,
+        text: Option<String>,
+    },
+    Image {
+        file: String,
+        url: Option<String>,
+    },
+    At {
+        qq: String,
+    },
+    Reply {
+        id: String,
+    },
+    Record {
+        file: String,
+    },
+    Video {
+        file: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    File {
+        file: String,
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+    },
+    /// 合并转发引用：只保留转发 ID，不下载全部内容。
+    Forward {
+        id: String,
+    },
+    /// JSON/XML/卡片等富消息的有界 envelope：只保留类型与有限元数据，不存全文。
+    Rich {
+        kind: RichKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+    /// 未知段：保留类型名与有界原始 JSON 片段，不静默删除。
+    Unknown {
+        seg_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw: Option<String>,
+    },
 }
 
 /// OneBot 上报的发送者资料；字段缺失时保留默认值。

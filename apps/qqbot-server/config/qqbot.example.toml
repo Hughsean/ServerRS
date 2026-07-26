@@ -5,6 +5,18 @@ self_qq_id = 123456789
 reconnect_initial_secs = 1
 reconnect_max_secs = 60
 
+# OneBot Heartbeat 超时监控（评审第三轮 P1-3）。
+# 缺失整个 [napcat.heartbeat] 段时使用默认宽松配置（enabled=true, grace=300s）。
+# 若 NapCat 实现不发送兼容 meta_event/heartbeat，可设 enabled=false 禁用 watchdog，
+# 或调大 startup_grace_secs 避免错误重连。
+[napcat.heartbeat]
+enabled = true
+startup_grace_secs = 300
+min_interval_secs = 5
+max_interval_secs = 300
+default_interval_secs = 30
+timeout_multiplier = 3
+
 [database]
 url = "mysql://serverrs:change_me@127.0.0.1:3306/qq_personal_secretary?ssl-mode=required"
 max_connections = 5

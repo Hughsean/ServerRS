@@ -93,7 +93,8 @@ fn parse_cq_codes(raw: &str) -> Vec<MessageSegment> {
                 }
                 _ => {
                     segments.push(MessageSegment::Unknown {
-                        raw: cq_content.to_string(),
+                        seg_type: cq_type.to_string(),
+                        raw: Some(cq_content.to_string()),
                     });
                 }
             }
