@@ -142,20 +142,41 @@ fn map_segments(segments: Vec<NapCatMessageSegment>) -> Vec<ContentSegment> {
                 source_url: None,
                 display_name: None,
             },
-            NapCatMessageSegment::Video { file } => ContentSegment::Media {
+            NapCatMessageSegment::Video { file, url } => ContentSegment::Media {
                 kind: MediaKind::Video,
                 source_key: file,
-                source_url: None,
+                source_url: url,
                 display_name: None,
             },
-            NapCatMessageSegment::File { file, name } => ContentSegment::Media {
+            NapCatMessageSegment::File { file, name, .. } => ContentSegment::Media {
                 kind: MediaKind::File,
                 source_key: file,
                 source_url: None,
                 display_name: name,
             },
-            NapCatMessageSegment::Unknown { raw } => ContentSegment::Unknown {
-                protocol_value: raw,
+            // 合并转发引用：只保留协议层 ID，不下载全部内容（B2 约束）。
+            NapCatMessageSegment::Forward { id } => ContentSegment::Unknown {
+                protocol_value: format!("forward:{id}"),
+            },
+            // 富消息 envelope：只保存有限描述，不保存完整载荷（B2/B6 约束）。
+            NapCatMessageSegment::Rich {
+                kind,
+                data,
+                summary,
+                ..
+            } => {
+                let value = match (data, summary) {
+                    (Some(d), Some(s)) => format!("{kind:?}:{d}|{s}"),
+                    (Some(d), None) => format!("{kind:?}:{d}"),
+                    (None, Some(s)) => format!("{kind:?}:|{s}"),
+                    (None, None) => format!("{kind:?}"),
+                };
+                ContentSegment::Unknown {
+                    protocol_value: value,
+                }
+            }
+            NapCatMessageSegment::Unknown { seg_type, raw } => ContentSegment::Unknown {
+                protocol_value: raw.map(|r| format!("{seg_type}:{r}")).unwrap_or(seg_type),
             },
         })
         .collect()

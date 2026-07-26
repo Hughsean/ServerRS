@@ -1,0 +1,245 @@
+//! NapCat 正向 WebSocket 连接循环与持久化 Worker 排空。
+//!
+//! 循环内每次连接建立独立 ConnectionEpoch：先 `begin_connection`，再装配本轮
+//! ingestion Worker 与监听器，用 `tokio::select!` 同时监听关闭信号与监听器返回；
+//! 连接结束后排空 ingestion Worker、`finish_connection` 产生 Gap 并唤醒回补，
+//! 然后按有上限的指数退避无限重连。关闭信号在任何等待点都能抢占。
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+
+use personal_secretary::{
+    ConnectionEndReason, ConnectionEpochId, PersonalSecretaryStoreT, SourceAccountRef,
+};
+use qqbot::napcat::{NapCatConnectionObserver, NapCatError, NapCatEventHandler, NapCatListener};
+
+use crate::bootstrap::workers::WorkerHandles;
+use crate::config::AppConfig;
+use crate::inbound::NapCatInboundMapper;
+use crate::ingestion_worker::{WorkerReport, spawn_ingestion_worker};
+
+use super::RuntimeError;
+use super::handlers::PersonalSecretaryInboundHandler;
+use super::health::{BackfillWake, ConnectionObserver};
+use super::shutdown::ShutdownSource;
+
+/// 运行 NapCat 连接循环，直到收到关闭信号或不可恢复错误。
+///
+/// 所有装配失败与关闭路径都回收已启动 Worker（`shutdown_all`）。NapCat 重连使用
+/// 有上限的指数退避并无限恢复，不会因有限次数退出；关闭信号在退避等待中也能抢占。
+pub(super) async fn run_connection_loop(
+    store: Arc<dyn PersonalSecretaryStoreT>,
+    account: SourceAccountRef,
+    config: &AppConfig,
+    handles: &mut WorkerHandles,
+    group_whitelist: Arc<HashSet<i64>>,
+    backfill_wake: Option<Arc<BackfillWake>>,
+    shutdown_source: &mut ShutdownSource,
+) -> Result<(), RuntimeError> {
+    let mut backoff = config.napcat.reconnect_initial_secs;
+    tracing::info!(
+        queue_capacity = config.ingestion.queue_capacity,
+        retry_initial_ms = config.ingestion.retry_initial_ms,
+        retry_max_ms = config.ingestion.retry_max_ms,
+        shutdown_drain_timeout_secs = config.ingestion.shutdown_drain_timeout_secs,
+        "个人秘书有界持久化队列配置已生效"
+    );
+
+    // 评审第三轮 P1-2：能力探测任务句柄纳入生命周期管理。
+    // 快速重连时若上一轮探测仍在运行（is_finished=false），先 abort 再发起新探测，
+    // 避免重叠探测。关闭路径（shutting_down）也会 abort 并短暂等待探测退出，
+    // 不再依赖 detached 任务随 runtime drop 取消。
+    let mut probe_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    loop {
+        // Single-flight 去重：上一轮探测未完成则先取消，避免重叠。
+        if let Some(handle) = probe_handle.take()
+            && !handle.is_finished()
+        {
+            tracing::warn!("上一轮能力探测仍在运行，已取消以避免重叠");
+            handle.abort();
+            // 等待 abort 生效，不无限阻塞。
+            let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
+        }
+
+        let connection_epoch_id = match store.begin_connection(&account).await {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::error!(error = %error, "begin_connection 失败，正在回收 Worker");
+                abort_probe(&mut probe_handle).await;
+                let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+                handles_to_shutdown.shutdown_all().await;
+                return Err(error.into());
+            }
+        };
+
+        // B5：连接建立后做一次只读能力探测，建立类型化 capability snapshot。
+        // 评审 P0-2：探测**不阻塞**实时 WebSocket 入站。探测在后台任务中并发执行，
+        // 受严格整体超时（5s）约束；超时后未完成的能力标记为 Unknown。
+        // 探测结果只用于日志与未来健康状态（B7），不影响入站路径。
+        // 评审第三轮 P1-2：JoinHandle 保存在 probe_handle，受 single-flight 与关闭管理。
+        let napcat_readonly =
+            qqbot::napcat::NapCatApiClient::new(config.napcat.http_base_url.clone());
+        probe_handle = Some(tokio::spawn(async move {
+            let snapshot = qqbot::napcat::CapabilitySnapshot::probe(&napcat_readonly).await;
+            tracing::info!(
+                app_name = ?snapshot.app_name,
+                app_version = ?snapshot.app_version,
+                probe_completed = snapshot.probe_completed,
+                heartbeat = snapshot.heartbeat_supported.is_available(),
+                online = ?snapshot.online,
+                "NapCat 能力探测完成"
+            );
+        }));
+
+        let (queue, mut ingestion_worker) = spawn_ingestion_worker(
+            Arc::clone(&store),
+            connection_epoch_id.clone(),
+            config.ingestion.clone(),
+        );
+        let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {
+            mapper: NapCatInboundMapper::new(config.napcat.self_qq_id),
+            queue,
+            group_whitelist: Arc::clone(&group_whitelist),
+        });
+        let observer = Arc::new(ConnectionObserver::new(
+            Arc::clone(&store),
+            connection_epoch_id.clone(),
+            backfill_wake.clone(),
+        ));
+        let connection_observer: Arc<dyn NapCatConnectionObserver> = observer.clone();
+        let listener = NapCatListener::new(
+            config.napcat.ws_url.clone(),
+            config.napcat.self_qq_id,
+            handler,
+        )
+        .with_connection_observer(connection_observer)
+        // 评审第三轮 P1-3：从 QQBot 独立 TOML/env 注入 HeartbeatConfig，
+        // 不再固定使用默认值。可按 NapCat 实现调整启动宽限、超时倍数或禁用 watchdog。
+        .with_heartbeat_config(config.napcat.heartbeat);
+
+        let (reason, shutting_down) = tokio::select! {
+            _ = shutdown_source.wait() => {
+                (ConnectionEndReason::ProcessShutdown, true)
+            }
+            result = listener.run_forward() => {
+                match result {
+                    Ok(()) => {
+                        tracing::warn!("NapCat WebSocket 已断开");
+                        (ConnectionEndReason::RemoteClosed, false)
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "NapCat WebSocket 运行失败");
+                        let reason = match &error {
+                            NapCatError::Handler(_) => ConnectionEndReason::ObserverRejected,
+                            NapCatError::HeartbeatTimeout(_) => {
+                                ConnectionEndReason::HeartbeatTimeout
+                            }
+                            _ => ConnectionEndReason::TransportError,
+                        };
+                        (reason, false)
+                    }
+                }
+            }
+        };
+        drop(listener);
+        drain_ingestion_worker(
+            &mut ingestion_worker,
+            Duration::from_secs(config.ingestion.shutdown_drain_timeout_secs),
+            &connection_epoch_id,
+        )
+        .await;
+
+        let gap_id = match store.finish_connection(&connection_epoch_id, reason).await {
+            Ok(gap_id) => gap_id,
+            Err(error) => {
+                tracing::error!(error = %error, "finish_connection 失败，正在回收 Worker");
+                abort_probe(&mut probe_handle).await;
+                let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+                handles_to_shutdown.shutdown_all().await;
+                return Err(error.into());
+            }
+        };
+        if let Some(gap_id) = gap_id {
+            tracing::warn!(
+                gap_id = %gap_id.as_str(),
+                connection_epoch_id = %connection_epoch_id.as_str(),
+                reason = reason.as_str(),
+                "NapCat 连接结束，已创建待历史回补验证的不确定空窗"
+            );
+            // 连接结束产生新的 uncertain Gap，唤醒回补 Worker 尽快处理。
+            if let Some(wake) = &backfill_wake {
+                wake.wake();
+            }
+        }
+        if shutting_down {
+            tracing::info!("QQBot NapCat 适配器正在退出");
+            abort_probe(&mut probe_handle).await;
+            let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+            handles_to_shutdown.shutdown_all().await;
+            return Ok(());
+        }
+        if observer.was_connected() {
+            backoff = config.napcat.reconnect_initial_secs;
+        }
+
+        tracing::info!(backoff_secs = backoff, "等待后重新连接 NapCat");
+        tokio::select! {
+            _ = shutdown_source.wait() => {
+                abort_probe(&mut probe_handle).await;
+                let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+                handles_to_shutdown.shutdown_all().await;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+        }
+        backoff = backoff
+            .saturating_mul(2)
+            .min(config.napcat.reconnect_max_secs);
+    }
+}
+
+/// 取消并等待能力探测任务退出（评审第三轮 P1-2）。
+/// abort 后用短超时等待 JoinHandle，避免探测任务悬挂但也不无限阻塞关闭路径。
+async fn abort_probe(probe_handle: &mut Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = probe_handle.take()
+        && !handle.is_finished()
+    {
+        handle.abort();
+        let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
+    }
+}
+
+/// 在连接结束前排空持久化 Worker；超时则 abort 并依赖历史回补。
+async fn drain_ingestion_worker(
+    worker: &mut tokio::task::JoinHandle<WorkerReport>,
+    timeout: Duration,
+    connection_epoch_id: &ConnectionEpochId,
+) {
+    match tokio::time::timeout(timeout, &mut *worker).await {
+        Ok(Ok(report)) => tracing::debug!(
+            connection_epoch_id = %connection_epoch_id.as_str(),
+            accepted = report.accepted,
+            duplicates = report.duplicates,
+            invalid = report.invalid,
+            retries = report.retries,
+            dropped = report.dropped,
+            "持久化 Worker 已在连接结束前排空"
+        ),
+        Ok(Err(error)) => tracing::error!(
+            connection_epoch_id = %connection_epoch_id.as_str(),
+            error = %error,
+            "持久化 Worker 异常退出；连接空窗将保持 uncertain"
+        ),
+        Err(_) => {
+            tracing::warn!(
+                connection_epoch_id = %connection_epoch_id.as_str(),
+                timeout_ms = timeout.as_millis(),
+                "持久化 Worker 未在期限内排空，将中止并依赖历史回补"
+            );
+            worker.abort();
+            let _ = worker.await;
+        }
+    }
+}

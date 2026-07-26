@@ -1,0 +1,88 @@
+//! NapCat 事件到个人秘书入站边界的映射与白名单过滤。
+//!
+//! 统一身份后先幂等落库（由 ingestion Worker 完成），只有新事件才进入后续处理。
+//! 群白名单非空时只处理白名单内群消息；为空表示不启用白名单（放行所有群）。
+
+use std::sync::Arc;
+
+use qqbot::napcat::{NapCatError, NapCatEvent, NapCatEventHandler};
+
+use crate::inbound::NapCatInboundMapper;
+use crate::ingestion_worker::IngestionQueue;
+
+/// 个人秘书入站边界：统一身份后先幂等落库，只有新事件才允许进入后续处理。
+pub(super) struct PersonalSecretaryInboundHandler {
+    pub(super) mapper: NapCatInboundMapper,
+    pub(super) queue: IngestionQueue,
+    /// 群白名单。非空时只处理白名单内群的消息；为空表示不启用白名单（放行所有群）。
+    pub(super) group_whitelist: Arc<std::collections::HashSet<i64>>,
+}
+
+/// 判断群消息是否应被处理。白名单为空时放行所有群（不启用过滤）。
+/// 这是一个纯函数，便于单元测试。
+fn should_accept_group_message(group_id: i64, whitelist: &std::collections::HashSet<i64>) -> bool {
+    whitelist.is_empty() || whitelist.contains(&group_id)
+}
+
+#[async_trait::async_trait]
+impl NapCatEventHandler for PersonalSecretaryInboundHandler {
+    async fn handle(&self, event: NapCatEvent) -> Result<(), NapCatError> {
+        match event {
+            NapCatEvent::GroupMessage(event) => {
+                if !should_accept_group_message(event.group_id, &self.group_whitelist) {
+                    tracing::debug!(group_id = event.group_id, "群消息不在白名单内，跳过");
+                    return Ok(());
+                }
+                self.queue.try_enqueue(self.mapper.map_group(event)?)?
+            }
+            NapCatEvent::PrivateMessage(event) => {
+                self.queue.try_enqueue(self.mapper.map_private(event)?)?
+            }
+            NapCatEvent::GroupMemberIncrease(event) => tracing::info!(
+                group_id = event.group_id,
+                user_id = event.user_id,
+                "NapCat 入群通知已接收；QQBot 业务尚未接入"
+            ),
+            NapCatEvent::GroupMemberDecrease(event) => tracing::info!(
+                group_id = event.group_id,
+                user_id = event.user_id,
+                sub_type = %event.sub_type,
+                "NapCat 退群通知已接收；QQBot 业务尚未接入"
+            ),
+            NapCatEvent::Poke(event) => tracing::info!(
+                group_id = event.group_id,
+                user_id = event.user_id,
+                target_id = ?event.target_id,
+                "NapCat 戳一戳通知已接收；QQBot 业务尚未接入"
+            ),
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whitelist_allows_listed_group() {
+        let mut whitelist = std::collections::HashSet::new();
+        whitelist.insert(671260344);
+        assert!(should_accept_group_message(671260344, &whitelist));
+    }
+
+    #[test]
+    fn whitelist_rejects_non_listed_group() {
+        let mut whitelist = std::collections::HashSet::new();
+        whitelist.insert(671260344);
+        assert!(!should_accept_group_message(999999999, &whitelist));
+    }
+
+    #[test]
+    fn empty_whitelist_allows_all_groups() {
+        let whitelist = std::collections::HashSet::new();
+        // 空白名单 = 不启用过滤，放行所有群
+        assert!(should_accept_group_message(671260344, &whitelist));
+        assert!(should_accept_group_message(999999999, &whitelist));
+    }
+}
