@@ -141,9 +141,76 @@ pub struct StatusData {
     pub good: Option<bool>,
 }
 
+/// Data returned by get_version_info（B5 能力探测）。字段缺失时保留默认值。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VersionInfoData {
+    #[serde(default)]
+    pub app_name: String,
+    #[serde(default)]
+    pub app_version: String,
+    #[serde(default)]
+    pub protocol_version: String,
+    /// OneBot 实现类型，例如 "napcat"。
+    #[serde(default)]
+    pub impl_type: Option<String>,
+}
+
+/// Data returned by get_friend_list（B4 会话发现）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FriendInfoData {
+    #[serde(default)]
+    pub user_id: i64,
+    #[serde(default)]
+    pub nickname: String,
+    #[serde(default)]
+    pub remark: String,
+}
+
+/// Data returned by get_recent_contact（B4 会话发现）。字段对齐真实 NapCat 响应
+/// （上游 Stapxs NapCat.Onebot.yaml 映射：peerUin/msgTime/chatType/peerName）。
+///
+/// 实机类型（评审 P0-1 实测确认）：
+/// - `peerUin` 返回 JSON **String**（如 `"123456"`），不是数字。UIN 可超过 i32 范围，
+///   且 napcat 以字符串形式传输。使用 string-or-number 反序列化以无精度损失保留 UIN。
+/// - `msgTime` 返回 JSON **String**（如 `"1719421200"`），不是数字。同样使用
+///   string-or-number 反序列化。
+/// - `chatType` 返回整数（1=私聊，2=群聊）。
+/// - `peerName` 返回字符串。
+///
+/// 字段缺失时保留默认值。UIN 保留为字符串避免精度损失（与 `HistoryMessage.user_id` 一致）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RecentContactData {
+    /// 会话对端 UIN（NapCat 原始字段 `peerUin`，实机为字符串）。
+    #[serde(
+        default,
+        rename = "peerUin",
+        deserialize_with = "deserialize_string_or_number"
+    )]
+    pub peer_uin: String,
+    /// 最近消息时间（NapCat 原始字段 `msgTime`，实机为字符串，Unix 秒）。
+    #[serde(
+        default,
+        rename = "msgTime",
+        deserialize_with = "deserialize_string_or_number"
+    )]
+    pub msg_time: String,
+    /// 会话类型（NapCat 原始字段 `chatType`，整数）：1=私聊，2=群聊。
+    #[serde(default, rename = "chatType")]
+    pub chat_type: i32,
+    /// 对端名称（NapCat 原始字段 `peerName`）。
+    #[serde(default, rename = "peerName")]
+    pub peer_name: String,
+}
+
 /// 单次 NapCat HTTP 请求的超时上限。防止 NapCat 卡住时回补 Worker 或实时读取永久挂起。
 /// 此值独立于回补租约（`lease_secs`）：租约覆盖整个运行生命周期，本超时只保护单次 HTTP 调用。
 const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 单次 HTTP 响应字节上限（评审第三轮 P1-1）。
+/// 防止异常或恶意 NapCat 响应造成无界内存占用。正常 OneBot 响应远小于此值；
+/// 超限响应在反序列化之前即被拒绝，不进入 `.json()` 无上限解析。
+/// 评审第五轮：`pub` 使集成测试可构造恰好等于上限的响应验证边界条件。
+pub const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
 /// NapCat 只读 HTTP 客户端。个人秘书不得通过本类型执行发送、撤回或群管理操作。
 pub struct NapCatApiClient {
@@ -182,9 +249,38 @@ impl NapCatApiClient {
             });
         }
 
-        let body: OneBotResponse = resp
-            .json()
-            .await
+        // 评审第四轮 P1：流式限流，防止异常/恶意响应造成无界内存分配。
+        // resp.bytes().await 会先把整个响应缓冲到内存，再执行 len 检查，无法防止无界下载。
+        // 改为：(1) 先检查可信的 Content-Length 作为快速拒绝路径；
+        //       (2) 用 bytes_stream() 分块读取，每次追加前检查累计大小，超限立即停止。
+        let content_length = resp.content_length();
+        if let Some(len) = content_length
+            && len > MAX_RESPONSE_BYTES as u64
+        {
+            return Err(NapCatError::Protocol(format!(
+                "NapCat {} Content-Length {} exceeds {} bytes; rejected before reading body",
+                action, len, MAX_RESPONSE_BYTES
+            )));
+        }
+
+        let mut body_bytes = Vec::new();
+        let mut stream = resp.bytes_stream();
+        use futures_util::StreamExt;
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result
+                .map_err(|e| NapCatError::Protocol(format!("read response chunk failed: {e}")))?;
+            // 在追加当前 chunk 前检查累计大小，保证已分配内存严格有界。
+            let next_len = body_bytes.len().saturating_add(chunk.len());
+            if next_len > MAX_RESPONSE_BYTES {
+                return Err(NapCatError::Protocol(format!(
+                    "NapCat {} response exceeds {} bytes during stream read (got {}); aborted",
+                    action, MAX_RESPONSE_BYTES, next_len
+                )));
+            }
+            body_bytes.extend_from_slice(&chunk);
+        }
+
+        let body: OneBotResponse = serde_json::from_slice(&body_bytes)
             .map_err(|e| NapCatError::Protocol(format!("parse response failed: {e}")))?;
 
         if body.retcode != 0 {
@@ -256,6 +352,35 @@ impl NapCatApiClient {
         let resp = self.call_api("get_status", serde_json::json!({})).await?;
         serde_json::from_value(resp.data.unwrap_or_default())
             .map_err(|e| NapCatError::Protocol(format!("parse status: {e}")))
+    }
+
+    /// 只读探测 NapCat/OneBot 实现与版本（B5）。不调用任何写接口。
+    pub async fn get_version_info(&self) -> Result<VersionInfoData, NapCatError> {
+        let resp = self
+            .call_api("get_version_info", serde_json::json!({}))
+            .await?;
+        serde_json::from_value(resp.data.unwrap_or_default())
+            .map_err(|e| NapCatError::Protocol(format!("parse version_info: {e}")))
+    }
+
+    /// 只读获取好友列表（B4 会话发现）。字段缺失时保留默认值。
+    pub async fn get_friend_list(&self) -> Result<Vec<FriendInfoData>, NapCatError> {
+        let resp = self
+            .call_api("get_friend_list", serde_json::json!({}))
+            .await?;
+        let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
+        serde_json::from_value(data)
+            .map_err(|e| NapCatError::Protocol(format!("parse friend_list: {e}")))
+    }
+
+    /// 只读获取最近会话列表（B4 会话发现）。NapCat 专有接口，可能不存在。
+    pub async fn get_recent_contact(&self) -> Result<Vec<RecentContactData>, NapCatError> {
+        let resp = self
+            .call_api("get_recent_contact", serde_json::json!({}))
+            .await?;
+        let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
+        serde_json::from_value(data)
+            .map_err(|e| NapCatError::Protocol(format!("parse recent_contact: {e}")))
     }
 
     pub async fn get_group_msg_history(
@@ -364,5 +489,39 @@ mod tests {
         assert!(validate_history_query("group_id", "1", 0).is_err());
         assert!(validate_history_query("group_id", "1", 101).is_err());
         assert!(validate_history_query("group_id", "1", 100).is_ok());
+    }
+
+    // P0-1 实测：真实 NapCat `get_recent_contact` 返回的 peerUin/msgTime 为 JSON **字符串**，
+    // 不是数字。原 i64 类型会导致 serde 解析失败，把真实可用接口误判为 unavailable。
+    // UIN 保留为字符串以避免精度损失（QQ 号可达 10^10，超出 i32 范围）。
+    #[test]
+    fn recent_contact_parses_real_napcat_string_fields_without_precision_loss() {
+        let payload = serde_json::json!([{
+            "peerUin": "1234567890",
+            "msgTime": "1719421200",
+            "chatType": 2,
+            "peerName": "测试群"
+        }]);
+        let contacts: Vec<RecentContactData> = serde_json::from_value(payload).unwrap();
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].peer_uin, "1234567890");
+        assert_eq!(contacts[0].msg_time, "1719421200");
+        assert_eq!(contacts[0].chat_type, 2);
+        assert_eq!(contacts[0].peer_name, "测试群");
+    }
+
+    // 兼容性：某些实现可能返回数字形式的 peerUin/msgTime；仍能解析为字符串。
+    #[test]
+    fn recent_contact_also_accepts_numeric_fields() {
+        let payload = serde_json::json!([{
+            "peerUin": 9876543210u64,
+            "msgTime": 1719421200i64,
+            "chatType": 1,
+            "peerName": ""
+        }]);
+        let contacts: Vec<RecentContactData> = serde_json::from_value(payload).unwrap();
+        assert_eq!(contacts[0].peer_uin, "9876543210");
+        assert_eq!(contacts[0].msg_time, "1719421200");
+        assert_eq!(contacts[0].chat_type, 1);
     }
 }
