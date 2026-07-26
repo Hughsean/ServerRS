@@ -3,6 +3,7 @@
 //! 本 crate 只描述可信身份、对话、入站消息和指令权限，不依赖 NapCat、
 //! QQ 开放平台、数据库或 Web 框架。
 
+mod action_graph;
 mod agent_runtime;
 mod continuity;
 mod follow_up;
@@ -10,7 +11,10 @@ mod follow_up_service;
 mod inbound;
 mod memory;
 mod memory_service;
+mod planner;
+mod planner_service;
 mod retriever;
+mod retriever_service;
 mod store;
 mod thread_link_service;
 mod thread_links;
@@ -26,12 +30,19 @@ mod backfill_service;
 
 mod infra;
 
+pub use action_graph::{
+    ActionGraphError, ActionGraphRuntime, ActionLeaseToken, ActionRunContext, ActionRunId,
+    ActionRunSeed, ActionStoreError, ActionStoreT, ClaimedActionRun, L0ExecuteNode, NoActionNode,
+    PlanNode, SecretaryActionEffectExecutor, SuspendedRunClaim, backoff_ms, build_action_graph,
+    is_l0_direct_execute,
+};
 pub use agent_runtime::{
-    RecentEventRef, SecretaryAction, SecretaryActionApprovalRequest, SecretaryActionEffect,
-    SecretaryActionProposal, SecretaryActionReceipt, SecretaryActionResumeInput,
-    SecretaryAgentPhase, SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
+    OwnerResponseDraft, RecentEventRef, ResponseSegment, SecretaryAction,
+    SecretaryActionApprovalRequest, SecretaryActionEffect, SecretaryActionProposal,
+    SecretaryActionReceipt, SecretaryActionResumeInput, SecretaryAgentPhase,
+    SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
     SecretaryApprovalDecision, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
-    gate_secretary_action, validate_action_proposal,
+    gate_secretary_action, validate_action_proposal, validate_response_draft,
 };
 pub use continuity::{
     ConnectionEndReason, ConnectionEpochId, ConnectionEpochStatus, ContinuityIdentityError,
@@ -54,6 +65,13 @@ pub use memory::{
     validate_memory_fact,
 };
 pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
+pub use planner::{
+    ActionPlannerT, Clock, PlannerCommandEvent, PlannerError, PlannerInput, PlannerOutput,
+    PlannerRetrievedExcerpt, SystemClock, TimeParseError, is_allowed_action_in_batch,
+    naive_to_unix, parse_common_timezone_offset_secs, parse_datetime_with_timezone,
+    parse_iso_datetime, validate_planner_input, validate_planner_output,
+};
+pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
 pub use retriever::{
     ContentTrustLevel, EventQuery, EventSearchResult, IdentityTrust, ParticipantIdentity,
     ParticipantRef, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
@@ -61,6 +79,7 @@ pub use retriever::{
     UpcomingItem, filter_for_model, is_allowed_for_model, resolve_reference_from_candidates,
     validate_event_query,
 };
+pub use retriever_service::{RetrieverPolicy, RetrieverUseCase, RetrieverUseCaseError};
 pub use store::{
     InboundEventStoreError, InboundEventStoreT, IngestMessageOutcome, IngestionContinuityStoreT,
     OwnerBinding, OwnerBindingStoreT, PersonalSecretaryStoreT, SourceEventId,
@@ -126,8 +145,12 @@ pub use backfill_service::{
 };
 
 pub use infra::{
-    build_mysql_backfill_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_owner_binding_store, build_mysql_thread_link_store,
+    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_backfill_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_owner_binding_store, build_mysql_retriever_store, build_mysql_thread_link_store,
     build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
+
+/// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。
+pub use agent_core::graph::{CheckpointStore, InMemoryCheckpointStore};
