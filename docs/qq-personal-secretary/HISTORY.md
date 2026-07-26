@@ -5,8 +5,14 @@
 
 ## 当前阶段
 
-- 当前分支：`Main`，当前提交为 `5d3ca2b`，工作区含待提交的 Owner Retriever/Action Planner；QQBot 运行数据库使用独立容器、独立数据库和
+- 主干分支：`Main`（`bfa9005`），Owner Retriever/Action Planner 已全部提交；QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
+- 进行中分支：`glm/qqbot-napcat-hardening-v1`（基于 `Main`，未提交、未推送，等待 Codex 第三轮评审），
+  承载 NapCat Adapter Hardening v1 + 分层合理化：阶段 A 行为保持拆分（config/runtime+bootstrap/
+  agent_runtime+action_graph/mysql_action_store）+ 阶段 B **PARTIAL**（B1 Heartbeat/Lifecycle、
+  B2 结构化消息段优先+CQ 回退、B5 能力版本探测，已修复第三轮评审 P0/P1 并新增 mock 集成测试，
+  仍待实机与 MySQL 验收）；
+  详见 `napcat-adapter-architecture.md`。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -30,6 +36,8 @@
 
 ## 最近事件
 
+- `2026-07-26 16:20（Asia/Shanghai）`：P0/P1 修复（评审反馈 6.5/10 未批准）；修复三态 Heartbeat 状态机（Expired 立即返回）、结构化段成为语义事实来源（normalized_text/at_bot 从 segments 生成）、RecentContactData DTO 修正为真实字段 chatType/peerUin/peerName、能力探测接入运行时真实调用接口、HeartbeatConfig validate 真正限制异常值、结构化段总字节数上限、历史 Unknown 有界、Action Planner 装配失败保证回收；B1/B2/B5 降为 PARTIAL；fmt/clippy/test/workspace_boundaries 全绿。
+- `2026-07-26 14:35（Asia/Shanghai）`：NapCat Adapter Hardening v1 + QQBot 分层合理化（阶段检查点，分支 `glm/qqbot-napcat-hardening-v1`，未提交待 Codex 评审）；阶段 A 行为保持拆分（config/runtime+bootstrap/agent_runtime+action_graph/mysql_action_store），阶段 B 完成 B1 Heartbeat/Lifecycle、B2 结构化消息段优先+CQ 回退、B5 能力版本探测；fmt/clippy/test/workspace_boundaries 全绿，MySQL 集成与实机 NapCat 验收列为未验证。
 - `2026-07-26 00:50（Asia/Shanghai）`：Owner Retriever/Action Planner 第五轮修复与全板块完整性验收；修复稳定 run ID、Suspend/Resume 租约、响应事务、Effect 幂等、信任矩阵和迁移约束。
 - `2026-07-25 18:17（Asia/Shanghai）`：E2E 最终验收通过（36.54s）；清理非白名单群 338 条历史数据；下一阶段 Owner Retriever / Action Planner。
 - `2026-07-25 17:05（Asia/Shanghai）`：群白名单、E2E RAII 守卫加固、跨扫描周期重启稳定性与文档修正。
@@ -37,17 +45,7 @@
 - `2026-07-25 12:47（Asia/Shanghai）`：并发优雅关闭、可编程运行时入口与真实 E2E 验收骨架。
 - `2026-07-25 10:44（Asia/Shanghai）`：QQBot 环境变量覆盖改为四类窄宏，消除配置解析样板代码。
 - `2026-07-25 10:35（Asia/Shanghai）`：移除 NapCat Token 配置，HTTP 13990/WebSocket 13991 无 Token 组合验收通过。
-- `2026-07-25 10:22（Asia/Shanghai）`：NapCat `6099` 端口复验，确认其为 WebUI 而非 OneBot WebSocket；HTTP/Ollama 正常，MySQL 已恢复健康。
 - `2026-07-24 22:42（Asia/Shanghai）`：Ollama Qwen3 实机语义与提示注入边界验收通过。
-- `2026-07-24 22:29（Asia/Shanghai）`：完成 QQBot 独立有界 LLM 线程语义提取垂直切片。
-- `2026-07-24 22:11（Asia/Shanghai）`：建立独立持久化 QQBot MySQL 运行库并完成 45 表验收。
-- `2026-07-24 21:37（Asia/Shanghai）`：OpenClaw QQBot 参考适配、账号隔离 Outbox 与 Agent Runtime 安全骨架。
-- `2026-07-24 21:00（Asia/Shanghai）`：记忆控制、冲突回读与承诺提醒 Scheduler/Outbox 闭环。
-- `2026-07-24 16:54（Asia/Shanghai）`：线程撤销、语义失效与来源化结构记忆多维批次。
-- `2026-07-24 16:24（Asia/Shanghai）`：线程变更持久化 Checkpoint/Suspend/Resume 与逻辑执行闭环。
-- `2026-07-24 14:33（Asia/Shanghai）`：历史分块、SeaORM 审核 CRUD 与线程变更 Suspend 预览。
-- `2026-07-24 14:19（Asia/Shanghai）`：Owner 关联审核与跨主体授权闭环。
-- `2026-07-24 14:10（Asia/Shanghai）`：跨群/私聊线程关联候选闭环。
 - 旧事件仅有日期证据，保留原日期，不伪造分钟。
 
 ## 分块规则

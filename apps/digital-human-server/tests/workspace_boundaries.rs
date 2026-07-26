@@ -163,10 +163,12 @@ fn qq_open_platform_is_a_protocol_adapter_without_business_or_database_code() {
 
 #[test]
 fn personal_secretary_domain_is_qq_protocol_neutral() {
-    // 只检查领域层和应用层文件（排除 infra 仓储实现，它合理使用数据库/SeaORM）。
+    // 只检查领域层文件（排除 infra 仓储实现与服务层中合理持有 DB 的类型）。
+    // A3 后 agent_runtime/action_graph 已拆为目录，按目录递归收集 .rs。
     let domain_root = workspace_root().join("crates/personal-secretary/src");
+    let mut sources = String::new();
+    // 顶层领域文件（保持与原意图一致，排除合理使用 DB 的服务层）。
     let domain_files = [
-        "agent_runtime.rs",
         "backfill.rs",
         "backfill_service.rs",
         "continuity.rs",
@@ -182,17 +184,32 @@ fn personal_secretary_domain_is_qq_protocol_neutral() {
         "thread_link_service.rs",
         "thread_links.rs",
         "thread_mutations.rs",
+        "thread_mutation_service.rs",
         "threading.rs",
+        "retriever.rs",
+        "retriever_service.rs",
+        "planner.rs",
         "lib.rs",
     ];
-    let sources = domain_files
-        .iter()
-        .map(|name| {
-            fs::read_to_string(domain_root.join(name))
-                .unwrap_or_else(|error| panic!("failed to read {name}: {error}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    for name in domain_files {
+        let path = domain_root.join(name);
+        if path.is_file() {
+            sources.push_str(
+                &fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("failed to read {name}: {error}")),
+            );
+            sources.push('\n');
+        }
+    }
+    // 拆分后的目录模块整体递归收集（不含 infra）。
+    for dir in ["agent_runtime", "action_graph"] {
+        let mut files = Vec::new();
+        collect_rs_files(&domain_root.join(dir), &mut files);
+        for file in files {
+            sources.push_str(&fs::read_to_string(&file).expect("domain source must be readable"));
+            sources.push('\n');
+        }
+    }
 
     for forbidden in [
         "qqbot::",
@@ -308,8 +325,8 @@ fn qqbot_llm_adapter_only_produces_bounded_semantic_candidates() {
 
 #[test]
 fn napcat_callback_does_not_wait_for_mysql() {
-    let runtime = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime.rs"))
-        .expect("qqbot-server runtime must be readable");
+    // A2 后 runtime 已拆为目录，按目录递归收集。
+    let runtime = rust_sources("apps/qqbot-server/src/runtime");
     let worker =
         fs::read_to_string(workspace_root().join("apps/qqbot-server/src/ingestion_worker.rs"))
             .expect("qqbot-server ingestion worker must be readable");
@@ -323,8 +340,7 @@ fn napcat_callback_does_not_wait_for_mysql() {
 
 #[test]
 fn backfill_worker_is_decoupled_from_realtime_websocket() {
-    let runtime = fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime.rs"))
-        .expect("qqbot-server runtime must be readable");
+    let runtime = rust_sources("apps/qqbot-server/src/runtime");
     let backfill_worker =
         fs::read_to_string(workspace_root().join("apps/qqbot-server/src/backfill/worker.rs"))
             .expect("qqbot-server backfill worker must be readable");
@@ -333,8 +349,11 @@ fn backfill_worker_is_decoupled_from_realtime_websocket() {
     )
     .expect("qqbot-server napcat history source must be readable");
 
-    // 回补独立装配在 runtime 中，与实时 WebSocket 接收解耦。
-    assert!(runtime.contains("spawn_backfill_worker"));
+    // A2 后回补装配下沉到 bootstrap，与实时 WebSocket 接收解耦。
+    // runtime + bootstrap 合并检查仍包含回补装配与并发/取消语义。
+    let bootstrap = rust_sources("apps/qqbot-server/src/bootstrap");
+    let runtime_and_bootstrap = format!("{runtime}{bootstrap}");
+    assert!(runtime_and_bootstrap.contains("spawn_backfill_worker"));
     assert!(backfill_worker.contains("BackfillRunner"));
     // 必须使用 JoinSet 真正并发，而非串行 await + 信号量假并发。
     assert!(
@@ -417,6 +436,10 @@ fn napcat_adapter_only_exposes_readonly_methods() {
         "get_group_msg_history",
         "get_friend_msg_history",
         "get_msg",
+        // B5/B4 只读能力探测与会话发现接口。
+        "get_version_info",
+        "get_friend_list",
+        "get_recent_contact",
     ];
 
     let mut missing: Vec<&str> = expected
@@ -518,9 +541,8 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
 
 #[test]
 fn qqbot_configuration_is_owned_by_the_qqbot_application() {
-    let config_source =
-        fs::read_to_string(workspace_root().join("apps/qqbot-server/src/config.rs"))
-            .expect("QQBot config source must be readable");
+    // A1 后 config 已拆为目录，按目录递归收集。
+    let config_source = rust_sources("apps/qqbot-server/src/config");
 
     assert!(
         workspace_root()
@@ -553,11 +575,14 @@ fn qqbot_is_a_napcat_adapter_without_business_or_database_modules() {
     assert_eq!(entries, BTreeSet::from(["lib.rs".into(), "napcat".into()]));
     for required in [
         "api.rs",
+        "capabilities.rs",
         "error.rs",
         "event.rs",
+        "heartbeat.rs",
         "listener.rs",
         "message_parser.rs",
         "mod.rs",
+        "segments.rs",
     ] {
         assert!(
             crate_root.join("napcat").join(required).is_file(),
