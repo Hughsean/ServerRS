@@ -1,0 +1,376 @@
+{
+  "schema_version": 1,
+  "suite_id": "qqbot-continuity-recall-artifact-health-v1",
+  "description": "个人 QQ 智能秘书独立验收矩阵。状态只能由验收脚本依据测试发现与执行结果生成。",
+  "gate": {
+    "blocking_severities": ["P0", "P1"],
+    "accepted_statuses": ["PASS"],
+    "missing_test_is_failure": true,
+    "blocked_test_is_failure": true
+  },
+  "evidence_levels": {
+    "L1": "纯领域或纯函数单元测试",
+    "L2": "使用 Fake 端口的应用用例测试",
+    "L3": "隔离 MySQL 或本地协议 Mock 集成测试",
+    "L4": "从生产入口到持久化/读取出口的垂直闭环",
+    "L5": "故障注入、重启、幂等和恢复证据",
+    "L6": "真实 NapCat 只读或真实事件验收"
+  },
+  "baseline_checks": [
+    {
+      "id": "BASE-FMT",
+      "program": "cargo",
+      "arguments": ["fmt", "--all", "--", "--check"]
+    },
+    {
+      "id": "BASE-CLIPPY",
+      "program": "cargo",
+      "arguments": ["clippy", "-p", "personal-secretary", "-p", "qqbot", "-p", "qqbot-server", "--all-targets", "--", "-D", "warnings"]
+    },
+    {
+      "id": "BASE-BOUNDARIES",
+      "program": "cargo",
+      "arguments": ["test", "-p", "digital-human-server", "--test", "workspace_boundaries"]
+    },
+    {
+      "id": "BASE-DIFF-CHECK",
+      "program": "git",
+      "arguments": ["diff", "--check"]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "B3-RECALL-001",
+      "title": "真实形状的撤回标识可持久化且保持幂等",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": [
+        "crates/qqbot/src/napcat/listener/notice_event.rs",
+        "apps/qqbot-server/src/recall.rs"
+      ],
+      "invariants": [
+        "真实账号、群和消息标识不会超过数据库约束",
+        "重复撤回只产生一条审计记录"
+      ],
+      "checks": [
+        {
+          "id": "B3-RECALL-001-DOMAIN",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_recall_identity_rejects_database_truncation",
+          "ignored": true,
+          "requires_mysql": false,
+          "evidence": "L1"
+        },
+        {
+          "id": "B3-RECALL-001-RUNTIME",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_realistic_recall_maps_to_stable_uuid_and_persists_idempotently",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    },
+    {
+      "id": "B3-RECALL-002",
+      "title": "撤回通知成为统一 SourceEvent",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "apps/qqbot-server/src/runtime/handlers.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_recall.rs"
+      ],
+      "invariants": [
+        "RecallEvent 与 SourceEvent 原子关联",
+        "撤回审计可以通过统一事件 ID 回读"
+      ],
+      "checks": [
+        {
+          "id": "B3-RECALL-002-MYSQL",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_recall_is_persisted_as_source_event",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
+    },
+    {
+      "id": "B3-RECALL-003",
+      "title": "撤回先到、消息后到能够自动关联",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": [
+        "apps/qqbot-server/src/ingestion_worker.rs",
+        "crates/personal-secretary/src/recall_service.rs"
+      ],
+      "invariants": [
+        "pending tombstone 在原消息入库后自动转为 applied",
+        "调用者不需要手工调用补偿方法"
+      ],
+      "checks": [
+        {
+          "id": "B3-RECALL-003-MYSQL",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_pending_recall_auto_applies_after_message_ingestion",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        },
+        {
+          "id": "B3-RECALL-003-RESTART",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_pending_recall_survives_process_restart",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L5"
+        }
+      ]
+    },
+    {
+      "id": "B3-RECALL-004",
+      "title": "撤回处理不阻塞 WebSocket 且瞬时故障可恢复",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L5",
+      "production_entries": [
+        "apps/qqbot-server/src/runtime/handlers.rs",
+        "apps/qqbot-server/src/ingestion_worker.rs"
+      ],
+      "invariants": [
+        "数据库阻塞时后续普通消息仍能入队",
+        "瞬时失败不会被返回 Ok 后永久丢弃"
+      ],
+      "checks": [
+        {
+          "id": "B3-RECALL-004-RESILIENCE",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_stalled_recall_store_does_not_block_websocket_and_retries",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L5"
+        }
+      ]
+    },
+    {
+      "id": "B3-RECALL-005",
+      "title": "群白名单同样约束撤回事件",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": ["apps/qqbot-server/src/runtime/handlers.rs"],
+      "invariants": ["非白名单群的消息和撤回均不进入个人秘书数据库"],
+      "checks": [
+        {
+          "id": "B3-RECALL-005-WHITELIST",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_non_whitelisted_group_recall_is_not_persisted",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    },
+    {
+      "id": "B4-DIRECTORY-001",
+      "title": "Gap 创建时自动冻结目录快照",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": [
+        "apps/qqbot-server/src/bootstrap/thread_pipeline.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_directory.rs"
+      ],
+      "invariants": [
+        "Gap 自动关联创建时的最新目录快照",
+        "后续目录同步不会改变旧 Gap 的冻结证据"
+      ],
+      "checks": [
+        {
+          "id": "B4-DIRECTORY-001-MYSQL",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_gap_creation_freezes_latest_directory_snapshot",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    },
+    {
+      "id": "B4-DIRECTORY-002",
+      "title": "目录同步整体 deadline 真正取消挂起操作",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L5",
+      "production_entries": ["apps/qqbot-server/src/directory_sync.rs"],
+      "invariants": ["同步时间不会超过配置 deadline 加有界清理时间"],
+      "checks": [
+        {
+          "id": "B4-DIRECTORY-002-TIMEOUT",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_directory_sync_honors_overall_deadline",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L5"
+        }
+      ]
+    },
+    {
+      "id": "B6-ARTIFACT-001",
+      "title": "消息 Artifact 创建并随撤回失效",
+      "severity": "P0",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": [
+        "apps/qqbot-server/src/ingestion_worker.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_artifact.rs"
+      ],
+      "invariants": [
+        "富消息进入生产入站后自动创建有界 Artifact",
+        "撤回后 Artifact 自动转为 recalled"
+      ],
+      "checks": [
+        {
+          "id": "B6-ARTIFACT-001-RECALL",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_recall_propagates_to_existing_artifacts",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        },
+        {
+          "id": "B6-ARTIFACT-001-POISON",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "acceptance_artifact_poison_job_fails_without_starving_later_work",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "B6-ARTIFACT-001-INGESTION",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_rich_message_ingestion_creates_bounded_artifacts",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    },
+    {
+      "id": "B6-ARTIFACT-002",
+      "title": "Artifact TTL 与内容策略生命周期生效",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L5",
+      "production_entries": ["crates/personal-secretary/src/artifact_service.rs"],
+      "invariants": [
+        "TTL 到期后自动变为 expired",
+        "never_long_term 不产生长期 Artifact",
+        "envelope_only 不保存扩展内容"
+      ],
+      "checks": [
+        {
+          "id": "B6-ARTIFACT-002-LIFECYCLE",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_artifact_ttl_worker_and_content_policy_survive_restart",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L5"
+        }
+      ]
+    },
+    {
+      "id": "B7-HEALTH-001",
+      "title": "运行时健康快照聚合真实子系统状态",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": [
+        "apps/qqbot-server/src/runtime",
+        "crates/personal-secretary/src/health_service.rs"
+      ],
+      "invariants": [
+        "WebSocket connected 不等于历史完整",
+        "内部 reader 返回有界缓存快照",
+        "数据库、Gap 和 Worker 故障会降低健康状态"
+      ],
+      "checks": [
+        {
+          "id": "B7-HEALTH-001-RUNTIME",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_runtime_health_snapshot_reports_real_subsystems",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    },
+    {
+      "id": "B7-HEALTH-002",
+      "title": "结构化健康日志不泄漏敏感数据",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L4",
+      "production_entries": ["apps/qqbot-server/src/runtime"],
+      "invariants": ["日志不包含 Token、消息正文、完整 URL 或联系人平台 ID"],
+      "checks": [
+        {
+          "id": "B7-HEALTH-002-LOGS",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "acceptance_health_logs_are_structured_and_redacted",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L4"
+        }
+      ]
+    }
+  ]
+}

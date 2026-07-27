@@ -5,14 +5,22 @@
 
 mod action_graph;
 mod agent_runtime;
+mod artifact;
+mod artifact_service;
 mod continuity;
+mod directory;
+mod directory_service;
 mod follow_up;
 mod follow_up_service;
+mod health;
+mod health_service;
 mod inbound;
 mod memory;
 mod memory_service;
 mod planner;
 mod planner_service;
+mod recall;
+mod recall_service;
 mod retriever;
 mod retriever_service;
 mod store;
@@ -44,19 +52,35 @@ pub use agent_runtime::{
     SecretaryApprovalDecision, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
     gate_secretary_action, validate_action_proposal, validate_response_draft,
 };
+pub use artifact::{
+    ArtifactAvailability, ArtifactEnvelope, ArtifactError, ArtifactId, ArtifactKind,
+    MAX_DESCRIPTION_CHARS, MAX_DISPLAY_NAME_CHARS, MAX_FORWARD_NESTING, MAX_HASH_CHARS,
+    MAX_MIME_TYPE_CHARS, MAX_PLATFORM_REFERENCE_CHARS,
+};
+pub use artifact_service::{ArtifactStoreError, ArtifactStoreT, ArtifactUseCase};
 pub use continuity::{
     ConnectionEndReason, ConnectionEpochId, ConnectionEpochStatus, ContinuityIdentityError,
     IngestionCursorScope, IngestionGapId, IngestionGapReason, IngestionGapStatus,
+};
+pub use directory::{
+    ConversationScope, DirectoryError, DirectoryEvidence, DirectorySnapshot, DirectorySnapshotId,
+    DirectorySourceApi, DirectoryStatus, ScopeBoundary, ScopeKind,
+};
+pub use directory_service::{
+    DirectoryListEntry, DirectorySourceError, DirectorySourceT, DirectoryStoreError,
+    DirectoryStoreT, DirectorySyncBudget, DirectorySyncError, DirectorySyncUseCase,
 };
 pub use follow_up::{
     ClaimedOwnerNotification, FollowUpScanReport, FollowUpStatus, NotificationFailureKind,
     NotificationId, NotificationLeaseToken,
 };
 pub use follow_up_service::{FollowUpStoreT, FollowUpUseCase};
+pub use health::{HealthSnapshot, HealthStatus, SubsystemHealth};
+pub use health_service::{HealthAggregator, HealthSnapshotProducer};
 pub use inbound::{
     ContentSegment, ConversationKind, ConversationRef, IdempotencyKey, InboundIdentityError,
-    InboundMessageEnvelope, MediaKind, MessageRole, MessageSource, SourceAccountRef,
-    SourceMessageRef, VerifiedActor, VerifiedActorKind,
+    InboundMessageEnvelope, MediaKind, MessageRole, MessageSource, RichContentKind,
+    SourceAccountRef, SourceMessageRef, VerifiedActor, VerifiedActorKind,
 };
 pub use memory::{
     CommitmentMemory, CommitmentStatus, MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact,
@@ -72,6 +96,11 @@ pub use planner::{
     parse_iso_datetime, validate_planner_input, validate_planner_output,
 };
 pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
+pub use recall::{
+    ClaimedRecallEvent, InvalidationTarget, RecallCorrelationKey, RecallError, RecallEvent,
+    RecallEventId, RecallFailureKind, RecallKind, TombstoneRecord, TombstoneStatus,
+};
+pub use recall_service::{RecallStoreError, RecallStoreT, RecallUseCase};
 pub use retriever::{
     ContentTrustLevel, EventQuery, EventSearchResult, IdentityTrust, ParticipantIdentity,
     ParticipantRef, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
@@ -145,9 +174,10 @@ pub use backfill_service::{
 };
 
 pub use infra::{
-    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_backfill_store,
-    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_owner_binding_store, build_mysql_retriever_store, build_mysql_thread_link_store,
+    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_artifact_store,
+    build_mysql_backfill_store, build_mysql_directory_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_owner_binding_store,
+    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_link_store,
     build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };

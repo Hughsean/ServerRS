@@ -91,6 +91,27 @@ batch_size = 200
 retry_initial_ms = 1000
 retry_max_ms = 60000
 
+[artifact]
+enabled = true
+default_ttl_secs = 86400
+ttl_scan_interval_ms = 60000
+
+[recall_wal]
+# Callback only appends+syncs encrypted frames; MySQL delivery is asynchronous.
+path = "data/qqbot-recall.spool"
+quarantine_dir = "data/qqbot-recall-quarantine"
+# Name of the environment variable holding a base64-encoded random 32-byte AES-256 key.
+# Do not put the key in TOML or source control. Example: QQBOT_RECALL_WAL_KEY.
+key_env = "QQBOT_RECALL_WAL_KEY"
+max_bytes = 16777216
+drain_interval_ms = 1000
+
+[health]
+enabled = true
+cache_ttl_secs = 5
+log_interval_ms = 30000
+worker_success_stale_secs = 300
+
 [qq_open_platform]
 enabled = false
 app_id = ""

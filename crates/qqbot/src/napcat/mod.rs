@@ -16,9 +16,9 @@ pub use api::{
 pub use capabilities::{ApiAvailability, CapabilitySnapshot};
 pub use error::NapCatError;
 pub use event::{
-    GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupMessageEvent, MessageSegment,
-    NapCatConnectionObserver, NapCatEvent, NapCatEventHandler, PokeEvent, PrivateMessageEvent,
-    RichKind, SenderInfo,
+    FriendRecallEvent, GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupMessageEvent,
+    GroupRecallEvent, MessageSegment, NapCatConnectionObserver, NapCatEvent, NapCatEventHandler,
+    PokeEvent, PrivateMessageEvent, RichKind, SenderInfo,
 };
 pub use heartbeat::{
     HeartbeatConfig, HeartbeatDeadline, HeartbeatState, LifecycleState, MetaEvent, parse_meta_event,

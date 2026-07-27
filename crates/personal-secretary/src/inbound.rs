@@ -213,6 +213,14 @@ pub enum ContentSegment {
         source_url: Option<String>,
         display_name: Option<String>,
     },
+    Forward {
+        source_key: String,
+    },
+    Rich {
+        kind: RichContentKind,
+        source_key: String,
+        summary: Option<String>,
+    },
     Unknown {
         protocol_value: String,
     },
@@ -228,6 +236,12 @@ impl ContentSegment {
             Self::Media { source_key, .. } => {
                 require_non_empty("segment.media.source_key", source_key)
             }
+            Self::Forward { source_key } => {
+                require_non_empty("segment.forward.source_key", source_key)
+            }
+            Self::Rich { source_key, .. } => {
+                require_non_empty("segment.rich.source_key", source_key)
+            }
             Self::Text { .. } | Self::MentionAll | Self::Face { .. } | Self::Unknown { .. } => {
                 Ok(())
             }
@@ -242,6 +256,14 @@ pub enum MediaKind {
     Audio,
     Video,
     File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RichContentKind {
+    Json,
+    Xml,
+    Card,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

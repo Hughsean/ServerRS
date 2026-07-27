@@ -58,7 +58,13 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                INNER JOIN secretary_conversations c ON e.conversation_id = c.id
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
-               WHERE e.account_id = ?"#,
+               WHERE e.account_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM secretary_message_tombstones t
+                   WHERE t.source_event_id = e.source_event_id
+                     AND t.account_id = e.account_id
+                     AND t.status = 'applied'
+               )"#,
         );
         let mut params: Vec<sea_orm::Value> = vec![EXCERPT_MAX_CHARS.into(), account_id.into()];
 
@@ -128,7 +134,13 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                INNER JOIN secretary_conversations c ON e.conversation_id = c.id
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
-               WHERE e.source_event_id = ? AND e.account_id = ?"#,
+               WHERE e.source_event_id = ? AND e.account_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM secretary_message_tombstones t
+                   WHERE t.source_event_id = e.source_event_id
+                     AND t.account_id = e.account_id
+                     AND t.status = 'applied'
+               )"#,
             [
                 EXCERPT_MAX_CHARS.into(),
                 event_id.as_str().into(),
@@ -159,6 +171,12 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                                  LEFT JOIN secretary_message_contents m2
                                    ON e2.source_event_id = m2.source_event_id
                                  WHERE te2.thread_id = t.thread_id
+                                   AND NOT EXISTS (
+                                       SELECT 1 FROM secretary_message_tombstones t2
+                                       WHERE t2.source_event_id = e2.source_event_id
+                                         AND t2.account_id = e2.account_id
+                                         AND t2.status = 'applied'
+                                   )
                                  ORDER BY e2.occurred_at_unix_secs DESC LIMIT 1), 1, ?) AS latest_excerpt
                FROM secretary_event_threads t
                LEFT JOIN secretary_thread_events te ON te.thread_id = t.thread_id
@@ -202,6 +220,12 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
                WHERE e.account_id = ?
                  AND (e.actor_platform_id LIKE ? OR m.normalized_text LIKE ?)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_message_tombstones t
+                     WHERE t.source_event_id = e.source_event_id
+                       AND t.account_id = e.account_id
+                       AND t.status = 'applied'
+                 )
                ORDER BY e.occurred_at_unix_secs DESC
                LIMIT 10"#,
             [
@@ -275,7 +299,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
 }
 
 /// 通过 SourceAccountRef 解析 secretary_accounts.id。
-async fn resolve_account_id(
+pub(crate) async fn resolve_account_id(
     db: &DatabaseConnection,
     account: &SourceAccountRef,
 ) -> Result<u64, InboundEventStoreError> {

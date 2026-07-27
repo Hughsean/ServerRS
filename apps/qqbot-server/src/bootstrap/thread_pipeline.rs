@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use personal_secretary::{
     BackfillGapUseCase, ConservativeThreadSemanticExtractor, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase,
-    ThreadSemanticExtractorT, ThreadSemanticUseCase, build_mysql_backfill_store,
-    build_mysql_thread_link_store, build_mysql_thread_projection_store,
+    DeterministicThreadPolicy, DirectorySyncUseCase, SourceAccountRef, ThreadLinkUseCase,
+    ThreadProjectionUseCase, ThreadSemanticExtractorT, ThreadSemanticUseCase,
+    build_mysql_backfill_store, build_mysql_thread_link_store, build_mysql_thread_projection_store,
     build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::NapCatApiClient;
@@ -147,6 +147,36 @@ pub(crate) async fn assemble_thread_workers(
         handles.backfill = Some(handle);
     } else {
         tracing::info!("历史回补已禁用（backfill.enabled=false）");
+    }
+
+    // B4 账号会话目录同步：只读 NapCat 列表 API -> 目录快照 -> MySQL。
+    // 不在每次 WebSocket 重连时无条件下载完整目录（TTL 内跳过）。
+    // 1 MiB 上限拒绝时保持 uncertain，不提高上限、不转空数组。
+    if config.directory_sync.enabled {
+        let directory_store = personal_secretary::build_mysql_directory_store(db.clone());
+        let napcat_readonly = Arc::new(NapCatApiClient::new(config.napcat.http_base_url.clone()));
+        let directory_source = Arc::new(crate::directory_sync::NapCatDirectorySource::new(
+            napcat_readonly,
+        ));
+        let budget = config.directory_sync.budget();
+        let use_case = Arc::new(
+            DirectorySyncUseCase::new(directory_source, directory_store, budget)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        let handle = crate::directory_sync::spawn_directory_sync_worker(
+            use_case,
+            account.clone(),
+            config.directory_sync.clone(),
+        );
+        tracing::info!(
+            snapshot_ttl_secs = config.directory_sync.snapshot_ttl_secs,
+            sync_deadline_secs = config.directory_sync.sync_deadline_secs,
+            max_entries = config.directory_sync.max_entries,
+            "B4 账号会话目录同步 Worker 已装配（TTL 内跳过完整下载）"
+        );
+        handles.directory_sync = Some(handle);
+    } else {
+        tracing::info!("B4 账号会话目录同步已禁用（directory_sync.enabled=false）");
     }
 
     Ok(())

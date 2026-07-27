@@ -11,9 +11,10 @@ use super::ConfigError;
 use super::action_planner::ActionPlannerConfig;
 use super::database::DatabaseConfig;
 use super::env::{
-    apply_backfill_env, apply_follow_up_env, apply_llm_env, apply_qq_open_platform_env,
-    apply_thread_links_env, apply_thread_projection_env, apply_thread_semantics_env,
-    apply_whitelist_env, parse_bool, parse_positive,
+    apply_artifact_env, apply_backfill_env, apply_follow_up_env, apply_health_env, apply_llm_env,
+    apply_qq_open_platform_env, apply_recall_wal_env, apply_thread_links_env,
+    apply_thread_projection_env, apply_thread_semantics_env, apply_whitelist_env, parse_bool,
+    parse_positive,
 };
 use super::llm::LlmConfig;
 use super::napcat::NapCatConfig;
@@ -21,7 +22,8 @@ use super::qq_open_platform::QqOpenPlatformConfig;
 use super::validation::{validate_loopback_url, validate_url};
 use super::whitelist::WhitelistConfig;
 use super::workers::{
-    BackfillConfig, FollowUpConfig, IngestionConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig, HealthConfig,
+    IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
     ThreadSemanticsConfig,
 };
 
@@ -42,6 +44,14 @@ pub struct AppConfig {
     pub thread_links: ThreadLinksConfig,
     #[serde(default)]
     pub follow_up: FollowUpConfig,
+    #[serde(default)]
+    pub directory_sync: DirectorySyncConfig,
+    #[serde(default)]
+    pub artifact: ArtifactConfig,
+    #[serde(default)]
+    pub recall_wal: RecallWalConfig,
+    #[serde(default)]
+    pub health: HealthConfig,
     #[serde(default)]
     pub llm: LlmConfig,
     #[serde(default)]
@@ -76,6 +86,7 @@ impl AppConfig {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
+        config.resolve_relative_paths(&config_dir);
         config.validate(&config_dir)?;
         Ok((config, config_dir))
     }
@@ -118,10 +129,22 @@ impl AppConfig {
         apply_thread_semantics_env(&mut self.thread_semantics)?;
         apply_thread_links_env(&mut self.thread_links)?;
         apply_follow_up_env(&mut self.follow_up)?;
+        apply_artifact_env(&mut self.artifact)?;
+        apply_recall_wal_env(&mut self.recall_wal)?;
+        apply_health_env(&mut self.health)?;
         apply_llm_env(&mut self.llm)?;
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         apply_whitelist_env(&mut self.whitelist)?;
         Ok(())
+    }
+
+    fn resolve_relative_paths(&mut self, config_dir: &std::path::Path) {
+        if self.recall_wal.path.is_relative() {
+            self.recall_wal.path = config_dir.join(&self.recall_wal.path);
+        }
+        if self.recall_wal.quarantine_dir.is_relative() {
+            self.recall_wal.quarantine_dir = config_dir.join(&self.recall_wal.quarantine_dir);
+        }
     }
 
     pub(super) fn validate(&self, config_dir: &std::path::Path) -> Result<(), ConfigError> {
@@ -177,6 +200,10 @@ impl AppConfig {
         self.thread_semantics.validate()?;
         self.thread_links.validate()?;
         self.follow_up.validate()?;
+        self.directory_sync.validate()?;
+        self.artifact.validate()?;
+        self.recall_wal.validate()?;
+        self.health.validate()?;
         self.llm.validate()?;
         self.qq_open_platform.validate()?;
         self.whitelist.validate(config_dir)?;

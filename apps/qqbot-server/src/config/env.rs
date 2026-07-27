@@ -11,8 +11,8 @@ use super::llm::{LlmConfig, LlmReasoningMode};
 use super::qq_open_platform::QqOpenPlatformConfig;
 use super::whitelist::WhitelistConfig;
 use super::workers::{
-    BackfillConfig, FollowUpConfig, ThreadLinksConfig, ThreadProjectionConfig,
-    ThreadSemanticsConfig,
+    ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig, RecallWalConfig,
+    ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 macro_rules! apply_env_field {
@@ -154,6 +154,54 @@ pub(super) fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), Con
             batch_size => "QQBOT_FOLLOW_UP_BATCH_SIZE",
             retry_initial_ms => "QQBOT_FOLLOW_UP_RETRY_INITIAL_MS",
             retry_max_ms => "QQBOT_FOLLOW_UP_RETRY_MAX_MS",
+        },
+    );
+    Ok(())
+}
+
+pub(super) fn apply_artifact_env(config: &mut ArtifactConfig) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_ARTIFACT_ENABLED" },
+        positive {
+            default_ttl_secs => "QQBOT_ARTIFACT_DEFAULT_TTL_SECS",
+            ttl_scan_interval_ms => "QQBOT_ARTIFACT_TTL_SCAN_INTERVAL_MS",
+        },
+    );
+    Ok(())
+}
+
+pub(super) fn apply_recall_wal_env(config: &mut RecallWalConfig) -> Result<(), ConfigError> {
+    if let Ok(value) = std::env::var("QQBOT_RECALL_WAL_PATH")
+        && !value.trim().is_empty()
+    {
+        config.path = PathBuf::from(value);
+    }
+    if let Ok(value) = std::env::var("QQBOT_RECALL_WAL_QUARANTINE_DIR")
+        && !value.trim().is_empty()
+    {
+        config.quarantine_dir = PathBuf::from(value);
+    }
+    if let Ok(value) = std::env::var("QQBOT_RECALL_WAL_KEY_ENV")
+        && !value.trim().is_empty()
+    {
+        config.key_env = value;
+    }
+    apply_env_fields!(config;
+        positive {
+            max_bytes => "QQBOT_RECALL_WAL_MAX_BYTES",
+            drain_interval_ms => "QQBOT_RECALL_WAL_DRAIN_INTERVAL_MS",
+        },
+    );
+    Ok(())
+}
+
+pub(super) fn apply_health_env(config: &mut HealthConfig) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_HEALTH_ENABLED" },
+        positive {
+            cache_ttl_secs => "QQBOT_HEALTH_CACHE_TTL_SECS",
+            log_interval_ms => "QQBOT_HEALTH_LOG_INTERVAL_MS",
+            worker_success_stale_secs => "QQBOT_HEALTH_WORKER_SUCCESS_STALE_SECS",
         },
     );
     Ok(())

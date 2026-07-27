@@ -18,7 +18,7 @@ use crate::runtime::connection_loop::run_connection_loop;
 use crate::runtime::shutdown::ShutdownSource;
 
 mod connection_loop;
-mod handlers;
+pub(crate) mod handlers;
 mod health;
 mod shutdown;
 
@@ -141,6 +141,73 @@ async fn run_with_shutdown(
         .as_ref()
         .map(|handle| std::sync::Arc::new(BackfillWake::new(handle.wake_notifier())));
 
+    // B6 Artifact：入站创建 + TTL Worker。
+    let artifact_use_case = if config.artifact.enabled {
+        let store = personal_secretary::build_mysql_artifact_store(infra.db.clone());
+        let use_case = std::sync::Arc::new(personal_secretary::ArtifactUseCase::new(store));
+        handles.artifact_ttl = Some(crate::artifact_ttl_worker::spawn_artifact_ttl_worker(
+            std::sync::Arc::clone(&use_case),
+            config.artifact.clone(),
+        ));
+        tracing::info!(
+            default_ttl_secs = config.artifact.default_ttl_secs,
+            ttl_scan_interval_ms = config.artifact.ttl_scan_interval_ms,
+            "B6 Artifact 入站与 TTL Worker 已启用"
+        );
+        Some(use_case)
+    } else {
+        tracing::info!("B6 Artifact 已禁用（artifact.enabled=false）");
+        None
+    };
+
+    // B7 健康快照：Recall Spool 的 telemetry 与 WAL 使用同一实例，避免从日志猜测积压。
+    let recall_spool_telemetry =
+        crate::recall::RecallSpoolTelemetry::new(config.recall_wal.max_bytes);
+    let health_state = crate::health_runtime::RuntimeHealthState::new();
+    health_state.mark_worker_started();
+    if config.health.enabled {
+        let aggregator = std::sync::Arc::new(
+            crate::health_runtime::build_runtime_health_aggregator_with_recall_spool(
+                std::sync::Arc::clone(&health_state),
+                std::sync::Arc::clone(&recall_spool_telemetry),
+                config.health.cache_ttl_secs,
+                config.health.worker_success_stale_secs,
+            ),
+        );
+        let (health_reader, health_handle) = crate::health_runtime::spawn_health_log_worker(
+            aggregator,
+            std::sync::Arc::clone(&health_state),
+            infra.db.clone(),
+            infra.account.clone(),
+            config.health.clone(),
+        );
+        handles.health_reader = Some(health_reader);
+        handles.health_log = Some(health_handle);
+        tracing::info!(
+            cache_ttl_secs = config.health.cache_ttl_secs,
+            log_interval_ms = config.health.log_interval_ms,
+            "B7 健康快照与周期日志已启用"
+        );
+    } else {
+        tracing::info!("B7 健康快照已禁用（health.enabled=false）");
+    }
+
+    // B3 撤回闭环：回调先 durable enqueue，Worker 再以 lease 领取并持久化 tombstone。
+    let recall_store = personal_secretary::build_mysql_recall_store(infra.db.clone());
+    let recall_use_case = std::sync::Arc::new(personal_secretary::RecallUseCase::new(recall_store));
+    let (recall_queue, recall_worker) = crate::recall::spawn_recall_worker_with_telemetry(
+        std::sync::Arc::clone(&recall_use_case),
+        config.recall_wal.clone(),
+        std::sync::Arc::clone(&recall_spool_telemetry),
+    )
+    .map_err(|error| RuntimeError::Config(format!("cannot open recall WAL: {error}")))?;
+    handles.recall = Some(recall_worker);
+    let recall_handler = std::sync::Arc::new(crate::recall::RecallHandler::new(
+        recall_queue,
+        infra.account.clone(),
+        config.napcat.self_qq_id,
+    ));
+
     run_connection_loop(
         infra.store,
         infra.account,
@@ -148,6 +215,11 @@ async fn run_with_shutdown(
         &mut handles,
         infra.group_whitelist,
         backfill_wake,
+        Some(recall_handler),
+        Some(std::sync::Arc::clone(&recall_use_case)),
+        artifact_use_case,
+        config.artifact.default_ttl_secs,
+        Some(std::sync::Arc::clone(&health_state)),
         &mut shutdown_source,
     )
     .await

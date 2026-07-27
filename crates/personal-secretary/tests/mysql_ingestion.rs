@@ -7,7 +7,8 @@ use personal_secretary::{
     BackfillAnchor, BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase,
     BackfillLease, BackfillOutcome, BackfillScopeStatus, CommitmentMemory, CommitmentStatus,
     ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ConversationKind,
-    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, EventThreadId,
+    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
+    DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EventThreadId,
     HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
     IngestionGapReason, IngestionGapStatus, MemoryDeleteInput, MemoryFact, MemoryFactId,
     MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource, PersonMemory, ProjectMemory,
@@ -18,8 +19,8 @@ use personal_secretary::{
     ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationRevertInput,
     ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
     ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor, VerifiedActorKind,
-    build_mysql_backfill_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_backfill_store, build_mysql_directory_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_thread_link_store,
     build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
@@ -168,6 +169,46 @@ async fn mysql_store_is_idempotent_and_resolves_reply_mentions() {
 
 #[tokio::test]
 #[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn mysql_store_never_persists_unknown_raw_payload() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let store = build_mysql_inbound_event_store(db.clone());
+    let marker = "https://example.invalid/file?token=secret-token";
+    let event = message(
+        &format!("unknown-{}", Uuid::new_v4().simple()),
+        "unknown-segment",
+        vec![ContentSegment::Unknown {
+            protocol_value: "unknown:future_card".into(),
+        }],
+    );
+    let source_event_id = store
+        .insert_message_if_absent(&event)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let segments = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT CAST(segments AS CHAR) AS value FROM secretary_message_contents WHERE source_event_id = ?",
+            [source_event_id.as_str().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "value")
+        .unwrap();
+
+    assert!(segments.contains("unknown:future_card"));
+    assert!(!segments.contains(marker));
+    assert!(!segments.contains("secret-token"));
+    assert!(!segments.contains("message text"));
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
 async fn mysql_store_tracks_connection_cursor_and_uncertain_gap() {
     let url = std::env::var("QQBOT_TEST_DATABASE_URL")
         .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
@@ -261,6 +302,94 @@ async fn mysql_store_tracks_connection_cursor_and_uncertain_gap() {
             .unwrap()
             .is_some(),
         "shutdown also creates an uncertain window until the next verified backfill"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn gap_freezes_empty_evidence_on_first_write() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let directory = build_mysql_directory_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_id = format!("empty-freeze-{run_id}");
+    let account = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+
+    let epoch = inbound.begin_connection(&account).await.unwrap();
+    inbound.mark_connection_connected(&epoch).await.unwrap();
+    let gap = inbound
+        .mark_connection_uncertain(&epoch, IngestionGapReason::QueueOverflow)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_gap_boundaries WHERE gap_id = ?",
+            [gap.as_str()],
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_directory_gap_freeze \
+             WHERE gap_id = ? AND snapshot_id IS NULL",
+            [gap.as_str()],
+        )
+        .await,
+        1,
+        "an empty directory snapshot must still be frozen explicitly"
+    );
+
+    inbound
+        .insert_message_if_absent(
+            &message(&account_id, "late-message", Vec::new()).observed_in(epoch.clone()),
+        )
+        .await
+        .unwrap();
+    directory
+        .snapshot_directory(&DirectorySnapshot {
+            snapshot_id: DirectorySnapshotId::new(Uuid::new_v4().to_string()).unwrap(),
+            account: account.clone(),
+            source_api: DirectorySourceApi::FriendGroupRecent,
+            status: DirectoryStatus::KnownScopesComplete,
+            evidence: DirectoryEvidence::default(),
+            scopes: Vec::new(),
+            created_at_unix_secs: 1_800_000_100,
+        })
+        .await
+        .unwrap();
+
+    let duplicate = inbound
+        .mark_connection_uncertain(&epoch, IngestionGapReason::QueueOverflow)
+        .await
+        .unwrap();
+    assert_eq!(duplicate, gap);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_gap_boundaries WHERE gap_id = ?",
+            [gap.as_str()],
+        )
+        .await,
+        0,
+        "later cursors must not be added to an existing Gap"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_directory_gap_freeze \
+             WHERE gap_id = ? AND snapshot_id IS NULL",
+            [gap.as_str()],
+        )
+        .await,
+        1,
+        "later directory snapshots must not replace an empty first-write freeze"
     );
 }
 
@@ -1335,6 +1464,13 @@ async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
             n if n.contains("_qq_open_platform.sql") => 10,
             n if n.contains("_action_planner.sql") => 11,
             n if n.contains("_action_planner_hardening.sql") => 12,
+            n if n.contains("_directory.sql") => 13,
+            n if n.contains("_gap_freeze_hardening.sql") => 14,
+            n if n.contains("_event_type_recall.sql") => 15,
+            n if n.contains("_recall.sql") => 16,
+            n if n.contains("_artifacts.sql") => 17,
+            n if n.contains("_recall_inbox.sql") => 18,
+            n if n.contains("_artifact_derivations.sql") => 19,
             _ => 99,
         }
     });
