@@ -5,7 +5,8 @@ use validator::Validate;
 pub struct LoginRequest {
     #[validate(length(min = 3, max = 32))]
     pub username: String,
-    #[validate(length(min = 8, max = 128))]
+    // 兼容历史账号的短密码哈希；新账号注册仍执行至少 8 位的安全限制。
+    #[validate(length(max = 128))]
     pub password: String,
     #[validate(length(max = 64))]
     #[serde(default)]
@@ -74,3 +75,30 @@ pub struct HealthResponse {
 static USERNAME_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[a-zA-Z0-9_]+$").expect("valid username regex")
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_accepts_a_legacy_short_password() {
+        let request = LoginRequest {
+            username: "test".into(),
+            password: "123123".into(),
+            device_id: None,
+        };
+
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn registration_still_rejects_a_short_password() {
+        let request = RegisterRequest {
+            username: "new_user".into(),
+            password: "123123".into(),
+            device_id: None,
+        };
+
+        assert!(request.validate().is_err());
+    }
+}
