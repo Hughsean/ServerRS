@@ -7,9 +7,12 @@ use axum::{
 use validator::Validate;
 
 use crate::api::dto::chat_dto::*;
+use crate::api::dto::tts_dto::{
+    ChatAudioToolCallItem, ChatMessageWithAudioRequest, ChatMessageWithAudioResponse,
+};
 use crate::api::error::ApiError as AppError;
-use crate::api::state::{ChatState, InternalState};
-use crate::app::agent::chat_state::{ChatSuspendData, ToolApprovalDecision};
+use crate::api::state::{ChatState, InternalState, TtsState};
+use crate::app::agent::chat_state::{ChatResponseMode, ChatSuspendData, ToolApprovalDecision};
 use crate::app::agent::graph::{CheckpointId, SuspendReason};
 use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::app::session::chat_service::{ChatTurnOutcome, ChatTurnResponse};
@@ -47,6 +50,52 @@ pub async fn chat_send_message(
         .send_message_checkpointed(auth_user.user_id, body.text, body.emotion, body.location)
         .await?;
     Ok(chat_turn_response(result))
+}
+
+/// POST /api/v1/chat/messages-with-audio
+///
+/// 仅在对话完成后调用 TTS；需审批的对话沿用现有 202 响应，不产生音频。
+pub async fn chat_send_message_with_audio(
+    State(chat_state): State<ChatState>,
+    State(tts_state): State<TtsState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    Json(body): Json<ChatMessageWithAudioRequest>,
+) -> Result<Response, AppError> {
+    body.validate().map_err(AppError::validation)?;
+    let spec = body.audio_spec().map_err(AppError::Validation)?;
+    let result = chat_state
+        .chat
+        .send_message_checkpointed_with_mode(
+            auth_user.user_id,
+            body.text,
+            body.emotion,
+            body.location,
+            ChatResponseMode::Audio,
+        )
+        .await?;
+    let ChatTurnOutcome::Completed(result) = result else {
+        return Ok(chat_turn_response(result));
+    };
+    let tts = tts_state
+        .tts
+        .ok_or_else(|| AppError::NotImplemented("对话语音接口未启用".into()))?;
+    let audio = tts
+        .synthesize(result.reply.clone(), body.voice, spec)
+        .await?;
+    Ok(Json(ChatMessageWithAudioResponse {
+        conversation_id: result.conversation_id,
+        reply: result.reply,
+        tool_calls: result
+            .tool_calls
+            .into_iter()
+            .map(|tool| ChatAudioToolCallItem {
+                name: tool.tool_name,
+                arguments: tool.arguments,
+            })
+            .collect(),
+        audio: audio.into(),
+    })
+    .into_response())
 }
 
 /// POST /api/v1/chat/checkpoints/{checkpoint_id}/resume

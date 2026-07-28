@@ -231,9 +231,11 @@ impl AgentNode<ChatTurnState> for BuildPromptNode {
                 "构建 Prompt 前 AgentContext 尚未设置",
             )
         })?;
-        let system_message = self
-            .prompt_builder
-            .build_system_message(context, self.tools_available);
+        let system_message = self.prompt_builder.build_system_message(
+            context,
+            self.tools_available,
+            turn.response_mode(),
+        );
 
         let mut messages = Vec::with_capacity(turn.recent_messages().len() + 1);
         messages.push(AgentMessage::system(system_message));

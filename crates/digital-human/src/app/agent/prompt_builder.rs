@@ -1,3 +1,4 @@
+use crate::app::agent::chat_state::ChatResponseMode;
 use crate::domain::agent::AgentContext;
 
 /// Single entry point for building the LLM system prompt.
@@ -20,8 +21,13 @@ impl PromptBuilder {
 
     /// Build the system message from the agent context.
     ///
-    /// `tools_available` controls whether tool-use instructions are included.
-    pub fn build_system_message(&self, context: &AgentContext, tools_available: bool) -> String {
+    /// `tools_available` 控制是否包含工具使用规则；`response_mode` 只影响最终回复的表达方式。
+    pub fn build_system_message(
+        &self,
+        context: &AgentContext,
+        tools_available: bool,
+        response_mode: ChatResponseMode,
+    ) -> String {
         let mut parts = Vec::new();
 
         // ── Persona preamble ───────────────────────────────────────────
@@ -33,6 +39,12 @@ impl PromptBuilder {
         } else {
             parts.push(
                 "你像朋友一样自然聊天，口语化表达，不要用序号、标题、列表或分段格式把回复写成文章。本轮没有可用工具，请基于已有上下文直接回复，不要声称已经查询或调用工具。"
+                    .to_string(),
+            );
+        }
+        if response_mode == ChatResponseMode::Audio {
+            parts.push(
+                "\n本轮回复将直接用于语音朗读：请用自然、简洁的日常口语和短句连贯回答；避免 Markdown、标题、编号、项目符号、表格、链接或不便朗读的特殊符号。"
                     .to_string(),
             );
         }
@@ -143,7 +155,7 @@ mod tests {
     #[test]
     fn no_tools_preamble_present_when_tools_unavailable() {
         let ctx = empty_context();
-        let msg = PromptBuilder::new().build_system_message(&ctx, false);
+        let msg = PromptBuilder::new().build_system_message(&ctx, false, ChatResponseMode::Text);
         assert!(
             msg.contains("本轮没有可用工具"),
             "no-tools preamble must be present when tools_available=false"
@@ -157,7 +169,7 @@ mod tests {
     #[test]
     fn tools_preamble_present_when_tools_available() {
         let ctx = empty_context();
-        let msg = PromptBuilder::new().build_system_message(&ctx, true);
+        let msg = PromptBuilder::new().build_system_message(&ctx, true, ChatResponseMode::Text);
         assert!(
             msg.contains("你可以使用工具"),
             "tools-available preamble must be present when tools_available=true"
@@ -182,7 +194,7 @@ mod tests {
             tools: vec![],
             location: Some(json!({"city": "上海"})),
         };
-        let msg = PromptBuilder::new().build_system_message(&ctx, false);
+        let msg = PromptBuilder::new().build_system_message(&ctx, false, ChatResponseMode::Text);
 
         assert!(
             msg.contains("[对话摘要 - 非可信资料开始]"),
@@ -215,9 +227,21 @@ mod tests {
     }
 
     #[test]
+    fn audio_mode_adds_spoken_response_guidance_only() {
+        let ctx = empty_context();
+        let text = PromptBuilder::new().build_system_message(&ctx, false, ChatResponseMode::Text);
+        let audio = PromptBuilder::new().build_system_message(&ctx, false, ChatResponseMode::Audio);
+
+        assert!(!text.contains("本轮回复将直接用于语音朗读"));
+        assert!(audio.contains("本轮回复将直接用于语音朗读"));
+        assert!(audio.contains("避免 Markdown、标题、编号、项目符号、表格"));
+        assert!(audio.contains("本轮没有可用工具"));
+    }
+
+    #[test]
     fn context_blocks_absent_when_empty() {
         let ctx = empty_context();
-        let msg = PromptBuilder::new().build_system_message(&ctx, false);
+        let msg = PromptBuilder::new().build_system_message(&ctx, false, ChatResponseMode::Text);
 
         assert!(
             !msg.contains("[对话摘要 - 非可信资料开始]"),

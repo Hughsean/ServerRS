@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use crate::app::agent::agent_runtime::{
     AgentResponse, AgentRunOutcome, AgentRuntime, AgentSuspension, ToolTrace,
 };
-use crate::app::agent::chat_state::{ChatResumeInput, ToolApprovalDecision};
+use crate::app::agent::chat_state::{ChatResponseMode, ChatResumeInput, ToolApprovalDecision};
 use crate::app::agent::graph::{CheckpointId, RunId};
 use crate::app::memory::memory_service::MemoryService;
 use crate::app::rag::vector_index_service::VectorIndexService;
@@ -163,6 +163,24 @@ impl ChatService {
         emotion: Option<String>,
         location: Option<HashMap<String, Value>>,
     ) -> Result<ChatTurnOutcome, AppError> {
+        self.send_message_checkpointed_with_mode(
+            user_id,
+            text,
+            emotion,
+            location,
+            ChatResponseMode::Text,
+        )
+        .await
+    }
+
+    pub async fn send_message_checkpointed_with_mode(
+        &self,
+        user_id: u64,
+        text: String,
+        emotion: Option<String>,
+        location: Option<HashMap<String, Value>>,
+        response_mode: ChatResponseMode,
+    ) -> Result<ChatTurnOutcome, AppError> {
         let lock = self.user_lock(user_id);
         let _guard = lock.lock().await;
 
@@ -189,6 +207,7 @@ impl ChatService {
                 emotion,
                 location_value,
                 recent_messages,
+                response_mode,
             )
             .await?;
 

@@ -52,6 +52,14 @@ pub struct PendingToolApproval {
     decision: Option<ToolApprovalDecision>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatResponseMode {
+    #[default]
+    Text,
+    Audio,
+}
+
 /// HTTP Chat 图的业务扩展状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatTurnState {
@@ -61,6 +69,8 @@ pub struct ChatTurnState {
     emotion: Option<String>,
     location: Option<Value>,
     recent_messages: Vec<ChatMessage>,
+    #[serde(default)]
+    response_mode: ChatResponseMode,
     messages_prepared: bool,
     context: Option<AgentContext>,
     context_version: Option<u64>,
@@ -78,6 +88,26 @@ impl ChatTurnState {
         location: Option<Value>,
         recent_messages: Vec<ChatMessage>,
     ) -> Self {
+        Self::with_response_mode(
+            user_id,
+            conversation_id,
+            user_message,
+            emotion,
+            location,
+            recent_messages,
+            ChatResponseMode::Text,
+        )
+    }
+
+    pub fn with_response_mode(
+        user_id: u64,
+        conversation_id: u64,
+        user_message: String,
+        emotion: Option<String>,
+        location: Option<Value>,
+        recent_messages: Vec<ChatMessage>,
+        response_mode: ChatResponseMode,
+    ) -> Self {
         Self {
             user_id,
             conversation_id,
@@ -85,6 +115,7 @@ impl ChatTurnState {
             emotion,
             location,
             recent_messages,
+            response_mode,
             messages_prepared: false,
             context: None,
             context_version: None,
@@ -116,6 +147,10 @@ impl ChatTurnState {
 
     pub fn recent_messages(&self) -> &[ChatMessage] {
         &self.recent_messages
+    }
+
+    pub fn response_mode(&self) -> ChatResponseMode {
+        self.response_mode
     }
 
     pub fn messages_prepared(&self) -> bool {

@@ -4,7 +4,7 @@ use tracing::trace;
 pub use super::chat_graph::AgentRuntimeSettings;
 use super::chat_graph::ChatAgentGraph;
 use super::chat_state::{
-    CHECKPOINT_OWNER_MISMATCH, ChatResumeInput, ChatSuspendData, ChatTurnState,
+    CHECKPOINT_OWNER_MISMATCH, ChatResponseMode, ChatResumeInput, ChatSuspendData, ChatTurnState,
     PersistedTurn as GraphPersistedTurn,
 };
 use super::graph::{
@@ -95,6 +95,7 @@ impl AgentRuntime {
             emotion,
             location,
             recent_messages,
+            ChatResponseMode::Text,
         )?;
         let result = self
             .chat_graph
@@ -122,6 +123,7 @@ impl AgentRuntime {
         emotion: Option<String>,
         location: Option<Value>,
         recent_messages: Vec<ChatMessage>,
+        response_mode: ChatResponseMode,
     ) -> Result<AgentRunOutcome, AppError> {
         let state = build_initial_chat_state(
             user_id,
@@ -130,6 +132,7 @@ impl AgentRuntime {
             emotion,
             location,
             recent_messages,
+            response_mode,
         )?;
         let result = self
             .chat_graph
@@ -161,16 +164,18 @@ fn build_initial_chat_state(
     emotion: Option<String>,
     location: Option<Value>,
     recent_messages: Vec<ChatMessage>,
+    response_mode: ChatResponseMode,
 ) -> Result<AgentState<ChatTurnState>, AppError> {
     let conversation_id =
         conversation_id.ok_or_else(|| AppError::Internal("需要对话 ID 才能持久化消息".into()))?;
-    Ok(AgentState::new(ChatTurnState::new(
+    Ok(AgentState::new(ChatTurnState::with_response_mode(
         user_id,
         conversation_id,
         user_message,
         emotion,
         location,
         recent_messages,
+        response_mode,
     )))
 }
 
@@ -333,8 +338,16 @@ mod tests {
 
     #[test]
     fn graph_facade_requires_the_existing_conversation_id() {
-        let error =
-            build_initial_chat_state(7, None, "hello".into(), None, None, vec![]).unwrap_err();
+        let error = build_initial_chat_state(
+            7,
+            None,
+            "hello".into(),
+            None,
+            None,
+            vec![],
+            ChatResponseMode::Text,
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,
