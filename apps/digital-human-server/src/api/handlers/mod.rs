@@ -10,4 +10,5 @@ pub mod object_handler;
 pub mod psychology_handler;
 pub mod signature_handler;
 pub mod stats_handler;
+pub mod tts_handler;
 pub mod user_handler;

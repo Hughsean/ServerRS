@@ -113,5 +113,6 @@ pub fn build_session(
         username,
         pending_approval: None,
         confirm: Arc::new(commands::stdin_confirm),
+        audio_player: Arc::new(crate::cli::audio_player::SystemAudioPlayer),
     }
 }

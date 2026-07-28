@@ -73,12 +73,57 @@ pub struct ChatMessageRequest {
     pub text: String,
 }
 
+/// CLI 普通对话使用的语音请求，采用服务端支持的稳定默认音频规格。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageWithAudioRequest {
+    pub text: String,
+    pub format: &'static str,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub sample_bits: u8,
+}
+
+impl ChatMessageWithAudioRequest {
+    pub fn with_default_audio(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            format: "wav",
+            sample_rate: 24_000,
+            channels: 1,
+            sample_bits: 16,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatMessageResponse {
     pub conversation_id: u64,
     pub reply: String,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCallItem>,
+}
+
+/// 语音对话完成时返回的音频描述。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAudioResponse {
+    pub audio_url: String,
+    pub format: String,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub sample_bits: u8,
+}
+
+/// 语音对话的完成响应；暂停响应仍沿用 `ChatSuspendedResponse`。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageWithAudioResponse {
+    pub conversation_id: u64,
+    pub reply: String,
+    #[serde(default)]
+    pub tool_calls: Vec<ChatToolCallItem>,
+    pub audio: ChatAudioResponse,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +171,14 @@ pub struct ChatSuspendedResponse {
 pub enum ChatTurnResponse {
     Suspended(ChatSuspendedResponse),
     Completed(ChatMessageResponse),
+}
+
+/// 带语音聊天的联合响应。暂停时不包含音频，沿用审批响应。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ChatTurnWithAudioResponse {
+    Suspended(ChatSuspendedResponse),
+    Completed(ChatMessageWithAudioResponse),
 }
 
 /// 待审批列表项，与后端 `PendingChatApprovalItem` 对应。
@@ -278,6 +331,53 @@ mod tests {
         let r: RefreshResponse = serde_json::from_str(json).unwrap();
         assert_eq!(r.access_token, "na");
         assert_eq!(r.refresh_token, "nr");
+    }
+
+    #[test]
+    fn audio_request_uses_supported_default_wav_specification() {
+        let request = ChatMessageWithAudioRequest::with_default_audio("你好");
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "text": "你好",
+                "format": "wav",
+                "sampleRate": 24000,
+                "channels": 1,
+                "sampleBits": 16,
+            })
+        );
+    }
+
+    #[test]
+    fn chat_turn_with_audio_response_deserializes_completed() {
+        let json = r#"{"conversationId":7,"reply":"hi","toolCalls":[],"audio":{"audioUrl":"https://example.com/audio","format":"wav","sampleRate":24000,"channels":1,"sampleBits":16}}"#;
+        let turn: ChatTurnWithAudioResponse = serde_json::from_str(json).unwrap();
+        match turn {
+            ChatTurnWithAudioResponse::Completed(response) => {
+                assert_eq!(response.conversation_id, 7);
+                assert_eq!(response.audio.format, "wav");
+                assert_eq!(response.audio.sample_rate, 24_000);
+            }
+            ChatTurnWithAudioResponse::Suspended(_) => {
+                panic!("completed JSON 不得解析为 Suspended")
+            }
+        }
+    }
+
+    #[test]
+    fn chat_turn_with_audio_response_deserializes_suspended() {
+        let json = r#"{
+            "status": "suspended",
+            "conversation_id": 9,
+            "checkpoint_id": "2bb282b3-f4ad-41a6-bf1b-bf5c51fdc760",
+            "run_id": "90b4891f-cf68-4c1a-ad83-32d9d8494d18",
+            "reason": "approval",
+            "approval": {"approval_id": "a", "prompt": "确认", "tool_calls": []}
+        }"#;
+        assert!(matches!(
+            serde_json::from_str::<ChatTurnWithAudioResponse>(json).unwrap(),
+            ChatTurnWithAudioResponse::Suspended(_)
+        ));
     }
 
     #[test]

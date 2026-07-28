@@ -1218,6 +1218,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "validator",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1240,6 +1241,7 @@ dependencies = [
  "qdrant-client",
  "regex",
  "reqwest 0.13.4",
+ "ring",
  "rpassword",
  "rustyline",
  "scraper",
@@ -1263,6 +1265,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "validator",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

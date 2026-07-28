@@ -17,6 +17,7 @@ use crate::app::session::chat_query_service::ChatQueryService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
+use crate::app::tts::tts_service::TtsService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::domain::auth::token_service::TokenServiceT;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub auth: AuthState,
     pub user: UserState,
     pub chat: ChatState,
+    pub tts: TtsState,
     pub object: ObjectState,
     pub psychology: PsychologyState,
     pub depression: DepressionState,
@@ -56,6 +58,11 @@ pub struct UserState {
 pub struct ChatState {
     pub chat: Arc<ChatService>,
     pub history: Arc<ChatQueryService>,
+}
+
+#[derive(Clone)]
+pub struct TtsState {
+    pub tts: Option<Arc<TtsService>>,
 }
 
 #[derive(Clone)]

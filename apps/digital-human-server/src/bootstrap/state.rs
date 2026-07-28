@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::api::{
     AdminState, AppState, AuthState, ChatState, CommunityState, DepressionState, DiaryState,
-    InternalState, MusicState, ObjectState, PsychologyState, SignatureState, UserState,
+    InternalState, MusicState, ObjectState, PsychologyState, SignatureState, TtsState, UserState,
 };
 use crate::app::agent::agent_runtime::AgentRuntime;
 use crate::app::auth::auth_service::AuthService;
@@ -19,6 +19,7 @@ use crate::app::session::chat_query_service::ChatQueryService;
 use crate::app::session::chat_service::ChatService;
 use crate::app::session::session_service::SessionService;
 use crate::app::storage::object_service::ObjectService;
+use crate::app::tts::tts_service::TtsService;
 use crate::app::user::user_service::UserService;
 use crate::app::web_ingestion::review_service::KnowledgeReviewService;
 use crate::bootstrap::auth::AuthGraph;
@@ -51,6 +52,7 @@ pub struct ServiceGraph {
     pub knowledge_review: Arc<KnowledgeReviewService>,
     pub chat: Arc<ChatService>,
     pub chat_history: Arc<ChatQueryService>,
+    pub tts: Option<Arc<TtsService>>,
     pub token_service: Arc<dyn TokenServiceT>,
     pub risk_stats: Arc<RiskStatsService>,
     pub dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
@@ -110,6 +112,15 @@ impl ServiceGraph {
             Arc::clone(&memory_svc),
         );
 
+        // ── 数字人对话语音服务（与 QQBot 完全隔离） ──
+        let tts = super::graph::tts_provider::build_tts_service(&ctx)?;
+        if let Some(service) = &tts {
+            service
+                .verify_ffmpeg()
+                .await
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+        }
+
         // ── 领域服务 ──
         let domain = build_domain_services(&ctx);
 
@@ -136,6 +147,7 @@ impl ServiceGraph {
             knowledge_review,
             chat: session.chat,
             chat_history: session.history,
+            tts,
             token_service: identity.token_service,
             risk_stats: risk.stats,
             dispatcher_handle,
@@ -154,6 +166,9 @@ pub fn build_state(services: &ServiceGraph) -> AppState {
         chat: ChatState {
             chat: Arc::clone(&services.chat),
             history: Arc::clone(&services.chat_history),
+        },
+        tts: TtsState {
+            tts: services.tts.clone(),
         },
         object: ObjectState {
             objects: Arc::clone(&services.objects),

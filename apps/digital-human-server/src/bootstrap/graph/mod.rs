@@ -22,6 +22,7 @@ mod session_provider;
 mod summary_handler_provider;
 mod summary_provider;
 mod summary_service_provider;
+pub(crate) mod tts_provider;
 mod web_ingestion_provider;
 mod wellbeing_provider;
 

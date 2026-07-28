@@ -5,8 +5,11 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use crate::cli::audio_player::AudioPlayer;
 use crate::cli::client::ApiClient;
-use crate::cli::dto::{ChatSuspendedResponse, ChatTurnResponse, PendingApprovalItem};
+use crate::cli::dto::{
+    ChatSuspendedResponse, ChatTurnResponse, ChatTurnWithAudioResponse, PendingApprovalItem,
+};
 use crate::cli::error::CliError;
 use crate::cli::render;
 
@@ -24,6 +27,7 @@ pub struct Session {
     /// `/approve`、`/reject` 不带参数时只能使用这一项,绝不能任意选择服务器列表第一项。
     pub pending_approval: Option<PendingApprovalItem>,
     pub confirm: ConfirmFn,
+    pub audio_player: Arc<dyn AudioPlayer>,
 }
 
 /// 解析后的命令。`Text` 表示非斜杠输入,作为对话消息发送。
@@ -112,8 +116,8 @@ pub async fn handle_command<W: Write>(
             if text.is_empty() {
                 return Ok(false);
             }
-            let turn = session.client.chat_send(&text).await?;
-            handle_turn(session, turn, out).await?;
+            let turn = session.client.chat_send_with_audio(&text).await?;
+            handle_audio_turn(session, turn, out).await?;
         }
         Command::Help => {
             writeln!(out, "{}", render::help())?;
@@ -227,6 +231,38 @@ async fn handle_turn<W: Write>(
             )?;
         }
         ChatTurnResponse::Suspended(suspended) => {
+            session.conversation_id = Some(suspended.conversation_id);
+            let item = refresh_pending_item(session, &suspended).await;
+            session.pending_approval = Some(item.clone());
+            writeln!(out, "{}", render::suspended_notice(&item))?;
+        }
+    }
+    Ok(())
+}
+
+/// 处理带音频的首次聊天响应：只有成功完成的轮次才请求本机播放。
+async fn handle_audio_turn<W: Write>(
+    session: &mut Session,
+    turn: ChatTurnWithAudioResponse,
+    out: &mut W,
+) -> Result<(), CliError> {
+    match turn {
+        ChatTurnWithAudioResponse::Completed(response) => {
+            session.conversation_id = Some(response.conversation_id);
+            writeln!(
+                out,
+                "{}",
+                render::assistant_reply(&response.reply, &response.tool_calls)
+            )?;
+            if session
+                .audio_player
+                .play(&response.audio.audio_url)
+                .is_err()
+            {
+                writeln!(out, "语音回复已生成，但本机自动播放失败。")?;
+            }
+        }
+        ChatTurnWithAudioResponse::Suspended(suspended) => {
             session.conversation_id = Some(suspended.conversation_id);
             let item = refresh_pending_item(session, &suspended).await;
             session.pending_approval = Some(item.clone());
@@ -487,6 +523,7 @@ mod approval_flow_tests {
     use reqwest::{Method, StatusCode};
 
     use super::*;
+    use crate::cli::audio_player::{AudioPlayer, SystemAudioPlayer};
     use crate::cli::auth::TokenCache;
     use crate::cli::client::HttpBackend;
     use crate::cli::config::CliConfig;
@@ -529,9 +566,45 @@ mod approval_flow_tests {
         }
     }
 
+    struct MockAudioPlayer {
+        result: Result<(), String>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MockAudioPlayer {
+        fn succeeds() -> Self {
+            Self {
+                result: Ok(()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn fails() -> Self {
+            Self {
+                result: Err("failed".into()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl AudioPlayer for MockAudioPlayer {
+        fn play(&self, _audio_url: &str) -> Result<(), String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.result.clone()
+        }
+    }
+
     fn session(
         backend: Arc<MockBackend>,
         confirm: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) -> Session {
+        session_with_player(backend, confirm, Arc::new(SystemAudioPlayer))
+    }
+
+    fn session_with_player(
+        backend: Arc<MockBackend>,
+        confirm: impl Fn(&str) -> bool + Send + Sync + 'static,
+        audio_player: Arc<dyn AudioPlayer>,
     ) -> Session {
         let config = CliConfig {
             base_url: "http://test".into(),
@@ -552,6 +625,7 @@ mod approval_flow_tests {
             username: "tester".into(),
             pending_approval: None,
             confirm: Arc::new(confirm),
+            audio_player,
         }
     }
 
@@ -571,9 +645,59 @@ mod approval_flow_tests {
         r#"{"conversation_id":9,"reply":"已完成","tool_calls":[]}"#.into()
     }
 
+    fn completed_audio_json() -> String {
+        r#"{"conversationId":9,"reply":"已完成","toolCalls":[],"audio":{"audioUrl":"https://example.com/audio?signature=x","format":"wav","sampleRate":24000,"channels":1,"sampleBits":16}}"#
+            .into()
+    }
+
+    #[tokio::test]
+    async fn text_with_completed_audio_reply_renders_and_starts_playback() {
+        let backend = Arc::new(MockBackend::new(vec![(
+            StatusCode::OK,
+            completed_audio_json(),
+        )]));
+        let player = Arc::new(MockAudioPlayer::succeeds());
+        let mut session = session_with_player(backend.clone(), |_| true, player.clone());
+        let mut out = Vec::new();
+
+        handle_command(&mut session, Command::Text("你好".into()), &mut out)
+            .await
+            .unwrap();
+
+        assert!(String::from_utf8(out).unwrap().contains("已完成"));
+        assert_eq!(player.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            backend.calls()[0]
+                .1
+                .ends_with("/api/v1/chat/messages-with-audio")
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_player_failure_does_not_hide_completed_reply() {
+        let backend = Arc::new(MockBackend::new(vec![(
+            StatusCode::OK,
+            completed_audio_json(),
+        )]));
+        let player = Arc::new(MockAudioPlayer::fails());
+        let mut session = session_with_player(backend, |_| true, player);
+        let mut out = Vec::new();
+
+        handle_command(&mut session, Command::Text("你好".into()), &mut out)
+            .await
+            .unwrap();
+
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("已完成"));
+        assert!(output.contains("本机自动播放失败"));
+    }
+
     #[tokio::test]
     async fn text_with_completed_reply_keeps_pending_state_untouched() {
-        let backend = Arc::new(MockBackend::new(vec![(StatusCode::OK, completed_json())]));
+        let backend = Arc::new(MockBackend::new(vec![(
+            StatusCode::OK,
+            completed_audio_json(),
+        )]));
         let mut session = session(backend, |_| true);
         let mut out = Vec::new();
 
@@ -615,7 +739,7 @@ mod approval_flow_tests {
         // 只发送了消息和详情查询,没有调用 resume
         let calls = backend_ref.calls();
         assert_eq!(calls.len(), 2);
-        assert!(calls[0].1.ends_with("/api/v1/chat/messages"));
+        assert!(calls[0].1.ends_with("/api/v1/chat/messages-with-audio"));
         assert!(
             calls[1]
                 .1

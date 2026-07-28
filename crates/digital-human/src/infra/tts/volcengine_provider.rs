@@ -386,6 +386,7 @@ mod tests {
             default_encoding: "wav".to_string(),
             timeout_secs: 30,
             sample_rate: 24000,
+            ..TtsConfig::default()
         };
 
         let provider = VolcengineTtsProvider::new(&config);
@@ -457,6 +458,7 @@ mod tests {
             default_encoding: "wav".to_string(),
             timeout_secs: 10,
             sample_rate: 24000,
+            ..TtsConfig::default()
         };
 
         let provider = VolcengineTtsProvider::new(&config);

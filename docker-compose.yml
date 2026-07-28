@@ -8,9 +8,9 @@ services:
       MYSQL_DATABASE: digital_companion
     ports:
       - "3306:3306"
-    # 数据持久化
+    # 生产/远端环境必须通过 MYSQL_DATA_DIR 指向仓库外目录，避免 git clean 清除数据库。
     volumes:
-      - ./data/mysql8:/var/lib/mysql
+      - ${MYSQL_DATA_DIR:-./data/mysql8}:/var/lib/mysql
 
   qdrant:
     image: qdrant/qdrant:v1.18

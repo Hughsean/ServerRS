@@ -1,6 +1,6 @@
 [ssh_tunnels.mysql]
 host = "HP"
-local_port = 3306
+local_port = 13306
 remote_port = 3306
 
 [database]
@@ -86,6 +86,28 @@ port = 8080
 
 [logging]
 level = "debug"
+
+# ── 数字人对话语音（默认关闭；与 QQBot 的 TTS 目录和路由完全独立）──────
+[tts]
+# 启用后，启动时会检查 ffmpeg，且必须通过环境变量配置 TTS_API_KEY、
+# TTS_RESOURCE_ID 与至少 32 字符的 TTS_URL_SIGNING_KEY。
+enabled = false
+provider = "volcengine"
+base_url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+model = "seed-tts-2.0-standard"
+default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
+default_encoding = "wav"
+timeout_secs = 30
+sample_rate = 24000
+# 相对路径以本配置文件所在目录为基准。
+output_dir = "../data/digital-human-tts"
+public_url_base = "http://127.0.0.1:8080"
+url_expiry_secs = 300
+audio_retention_secs = 3600
+audio_cleanup_interval_secs = 300
+ffmpeg_path = "ffmpeg"
+# 空数组时只允许 default_voice；按需填写可选音色。
+allowed_voices = []
 
 [cors]
 allowed_origins = [
@@ -285,18 +307,3 @@ terminal = 8                         # 消费 IngestionSkipped/KnowledgePublishe
 # knowledge_staged = 2             # 消费 KnowledgeStaged；完成暂存，必要时发起发布请求
 # knowledge_publish_requested = 1  # 消费 KnowledgePublishRequested；激活暂存版本
 # knowledge_rollback_requested = 1 # 消费 KnowledgeRollbackRequested；回滚当前激活版本
-
-
-# ── TTS (Text-to-Speech) ───────────────────────────────────────────
-# 火山引擎豆包语音 v3 配置
-# 生产环境建议用环境变量注入：TTS_API_KEY、TTS_RESOURCE_ID
-[tts]
-provider = "volcengine"
-base_url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-api_key = ""
-resource_id = ""
-model = "seed-tts-2.0-standard"
-default_voice = "zh_female_wanwanxiaohe_moon_bigtts"
-default_encoding = "wav"
-timeout_secs = 30
-sample_rate = 24000

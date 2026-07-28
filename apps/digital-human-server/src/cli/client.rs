@@ -224,10 +224,26 @@ impl ApiClient {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn chat_send(&self, text: &str) -> Result<ChatTurnResponse, CliError> {
         let body = serde_json::to_string(&ChatMessageRequest { text: text.into() })?;
         self.request(Method::POST, "/api/v1/chat/messages", Some(body), true)
             .await
+    }
+
+    /// 发送带语音的普通对话请求。审批暂停仍使用原有响应形状。
+    pub async fn chat_send_with_audio(
+        &self,
+        text: &str,
+    ) -> Result<ChatTurnWithAudioResponse, CliError> {
+        let body = serde_json::to_string(&ChatMessageWithAudioRequest::with_default_audio(text))?;
+        self.request(
+            Method::POST,
+            "/api/v1/chat/messages-with-audio",
+            Some(body),
+            true,
+        )
+        .await
     }
 
     /// 查询当前用户的待审批列表（非消费式）。
@@ -352,7 +368,7 @@ mod tests {
     /// 可编程 mock backend:按调用次数返回预设响应。
     struct MockBackend {
         responses: Mutex<Vec<(StatusCode, String)>>,
-        calls: Mutex<Vec<(String, Option<String>)>>,
+        calls: Mutex<Vec<(Method, String, Option<String>, Option<String>)>>,
         refresh_calls: AtomicUsize,
     }
 
@@ -370,13 +386,16 @@ mod tests {
     impl HttpBackend for MockBackend {
         async fn execute(
             &self,
-            _method: Method,
+            method: Method,
             url: String,
             auth_header: Option<String>,
-            _body: Option<String>,
+            body: Option<String>,
         ) -> Result<(StatusCode, String), CliError> {
             let is_refresh = url.contains("/auth/refresh");
-            self.calls.lock().unwrap().push((url, auth_header));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((method, url, auth_header, body));
             if is_refresh {
                 self.refresh_calls.fetch_add(1, Ordering::SeqCst);
             }
@@ -393,6 +412,39 @@ mod tests {
             base_url: "http://test".into(),
             token_path: std::path::PathBuf::from("/tmp/x"),
         }
+    }
+
+    #[tokio::test]
+    async fn chat_send_with_audio_uses_audio_endpoint_and_default_specification() {
+        let mock = Arc::new(MockBackend::new(vec![(
+            StatusCode::OK,
+            r#"{"conversationId":7,"reply":"hi","toolCalls":[],"audio":{"audioUrl":"https://example.com/audio","format":"wav","sampleRate":24000,"channels":1,"sampleBits":16}}"#.into(),
+        )]));
+        let client = ApiClient::new(
+            &cfg(),
+            mock.clone(),
+            Some(TokenCache {
+                access_token: "t".into(),
+                refresh_token: "r".into(),
+            }),
+        );
+
+        let turn = client.chat_send_with_audio("你好").await.unwrap();
+        assert!(matches!(turn, ChatTurnWithAudioResponse::Completed(_)));
+        let calls = mock.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, Method::POST);
+        assert!(calls[0].1.ends_with("/api/v1/chat/messages-with-audio"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(calls[0].3.as_deref().unwrap()).unwrap(),
+            serde_json::json!({
+                "text": "你好",
+                "format": "wav",
+                "sampleRate": 24000,
+                "channels": 1,
+                "sampleBits": 16,
+            })
+        );
     }
 
     #[tokio::test]

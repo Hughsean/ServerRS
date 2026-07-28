@@ -18,7 +18,8 @@ use super::handlers::auth_handler::{health, login, logout, me, refresh_token, re
 use super::handlers::chat_handler::{
     chat_disable_memory, chat_forget, chat_get_checkpoint, chat_history,
     chat_list_pending_approvals, chat_memories, chat_open, chat_persona, chat_persona_rebuild,
-    chat_persona_reset, chat_resume_checkpoint, chat_send_message, chat_transcript_clear,
+    chat_persona_reset, chat_resume_checkpoint, chat_send_message, chat_send_message_with_audio,
+    chat_transcript_clear,
 };
 use super::handlers::community_handler::{
     create_comment, create_post, delete_comment, delete_post, get_post, like_comment, like_post,
@@ -49,6 +50,7 @@ use super::handlers::psychology_handler::{
 };
 use super::handlers::signature_handler::{create_signature, verify_signature};
 use super::handlers::stats_handler::{stats_music, stats_reviews, stats_risks, stats_users};
+use super::handlers::tts_handler::get_signed_audio;
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
 
@@ -77,6 +79,10 @@ pub fn build_router_with_origins(
         // Chat API (new — sessionless, per-user conversation)
         .route("/api/v1/chat/open", post(chat_open))
         .route("/api/v1/chat/messages", post(chat_send_message))
+        .route(
+            "/api/v1/chat/messages-with-audio",
+            post(chat_send_message_with_audio),
+        )
         .route(
             "/api/v1/chat/checkpoints/pending",
             get(chat_list_pending_approvals),
@@ -259,6 +265,8 @@ pub fn build_router_with_origins(
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh_token))
         .route("/api/v1/auth/logout", post(logout))
+        // 数字人语音下载使用独立的 HMAC 时效 URL，不复用 QQBot 的静态 /tts 路由。
+        .route("/api/v1/tts/audio/{file_id}", get(get_signed_audio))
         // Psychology — public read endpoints
         .route("/api/v1/psychology/categories", get(list_categories))
         .route("/api/v1/psychology/categories/tree", get(get_category_tree))

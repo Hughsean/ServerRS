@@ -35,6 +35,7 @@ fn default_true() -> bool {
 }
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use serde::Deserialize;
 
@@ -163,6 +164,7 @@ impl AppConfig {
             }
         };
         cfg.apply_env_overrides();
+        cfg.resolve_tts_output_dir(&path);
         cfg.resolve_tunnel_templates()
             .unwrap_or_else(|e| panic!("invalid application configuration: {e}"));
         cfg.validate()
@@ -219,6 +221,36 @@ impl AppConfig {
             return Err(
                 "embedding.batch_size and embedding.timeout_secs must be greater than zero".into(),
             );
+        }
+        if self.tts.url_expiry_secs == 0 {
+            return Err("tts.url_expiry_secs must be greater than zero".into());
+        }
+        if self.tts.audio_retention_secs < self.tts.url_expiry_secs {
+            return Err(
+                "tts.audio_retention_secs must not be shorter than tts.url_expiry_secs".into(),
+            );
+        }
+        if self.tts.audio_cleanup_interval_secs == 0 {
+            return Err("tts.audio_cleanup_interval_secs must be greater than zero".into());
+        }
+        if self.tts.output_dir.trim().is_empty()
+            || self.tts.public_url_base.trim().is_empty()
+            || self.tts.ffmpeg_path.trim().is_empty()
+        {
+            return Err("tts output_dir, public_url_base and ffmpeg_path cannot be empty".into());
+        }
+        if self.tts.enabled {
+            if self.tts.url_signing_key.len() < 32 {
+                return Err(
+                    "tts.url_signing_key must be at least 32 characters when tts.enabled=true"
+                        .into(),
+                );
+            }
+            if self.tts.api_key.trim().is_empty() || self.tts.resource_id.trim().is_empty() {
+                return Err(
+                    "tts.api_key and tts.resource_id are required when tts.enabled=true".into(),
+                );
+            }
         }
         self.semantic_classification.validate()?;
         self.context_routing.validate()?;
@@ -322,6 +354,19 @@ impl AppConfig {
             )?;
         }
         Ok(())
+    }
+
+    /// 将数字人语音输出相对路径转换为配置文件目录下的绝对路径。
+    /// 环境变量覆盖同样使用配置文件路径作为基准，避免依赖进程工作目录。
+    fn resolve_tts_output_dir(&mut self, config_path: &str) {
+        let output_dir = Path::new(&self.tts.output_dir);
+        if output_dir.is_absolute() {
+            return;
+        }
+        let base_dir = Path::new(config_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        self.tts.output_dir = base_dir.join(output_dir).to_string_lossy().into_owned();
     }
 
     /// 返回所有被业务配置引用的 SSH 隧道名称。
@@ -752,7 +797,11 @@ impl AppConfig {
                 self.embedding.vector_index_name = val;
             }
         }
-        // ── TTS ──
+        if let Ok(val) = std::env::var("TTS_ENABLED") {
+            if let Ok(enabled) = val.parse::<bool>() {
+                self.tts.enabled = enabled;
+            }
+        }
         if let Ok(val) = std::env::var("TTS_API_KEY") {
             if !val.is_empty() {
                 self.tts.api_key = val;
@@ -792,6 +841,49 @@ impl AppConfig {
             if let Ok(n) = val.parse::<u32>() {
                 self.tts.sample_rate = n;
             }
+        }
+        if let Ok(val) = std::env::var("TTS_OUTPUT_DIR") {
+            if !val.is_empty() {
+                self.tts.output_dir = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_PUBLIC_URL_BASE") {
+            if !val.is_empty() {
+                self.tts.public_url_base = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_URL_SIGNING_KEY") {
+            if !val.is_empty() {
+                self.tts.url_signing_key = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_URL_EXPIRY_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.tts.url_expiry_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_AUDIO_RETENTION_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.tts.audio_retention_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_AUDIO_CLEANUP_INTERVAL_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.tts.audio_cleanup_interval_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_FFMPEG_PATH") {
+            if !val.is_empty() {
+                self.tts.ffmpeg_path = val;
+            }
+        }
+        if let Ok(val) = std::env::var("TTS_ALLOWED_VOICES") {
+            self.tts.allowed_voices = val
+                .split(',')
+                .map(str::trim)
+                .filter(|voice| !voice.is_empty())
+                .map(str::to_owned)
+                .collect();
         }
     }
 }
