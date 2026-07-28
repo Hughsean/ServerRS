@@ -1,3 +1,4 @@
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
@@ -26,11 +27,100 @@ fn build_forward_spec(config: &SshTunnelConfig) -> String {
     }
 }
 
+/// 本地转发必须独占监听端口。若端口已被其他服务占用，继续启动会让业务误连该服务，
+/// 因此在创建 SSH 子进程前先 fail closed。
+fn ensure_local_forward_port_available(config: &SshTunnelConfig) -> Result<(), String> {
+    if !matches!(config.direction, TunnelDirection::Local) {
+        return Ok(());
+    }
+
+    let bind_address = config.bind_address.as_deref().unwrap_or("127.0.0.1");
+    TcpListener::bind((bind_address, config.local_port))
+        .map(drop)
+        .map_err(|error| {
+            format!(
+                "SSH 本地转发端口 {bind_address}:{} 不可用，拒绝启动以避免连接错误服务: {error}",
+                config.local_port
+            )
+        })
+}
+
 /// 单个 SSH 隧道实例，持有 ssh 子进程句柄。
 struct SshTunnel {
     name: String,
     _config: SshTunnelConfig,
     child: Arc<Mutex<Option<Child>>>,
+    /// Windows Job Object 在父进程被强制终止时自动杀死 ssh 子进程树。
+    #[cfg(windows)]
+    _job: Option<WindowsJob>,
+}
+
+#[cfg(windows)]
+struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn new() -> Result<Self, String> {
+        use std::mem::{size_of, zeroed};
+        use std::ptr::null;
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: 使用无名称、默认安全属性的 Job Object；返回的句柄仅由 Self 持有。
+        let handle = unsafe { CreateJobObjectW(null(), null()) };
+        if handle.is_null() {
+            return Err(format!(
+                "创建 SSH Job Object 失败: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits 指针和长度与信息类别完全匹配，handle 是刚创建的有效 Job Object。
+        let configured = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if configured == 0 {
+            // SAFETY: 当前路径仍独占这个有效句柄。
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+            return Err(format!(
+                "配置 SSH Job Object 失败: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self(handle))
+    }
+
+    fn assign(&self, child: &Child) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+        // SAFETY: child 仍由调用方持有且未退出；Job Object 句柄由 Self 持有。
+        let assigned = unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) };
+        if assigned == 0 {
+            return Err(format!(
+                "将 SSH 子进程加入 Job Object 失败: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        // SAFETY: Self 独占句柄；KILL_ON_JOB_CLOSE 由内核终止仍在 Job 中的进程树。
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
 }
 
 impl SshTunnel {
@@ -39,6 +129,8 @@ impl SshTunnel {
     /// 优先使用 ssh-agent 认证，不提供密码交互通道。
     /// 若 ssh 命令不存在或端口被占用，立即返回错误。
     fn start(name: &str, config: &SshTunnelConfig) -> Result<Self, String> {
+        ensure_local_forward_port_available(config)?;
+
         let addr = match &config.user {
             Some(user) => format!("{}@{}", user, config.host),
             None => config.host.clone(),
@@ -50,7 +142,7 @@ impl SshTunnel {
         };
         let forward_spec = build_forward_spec(config);
 
-        let child = Command::new("ssh")
+        let mut child = Command::new("ssh")
             .args([
                 forward_flag,
                 &forward_spec,
@@ -71,6 +163,21 @@ impl SshTunnel {
             .spawn()
             .map_err(|e| format!("启动 SSH 隧道 '{name}' 失败: {e}"))?;
 
+        #[cfg(windows)]
+        let job = match WindowsJob::new().and_then(|job| {
+            job.assign(&child)?;
+            Ok(job)
+        }) {
+            Ok(job) => Some(job),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "启动 SSH 隧道 '{name}' 时无法纳入 Windows Job Object: {error}"
+                ));
+            }
+        };
+
         info!(
             "SSH 隧道 '{}' 已启动: {} {} → {} (bind={})",
             name,
@@ -84,6 +191,8 @@ impl SshTunnel {
             name: name.to_string(),
             _config: config.clone(),
             child: Arc::new(Mutex::new(Some(child))),
+            #[cfg(windows)]
+            _job: job,
         })
     }
 
@@ -192,6 +301,29 @@ mod tests {
     }
 
     #[test]
+    fn local_forward_rejects_an_occupied_port() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("test listener address").port();
+        let cfg = make_config(port, 3306, TunnelDirection::Local, None);
+
+        let error = ensure_local_forward_port_available(&cfg)
+            .expect_err("occupied local-forward port must be rejected");
+
+        assert!(error.contains(&port.to_string()));
+        assert!(error.contains("拒绝启动"));
+    }
+
+    #[test]
+    fn remote_forward_does_not_claim_the_local_service_port() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("test listener address").port();
+        let cfg = make_config(port, 8080, TunnelDirection::Remote, None);
+
+        ensure_local_forward_port_available(&cfg)
+            .expect("remote forwarding must not preflight the local service port");
+    }
+
+    #[test]
     fn dropping_tunnel_kills_child_process() {
         let child = spawn_sleep_child();
         let pid = child.id();
@@ -199,6 +331,8 @@ mod tests {
             name: "test".to_string(),
             _config: make_config(8080, 3306, TunnelDirection::Local, None),
             child: Arc::new(Mutex::new(Some(child))),
+            #[cfg(windows)]
+            _job: None,
         };
 
         drop(tunnel);

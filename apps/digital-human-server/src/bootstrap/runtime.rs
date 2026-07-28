@@ -54,6 +54,14 @@ pub async fn run(config: AppConfig) -> Result<(), std::io::Error> {
         shutdown_token.clone(),
     )
     .await?;
+    if let Some(tts) = services.tts.clone() {
+        tasks.background.spawn(tokio::spawn(periodic_tts_cleanup(
+            tts,
+            config.tts.audio_retention_secs,
+            config.tts.audio_cleanup_interval_secs,
+            shutdown_token.clone(),
+        )));
+    }
     // 阶段 6: HTTP 服务
     serve(&config, services, tasks, infra, shutdown_token).await
 }
@@ -192,7 +200,28 @@ async fn periodic_revocation(repo: Arc<dyn RefreshTokenStoreT>) {
     }
 }
 
-/// 监听 SIGTERM（Unix）和 Ctrl+C（所有平台），用于优雅关闭。
+/// 定期清理数字人独立语音目录中过期的 UUID 音频文件。
+async fn periodic_tts_cleanup(
+    tts: Arc<crate::app::tts::tts_service::TtsService>,
+    retention_secs: u64,
+    interval_secs: u64,
+    shutdown_token: CancellationToken,
+) {
+    let retention = tokio::time::Duration::from_secs(retention_secs);
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+    loop {
+        tokio::select! {
+            _ = shutdown_token.cancelled() => break,
+            _ = interval.tick() => match tts.cleanup_expired(retention).await {
+                Ok(removed) if removed > 0 => tracing::info!(removed, "已清理过期数字人语音文件"),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(error = %error, "清理数字人语音文件失败"),
+            },
+        }
+    }
+}
+
+/// 监听平台终止信号，用于优雅关闭。
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -204,9 +233,87 @@ async fn shutdown_signal() {
             s.recv().await;
         }
     };
-    #[cfg(not(unix))]
-    let term = std::future::pending::<()>();
+    #[cfg(unix)]
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
+
+    #[cfg(windows)]
+    {
+        let registration = match windows_console_shutdown::Registration::register() {
+            Ok(registration) => Some(registration),
+            Err(error) => {
+                tracing::warn!(error = %error, "注册 Windows 控制台关闭通知失败，将仅响应 Ctrl+C");
+                None
+            }
+        };
+        let console_close = async {
+            if registration.is_some() {
+                windows_console_shutdown::wait_for_close_event().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! { _ = ctrl_c => {}, _ = console_close => {} }
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    ctrl_c.await;
+}
+
+/// Windows 关闭控制台会产生 CTRL_CLOSE_EVENT，而 Tokio 的 `ctrl_c` 不会覆盖它。
+/// 控制台回调受系统的短时限约束，因此只设置原子标记；异步清理由运行时任务完成。
+#[cfg(windows)]
+mod windows_console_shutdown {
+    use std::io;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use windows_sys::Win32::System::Console::{
+        CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, SetConsoleCtrlHandler,
+    };
+
+    static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    pub struct Registration;
+
+    impl Registration {
+        pub fn register() -> io::Result<Self> {
+            CLOSE_REQUESTED.store(false, Ordering::Release);
+            // SAFETY: handler 是静态函数，进程存活期间地址有效；Drop 中会解除注册。
+            let registered = unsafe { SetConsoleCtrlHandler(Some(console_control_handler), 1) };
+            if registered == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self)
+        }
+    }
+
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            // SAFETY: 与注册时传入同一个静态回调；注销失败时进程即将退出，不影响资源回收。
+            unsafe {
+                SetConsoleCtrlHandler(Some(console_control_handler), 0);
+            }
+        }
+    }
+
+    pub async fn wait_for_close_event() {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(25));
+        loop {
+            interval.tick().await;
+            if CLOSE_REQUESTED.swap(false, Ordering::AcqRel) {
+                return;
+            }
+        }
+    }
+
+    unsafe extern "system" fn console_control_handler(control_type: u32) -> i32 {
+        match control_type {
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+                CLOSE_REQUESTED.store(true, Ordering::Release);
+                1
+            }
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
