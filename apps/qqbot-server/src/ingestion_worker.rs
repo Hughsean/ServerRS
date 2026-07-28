@@ -3,8 +3,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use personal_secretary::{
-    ConnectionEpochId, InboundEventStoreError, InboundMessageEnvelope, IngestMessageOutcome,
-    IngestionGapReason, PersonalSecretaryStoreT,
+    ArtifactEnvelope, ArtifactId, ArtifactKind, ArtifactUseCase, ConnectionEpochId, ContentSegment,
+    ContentTrustLevel, InboundEventStoreError, InboundMessageEnvelope, IngestMessageOutcome,
+    IngestionGapReason, MediaKind, PersonalSecretaryStoreT, RecallCorrelationKey, RecallUseCase,
+    RichContentKind, SourceEventId,
 };
 use qqbot::napcat::NapCatError;
 use tokio::sync::mpsc;
@@ -36,14 +38,25 @@ impl OverflowState {
     }
 }
 
-pub(crate) struct IngestionQueue {
+pub struct IngestionQueue {
     sender: mpsc::Sender<InboundMessageEnvelope>,
     overflow: Arc<OverflowState>,
     connection_epoch_id: ConnectionEpochId,
 }
 
 impl IngestionQueue {
-    pub(crate) fn try_enqueue(&self, message: InboundMessageEnvelope) -> Result<(), NapCatError> {
+    /// 验收测试专用：构造一个有界队列但不启动 Worker。
+    /// 发送端 drop 后所有 Receiver 立即收到 None；用于入站 handler 分支测试。
+    pub fn for_test() -> Self {
+        let (sender, _receiver) = mpsc::channel(1);
+        Self {
+            sender,
+            overflow: Arc::new(OverflowState::default()),
+            connection_epoch_id: ConnectionEpochId::new("test-epoch").expect("valid id"),
+        }
+    }
+
+    pub fn try_enqueue(&self, message: InboundMessageEnvelope) -> Result<(), NapCatError> {
         let message = message.observed_in(self.connection_epoch_id.clone());
         let platform_message_id = message.source.message_id.clone();
         let conversation_id = message.conversation.id.clone();
@@ -86,18 +99,22 @@ impl IngestionQueue {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct WorkerReport {
-    pub(crate) accepted: u64,
-    pub(crate) duplicates: u64,
-    pub(crate) invalid: u64,
-    pub(crate) retries: u64,
-    pub(crate) dropped: u64,
+pub struct WorkerReport {
+    pub accepted: u64,
+    pub duplicates: u64,
+    pub invalid: u64,
+    pub retries: u64,
+    pub dropped: u64,
 }
 
-pub(crate) fn spawn_ingestion_worker(
+pub fn spawn_ingestion_worker(
     store: Arc<dyn PersonalSecretaryStoreT>,
     connection_epoch_id: ConnectionEpochId,
     config: IngestionConfig,
+    recall_use_case: Option<Arc<RecallUseCase>>,
+    artifact_use_case: Option<Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
 ) -> (IngestionQueue, JoinHandle<WorkerReport>) {
     let (sender, receiver) = mpsc::channel(config.queue_capacity);
     let overflow = Arc::new(OverflowState::default());
@@ -112,16 +129,25 @@ pub(crate) fn spawn_ingestion_worker(
         store,
         connection_epoch_id,
         config,
+        recall_use_case,
+        artifact_use_case,
+        artifact_default_ttl_secs,
+        health_state,
     ));
     (queue, worker)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_worker(
     mut receiver: mpsc::Receiver<InboundMessageEnvelope>,
     overflow: Arc<OverflowState>,
     store: Arc<dyn PersonalSecretaryStoreT>,
     connection_epoch_id: ConnectionEpochId,
     config: IngestionConfig,
+    recall_use_case: Option<Arc<RecallUseCase>>,
+    artifact_use_case: Option<Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
 ) -> WorkerReport {
     tracing::debug!(
         connection_epoch_id = %connection_epoch_id.as_str(),
@@ -141,6 +167,10 @@ async fn run_worker(
             &config,
             &message,
             &mut report,
+            recall_use_case.as_ref(),
+            artifact_use_case.as_ref(),
+            artifact_default_ttl_secs,
+            health_state.as_ref(),
         )
         .await;
     }
@@ -158,6 +188,7 @@ async fn run_worker(
     report
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn persist_with_retry(
     store: &Arc<dyn PersonalSecretaryStoreT>,
     connection_epoch_id: &ConnectionEpochId,
@@ -165,6 +196,10 @@ async fn persist_with_retry(
     config: &IngestionConfig,
     message: &InboundMessageEnvelope,
     report: &mut WorkerReport,
+    recall_use_case: Option<&Arc<RecallUseCase>>,
+    artifact_use_case: Option<&Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_state: Option<&Arc<crate::health_runtime::RuntimeHealthState>>,
 ) {
     let mut attempt = 0_u64;
     let mut retry_delay = Duration::from_millis(config.retry_initial_ms);
@@ -185,6 +220,9 @@ async fn persist_with_retry(
                 reply_to_event_id,
             }) => {
                 report.accepted += 1;
+                if let Some(health) = health_state {
+                    health.mark_worker_success(current_unix_secs());
+                }
                 tracing::debug!(
                     connection_epoch_id = %connection_epoch_id.as_str(),
                     source_event_id = %source_event_id.as_str(),
@@ -198,20 +236,44 @@ async fn persist_with_retry(
                     attempt,
                     "队列消息已幂等保存，允许进入后续处理"
                 );
+                maybe_apply_pending_recall(recall_use_case, message, source_event_id.as_str())
+                    .await;
+                maybe_create_artifacts(
+                    artifact_use_case,
+                    message,
+                    source_event_id.as_str(),
+                    artifact_default_ttl_secs,
+                )
+                .await;
                 return;
             }
             Ok(IngestMessageOutcome::Duplicate { source_event_id }) => {
                 report.duplicates += 1;
+                if let Some(health) = health_state {
+                    health.mark_worker_success(current_unix_secs());
+                }
                 tracing::trace!(
                     connection_epoch_id = %connection_epoch_id.as_str(),
                     source_event_id = %source_event_id.as_str(),
                     platform_message_id = %message.source.message_id,
                     "队列消息为重复投递"
                 );
+                maybe_apply_pending_recall(recall_use_case, message, source_event_id.as_str())
+                    .await;
+                maybe_create_artifacts(
+                    artifact_use_case,
+                    message,
+                    source_event_id.as_str(),
+                    artifact_default_ttl_secs,
+                )
+                .await;
                 return;
             }
             Err(InboundEventStoreError::InvalidData(error)) => {
                 report.invalid += 1;
+                if let Some(health) = health_state {
+                    health.mark_worker_failure();
+                }
                 tracing::error!(
                     connection_epoch_id = %connection_epoch_id.as_str(),
                     platform_message_id = %message.source.message_id,
@@ -235,6 +297,9 @@ async fn persist_with_retry(
             }
             Err(error) => {
                 report.retries += 1;
+                if let Some(health) = health_state {
+                    health.mark_worker_failure();
+                }
                 if attempt == 1 || attempt.is_power_of_two() {
                     tracing::warn!(
                         connection_epoch_id = %connection_epoch_id.as_str(),
@@ -259,6 +324,155 @@ async fn persist_with_retry(
             }
         }
     }
+}
+
+/// 富消息段 -> 有界 Artifact 信封。不下载、不写 URL 到日志。
+async fn maybe_create_artifacts(
+    artifact_use_case: Option<&Arc<ArtifactUseCase>>,
+    message: &InboundMessageEnvelope,
+    source_event_id: &str,
+    default_ttl_secs: u64,
+) {
+    let Some(use_case) = artifact_use_case else {
+        return;
+    };
+    let Ok(source_event_id) = SourceEventId::new(source_event_id) else {
+        return;
+    };
+    let ttl = if default_ttl_secs == 0 {
+        None
+    } else {
+        Some(
+            message
+                .occurred_at_unix_secs
+                .saturating_add(default_ttl_secs as i64),
+        )
+    };
+    for (segment_ordinal, segment) in message.segments.iter().enumerate() {
+        let (artifact_kind, source_key, display_name, description) = match segment {
+            ContentSegment::Media {
+                kind,
+                source_key,
+                display_name,
+                ..
+            } => (
+                match kind {
+                    MediaKind::Image => ArtifactKind::Image,
+                    MediaKind::Audio => ArtifactKind::Record,
+                    MediaKind::Video => ArtifactKind::Video,
+                    MediaKind::File => ArtifactKind::File,
+                },
+                source_key,
+                display_name.clone(),
+                None,
+            ),
+            ContentSegment::Forward { source_key } => {
+                (ArtifactKind::Forward, source_key, None, None)
+            }
+            ContentSegment::Rich {
+                kind,
+                source_key,
+                summary,
+            } => (
+                match kind {
+                    RichContentKind::Json => ArtifactKind::RichJson,
+                    RichContentKind::Xml => ArtifactKind::RichXml,
+                    RichContentKind::Card => ArtifactKind::RichCard,
+                },
+                source_key,
+                None,
+                summary.clone(),
+            ),
+            _ => continue,
+        };
+        let artifact_id =
+            ArtifactId::for_source_segment(&source_event_id, segment_ordinal, artifact_kind);
+        let mut envelope = match ArtifactEnvelope::new(
+            artifact_id,
+            message.source.account_ref(),
+            source_event_id.clone(),
+            message.conversation.clone(),
+            artifact_kind,
+            source_key.clone(),
+            ContentTrustLevel::Normal,
+            message.occurred_at_unix_secs,
+            ttl,
+        ) {
+            Ok(env) => env,
+            Err(error) => {
+                tracing::warn!(error = %error, "跳过非法 Artifact 信封");
+                continue;
+            }
+        };
+        if let Some(name) = display_name {
+            envelope = envelope.with_display_name(Some(name));
+        }
+        if let Some(description) = description {
+            envelope = envelope.with_description(Some(description));
+        }
+        if let Err(error) = use_case.create(&envelope).await {
+            tracing::warn!(
+                source_event_id = source_event_id.as_str(),
+                error = %error,
+                "Artifact 创建失败（消息已入库，不回滚）"
+            );
+        }
+    }
+}
+
+/// 消息入库后尝试消费 pending tombstone。失败只记日志，不回滚已成功的消息入库。
+async fn maybe_apply_pending_recall(
+    recall_use_case: Option<&Arc<RecallUseCase>>,
+    message: &InboundMessageEnvelope,
+    source_event_id: &str,
+) {
+    let Some(use_case) = recall_use_case else {
+        return;
+    };
+    let correlation = match RecallCorrelationKey::new(
+        message.source.account_ref(),
+        message.source.channel,
+        message.conversation.clone(),
+        message.source.message_id.clone(),
+    ) {
+        Ok(key) => key,
+        Err(error) => {
+            tracing::warn!(
+                platform_message_id = %message.source.message_id,
+                error = %error,
+                "无法构造撤回关联键，跳过 pending tombstone 关联"
+            );
+            return;
+        }
+    };
+    match use_case
+        .on_message_ingested(&correlation, source_event_id)
+        .await
+    {
+        Ok(Some(record)) => {
+            tracing::debug!(
+                source_event_id,
+                status = record.status.as_str(),
+                "消息入库后已自动应用 pending 撤回 tombstone"
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                source_event_id,
+                platform_message_id = %message.source.message_id,
+                error = %error,
+                "pending 撤回关联失败（消息已入库，不回滚）"
+            );
+        }
+    }
+}
+
+fn current_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 async fn persist_overflow_gap(
@@ -421,6 +635,10 @@ mod tests {
             store_port,
             ConnectionEpochId::new("epoch-retry").unwrap(),
             config,
+            None,
+            None,
+            0,
+            None,
         );
 
         queue.try_enqueue(message("message-retry")).unwrap();

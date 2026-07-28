@@ -4,10 +4,12 @@ use agent_core::graph::{
     TransitionRule,
 };
 use personal_secretary::{
-    BackfillAnchor, BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase,
-    BackfillLease, BackfillOutcome, BackfillScopeStatus, CommitmentMemory, CommitmentStatus,
+    AgendaApplyRequest, AgendaItemKind, AgendaMutation, AgendaUseCase, BackfillAnchor,
+    BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase, BackfillLease,
+    BackfillOutcome, BackfillScopeStatus, Clock, CommitmentMemory, CommitmentStatus,
     ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ConversationKind,
-    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, EventThreadId,
+    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
+    DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EventThreadId,
     HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
     IngestionGapReason, IngestionGapStatus, MemoryDeleteInput, MemoryFact, MemoryFactId,
     MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource, PersonMemory, ProjectMemory,
@@ -18,10 +20,11 @@ use personal_secretary::{
     ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationRevertInput,
     ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
     ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor, VerifiedActorKind,
-    build_mysql_backfill_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    build_mysql_agenda_store, build_mysql_backfill_store, build_mysql_directory_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
+    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 use std::num::NonZeroU32;
@@ -168,6 +171,46 @@ async fn mysql_store_is_idempotent_and_resolves_reply_mentions() {
 
 #[tokio::test]
 #[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn mysql_store_never_persists_unknown_raw_payload() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let store = build_mysql_inbound_event_store(db.clone());
+    let marker = "https://example.invalid/file?token=secret-token";
+    let event = message(
+        &format!("unknown-{}", Uuid::new_v4().simple()),
+        "unknown-segment",
+        vec![ContentSegment::Unknown {
+            protocol_value: "unknown:future_card".into(),
+        }],
+    );
+    let source_event_id = store
+        .insert_message_if_absent(&event)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let segments = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT CAST(segments AS CHAR) AS value FROM secretary_message_contents WHERE source_event_id = ?",
+            [source_event_id.as_str().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "value")
+        .unwrap();
+
+    assert!(segments.contains("unknown:future_card"));
+    assert!(!segments.contains(marker));
+    assert!(!segments.contains("secret-token"));
+    assert!(!segments.contains("message text"));
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
 async fn mysql_store_tracks_connection_cursor_and_uncertain_gap() {
     let url = std::env::var("QQBOT_TEST_DATABASE_URL")
         .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
@@ -261,6 +304,94 @@ async fn mysql_store_tracks_connection_cursor_and_uncertain_gap() {
             .unwrap()
             .is_some(),
         "shutdown also creates an uncertain window until the next verified backfill"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn gap_freezes_empty_evidence_on_first_write() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let directory = build_mysql_directory_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_id = format!("empty-freeze-{run_id}");
+    let account = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+
+    let epoch = inbound.begin_connection(&account).await.unwrap();
+    inbound.mark_connection_connected(&epoch).await.unwrap();
+    let gap = inbound
+        .mark_connection_uncertain(&epoch, IngestionGapReason::QueueOverflow)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_gap_boundaries WHERE gap_id = ?",
+            [gap.as_str()],
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_directory_gap_freeze \
+             WHERE gap_id = ? AND snapshot_id IS NULL",
+            [gap.as_str()],
+        )
+        .await,
+        1,
+        "an empty directory snapshot must still be frozen explicitly"
+    );
+
+    inbound
+        .insert_message_if_absent(
+            &message(&account_id, "late-message", Vec::new()).observed_in(epoch.clone()),
+        )
+        .await
+        .unwrap();
+    directory
+        .snapshot_directory(&DirectorySnapshot {
+            snapshot_id: DirectorySnapshotId::new(Uuid::new_v4().to_string()).unwrap(),
+            account: account.clone(),
+            source_api: DirectorySourceApi::FriendGroupRecent,
+            status: DirectoryStatus::KnownScopesComplete,
+            evidence: DirectoryEvidence::default(),
+            scopes: Vec::new(),
+            created_at_unix_secs: 1_800_000_100,
+        })
+        .await
+        .unwrap();
+
+    let duplicate = inbound
+        .mark_connection_uncertain(&epoch, IngestionGapReason::QueueOverflow)
+        .await
+        .unwrap();
+    assert_eq!(duplicate, gap);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_gap_boundaries WHERE gap_id = ?",
+            [gap.as_str()],
+        )
+        .await,
+        0,
+        "later cursors must not be added to an existing Gap"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_directory_gap_freeze \
+             WHERE gap_id = ? AND snapshot_id IS NULL",
+            [gap.as_str()],
+        )
+        .await,
+        1,
+        "later directory snapshots must not replace an empty first-write freeze"
     );
 }
 
@@ -1286,6 +1417,190 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn agenda_due_outbox_is_idempotent_version_fenced_and_lease_fenced() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let account_id = format!("agenda-outbox-{}", Uuid::new_v4().simple());
+    let account = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+    let command = message(&account_id, "agenda-command", Vec::new());
+    let command_source_event_id = inbound
+        .insert_message_if_absent(&command)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let run_id = Uuid::new_v4().to_string();
+    let lease_token = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_action_runs
+           (run_id, account_id, command_source_event_id, command_text, conversation_id,
+            occurred_at_unix_secs, timezone_offset_secs, timezone_name, recent_events_json,
+            status, lease_token)
+           SELECT ?, id, ?, '创建提醒', 'owner-private', 100000, 0, 'UTC', JSON_ARRAY(),
+                  'running', ?
+           FROM secretary_accounts
+           WHERE source_channel = ? AND platform_account_id = ?"#,
+        [
+            run_id.clone().into(),
+            command_source_event_id.as_str().into(),
+            lease_token.clone().into(),
+            MessageSource::NapCat.as_str().into(),
+            account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+
+    let create = AgendaUseCase::new(
+        build_mysql_agenda_store(db.clone()),
+        Arc::new(FixedClock { now: 100_000 }),
+    );
+    let created = create
+        .apply(&AgendaApplyRequest {
+            account: account.clone(),
+            command_source_event_id: command_source_event_id.clone(),
+            run_id: run_id.clone(),
+            effect_id: format!("agenda-create-{}", Uuid::new_v4()),
+            proposal_id: Uuid::new_v4().to_string(),
+            proposal_json: r#"{"kind":"create_reminder"}"#.into(),
+            lease_token: lease_token.clone(),
+            idempotency_key: format!("agenda-create-{run_id}"),
+            mutation: AgendaMutation::Create {
+                kind: AgendaItemKind::Reminder,
+                title: "续费提醒".into(),
+                scheduled_at_unix_secs: Some(100_001),
+                timezone: "Asia/Shanghai".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.item.version, 1);
+
+    let due = AgendaUseCase::new(
+        build_mysql_agenda_store(db.clone()),
+        Arc::new(FixedClock { now: 100_001 }),
+    );
+    assert_eq!(due.enqueue_due_notifications(100).await.unwrap(), 1);
+    assert_eq!(due.enqueue_due_notifications(100).await.unwrap(), 0);
+
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        build_mysql_memory_store(db.clone()),
+    );
+    let reschedule = AgendaUseCase::new(
+        build_mysql_agenda_store(db.clone()),
+        Arc::new(FixedClock { now: 100_001 }),
+    );
+    let updated = reschedule
+        .apply(&AgendaApplyRequest {
+            account: account.clone(),
+            command_source_event_id,
+            run_id: run_id.clone(),
+            effect_id: format!("agenda-reschedule-{}", Uuid::new_v4()),
+            proposal_id: Uuid::new_v4().to_string(),
+            proposal_json: r#"{"kind":"reschedule_item"}"#.into(),
+            lease_token,
+            idempotency_key: format!("agenda-reschedule-{run_id}"),
+            mutation: AgendaMutation::Reschedule {
+                item_id: created.item.item_id.clone(),
+                expected_version: created.item.version,
+                scheduled_at_unix_secs: 100_002,
+                timezone: "Asia/Shanghai".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated.item.version, 2);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox WHERE agenda_item_id = ? AND agenda_version = 1 AND delivery_status = 'suppressed'",
+            [created.item.item_id.as_str()],
+        )
+        .await,
+        1
+    );
+
+    let rescheduled_due = AgendaUseCase::new(
+        build_mysql_agenda_store(db.clone()),
+        Arc::new(FixedClock { now: 100_002 }),
+    );
+    assert_eq!(
+        rescheduled_due
+            .enqueue_due_notifications(100)
+            .await
+            .unwrap(),
+        1
+    );
+    let current_claim = follow_up
+        .claim_due_notification(&account, 100_002, 60)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        current_claim.content,
+        personal_secretary::OwnerNotificationContent::Agenda {
+            kind: AgendaItemKind::Reminder,
+            ref title,
+        } if title == "续费提醒"
+    ));
+    assert!(matches!(
+        follow_up
+            .mark_notification_delivered(
+                &current_claim.notification_id,
+                &personal_secretary::NotificationLeaseToken::generate(),
+                "must-not-be-recorded",
+            )
+            .await,
+        Err(personal_secretary::InboundEventStoreError::LeaseLost)
+    ));
+    assert_eq!(current_claim.attempt, 1);
+    follow_up
+        .mark_notification_failed(
+            &current_claim.notification_id,
+            &current_claim.lease_token,
+            "ambiguous_post",
+            personal_secretary::NotificationFailureKind::UnknownCommit,
+        )
+        .await
+        .unwrap();
+    assert!(
+        follow_up
+            .claim_due_notification(&account, 2_000_000_000, 60)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox WHERE notification_id = ?",
+            [current_claim.notification_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("unknown_commit")
+    );
+}
+
+/// 测试用固定时钟，确保 Agenda 到期扫描可重复验证。
+struct FixedClock {
+    now: i64,
+}
+
+impl Clock for FixedClock {
+    fn now_unix_secs(&self) -> i64 {
+        self.now
+    }
+}
+
 async fn scalar_i64<const N: usize>(
     db: &sea_orm::DatabaseConnection,
     sql: &str,
@@ -1335,10 +1650,33 @@ async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
             n if n.contains("_qq_open_platform.sql") => 10,
             n if n.contains("_action_planner.sql") => 11,
             n if n.contains("_action_planner_hardening.sql") => 12,
+            n if n.contains("_directory.sql") => 13,
+            n if n.contains("_gap_freeze_hardening.sql") => 14,
+            n if n.contains("_event_type_recall.sql") => 15,
+            n if n.contains("_recall.sql") => 16,
+            n if n.contains("_artifacts.sql") => 17,
+            n if n.contains("_recall_inbox.sql") => 18,
+            n if n.contains("_owner_agenda.sql") => 20,
             _ => 99,
         }
     });
     for path in entries {
+        let migration_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if migration_name.contains("_owner_agenda.sql")
+            && db
+                .query_one_raw(Statement::from_string(
+                    DatabaseBackend::MySql,
+                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
+                ))
+                .await
+                .expect("agenda migration sentinel query failed")
+                .is_some()
+        {
+            continue;
+        }
         let sql = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         // 移除整行注释，再按分号拆分语句；空语句跳过。

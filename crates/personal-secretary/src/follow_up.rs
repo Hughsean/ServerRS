@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{CommitmentMemory, SourceAccountRef};
+use crate::{AgendaItemKind, CommitmentMemory, SourceAccountRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,11 +53,17 @@ impl NotificationLeaseToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OwnerNotificationContent {
+    FollowUp { commitment: CommitmentMemory },
+    Agenda { kind: AgendaItemKind, title: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimedOwnerNotification {
     pub notification_id: NotificationId,
     pub lease_token: NotificationLeaseToken,
     pub managed_account: SourceAccountRef,
-    pub commitment: CommitmentMemory,
+    pub content: OwnerNotificationContent,
     pub due_at_unix_secs: i64,
     pub attempt: u32,
 }

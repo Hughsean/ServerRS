@@ -3,6 +3,8 @@
 //! 包含入站队列、历史回补、线程投影、线程语义、线程关联与跟进提醒。
 //! 所有配置只在 QQBot 应用目录内生效，不读取数字人配置；预算业务不变量集中在领域层。
 
+use std::path::PathBuf;
+
 use personal_secretary::BackfillBudget;
 use serde::Deserialize;
 
@@ -325,6 +327,50 @@ impl ThreadLinksConfig {
     }
 }
 
+/// Owner Agenda 到期扫描。只将已到期的当前版本事项写入统一通知 Outbox。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgendaConfig {
+    pub enabled: bool,
+    pub scan_interval_ms: u64,
+    pub batch_size: u32,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for AgendaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_interval_ms: 30_000,
+            batch_size: 200,
+            retry_initial_ms: 1_000,
+            retry_max_ms: 60_000,
+        }
+    }
+}
+
+impl AgendaConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_ms < 1_000 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "agenda.scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "agenda.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "agenda retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// 结构化记忆维护与承诺提醒调度。只写持久化 Outbox，不直接发送消息。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -370,6 +416,216 @@ impl FollowUpConfig {
         if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
             return Err(ConfigError::Invalid(
                 "follow_up retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// B4 账号会话目录同步配置。
+///
+/// 目录同步具备 single-flight、TTL、批次上限、整体 deadline、指数退避、shutdown。
+/// 不在每次 WebSocket 重连时无条件下载完整目录（TTL 内跳过）。
+/// 1 MiB 上限拒绝时保持 uncertain，不提高上限、不转空数组。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DirectorySyncConfig {
+    pub enabled: bool,
+    /// 快照 TTL（秒）。TTL 内跳过完整下载。
+    pub snapshot_ttl_secs: u64,
+    /// 单次同步的整体 deadline（秒）。
+    pub sync_deadline_secs: u64,
+    /// 单次同步的条目上限。
+    pub max_entries: u32,
+    /// 扫描间隔（毫秒）。目录同步是周期性后台任务。
+    pub scan_interval_ms: u64,
+    /// 错误退避初始延迟（毫秒）。
+    pub retry_initial_ms: u64,
+    /// 错误退避最大延迟（毫秒）。
+    pub retry_max_ms: u64,
+}
+
+impl Default for DirectorySyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            snapshot_ttl_secs: 3600,
+            sync_deadline_secs: 30,
+            max_entries: 5000,
+            scan_interval_ms: 300_000,
+            retry_initial_ms: 1_000,
+            retry_max_ms: 60_000,
+        }
+    }
+}
+
+impl DirectorySyncConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.snapshot_ttl_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "directory_sync.snapshot_ttl_secs must be positive".into(),
+            ));
+        }
+        if self.sync_deadline_secs == 0 || self.sync_deadline_secs > 120 {
+            return Err(ConfigError::Invalid(
+                "directory_sync.sync_deadline_secs must be between 1 and 120".into(),
+            ));
+        }
+        if self.max_entries == 0 || self.max_entries > 100_000 {
+            return Err(ConfigError::Invalid(
+                "directory_sync.max_entries must be between 1 and 100000".into(),
+            ));
+        }
+        if self.scan_interval_ms < 60_000 || self.scan_interval_ms > 86_400_000 {
+            return Err(ConfigError::Invalid(
+                "directory_sync.scan_interval_ms must be between 60000 and 86400000".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "directory_sync retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 构造领域层有界预算。
+    pub fn budget(&self) -> personal_secretary::DirectorySyncBudget {
+        personal_secretary::DirectorySyncBudget {
+            snapshot_ttl_secs: self.snapshot_ttl_secs,
+            sync_deadline_secs: self.sync_deadline_secs,
+            max_entries: self.max_entries,
+            retry_initial_ms: self.retry_initial_ms,
+            retry_max_ms: self.retry_max_ms,
+        }
+    }
+}
+
+/// B3 本地撤回 WAL 配置。WAL 成功落盘后回调即可返回；后台异步转存 MySQL。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecallWalConfig {
+    pub path: PathBuf,
+    pub max_bytes: u64,
+    pub drain_interval_ms: u64,
+    pub key_env: String,
+    pub quarantine_dir: PathBuf,
+}
+
+impl Default for RecallWalConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from("data/qqbot-recall.wal"),
+            max_bytes: 16 * 1024 * 1024,
+            drain_interval_ms: 1_000,
+            key_env: "QQBOT_RECALL_WAL_KEY".into(),
+            quarantine_dir: PathBuf::from("data/qqbot-recall-quarantine"),
+        }
+    }
+}
+
+impl RecallWalConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.path.as_os_str().is_empty() {
+            return Err(ConfigError::Invalid(
+                "recall_wal.path must not be empty".into(),
+            ));
+        }
+        if self.key_env.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "recall_wal.key_env must not be empty".into(),
+            ));
+        }
+        if self.quarantine_dir.as_os_str().is_empty() {
+            return Err(ConfigError::Invalid(
+                "recall_wal.quarantine_dir must not be empty".into(),
+            ));
+        }
+        if !(1024..=1_073_741_824).contains(&self.max_bytes) {
+            return Err(ConfigError::Invalid(
+                "recall_wal.max_bytes must be between 1024 and 1073741824".into(),
+            ));
+        }
+        if !(10..=60_000).contains(&self.drain_interval_ms) {
+            return Err(ConfigError::Invalid(
+                "recall_wal.drain_interval_ms must be between 10 and 60000".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// B6 富消息 Artifact 配置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ArtifactConfig {
+    pub enabled: bool,
+    /// 默认 TTL（秒）。None/0 表示不设默认 TTL（仅显式过期策略）。
+    pub default_ttl_secs: u64,
+    /// TTL 扫描间隔（毫秒）。
+    pub ttl_scan_interval_ms: u64,
+}
+
+impl Default for ArtifactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_ttl_secs: 86_400,
+            ttl_scan_interval_ms: 60_000,
+        }
+    }
+}
+
+impl ArtifactConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.ttl_scan_interval_ms < 1_000 || self.ttl_scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "artifact.ttl_scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if self.default_ttl_secs > 31_536_000 {
+            return Err(ConfigError::Invalid(
+                "artifact.default_ttl_secs must be <= 31536000".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// B7 健康快照配置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HealthConfig {
+    pub enabled: bool,
+    /// 聚合缓存 TTL（秒）。
+    pub cache_ttl_secs: u64,
+    /// 周期结构化日志间隔（毫秒）。
+    pub log_interval_ms: u64,
+    /// 最近一次 Worker 成功超过该阈值后降级（秒）。
+    pub worker_success_stale_secs: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cache_ttl_secs: 5,
+            log_interval_ms: 30_000,
+            worker_success_stale_secs: 300,
+        }
+    }
+}
+
+impl HealthConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.cache_ttl_secs == 0 || self.cache_ttl_secs > 300 {
+            return Err(ConfigError::Invalid(
+                "health.cache_ttl_secs must be between 1 and 300".into(),
+            ));
+        }
+        if !(1..=86_400).contains(&self.worker_success_stale_secs) {
+            return Err(ConfigError::Invalid(
+                "health.worker_success_stale_secs must be between 1 and 86400".into(),
             ));
         }
         Ok(())

@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use personal_secretary::{
     ContentSegment, ConversationKind, ConversationRef, FollowUpUseCase, InboundEventStoreT,
     InboundMessageEnvelope, IngestMessageOutcome, MessageSource, NotificationFailureKind,
-    OwnerBinding, SourceAccountRef, SourceMessageRef, VerifiedActor, VerifiedActorKind,
+    OwnerBinding, OwnerNotificationContent, SecretaryActionResumeInput, SecretaryApprovalDecision,
+    SourceAccountRef, SourceMessageRef, VerifiedActor, VerifiedActorKind,
 };
 use qq_open_platform::{
     GatewayEventHandlerT, GatewayRunError, GatewaySession, GatewaySessionStoreT, QqApiError,
@@ -17,6 +18,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::config::QqOpenPlatformConfig;
+use crate::owner_approval::{ApprovalCommand, parse_owner_approval_command};
 use crate::worker_lifecycle::WorkerHandle;
 
 pub(crate) struct OfficialPlatformHandle {
@@ -64,6 +66,7 @@ pub(crate) async fn spawn_official_platform(
         action_planner,
         managed_account: managed_account.clone(),
         command_account,
+        owner_timezone: config.owner_timezone.clone(),
     });
     let gateway = Arc::new(QqGatewayClient::new(
         Arc::clone(&api),
@@ -166,10 +169,17 @@ async fn run_outbox_loop(
                 let due = DateTime::<Utc>::from_timestamp(notification.due_at_unix_secs, 0)
                     .map(|value| value.to_rfc3339())
                     .unwrap_or_else(|| notification.due_at_unix_secs.to_string());
-                let text = format!(
-                    "⏰ 承诺提醒\n事项：{}\n截止：{}",
-                    notification.commitment.action, due
-                );
+                let text = match notification.content {
+                    OwnerNotificationContent::FollowUp { commitment } => {
+                        format!("⏰ 承诺提醒\n事项：{}\n截止：{}", commitment.action, due)
+                    }
+                    OwnerNotificationContent::Agenda { kind, title } => format!(
+                        "⏰ {}提醒\n事项：{}\n时间：{}",
+                        agenda_kind_label(kind),
+                        title,
+                        due
+                    ),
+                };
                 let target = QqTarget::C2c {
                     user_openid: config.owner_openid.clone(),
                 };
@@ -213,6 +223,14 @@ async fn run_outbox_loop(
     }
 }
 
+fn agenda_kind_label(kind: personal_secretary::AgendaItemKind) -> &'static str {
+    match kind {
+        personal_secretary::AgendaItemKind::Schedule => "日程",
+        personal_secretary::AgendaItemKind::Task => "任务",
+        personal_secretary::AgendaItemKind::Reminder => "提醒",
+    }
+}
+
 fn classify_delivery_failure(error: &QqApiError) -> NotificationFailureKind {
     match error {
         QqApiError::RateLimited => NotificationFailureKind::Retryable,
@@ -246,6 +264,18 @@ fn unix_now() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
+/// 配置已在启动阶段验证；极端时间戳越界时安全回退 UTC 偏移。
+fn timezone_offset_secs(timezone: &str, unix_secs: i64) -> i64 {
+    use chrono::{Offset, TimeZone};
+
+    timezone
+        .parse::<chrono_tz::Tz>()
+        .ok()
+        .and_then(|tz| tz.timestamp_opt(unix_secs, 0).single())
+        .map(|datetime| datetime.offset().fix().local_minus_utc() as i64)
+        .unwrap_or(0)
+}
+
 struct OfficialInboundHandler {
     inbound: Arc<dyn InboundEventStoreT>,
     raw_events: MySqlRawEventStore,
@@ -259,9 +289,64 @@ struct OfficialInboundHandler {
     /// OwnerCommand 来源账号（QQ 开放平台 Bot），仅供审计。
     #[allow(dead_code)]
     command_account: personal_secretary::SourceAccountRef,
+    /// 已在启动阶段校验的 Owner IANA 时区。
+    owner_timezone: String,
 }
 
 impl OfficialInboundHandler {
+    async fn try_resume_owner_approval(
+        &self,
+        envelope: &InboundMessageEnvelope,
+        approval_source_event_id: &personal_secretary::SourceEventId,
+    ) -> Result<bool, String> {
+        let Some(command) = parse_owner_approval_command(&envelope.normalized_text) else {
+            return Ok(false);
+        };
+        let planner = self
+            .action_planner
+            .as_ref()
+            .ok_or_else(|| "action planner is disabled".to_string())?;
+        let candidates = planner
+            .list_suspended_runs(&self.managed_account, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        let matches: Vec<_> = match command.proposal_short_id.as_deref() {
+            Some(short_id) => candidates
+                .into_iter()
+                .filter(|candidate| candidate.proposal_id.starts_with(short_id))
+                .collect(),
+            None => candidates,
+        };
+        let [candidate] = matches.as_slice() else {
+            // 0 项与多项均不选择“最新一条”，避免 Owner 的模糊确认误操作。
+            return Err("approval requires exactly one matching suspended proposal".into());
+        };
+        let decision = match command.command {
+            ApprovalCommand::Approve => SecretaryApprovalDecision::Approve,
+            ApprovalCommand::Reject => SecretaryApprovalDecision::Reject,
+        };
+        planner
+            .resume_run(
+                &candidate.run_id,
+                &candidate.checkpoint_id,
+                SecretaryActionResumeInput {
+                    proposal_id: candidate.proposal_id.clone(),
+                    decision,
+                    // 运行仍绑定原始命令；审批事件只追加为不可变审计证据。
+                    command_source_event_id: candidate.command_source_event_id.clone(),
+                    approval_source_event_id: Some(approval_source_event_id.clone()),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        tracing::info!(
+            run_id = candidate.run_id.as_str(),
+            proposal_id = %candidate.proposal_id,
+            "owner approval resumed suspended action"
+        );
+        Ok(true)
+    }
+
     /// OwnerCommand 入库后幂等创建 action_run。
     /// run_id 从 source_event_id 派生（非随机 UUID），保证重复投递不创建多个运行。
     async fn ensure_action_run_for_owner_command(
@@ -282,7 +367,11 @@ impl OfficialInboundHandler {
             command_text: envelope.normalized_text.clone(),
             conversation_id: envelope.conversation.id.clone(),
             occurred_at_unix_secs: envelope.occurred_at_unix_secs,
-            timezone_offset_secs: 0,
+            timezone_offset_secs: timezone_offset_secs(
+                &self.owner_timezone,
+                envelope.occurred_at_unix_secs,
+            ),
+            timezone: self.owner_timezone.clone(),
             recent_events: Vec::new(),
         };
         match planner.ensure_action_run(&run_id, &seed).await {
@@ -371,8 +460,19 @@ impl GatewayEventHandlerT for OfficialInboundHandler {
         // ensure_action_run 短暂失败导致命令永久没有 Run（双写丢失窗口）。
         // ensure_action_run 本身是幂等的（INSERT IGNORE + 业务唯一键）。
         if envelope.accepts_instructions() {
-            self.ensure_action_run_for_owner_command(&envelope, outcome.source_event_id())
-                .await;
+            match self
+                .try_resume_owner_approval(&envelope, outcome.source_event_id())
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.ensure_action_run_for_owner_command(&envelope, outcome.source_event_id())
+                        .await;
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "Owner approval command was not resumed");
+                }
+            }
         }
         tracing::info!(
             app_id = event.app_id,

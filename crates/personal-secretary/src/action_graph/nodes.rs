@@ -118,6 +118,7 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
             },
             recent_events: business.recent_events().to_vec(),
             timezone_offset_secs: self.context.timezone_offset_secs,
+            timezone: self.context.timezone.clone(),
             now_unix_secs: self.context.now_unix_secs,
             retrieved,
         };

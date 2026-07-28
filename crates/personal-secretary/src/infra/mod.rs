@@ -75,9 +75,29 @@ pub fn build_mysql_owner_binding_store(
     Arc::new(repo::MySqlOwnerBindingStore::new(db))
 }
 
+/// 构造账号会话目录快照仓储。快照绑定 account_id，幂等，跨重启恢复。
+pub fn build_mysql_directory_store(db: DatabaseConnection) -> Arc<dyn crate::DirectoryStoreT> {
+    Arc::new(repo::MySqlDirectoryStore::new(db))
+}
+
+/// 构造消息撤回仓储。不物理删除审计历史；关联键禁止单 message_id 跨账号。
+pub fn build_mysql_recall_store(db: DatabaseConnection) -> Arc<dyn crate::RecallStoreT> {
+    Arc::new(repo::MySqlRecallStore::new(db))
+}
+
+/// 构造富消息 Artifact 引用仓储。不自动下载；有界；TTL；撤回失效传播。
+pub fn build_mysql_artifact_store(db: DatabaseConnection) -> Arc<dyn crate::ArtifactStoreT> {
+    Arc::new(repo::MySqlArtifactStore::new(db))
+}
+
 /// 构造 Owner Retriever 仓储。查询严格限定在账号作用域内，跨账号查询被 SQL 拒绝。
 pub fn build_mysql_retriever_store(db: DatabaseConnection) -> Arc<dyn crate::RetrieverStoreT> {
     Arc::new(repo::MySqlRetrieverStore::new(db))
+}
+
+/// 构造 Owner Agenda 仓储；mutation、审计与 Action Receipt 共用事务。
+pub fn build_mysql_agenda_store(db: DatabaseConnection) -> Arc<dyn crate::AgendaStoreT> {
+    Arc::new(repo::MySqlAgendaStore::new(db))
 }
 
 /// 构造 Action Planner 运行仓储。CAS 领取 + lease fencing + 幂等 Effect。

@@ -52,7 +52,8 @@ impl EventQuery {
 }
 
 /// 内容信任级别，决定正文是否可以进入检索结果或远程 LLM。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContentTrustLevel {
     /// 普通内容，可进入长期记忆、检索和模型。
     Normal,

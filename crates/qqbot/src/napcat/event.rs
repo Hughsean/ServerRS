@@ -143,6 +143,27 @@ pub struct PokeEvent {
     pub raw_event: Value,
 }
 
+/// 群消息撤回通知。`operator_id` 是执行撤回的人（群主/管理员或发送者本人），
+/// `user_id` 是被撤回消息的发送者，`message_id` 是被撤回消息的平台 ID。
+#[derive(Debug, Clone)]
+pub struct GroupRecallEvent {
+    pub group_id: i64,
+    pub user_id: i64,
+    pub operator_id: Option<i64>,
+    pub message_id: String,
+    pub time: i64,
+    pub raw_event: Value,
+}
+
+/// 好友消息撤回通知。无 `group_id`；`user_id` 是撤回消息的好友。
+#[derive(Debug, Clone)]
+pub struct FriendRecallEvent {
+    pub user_id: i64,
+    pub message_id: String,
+    pub time: i64,
+    pub raw_event: Value,
+}
+
 /// NapCat 适配器向未来业务层暴露的协议事件集合。
 #[derive(Debug, Clone)]
 pub enum NapCatEvent {
@@ -151,6 +172,8 @@ pub enum NapCatEvent {
     GroupMemberIncrease(GroupMemberIncreaseEvent),
     GroupMemberDecrease(GroupMemberDecreaseEvent),
     Poke(PokeEvent),
+    GroupRecall(GroupRecallEvent),
+    FriendRecall(FriendRecallEvent),
 }
 
 /// 未来 QQBot 业务接入 NapCat 的唯一回调边界。

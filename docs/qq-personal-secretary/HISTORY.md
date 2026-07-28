@@ -5,14 +5,10 @@
 
 ## 当前阶段
 
-- 主干分支：`Main`（`bfa9005`），Owner Retriever/Action Planner 已全部提交；QQBot 运行数据库使用独立容器、独立数据库和
+- 主干分支：`Main`（`d8777a1`）；Release Hardening 检查点为 `d66f4eb`。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 进行中分支：`glm/qqbot-napcat-hardening-v1`（基于 `Main`，未提交、未推送，等待 Codex 第三轮评审），
-  承载 NapCat Adapter Hardening v1 + 分层合理化：阶段 A 行为保持拆分（config/runtime+bootstrap/
-  agent_runtime+action_graph/mysql_action_store）+ 阶段 B **PARTIAL**（B1 Heartbeat/Lifecycle、
-  B2 结构化消息段优先+CQ 回退、B5 能力版本探测，已修复第三轮评审 P0/P1 并新增 mock 集成测试，
-  仍待实机与 MySQL 验收）；
-  详见 `napcat-adapter-architecture.md`。
+- 进行中分支：`gpt/qqbot-owner-agenda-v1`（基于 `d66f4eb`，未提交、未推送），承载 Owner
+  Agenda/Reminder v1；Release Hardening 已在前一分支建立检查点。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -20,13 +16,15 @@
   并发优雅关闭（RuntimeWorkers + 25s 全局 deadline）、可编程运行时入口（run_with_cancellation）、
   群白名单过滤、Owner Retriever、受约束 Action Planner、真实 Effect Receipt、响应产物，
   以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
-- 当前边界：NapCat 保持只读；本地 QQBot MySQL 8.4 运行库已建成并通过 TLS、迁移幂等和应用
-  连接验收。QQ 开放平台本地凭据可以完成鉴权和 Gateway 地址读取，但官方通道仍关闭，Owner
-  OpenID 尚未通过真实 C2C 入站事件确认。NapCat HTTP `13990`、WebSocket `13991` 和 Ollama
-  `11434` 曾完成实机验收，但在 2026-07-26 00:50 当前复验中均未监听，不能视为当前在线；
-  MySQL 容器保持健康。已在聊天中暴露的 QQ 开放平台 Secret 仍应轮换后再上线。
-- 下一开发项：恢复 NapCat/Ollama 后重跑真实入站 E2E；随后接通 Owner 审批入口、响应投递和
-  日程/提醒执行器。QQ 开放平台通道保持关闭，启用前必须再次通知并确认本地凭据。
+  **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
+  L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
+- 当前边界：NapCat 保持只读；B4/B3/B6/B7 生产链的独立验收矩阵 15/15 实际通过；Agenda
+  在 MySQL 8.4.10 从空 schema 完成真实迁移与业务闭环，Action Planner MySQL 5/5 通过。
+  合并门禁仍为 `REJECTED`，原因是 GitHub protected Environment、固定可信公钥/签发密钥托管
+  和 required check 尚未配置，当前运行没有受保护的仓库外 L4/L5 attestation。
+- 下一开发项：整理 Agenda 功能检查点提交；随后在明确通知用户并重新确认本地凭据与测试范围后，
+  验收真实 Owner 指令→审批/拒绝→到期通知链路。GitHub 管理侧仍需配置 protected Environment、
+  固定可信公钥与 `QQBot Acceptance Gate / acceptance` required check。
 
 ## 历史分块
 
@@ -36,6 +34,21 @@
 
 ## 最近事件
 
+- `2026-07-28 11:22（Asia/Shanghai）`：Owner Agenda/Reminder v1 代码与真实 MySQL 收口；Codex
+  修复 `UNIX_TIMESTAMP` DECIMAL 解码和新迁移重复执行冲突。Agenda MySQL 1/1、Action Planner
+  MySQL 5/5、常规三 crate 测试、严格 Clippy、workspace boundaries 19/19、既有验收矩阵
+  15/15 实际通过；所有临时 schema 已删除，未连接或发送 QQ 消息。
+
+- `2026-07-27 21:32（Asia/Shanghai）`：Release Hardening v1.1 代码侧收尾；提取并验证
+  .NET RSA-PSS attestation（合法签名/签名篡改/claim 篡改），Recall Spool 指标接入 B7；
+  fmt、严格 clippy、相关 crate 测试、workspace boundaries 与隔离 MySQL 14 个检查实际通过。
+  GitHub protected Environment、固定可信公钥/签发密钥托管和 required check 尚未配置，故无
+  合规 L4/L5 attestation，门禁按规则保持 `REJECTED`。
+
+- `2026-07-26 21:55（Asia/Shanghai）`：建立 QQBot 独立机器验收基础设施；新增 JSON
+  验收矩阵、L1-L6 证据等级、隔离 MySQL 执行器、精确测试发现与自动合并门禁；首批 5 个
+  黑盒测试真实复现撤回 ID 约束、SourceEvent 缺失、pending 未自动关联、Gap 未冻结及
+  Artifact 未随撤回失效，当前结果 5 FAIL + 6 MISSING，门禁 `REJECTED`。
 - `2026-07-26 16:20（Asia/Shanghai）`：P0/P1 修复（评审反馈 6.5/10 未批准）；修复三态 Heartbeat 状态机（Expired 立即返回）、结构化段成为语义事实来源（normalized_text/at_bot 从 segments 生成）、RecentContactData DTO 修正为真实字段 chatType/peerUin/peerName、能力探测接入运行时真实调用接口、HeartbeatConfig validate 真正限制异常值、结构化段总字节数上限、历史 Unknown 有界、Action Planner 装配失败保证回收；B1/B2/B5 降为 PARTIAL；fmt/clippy/test/workspace_boundaries 全绿。
 - `2026-07-26 14:35（Asia/Shanghai）`：NapCat Adapter Hardening v1 + QQBot 分层合理化（阶段检查点，分支 `glm/qqbot-napcat-hardening-v1`，未提交待 Codex 评审）；阶段 A 行为保持拆分（config/runtime+bootstrap/agent_runtime+action_graph/mysql_action_store），阶段 B 完成 B1 Heartbeat/Lifecycle、B2 结构化消息段优先+CQ 回退、B5 能力版本探测；fmt/clippy/test/workspace_boundaries 全绿，MySQL 集成与实机 NapCat 验收列为未验证。
 - `2026-07-26 00:50（Asia/Shanghai）`：Owner Retriever/Action Planner 第五轮修复与全板块完整性验收；修复稳定 run ID、Suspend/Resume 租约、响应事务、Effect 幂等、信任矩阵和迁移约束。

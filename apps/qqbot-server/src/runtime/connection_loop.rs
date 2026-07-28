@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use personal_secretary::{
-    ConnectionEndReason, ConnectionEpochId, PersonalSecretaryStoreT, SourceAccountRef,
+    ArtifactUseCase, ConnectionEndReason, ConnectionEpochId, PersonalSecretaryStoreT,
+    RecallUseCase, SourceAccountRef,
 };
 use qqbot::napcat::{NapCatConnectionObserver, NapCatError, NapCatEventHandler, NapCatListener};
 
@@ -28,6 +29,7 @@ use super::shutdown::ShutdownSource;
 ///
 /// 所有装配失败与关闭路径都回收已启动 Worker（`shutdown_all`）。NapCat 重连使用
 /// 有上限的指数退避并无限恢复，不会因有限次数退出；关闭信号在退避等待中也能抢占。
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_connection_loop(
     store: Arc<dyn PersonalSecretaryStoreT>,
     account: SourceAccountRef,
@@ -35,6 +37,11 @@ pub(super) async fn run_connection_loop(
     handles: &mut WorkerHandles,
     group_whitelist: Arc<HashSet<i64>>,
     backfill_wake: Option<Arc<BackfillWake>>,
+    recall_handler: Option<Arc<crate::recall::RecallHandler>>,
+    recall_use_case: Option<Arc<RecallUseCase>>,
+    artifact_use_case: Option<Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
     shutdown_source: &mut ShutdownSource,
 ) -> Result<(), RuntimeError> {
     let mut backoff = config.napcat.reconnect_initial_secs;
@@ -97,16 +104,22 @@ pub(super) async fn run_connection_loop(
             Arc::clone(&store),
             connection_epoch_id.clone(),
             config.ingestion.clone(),
+            recall_use_case.clone(),
+            artifact_use_case.clone(),
+            artifact_default_ttl_secs,
+            health_state.clone(),
         );
         let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {
             mapper: NapCatInboundMapper::new(config.napcat.self_qq_id),
             queue,
             group_whitelist: Arc::clone(&group_whitelist),
+            recall_handler: recall_handler.clone(),
         });
         let observer = Arc::new(ConnectionObserver::new(
             Arc::clone(&store),
             connection_epoch_id.clone(),
             backfill_wake.clone(),
+            health_state.clone(),
         ));
         let connection_observer: Arc<dyn NapCatConnectionObserver> = observer.clone();
         let listener = NapCatListener::new(
@@ -172,7 +185,12 @@ pub(super) async fn run_connection_loop(
             if let Some(wake) = &backfill_wake {
                 wake.wake();
             }
+            if let Some(health) = &health_state {
+                // 只记“存在 uncertain gap”，不把 WS 断开伪装成历史完整。
+                health.set_uncertain_gaps(1);
+            }
         }
+        observer.mark_disconnected();
         if shutting_down {
             tracing::info!("QQBot NapCat 适配器正在退出");
             abort_probe(&mut probe_handle).await;

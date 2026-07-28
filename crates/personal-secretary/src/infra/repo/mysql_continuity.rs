@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
     QueryFilter, Set, Statement, TransactionTrait,
@@ -147,31 +147,20 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
             return Ok(None);
         }
 
-        let proposed_gap_id = Uuid::new_v4().to_string();
-        secretary_ingestion_gaps::Entity::insert(secretary_ingestion_gaps::ActiveModel {
-            gap_id: Set(proposed_gap_id),
-            account_id: Set(account_id),
-            connection_epoch_id: Set(connection_epoch_id.as_str().to_owned()),
-            gap_started_at: Set(now),
-            gap_ended_at: Set(None),
-            status: Set(IngestionGapStatus::Uncertain.as_str().into()),
-            reason: Set(reason.as_str().into()),
-            created_at: Set(now),
-            updated_at: Set(now),
-        })
-        .on_conflict(
-            OnConflict::column(secretary_ingestion_gaps::Column::ConnectionEpochId)
-                .update_column(secretary_ingestion_gaps::Column::ConnectionEpochId)
-                .to_owned(),
+        let created = insert_gap_if_absent(
+            &transaction,
+            account_id,
+            connection_epoch_id,
+            reason.as_str(),
+            now,
         )
-        .exec(&transaction)
-        .await
-        .map_err(store_error)?;
+        .await?;
         let gap = gap_for_epoch(&transaction, connection_epoch_id).await?;
-        // 空窗前稳定边界必须是创建时的快照，而非领取时的实时游标。首写获胜（ON DUPLICATE
-        // KEY 不更新），保证捕获最早连续性中断点；多次结束同一周期不会覆盖已冻结的边界。
-        if let Some(gap_id) = gap.as_ref() {
+        // 只在 Gap 首次创建的事务冻结证据。即使当时没有游标或目录快照，重复调用也不能
+        // 把后续数据补入旧 Gap。
+        if created && let Some(gap_id) = gap.as_ref() {
             snapshot_gap_boundaries(&transaction, gap_id.as_str(), account_id, now).await?;
+            freeze_directory_snapshot_for_gap(&transaction, gap_id.as_str(), account_id).await?;
         }
         transaction.commit().await.map_err(store_error)?;
         tracing::debug!(
@@ -204,7 +193,7 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
             )
         })?;
 
-        insert_gap_if_absent(
+        let created = insert_gap_if_absent(
             &transaction,
             epoch.account_id,
             connection_epoch_id,
@@ -215,8 +204,10 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
         let gap = gap_for_epoch(&transaction, connection_epoch_id)
             .await?
             .ok_or(InboundEventStoreError::Unavailable)?;
-        // 队列溢出空窗：边界为溢出时刻最后成功落库的消息（首写获胜）。
-        snapshot_gap_boundaries(&transaction, gap.as_str(), epoch.account_id, now).await?;
+        if created {
+            snapshot_gap_boundaries(&transaction, gap.as_str(), epoch.account_id, now).await?;
+            freeze_directory_snapshot_for_gap(&transaction, gap.as_str(), epoch.account_id).await?;
+        }
         transaction.commit().await.map_err(store_error)?;
         tracing::warn!(
             connection_epoch_id = %connection_epoch_id.as_str(),
@@ -234,27 +225,29 @@ async fn insert_gap_if_absent(
     connection_epoch_id: &ConnectionEpochId,
     reason: &str,
     now: chrono::NaiveDateTime,
-) -> Result<(), InboundEventStoreError> {
-    secretary_ingestion_gaps::Entity::insert(secretary_ingestion_gaps::ActiveModel {
-        gap_id: Set(Uuid::new_v4().to_string()),
-        account_id: Set(account_id),
-        connection_epoch_id: Set(connection_epoch_id.as_str().to_owned()),
-        gap_started_at: Set(now),
-        gap_ended_at: Set(None),
-        status: Set(IngestionGapStatus::Uncertain.as_str().into()),
-        reason: Set(reason.into()),
-        created_at: Set(now),
-        updated_at: Set(now),
-    })
-    .on_conflict(
-        OnConflict::column(secretary_ingestion_gaps::Column::ConnectionEpochId)
-            .update_column(secretary_ingestion_gaps::Column::ConnectionEpochId)
-            .to_owned(),
-    )
-    .exec(db)
-    .await
-    .map_err(store_error)?;
-    Ok(())
+) -> Result<bool, InboundEventStoreError> {
+    let result = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_ingestion_gaps
+               (gap_id, account_id, connection_epoch_id, gap_started_at, gap_ended_at,
+                status, reason, created_at, updated_at)
+               VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE connection_epoch_id = connection_epoch_id"#,
+            [
+                Uuid::new_v4().to_string().into(),
+                account_id.into(),
+                connection_epoch_id.as_str().into(),
+                now.into(),
+                IngestionGapStatus::Uncertain.as_str().into(),
+                reason.into(),
+                now.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+    Ok(result.rows_affected() == 1)
 }
 
 async fn gap_for_epoch(
@@ -300,6 +293,32 @@ async fn snapshot_gap_boundaries(
          WHERE cur.account_id = ? AND cur.scope_kind = 'conversation' \
          ON DUPLICATE KEY UPDATE gap_id = gap_id",
         values,
+    ))
+    .await
+    .map_err(store_error)?;
+    Ok(())
+}
+
+/// 冻结账号最新目录快照到 Gap。`snapshot_id = NULL` 明确表示创建时没有目录快照。
+///
+/// 在 Gap 创建事务内执行，保证与 gap 行同事务可见。
+async fn freeze_directory_snapshot_for_gap(
+    db: &sea_orm::DatabaseTransaction,
+    gap_id: &str,
+    account_id: u64,
+) -> Result<(), InboundEventStoreError> {
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_directory_gap_freeze (gap_id, snapshot_id, account_id)
+           VALUES (?, (
+               SELECT s.snapshot_id
+               FROM secretary_directory_snapshots s
+               WHERE s.account_id = ?
+               ORDER BY s.created_at_unix_secs DESC, s.snapshot_id DESC
+               LIMIT 1
+           ), ?)
+           ON DUPLICATE KEY UPDATE gap_id = gap_id"#,
+        [gap_id.into(), account_id.into(), account_id.into()],
     ))
     .await
     .map_err(store_error)?;

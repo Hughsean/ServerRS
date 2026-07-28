@@ -25,7 +25,7 @@ use tracing::warn;
 ///
 /// 各 Worker handle 在 `shutdown()` 中构造 `WorkerHandle`，把停止信号发出后
 /// 交由 [`shutdown_with_timeout`] 统一回收。
-pub(crate) struct WorkerHandle {
+pub struct WorkerHandle {
     /// 停止信号已经发出后取出的 JoinHandle。
     join: Option<JoinHandle<()>>,
     /// 在进入并发等待前保存的 abort 句柄，用于超时后强制中止。
@@ -35,7 +35,7 @@ pub(crate) struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub(crate) fn new(name: &'static str, join: JoinHandle<()>) -> Self {
+    pub fn new(name: &'static str, join: JoinHandle<()>) -> Self {
         let abort = join.abort_handle();
         Self {
             join: Some(join),
@@ -47,7 +47,7 @@ impl WorkerHandle {
     /// 带超时地等待 Worker 退出。超时后调用 `abort()` 并限时回收。
     ///
     /// 返回 `true` 表示 Worker 在 deadline 内正常退出，`false` 表示被强制中止。
-    pub(crate) async fn join_with_timeout(mut self, deadline: Duration) -> bool {
+    pub async fn join_with_timeout(mut self, deadline: Duration) -> bool {
         // 取出 join（此时停止信号已由调用方发出）。
         let mut join = match self.join.take() {
             Some(join) => join,

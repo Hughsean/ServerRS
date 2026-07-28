@@ -10,10 +10,15 @@ use personal_secretary::{FollowUpUseCase, PlannerUseCase, build_mysql_inbound_ev
 use sea_orm::DatabaseConnection;
 
 use crate::action_planner_worker::ActionPlannerHandle;
+use crate::agenda_notification_worker::AgendaNotificationHandle;
+use crate::artifact_ttl_worker::ArtifactTtlHandle;
 use crate::backfill::BackfillHandle;
 use crate::config::AppConfig;
+use crate::directory_sync::DirectorySyncHandle;
 use crate::follow_up_worker::FollowUpHandle;
+use crate::health_runtime::{HealthLogHandle, HealthReader};
 use crate::qq_open_platform::{OfficialPlatformHandle, spawn_official_platform};
+use crate::recall::RecallWorkerHandle;
 use crate::runtime::RuntimeError;
 use crate::thread_links::ThreadLinksHandle;
 use crate::thread_projection::ThreadProjectionHandle;
@@ -34,8 +39,14 @@ pub(crate) struct WorkerHandles {
     pub(crate) thread_semantics: Option<ThreadSemanticsHandle>,
     pub(crate) thread_links: Option<ThreadLinksHandle>,
     pub(crate) follow_up: Option<FollowUpHandle>,
+    pub(crate) agenda_notification: Option<AgendaNotificationHandle>,
     pub(crate) official_platform: Option<OfficialPlatformHandle>,
     pub(crate) action_planner: Option<ActionPlannerHandle>,
+    pub(crate) directory_sync: Option<DirectorySyncHandle>,
+    pub(crate) artifact_ttl: Option<ArtifactTtlHandle>,
+    pub(crate) recall: Option<RecallWorkerHandle>,
+    pub(crate) health_reader: Option<HealthReader>,
+    pub(crate) health_log: Option<HealthLogHandle>,
 }
 
 impl WorkerHandles {
@@ -46,8 +57,14 @@ impl WorkerHandles {
             thread_semantics: None,
             thread_links: None,
             follow_up: None,
+            agenda_notification: None,
             official_platform: None,
             action_planner: None,
+            directory_sync: None,
+            artifact_ttl: None,
+            recall: None,
+            health_reader: None,
+            health_log: None,
         }
     }
 
@@ -69,10 +86,25 @@ impl WorkerHandles {
         if let Some(handle) = self.follow_up {
             workers.push(handle.signal_and_detach());
         }
+        if let Some(handle) = self.agenda_notification {
+            workers.push(handle.signal_and_detach());
+        }
         if let Some(handle) = self.official_platform {
             workers.push(handle.signal_and_detach());
         }
         if let Some(handle) = self.action_planner {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.directory_sync {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.artifact_ttl {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.recall {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.health_log {
             workers.push(handle.signal_and_detach());
         }
         workers.shutdown_all(WORKER_SHUTDOWN_DEADLINE).await;

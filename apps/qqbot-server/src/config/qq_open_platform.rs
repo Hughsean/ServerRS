@@ -17,6 +17,8 @@ pub struct QqOpenPlatformConfig {
     pub app_id: String,
     pub client_secret_file: Option<PathBuf>,
     pub owner_openid: String,
+    /// Owner 的 IANA 时区，用于将自然语言时间解析为 UTC 并保留展示语义。
+    pub owner_timezone: String,
     pub reconnect_initial_ms: u64,
     pub reconnect_max_ms: u64,
     pub notification_lease_secs: u64,
@@ -29,6 +31,7 @@ impl Default for QqOpenPlatformConfig {
             app_id: String::new(),
             client_secret_file: None,
             owner_openid: String::new(),
+            owner_timezone: "Asia/Shanghai".into(),
             reconnect_initial_ms: 1_000,
             reconnect_max_ms: 60_000,
             notification_lease_secs: 60,
@@ -49,6 +52,14 @@ impl QqOpenPlatformConfig {
         if self.owner_openid.trim().is_empty() || self.owner_openid.len() > 191 {
             return Err(ConfigError::Invalid(
                 "qq_open_platform.owner_openid must contain 1..=191 bytes when enabled".into(),
+            ));
+        }
+        if self.owner_timezone.trim().is_empty()
+            || self.owner_timezone.len() > 64
+            || self.owner_timezone.parse::<chrono_tz::Tz>().is_err()
+        {
+            return Err(ConfigError::Invalid(
+                "qq_open_platform.owner_timezone must be a valid IANA timezone when enabled".into(),
             ));
         }
         if self.reconnect_initial_ms == 0 || self.reconnect_max_ms < self.reconnect_initial_ms {

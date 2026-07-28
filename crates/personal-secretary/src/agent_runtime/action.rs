@@ -32,6 +32,8 @@ pub enum SecretaryToolKind {
     CancelItem,
     CreateTask,
     CreateReminder,
+    CompleteItem,
+    SnoozeItem,
     SendOwnerMessage,
     AskOwnerClarification,
 }
@@ -71,7 +73,9 @@ impl SecretaryToolKind {
             | Self::RescheduleItem
             | Self::CancelItem
             | Self::CreateTask
-            | Self::CreateReminder => SecretaryToolPolicy {
+            | Self::CreateReminder
+            | Self::CompleteItem
+            | Self::SnoozeItem => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -124,22 +128,38 @@ pub enum SecretaryAction {
     CreateSchedule {
         title: String,
         starts_at_unix: i64,
+        timezone: String,
     },
     RescheduleItem {
         item_id: String,
+        expected_version: u64,
         starts_at_unix: i64,
+        timezone: String,
     },
     CancelItem {
         item_id: String,
+        expected_version: u64,
         reason: String,
     },
     CreateTask {
         title: String,
         due_at_unix: Option<i64>,
+        timezone: String,
     },
     CreateReminder {
         text: String,
         due_at_unix: i64,
+        timezone: String,
+    },
+    CompleteItem {
+        item_id: String,
+        expected_version: u64,
+    },
+    SnoozeItem {
+        item_id: String,
+        expected_version: u64,
+        due_at_unix: i64,
+        timezone: String,
     },
     SendOwnerMessage {
         text: String,
@@ -163,6 +183,8 @@ impl SecretaryAction {
             Self::CancelItem { .. } => SecretaryToolKind::CancelItem,
             Self::CreateTask { .. } => SecretaryToolKind::CreateTask,
             Self::CreateReminder { .. } => SecretaryToolKind::CreateReminder,
+            Self::CompleteItem { .. } => SecretaryToolKind::CompleteItem,
+            Self::SnoozeItem { .. } => SecretaryToolKind::SnoozeItem,
             Self::SendOwnerMessage { .. } => SecretaryToolKind::SendOwnerMessage,
             Self::AskOwnerClarification { .. } => SecretaryToolKind::AskOwnerClarification,
         }

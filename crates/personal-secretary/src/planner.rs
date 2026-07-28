@@ -51,6 +51,13 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | ListUpcomingItems { .. }
             | DraftReminder { .. }
             | AskOwnerClarification { .. }
+            | CreateSchedule { .. }
+            | CreateTask { .. }
+            | CreateReminder { .. }
+            | RescheduleItem { .. }
+            | CancelItem { .. }
+            | CompleteItem { .. }
+            | SnoozeItem { .. }
     )
 }
 
@@ -99,6 +106,7 @@ pub struct PlannerInput {
     pub recent_events: Vec<RecentEventRef>,
     /// UTC 偏移秒数（如 Asia/Shanghai 为 28800）。由已验证配置生成，不由调用方随意传入。
     pub timezone_offset_secs: i64,
+    pub timezone: String,
     pub now_unix_secs: i64,
     pub retrieved: Vec<PlannerRetrievedExcerpt>,
 }
@@ -164,6 +172,14 @@ pub fn validate_planner_input(input: &PlannerInput) -> Result<(), PlannerError> 
         return Err(PlannerError::InvalidInput(format!(
             "timezone_offset_secs must be in {MIN_OFFSET_SECS}..={MAX_OFFSET_SECS}"
         )));
+    }
+    if input.timezone.trim().is_empty()
+        || input.timezone.len() > MAX_TIMEZONE_NAME_BYTES
+        || input.timezone.parse::<chrono_tz::Tz>().is_err()
+    {
+        return Err(PlannerError::InvalidInput(
+            "timezone must be a valid IANA timezone".into(),
+        ));
     }
     if input.retrieved.len() > MAX_RETRIEVED_EXCERPTS {
         return Err(PlannerError::InvalidInput(format!(
@@ -304,18 +320,25 @@ pub fn parse_common_timezone_offset_secs(name: &str) -> Option<i64> {
     }
 }
 
-/// 组合函数：解析 ISO 日期时间 + 时区名称 -> Unix 秒。
+/// 解析 IANA timezone 中的本地日期时间；DST 歧义或不存在时间一律要求澄清。
 pub fn parse_datetime_with_timezone(
     input: &str,
     timezone_name: &str,
 ) -> Result<i64, TimeParseError> {
-    if timezone_name.len() > MAX_TIMEZONE_NAME_BYTES {
-        return Err(TimeParseError::UnknownTimezone(timezone_name.into()));
-    }
+    use chrono::TimeZone;
     let naive = parse_iso_datetime(input)?;
-    let offset = parse_common_timezone_offset_secs(timezone_name)
-        .ok_or_else(|| TimeParseError::UnknownTimezone(timezone_name.into()))?;
-    Ok(naive_to_unix(naive, offset))
+    let timezone = timezone_name
+        .parse::<chrono_tz::Tz>()
+        .map_err(|_| TimeParseError::UnknownTimezone(timezone_name.into()))?;
+    match timezone.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(value) => Ok(value.timestamp()),
+        chrono::LocalResult::Ambiguous(_, _) => Err(TimeParseError::InvalidFormat(
+            "ambiguous local datetime".into(),
+        )),
+        chrono::LocalResult::None => Err(TimeParseError::InvalidFormat(
+            "nonexistent local datetime".into(),
+        )),
+    }
 }
 
 fn bounded_text(field: &str, value: &str, min: usize, max: usize) -> Result<(), PlannerError> {
@@ -371,6 +394,7 @@ mod tests {
             command: command_event(text),
             recent_events: Vec::new(),
             timezone_offset_secs: 28_800,
+            timezone: "Asia/Shanghai".into(),
             now_unix_secs: 1_000,
             retrieved: Vec::new(),
         }
@@ -408,11 +432,12 @@ mod tests {
     }
 
     #[test]
-    fn create_reminder_is_not_allowed_in_batch() {
-        assert!(!is_allowed_action_in_batch(
+    fn create_reminder_is_allowed_and_suspends_for_owner_approval() {
+        assert!(is_allowed_action_in_batch(
             &SecretaryAction::CreateReminder {
                 text: "提醒".into(),
                 due_at_unix: 1_800_000_000,
+                timezone: "Asia/Shanghai".into(),
             }
         ));
     }
@@ -552,19 +577,19 @@ mod tests {
 
     #[test]
     fn validate_output_rejects_disallowed_proposal() {
-        // CreateReminder 不在本批白名单内，即使 Proposal 本身校验通过也应被拒绝。
+        // CreateReminder 为 L2；在 server-generated idempotency key 到位后允许进入 Suspend。
         let proposal = SecretaryActionProposal::new(
             SecretaryAction::CreateReminder {
                 text: "提交报价单".into(),
                 due_at_unix: 1_800_000_000,
+                timezone: "Asia/Shanghai".into(),
             },
             "用户要求创建提醒",
             vec![SourceEventId::new("event-1").unwrap()],
             Some("reminder:quote:deadline".into()),
         )
         .unwrap();
-        let result = validate_planner_output(&PlannerOutput::Proposal(proposal));
-        assert!(matches!(result, Err(PlannerError::DisallowedAction(_))));
+        assert!(validate_planner_output(&PlannerOutput::Proposal(proposal)).is_ok());
     }
 
     // ===== 时间解析 =====

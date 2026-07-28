@@ -25,7 +25,7 @@ pub use effect_executor::SecretaryActionEffectExecutor;
 pub use nodes::{ActionGraphError, BuildResponseNode, L0ExecuteNode, NoActionNode, PlanNode};
 pub use port::{
     ActionLeaseToken, ActionRunContext, ActionRunId, ActionRunSeed, ActionStoreError, ActionStoreT,
-    ClaimedActionRun, SuspendedRunClaim,
+    ClaimedActionRun, SuspendedActionRun, SuspendedRunClaim,
 };
 
 /// 装配好的 Action Graph Runtime。

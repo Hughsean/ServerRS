@@ -26,5 +26,7 @@ pub enum SecretaryApprovalDecision {
 pub struct SecretaryActionResumeInput {
     pub proposal_id: String,
     pub decision: SecretaryApprovalDecision,
+    /// 原始 OwnerCommand 保持运行幂等身份；审批消息仅作为恢复操作的审计证据。
     pub command_source_event_id: SourceEventId,
+    pub approval_source_event_id: Option<SourceEventId>,
 }

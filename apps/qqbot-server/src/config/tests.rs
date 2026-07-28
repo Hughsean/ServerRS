@@ -532,6 +532,68 @@ send_via_napcat = true
 }
 
 #[test]
+fn agenda_bounds_unknown_fields_and_env_overrides_are_checked() {
+    let invalid = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[agenda]
+scan_interval_ms = 999
+"#,
+    )
+    .unwrap_err();
+    assert!(invalid.to_string().contains("agenda.scan_interval_ms"));
+
+    let unknown = toml::from_str::<AppConfig>(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[agenda]
+send_via_napcat = true
+"#,
+    )
+    .unwrap_err();
+    assert!(unknown.to_string().contains("unknown field"));
+
+    let mut config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+    )
+    .unwrap();
+    // SAFETY: 单线程单元测试，仅在测试期间临时设置后立即移除。
+    unsafe {
+        std::env::set_var("QQBOT_AGENDA_ENABLED", "false");
+        std::env::set_var("QQBOT_AGENDA_BATCH_SIZE", "50");
+    }
+    config.apply_env_overrides().unwrap();
+    unsafe {
+        std::env::remove_var("QQBOT_AGENDA_ENABLED");
+        std::env::remove_var("QQBOT_AGENDA_BATCH_SIZE");
+    }
+    assert!(!config.agenda.enabled);
+    assert_eq!(config.agenda.batch_size, 50);
+}
+
+#[test]
 fn backfill_env_overrides_only_use_qqbot_prefix() {
     // 通过环境变量覆盖 page_size 并校验；保证只使用 QQBOT_BACKFILL_* 前缀。
     // SAFETY: 单线程单元测试，仅在测试期间临时设置后立即移除。

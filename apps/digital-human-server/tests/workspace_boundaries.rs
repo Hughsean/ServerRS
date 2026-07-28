@@ -579,7 +579,6 @@ fn qqbot_is_a_napcat_adapter_without_business_or_database_modules() {
         "error.rs",
         "event.rs",
         "heartbeat.rs",
-        "listener.rs",
         "message_parser.rs",
         "mod.rs",
         "segments.rs",
@@ -587,6 +586,25 @@ fn qqbot_is_a_napcat_adapter_without_business_or_database_modules() {
         assert!(
             crate_root.join("napcat").join(required).is_file(),
             "missing NapCat adapter file {required}"
+        );
+    }
+    // listener 已拆分为 listener/ 目录（transport/dispatch/message_event/notice_event/bounds/mod）。
+    let listener_dir = crate_root.join("napcat").join("listener");
+    assert!(
+        listener_dir.is_dir(),
+        "missing NapCat listener/ directory (split from listener.rs)"
+    );
+    for required in [
+        "bounds.rs",
+        "dispatch.rs",
+        "message_event.rs",
+        "mod.rs",
+        "notice_event.rs",
+        "transport.rs",
+    ] {
+        assert!(
+            listener_dir.join(required).is_file(),
+            "missing NapCat listener/ module file {required}"
         );
     }
 

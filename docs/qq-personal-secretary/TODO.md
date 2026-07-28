@@ -3,37 +3,28 @@
 > 最后更新：2026-07-26
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
-> 当前开发阶段：阶段 6「Owner 控制与官方 QQ 通道」正在推进；官方协议适配、Gateway 入站、
-> Owner 绑定、可靠通知 Outbox、类型化 Agent 动作安全底座、首条有界 LLM 线程语义切片、
-> 并发优雅关闭（`RuntimeWorkers`）和可编程运行时入口（`run_with_cancellation`）已完成；
-> 真实消息 E2E 验收已通过（SourceEvent->EventThread->LLM proposed 候选->精确来源证据链完整，
-> 重启幂等性验证通过）；Owner Retriever/Action Planner 的数据库闭环已通过隔离 MySQL 验收；
-> 真实凭据轮换后的联机验收、Owner 审批/响应投递和日程执行仍待实现。
->
-> NapCat Adapter Hardening v1 + 分层合理化（分支 `glm/qqbot-napcat-hardening-v1`，未提交待第三轮评审）：
-> 阶段 A 行为保持拆分已完成（config/runtime+bootstrap/agent_runtime+action_graph/mysql_action_store）；
-> 阶段 B **PARTIAL**（第三轮评审修复后）：
-> - B1 Heartbeat/Lifecycle - PARTIAL（三态状态机 Disabled/Waiting/Expired 已修复；mock WebSocket 集成测试
->   已证明 run_forward() 在无 Heartbeat 时返回 HeartbeatTimeout、禁用时正常关闭；HeartbeatConfig validate
->   限制异常值、默认 grace 300s；**HeartbeatConfig 已进入 TOML `[napcat.heartbeat]` 与
->   `NAPCAT_HEARTBEAT_*` 环境变量**（评审第三轮 P1-3），可按 NapCat 实现调整或禁用 watchdog；
->   仍待实机验收）。
-> - B2 结构化消息段优先+CQ 回退 - PARTIAL（normalized_text/at_bot/reply/mention 从 canonical segments 生成；
->   结构化段总字节数预算在加入前检查（P1-1）；CQ 回退前 raw_message 有界截断（P1-3）；
->   WS 文本帧上限 MAX_WS_TEXT_BYTES 在反序列化前检查、raw_event 超限时替换为有界摘要（P1-4）；
->   历史 Unknown UTF-8 安全截断（P1-2）；待实机验证）。
-> - B5 能力版本探测 - PARTIAL（探测并发执行+整体 5s 超时+不阻塞 WS（P0-2）；**探测只调用轻量接口
->   version_info+status，不拉取完整列表**（评审第三轮 P1-1）；**HTTP 响应流式限流 1MiB**（评审第四轮 P1：
->   先检查 Content-Length，再用 bytes_stream() 分块累计，超限立即停止）；探测任务纳入 single-flight 去重与
->   关闭回收（P1-2）；**Deferred 状态明确区分"未验证"与"已确认不可用"**（评审第四轮 P2）；
->   RecentContactData DTO 修正为字符串 peerUin/msgTime 无精度损失（P0-1）；HTTP mock 测试已验证真实 DTO
->   形状、超时降级与流式限流；heartbeat/structured_message 能力仍标记为需运行时验证；待实机验收）。
-> 待续：B4 账号会话目录与历史完整性证据、B3 消息撤回闭环、B6 富消息 Artifact 引用、B7 健康状态与日志、
-> MySQL 集成测试与实机 NapCat 验收真实运行、剩余仓储拆分（listener.rs 仍 ~990 行）。
+> 当前开发阶段：NapCat 数据完整性、撤回与 Artifact 生命周期闭环 v1
+> （分支 `glm/qqbot-continuity-recall-v1`，未提交待 Codex 评审）：
+> B4 账号会话目录与历史完整性证据、B3 消息撤回闭环、B6 富消息 Artifact 引用、
+> B7 健康状态与结构化日志领域层已完成并通过单元测试 + clippy + fmt + build + workspace_boundaries；
+> NapCat 只读保持，不发送消息，不启用 QQ 开放平台。
 
 ## 0. 当前完成与阻塞
 
-- [x] `DONE ID-001` 建立 `personal-secretary` 协议无关业务 crate。
+- [x] `DONE QA-001` 建立独立于业务实现的机器验收基础设施：JSON 验收矩阵、L1-L6
+  证据等级、P0/P1 合并门禁、精确测试发现、隔离 MySQL schema 生命周期、逐项日志以及
+  JSON/Markdown 自动报告。首批 5 个黑盒验收测试已落地，报告只能由脚本生成。
+- [ ] `BLOCKED QA-002` 当前机器门禁为 `REJECTED`：11 个要求中 5 个 FAIL、6 个 MISSING；
+  必须修复生产链路并补齐 `qqbot_acceptance_runtime` 测试后，才允许把 B3/B4/B6/B7 标为完成。
+- [x] `DONE QA-003` Release Hardening v1.1 代码侧收尾：attestation 的 .NET RSA-PSS
+  合法签名、签名篡改、claim 篡改测试通过；Recall Spool backlog、最老记录年龄、容量占比、
+  quarantine 数量和 allowlist 最近错误已接入 B7 第五子系统。隔离 MySQL 矩阵的全部 14 个
+  具体检查均实际 PASS，但 8 个要求的最低 L4/L5 证据因缺少独立 attestation 而降为 L3，
+  合并门禁保持 `REJECTED`。
+- [ ] `BLOCKED QA-004` GitHub 管理侧尚未配置：protected Environment、受保护 runner 使用的
+  固定可信公钥/签发密钥托管，以及 branch protection 的
+  `QQBot Acceptance Gate / acceptance` required check。本轮仅记录，不伪造完成。
+
 - [x] `DONE ID-002` 建模来源账号、会话、可信发送者、消息角色和账号作用域幂等键。
 - [x] `DONE ID-003` 保证 NapCat Owner 消息只能是 Observation。
 - [x] `DONE ING-001` NapCat 接收群聊和普通私聊。
@@ -194,7 +185,9 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [ ] `PARTIAL FUP-007` 平台无关 Outbox 已接入按账号隔离领取、租约 fencing、指数退避、送达
   回执和 `unknown_commit`；官方 Bot 只向配置的 Owner OpenID 发送。隔离 MySQL 已覆盖跨账号、
   错误租约、重试、送达和提交结果不明；真实 QQ 投递仍待替换凭据后的联机验收。
-- [ ] `TODO FUP-008` 支持 Owner 确认、稍后提醒、完成、忽略、改期和关闭线程。
+- [ ] `PARTIAL FUP-008` Agenda 写操作已支持 Owner 确认/拒绝、稍后提醒、完成、取消和改期；
+  全部经 L2 Suspend/Resume、账号验权、单次消费、版本 fencing 和不可变审计。忽略通用跟进及
+  关闭线程仍待实现。
 - [ ] `TODO FUP-009` 记录“为何提醒”和“为何未提醒”，支持重要/不重要反馈。
 - [x] `DONE FUP-010` NapCat 业务路径不含主动发送；官方通道也只消费 Owner 通知 Outbox，禁止
   自动催促客户、负责人或群成员。
@@ -212,9 +205,10 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   原始信封持久化后推进 sequence、Owner OpenID 绑定和官方 C2C 通知；真实联机和交互回执待验收。
 - [ ] `PARTIAL CMD-003` 线程关联审核已强制验证 `OwnerCommand`、本地 Owner 账号绑定及同一
   被管理账号；普通观察、未绑定和跨账号命令默认拒绝。其余命令类型仍须逐项接入同一边界。
-- [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿和
-  Owner 澄清的受约束 LLM Planner、Retriever 与 L0 Effect；结果使用来源化有界摘要并持久化
-  Receipt/Response。日程、任务、真实提醒创建和 Owner 消息仍未进入可执行白名单。
+- [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿、
+  Owner 澄清及类型化 Agenda Action；支持创建日程/任务/提醒、查询、改期、稍后提醒、完成和
+  取消。L2 写操作经既有 Suspend/Resume 审批后写入 MySQL，并以版本化 Outbox 仅通知 Owner；
+  真实 QQ 开放平台联机投递仍待凭据确认后的人工验收。
 - [ ] `TODO CMD-005` 定义类型化策略 Action：群提醒、重要联系人、静默时间和自动回复禁用。
 - [ ] `TODO CMD-006` 定义反馈 Action：重要、不重要、类似消息规则和联系人策略。
 - [ ] `TODO CMD-007` 定义记忆 Action：查看来源、修正、删除、TTL 和会话长期记忆开关。
@@ -233,11 +227,12 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 
 ## 7. 控制面、可观测性和生产强化
 
-- [ ] `TODO OPS-001` 展示 NapCat/官方 Bot/MySQL/Worker 健康状态。
+- [ ] `PARTIAL OPS-001` 已通过内部 reader 与周期结构化日志展示 WebSocket、历史完整性、MySQL、
+  Worker 和 Recall Spool 健康状态；尚无经安全边界评审的 Owner/控制面展示入口。
 - [ ] `PARTIAL OPS-002` 已为连接周期、入队、幂等结果、重试、溢出 Gap、Worker 排空、官方
   Gateway/Token/Outbox、线程 Effect/撤销、LLM 输入/响应预算与 Token Usage、结构记忆写入/
-  过期/来源回读/删除和跟进扫描增加 `trace/debug/info/warn` 结构化日志；控制面展示、队列积压
-  指标和回补进度仍待实现。
+  过期/来源回读/删除和跟进扫描增加结构化日志；Recall Spool 已提供 backlog、最老记录年龄、
+  容量占比、quarantine 数量与 allowlist 最近错误。控制面展示和回补进度仍待实现。
 - [ ] `TODO OPS-003` 展示线程、记忆、承诺、提醒、Outbox 和来源。
 - [ ] `TODO OPS-004` 提供修正、删除、策略和重新处理入口，所有操作审计。
 - [ ] `TODO OPS-005` 建立吞吐、延迟、LLM 调用率、误关联和提醒误报指标。

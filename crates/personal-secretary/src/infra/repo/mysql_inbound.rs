@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, Set, TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, Set, TransactionTrait,
 };
 use tracing::error;
 use uuid::Uuid;
@@ -121,6 +121,15 @@ impl InboundEventStoreT for MySqlInboundEventStore {
         let source_event_id = SourceEventId::new(stored.source_event_id.clone())?;
 
         if stored.source_event_id != proposed_event_id {
+            // 重复投递：仍尝试关联 pending tombstone（撤回先到、消息后到的补偿路径）。
+            let source_event_id = SourceEventId::new(stored.source_event_id.clone())?;
+            apply_pending_tombstone_in_txn(
+                &transaction,
+                account_id,
+                message,
+                source_event_id.as_str(),
+            )
+            .await?;
             transaction.commit().await.map_err(store_error)?;
             tracing::trace!(
                 source_event_id = %source_event_id.as_str(),
@@ -130,7 +139,13 @@ impl InboundEventStoreT for MySqlInboundEventStore {
             return Ok(IngestMessageOutcome::Duplicate { source_event_id });
         }
 
-        let segments = serde_json::to_value(&message.segments)
+        let mut persisted_segments = message.segments.clone();
+        for segment in &mut persisted_segments {
+            if let crate::ContentSegment::Media { source_url, .. } = segment {
+                *source_url = None;
+            }
+        }
+        let segments = serde_json::to_value(&persisted_segments)
             .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
         let mentioned_actor_ids =
             serde_json::to_value(message.mentioned_actor_ids().collect::<Vec<_>>())
@@ -146,6 +161,14 @@ impl InboundEventStoreT for MySqlInboundEventStore {
         };
         secretary_message_contents::Entity::insert(content)
             .exec(&transaction)
+            .await
+            .map_err(store_error)?;
+        transaction
+            .execute_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::MySql,
+                "INSERT IGNORE INTO secretary_artifact_derivations (source_event_id) VALUES (?)",
+                [source_event_id.as_str().into()],
+            ))
             .await
             .map_err(store_error)?;
 
@@ -165,6 +188,11 @@ impl InboundEventStoreT for MySqlInboundEventStore {
         // 父消息后到回填：本消息作为父消息，把同账号内此前因父消息尚未入库而未解析的
         // 子消息 reply_to_event_id 回填为当前事件。不跨账号、幂等。
         backfill_child_reply_edges(&transaction, account_id, &source_event_id, message).await?;
+
+        // B3：撤回先到时的 pending tombstone，在消息 Accepted 时同事务自动关联。
+        // Duplicate 路径在下方单独处理，因为 duplicate 会提前 commit。
+        apply_pending_tombstone_in_txn(&transaction, account_id, message, source_event_id.as_str())
+            .await?;
 
         transaction.commit().await.map_err(store_error)?;
         tracing::debug!(
@@ -439,4 +467,59 @@ async fn backfill_child_reply_edges(
 pub(super) fn store_error(error: sea_orm::DbErr) -> InboundEventStoreError {
     error!(%error, "personal secretary inbound store operation failed");
     InboundEventStoreError::Database(error.to_string())
+}
+
+/// B3：在消息入库事务内把匹配的 pending tombstone 转为 applied，并传播 Artifact 失效。
+async fn apply_pending_tombstone_in_txn(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    message: &InboundMessageEnvelope,
+    source_event_id: &str,
+) -> Result<(), InboundEventStoreError> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+    let correlation_key = format!(
+        "{}:{}:{}:{}:{}",
+        message.source.channel.as_str(),
+        message.source.account_id,
+        message.conversation.kind.as_str(),
+        message.conversation.id,
+        message.source.message_id
+    );
+
+    let update = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"UPDATE secretary_message_tombstones
+               SET source_event_id = ?, status = 'applied',
+                   invalidation_reason = 'original message arrived after recall',
+                   invalidated_at_unix_secs = UNIX_TIMESTAMP()
+               WHERE account_id = ? AND correlation_key = ? AND status = 'pending'"#,
+            [
+                source_event_id.into(),
+                account_id.into(),
+                correlation_key.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+
+    if update.rows_affected() > 0 {
+        // 同步传播 Artifact 失效；失败必须回滚整个消息事务，禁止 tombstone=applied 但 artifact 仍 available。
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"UPDATE secretary_artifacts
+               SET availability = 'recalled'
+               WHERE source_event_id = ? AND availability = 'available'"#,
+            [source_event_id.into()],
+        ))
+        .await
+        .map_err(store_error)?;
+        tracing::debug!(
+            source_event_id,
+            platform_message_id = %message.source.message_id,
+            "消息入库事务内已应用 pending 撤回 tombstone 并传播 Artifact 失效"
+        );
+    }
+    Ok(())
 }

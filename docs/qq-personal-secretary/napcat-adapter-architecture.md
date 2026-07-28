@@ -1,13 +1,12 @@
-# NapCat 适配器架构（Hardening v1）
+# NapCat 适配器架构（Continuity Recall v1）
 
-> 分支：`glm/qqbot-napcat-hardening-v1`。本文件说明 `crates/qqbot` 协议适配层与
-> `apps/qqbot-server` 运行时分层在 Hardening v1 阶段的结构。
-> **状态：阶段 A 完成；阶段 B（B1/B2/B5）PARTIAL** — 已修复评审 P0/P1（三态 Heartbeat 状态机、
-> 结构化段成为语义事实来源、RecentContactData DTO 修正、能力探测接入运行时），但待实机 `run_forward`
-> 集成测试与 MySQL/实机 NapCat 验收。B3/B4/B6/B7 未开始。
+> 分支：`glm/qqbot-continuity-recall-v1`。本文件说明 `crates/qqbot` 协议适配层与
+> `apps/qqbot-server` 运行时分层在 Continuity Recall v1 阶段的结构。
+> **状态：B4/B3/B6/B7 领域层+基础设施+运行时装配完成**，单元测试+clippy+fmt+build+
+> workspace_boundaries 全绿；MySQL 集成测试受 action_planner_hardening 既有 DROP CHECK
+> 问题阻塞（非本轮引入）；实机 NapCat 13990/13991 当前在线。
 > NapCat 在本阶段保持只读：不得加入发送、撤回、禁言、踢人、点赞、设精华、标记已读等写操作。
 > 当前为本机无 Token 模式（HTTP `127.0.0.1:13990`，WebSocket `127.0.0.1:13991`）。
-> 上游参考：Stapxs-QQ-Lite-2.0 commit `dbe8d290`（仅学习 heartbeat watchdog / canonical text / API 字段映射思想，未复制 UI/重连/Token）。
 
 ## 1. 模块结构
 
@@ -17,16 +16,38 @@ crates/qqbot/src/napcat/
 ├── api.rs              # 只读 HTTP 客户端 NapCatApiClient（固定只读 allowlist）
 ├── capabilities.rs     # B5 能力/版本探测，类型化 CapabilitySnapshot
 ├── error.rs            # NapCatError（含 HeartbeatTimeout 类型化错误）
-├── event.rs           # MessageSegment / 事件类型（B2 扩展段类型）
+├── event.rs           # MessageSegment / 事件类型（B2 扩展段类型 + B3 撤回事件）
 ├── heartbeat.rs       # B1 OneBot Heartbeat/Lifecycle 监控状态机
-├── listener.rs        # 正向 WebSocket 监听器，tokio::select! 监听消息/Heartbeat/shutdown
+├── listener/          # 正向 WebSocket 监听器（从 listener.rs 990 行拆分）
+│   ├── mod.rs         # NapCatListener + run_forward 三态 deadline 驱动循环
+│   ├── transport.rs   # WS 建连、单条帧读取、Ping/Pong/Close
+│   ├── dispatch.rs    # 帧边界 + JSON + meta_event/notice/message 路由
+│   ├── message_event.rs # 消息事件 DTO 解析与 Group/PrivateMessage 构造
+│   ├── notice_event.rs  # 通知事件 DTO 解析（含 group_recall/friend_recall）
+│   └── bounds.rs      # 帧/raw_event/字段有界与 actor ID 校验
 ├── message_parser.rs  # CQ raw 回退解析与 normalize_text
 └── segments.rs         # B2 结构化 message 数组优先解析
 
+crates/personal-secretary/src/
+├── directory.rs       # B4 账号会话目录领域模型
+├── directory_service.rs # B4 目录同步用例与端口
+├── recall.rs          # B3 消息撤回领域模型（RecallEvent/Tombstone/CorrelationKey）
+├── recall_service.rs  # B3 撤回用例与端口
+├── artifact.rs        # B6 富消息 Artifact 信封领域模型
+├── artifact_service.rs # B6 Artifact 用例与端口
+├── health.rs          # B7 健康状态四态与快照
+├── health_service.rs  # B7 健康聚合器与有界缓存
+└── infra/repo/
+    ├── mysql_directory.rs  # B4 MySQL 目录快照仓储
+    ├── mysql_recall.rs     # B3 MySQL 撤回仓储
+    └── mysql_artifact.rs   # B6 MySQL Artifact 仓储
+
 apps/qqbot-server/src/
-├── config/             # A1 拆分：app/napcat/database/llm/workers/.../env/validation/tests
-├── runtime/            # A2 拆分：mod(connection_loop/handlers/health/shutdown)
-├── bootstrap/          # A2 拆分：infra/workers/thread_pipeline/action_planner
+├── config/             # A1 拆分 + 新增 directory_sync 配置段
+├── runtime/            # A2 拆分 + handlers 新增撤回路径
+├── bootstrap/          # A2 拆分 + thread_pipeline 装配 DirectorySyncWorker
+├── directory_sync.rs  # B4 目录同步 Worker + NapCat DirectorySourceT 适配器
+├── recall.rs          # B3 撤回事件处理器
 └── ...
 ```
 

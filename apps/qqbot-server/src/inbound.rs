@@ -1,22 +1,22 @@
 use personal_secretary::{
     ContentSegment, ConversationKind, ConversationRef, InboundMessageEnvelope, MediaKind,
-    MessageSource, SourceMessageRef, VerifiedActor, VerifiedActorKind,
+    MessageSource, RichContentKind, SourceMessageRef, VerifiedActor, VerifiedActorKind,
 };
 use qqbot::napcat::{
     GroupMessageEvent, MessageSegment as NapCatMessageSegment, NapCatError, PrivateMessageEvent,
 };
 
 /// 把 NapCat 协议身份映射到个人秘书的统一消息边界。
-pub(crate) struct NapCatInboundMapper {
+pub struct NapCatInboundMapper {
     self_qq_id: i64,
 }
 
 impl NapCatInboundMapper {
-    pub(crate) fn new(self_qq_id: i64) -> Self {
+    pub fn new(self_qq_id: i64) -> Self {
         Self { self_qq_id }
     }
 
-    pub(crate) fn map_group(
+    pub fn map_group(
         &self,
         event: GroupMessageEvent,
     ) -> Result<InboundMessageEnvelope, NapCatError> {
@@ -32,7 +32,7 @@ impl NapCatInboundMapper {
         )
     }
 
-    pub(crate) fn map_private(
+    pub fn map_private(
         &self,
         event: PrivateMessageEvent,
     ) -> Result<InboundMessageEnvelope, NapCatError> {
@@ -154,29 +154,33 @@ fn map_segments(segments: Vec<NapCatMessageSegment>) -> Vec<ContentSegment> {
                 source_url: None,
                 display_name: name,
             },
-            // 合并转发引用：只保留协议层 ID，不下载全部内容（B2 约束）。
-            NapCatMessageSegment::Forward { id } => ContentSegment::Unknown {
-                protocol_value: format!("forward:{id}"),
-            },
-            // 富消息 envelope：只保存有限描述，不保存完整载荷（B2/B6 约束）。
+            NapCatMessageSegment::Forward { id } => ContentSegment::Forward { source_key: id },
             NapCatMessageSegment::Rich {
                 kind,
-                data,
+                data: _,
                 summary,
-                ..
-            } => {
-                let value = match (data, summary) {
-                    (Some(d), Some(s)) => format!("{kind:?}:{d}|{s}"),
-                    (Some(d), None) => format!("{kind:?}:{d}"),
-                    (None, Some(s)) => format!("{kind:?}:|{s}"),
-                    (None, None) => format!("{kind:?}"),
-                };
-                ContentSegment::Unknown {
-                    protocol_value: value,
-                }
-            }
-            NapCatMessageSegment::Unknown { seg_type, raw } => ContentSegment::Unknown {
-                protocol_value: raw.map(|r| format!("{seg_type}:{r}")).unwrap_or(seg_type),
+            } => match kind {
+                qqbot::napcat::RichKind::Json => ContentSegment::Rich {
+                    kind: RichContentKind::Json,
+                    source_key: "rich_json".into(),
+                    summary,
+                },
+                qqbot::napcat::RichKind::Xml => ContentSegment::Rich {
+                    kind: RichContentKind::Xml,
+                    source_key: "rich_xml".into(),
+                    summary,
+                },
+                qqbot::napcat::RichKind::Card => ContentSegment::Rich {
+                    kind: RichContentKind::Card,
+                    source_key: "rich_card".into(),
+                    summary,
+                },
+                qqbot::napcat::RichKind::Other => ContentSegment::Unknown {
+                    protocol_value: "rich_other".into(),
+                },
+            },
+            NapCatMessageSegment::Unknown { seg_type, raw: _ } => ContentSegment::Unknown {
+                protocol_value: format!("unknown:{seg_type}"),
             },
         })
         .collect()
@@ -233,6 +237,30 @@ mod tests {
         assert_eq!(message.conversation.id, "20002");
         assert_eq!(message.actor.id, "20002");
         assert_eq!(message.role(), MessageRole::ExternalObservation);
+    }
+
+    #[test]
+    fn unknown_segment_discards_raw_payload() {
+        let raw = serde_json::json!({
+            "url": "https://example.invalid/file?token=secret-token",
+            "token": "secret-token",
+            "body": {"private": "message text"}
+        });
+        let mapped = map_segments(vec![NapCatMessageSegment::Unknown {
+            seg_type: "future_card".into(),
+            raw: Some(raw.to_string()),
+        }]);
+        let serialized = serde_json::to_string(&mapped).expect("serialize mapped segments");
+
+        assert_eq!(
+            mapped,
+            vec![ContentSegment::Unknown {
+                protocol_value: "unknown:future_card".into()
+            }]
+        );
+        assert!(!serialized.contains("example.invalid"));
+        assert!(!serialized.contains("secret-token"));
+        assert!(!serialized.contains("message text"));
     }
 
     #[test]
