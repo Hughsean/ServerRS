@@ -95,6 +95,11 @@ pub fn build_mysql_retriever_store(db: DatabaseConnection) -> Arc<dyn crate::Ret
     Arc::new(repo::MySqlRetrieverStore::new(db))
 }
 
+/// 构造 Owner Agenda 仓储；mutation、审计与 Action Receipt 共用事务。
+pub fn build_mysql_agenda_store(db: DatabaseConnection) -> Arc<dyn crate::AgendaStoreT> {
+    Arc::new(repo::MySqlAgendaStore::new(db))
+}
+
 /// 构造 Action Planner 运行仓储。CAS 领取 + lease fencing + 幂等 Effect。
 pub fn build_mysql_action_store(db: DatabaseConnection) -> Arc<dyn crate::ActionStoreT> {
     Arc::new(repo::MySqlActionStore::new(db))

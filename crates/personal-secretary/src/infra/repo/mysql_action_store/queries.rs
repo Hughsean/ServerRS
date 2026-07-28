@@ -34,6 +34,7 @@ pub(super) struct ClaimedRunRow {
     pub(super) conversation_id: String,
     pub(super) occurred_at_unix_secs: i64,
     pub(super) timezone_offset_secs: i64,
+    pub(super) timezone: String,
     pub(super) recent_events_json: Option<String>,
     pub(super) lease_token: String,
     pub(super) source_channel: String,
@@ -105,6 +106,7 @@ pub(super) fn map_claimed_row(
         conversation_id: row.conversation_id,
         occurred_at_unix_secs: row.occurred_at_unix_secs,
         timezone_offset_secs: row.timezone_offset_secs,
+        timezone: row.timezone,
         recent_events,
     }))
 }

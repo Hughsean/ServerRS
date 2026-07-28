@@ -30,8 +30,8 @@ pub use napcat::NapCatConfig;
 pub use qq_open_platform::QqOpenPlatformConfig;
 pub use whitelist::WhitelistConfig;
 pub use workers::{
-    ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig, HealthConfig,
-    IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
+    HealthConfig, IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
     ThreadSemanticsConfig,
 };
 

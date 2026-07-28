@@ -93,6 +93,22 @@ async fn apply_qqbot_migrations(db: &DatabaseConnection) {
         .collect();
     entries.sort_by_key(|path| migration_order(path));
     for path in entries {
+        let migration_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if migration_name.contains("_owner_agenda.sql")
+            && db
+                .query_one_raw(Statement::from_string(
+                    DatabaseBackend::MySql,
+                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
+                ))
+                .await
+                .expect("agenda migration sentinel query failed")
+                .is_some()
+        {
+            continue;
+        }
         let sql = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         let stripped = sql
@@ -138,6 +154,7 @@ fn migration_order(path: &std::path::Path) -> u8 {
         name if name.contains("_artifacts.sql") => 17,
         name if name.contains("_recall_inbox.sql") => 18,
         name if name.contains("_artifact_derivations.sql") => 19,
+        name if name.contains("_owner_agenda.sql") => 20,
         _ => 99,
     }
 }

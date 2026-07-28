@@ -20,6 +20,7 @@ pub struct ActionRunSeed {
     pub conversation_id: String,
     pub occurred_at_unix_secs: i64,
     pub timezone_offset_secs: i64,
+    pub timezone: String,
     pub recent_events: Vec<RecentEventRef>,
 }
 
@@ -34,6 +35,15 @@ pub struct SuspendedRunClaim {
     pub worker_id: String,
     pub lease_secs: u64,
     pub now_unix_secs: i64,
+}
+
+/// 已挂起审批的最小索引；完整 Checkpoint 仍由既有 CheckpointStore 保存。
+#[derive(Debug, Clone)]
+pub struct SuspendedActionRun {
+    pub run_id: ActionRunId,
+    pub checkpoint_id: String,
+    pub proposal_id: String,
+    pub command_source_event_id: SourceEventId,
 }
 
 /// Action 运行存储端口。基础设施层实现，领域层定义。
@@ -62,7 +72,14 @@ pub trait ActionStoreT: Send + Sync {
         claim: &SuspendedRunClaim,
     ) -> Result<Option<ClaimedActionRun>, ActionStoreError>;
 
-    /// 将持有租约的 running run 标记为 suspended，并释放 Worker 租约。
+    /// 列出账号内正在等待 Owner 审批的运行。存在多个候选时调用方必须要求明确 proposal ID。
+    async fn list_suspended_runs(
+        &self,
+        account: &SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<SuspendedActionRun>, ActionStoreError>;
+
+    /// 将已持有租约的 running run 标记为 suspended，并释放 Worker 租约。
     /// 完整 Graph Checkpoint 由绑定 run_id 的 CheckpointStore 持久化；这里仅保存索引摘要。
     async fn mark_suspended(
         &self,
@@ -195,6 +212,7 @@ pub struct ClaimedActionRun {
     pub conversation_id: String,
     pub occurred_at_unix_secs: i64,
     pub timezone_offset_secs: i64,
+    pub timezone: String,
     pub recent_events: Vec<RecentEventRef>,
 }
 
@@ -257,6 +275,7 @@ pub struct ActionRunContext {
     pub conversation_id: String,
     pub occurred_at_unix_secs: i64,
     pub timezone_offset_secs: i64,
+    pub timezone: String,
     pub now_unix_secs: i64,
     pub lease_token: ActionLeaseToken,
 }

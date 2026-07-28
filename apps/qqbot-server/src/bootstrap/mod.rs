@@ -6,6 +6,7 @@
 //! - [`action_planner`]：Action Planner（含 LLM 与 NoAction 降级）装配。
 
 pub(crate) mod action_planner;
+pub(crate) mod agenda;
 pub(crate) mod infra;
 pub(crate) mod thread_pipeline;
 pub(crate) mod workers;

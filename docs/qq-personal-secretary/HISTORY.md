@@ -5,12 +5,10 @@
 
 ## 当前阶段
 
-- 主干分支：`Main`（`d8777a1`），NapCat Adapter Hardening v1 已合并；QQBot 运行数据库使用独立容器、独立数据库和
+- 主干分支：`Main`（`d8777a1`）；Release Hardening 检查点为 `d66f4eb`。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 进行中分支：`glm/qqbot-continuity-recall-v1`（基于 `Main`，未提交、未推送，等待 Codex 评审），
-  承载 NapCat 数据完整性、撤回与 Artifact 生命周期闭环 v1：B4 账号会话目录与历史完整性证据、
-  B3 消息撤回闭环、B6 富消息 Artifact 引用、B7 健康状态与日志，以及 listener.rs 分层拆分。
-  详见 `napcat-adapter-architecture.md`。
+- 进行中分支：`gpt/qqbot-owner-agenda-v1`（基于 `d66f4eb`，未提交、未推送），承载 Owner
+  Agenda/Reminder v1；Release Hardening 已在前一分支建立检查点。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -18,17 +16,15 @@
   并发优雅关闭（RuntimeWorkers + 25s 全局 deadline）、可编程运行时入口（run_with_cancellation）、
   群白名单过滤、Owner Retriever、受约束 Action Planner、真实 Effect Receipt、响应产物，
   以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
-  **新增（本轮）**：B4 账号会话目录快照（DirectoryStatus 映射到 HistoryCompleteness，不建第二套状态机）、
-  B3 消息撤回闭环（tombstone pending/applied、关联键禁止单 message_id 跨账号、Retriever SQL 过滤）、
-  B6 Artifact 信封（有界、TTL、never_long_term/envelope_only 策略、撤回失效传播）、
-  B7 健康状态（四态聚合、有界缓存、不暴露 HTTP）、listener.rs 拆分为 6 个职责模块。
-- 当前边界：NapCat 保持只读；B4/B3/B6/B7 生产链的 14 个隔离 MySQL 机器检查全部实际通过；
-  Release Hardening v1.1 增加 RSA-PSS attestation 篡改回归测试与 Recall Spool B7 指标。
+  **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
+  L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
+- 当前边界：NapCat 保持只读；B4/B3/B6/B7 生产链的独立验收矩阵 15/15 实际通过；Agenda
+  在 MySQL 8.4.10 从空 schema 完成真实迁移与业务闭环，Action Planner MySQL 5/5 通过。
   合并门禁仍为 `REJECTED`，原因是 GitHub protected Environment、固定可信公钥/签发密钥托管
   和 required check 尚未配置，当前运行没有受保护的仓库外 L4/L5 attestation。
-- 下一开发项：由 Codex 独立复验当前 dirty worktree 并整理 checkpoint commit；工作树清理后再创建
-  `gpt/qqbot-owner-agenda-v1`。GitHub 管理侧仍需配置 protected Environment、固定可信公钥与
-  `QQBot Acceptance Gate / acceptance` required check；随后才能获取合规的 L4/L5 attestation。
+- 下一开发项：整理 Agenda 功能检查点提交；随后在明确通知用户并重新确认本地凭据与测试范围后，
+  验收真实 Owner 指令→审批/拒绝→到期通知链路。GitHub 管理侧仍需配置 protected Environment、
+  固定可信公钥与 `QQBot Acceptance Gate / acceptance` required check。
 
 ## 历史分块
 
@@ -37,6 +33,11 @@
 | 2026-07-23～2026-07-24 | 个人秘书立项、NapCat 验证、可靠入站、Gap 回补、线程与 Owner 审核 | [2026-07 归档](history/2026-07.md) |
 
 ## 最近事件
+
+- `2026-07-28 11:22（Asia/Shanghai）`：Owner Agenda/Reminder v1 代码与真实 MySQL 收口；Codex
+  修复 `UNIX_TIMESTAMP` DECIMAL 解码和新迁移重复执行冲突。Agenda MySQL 1/1、Action Planner
+  MySQL 5/5、常规三 crate 测试、严格 Clippy、workspace boundaries 19/19、既有验收矩阵
+  15/15 实际通过；所有临时 schema 已删除，未连接或发送 QQ 消息。
 
 - `2026-07-27 21:32（Asia/Shanghai）`：Release Hardening v1.1 代码侧收尾；提取并验证
   .NET RSA-PSS attestation（合法签名/签名篡改/claim 篡改），Recall Spool 指标接入 B7；

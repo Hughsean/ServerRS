@@ -61,6 +61,7 @@ fn impactful_action_without_idempotency_key_is_rejected() {
         SecretaryAction::CreateReminder {
             text: "提交报价单".into(),
             due_at_unix: 1_800_000_000,
+            timezone: "Asia/Shanghai".into(),
         },
         "用户要求创建提醒",
         Vec::new(),

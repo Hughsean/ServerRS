@@ -1,5 +1,6 @@
 mod entities;
 mod mysql_action_store;
+mod mysql_agenda;
 mod mysql_artifact;
 mod mysql_backfill;
 mod mysql_continuity;
@@ -16,6 +17,7 @@ mod mysql_thread_semantics;
 mod mysql_threading;
 
 pub(crate) use mysql_action_store::{BoundActionCheckpointStore, MySqlActionStore};
+pub(crate) use mysql_agenda::MySqlAgendaStore;
 pub(crate) use mysql_artifact::MySqlArtifactStore;
 pub(crate) use mysql_directory::MySqlDirectoryStore;
 pub(crate) use mysql_follow_up::MySqlFollowUpStore;

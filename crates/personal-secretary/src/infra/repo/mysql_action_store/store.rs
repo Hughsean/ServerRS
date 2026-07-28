@@ -26,6 +26,14 @@ pub(crate) struct MySqlActionStore {
     db: DatabaseConnection,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct SuspendedRunRow {
+    run_id: String,
+    checkpoint_id: String,
+    proposal_id: String,
+    command_source_event_id: String,
+}
+
 impl MySqlActionStore {
     pub(crate) fn new(db: DatabaseConnection) -> Self {
         Self { db }
@@ -54,9 +62,9 @@ impl ActionStoreT for MySqlActionStore {
                 DatabaseBackend::MySql,
                 r#"INSERT IGNORE INTO secretary_action_runs
                    (run_id, account_id, command_source_event_id, command_text, conversation_id,
-                    occurred_at_unix_secs, timezone_offset_secs, recent_events_json,
+                    occurred_at_unix_secs, timezone_offset_secs, timezone_name, recent_events_json,
                     status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)"#,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)"#,
                 [
                     run_id.as_str().into(),
                     account_id.into(),
@@ -65,6 +73,7 @@ impl ActionStoreT for MySqlActionStore {
                     seed.conversation_id.clone().into(),
                     seed.occurred_at_unix_secs.into(),
                     seed.timezone_offset_secs.into(),
+                    seed.timezone.clone().into(),
                     recent_json.into(),
                     now.into(),
                     now.into(),
@@ -156,6 +165,7 @@ impl ActionStoreT for MySqlActionStore {
             DatabaseBackend::MySql,
             r#"SELECT r.run_id, r.account_id, r.command_source_event_id, r.command_text,
                       r.conversation_id, r.occurred_at_unix_secs, r.timezone_offset_secs,
+                      r.timezone_name AS timezone,
                       CAST(r.recent_events_json AS CHAR) AS recent_events_json,
                       r.lease_token,
                       a.source_channel, a.platform_account_id
@@ -213,6 +223,7 @@ impl ActionStoreT for MySqlActionStore {
             DatabaseBackend::MySql,
             r#"SELECT r.run_id, r.account_id, r.command_source_event_id, r.command_text,
                       r.conversation_id, r.occurred_at_unix_secs, r.timezone_offset_secs,
+                      r.timezone_name AS timezone,
                       CAST(r.recent_events_json AS CHAR) AS recent_events_json,
                       r.lease_token,
                       a.source_channel, a.platform_account_id
@@ -226,6 +237,52 @@ impl ActionStoreT for MySqlActionStore {
         .map_err(store_error)?
         .ok_or(ActionStoreError::LeaseLost)?;
         map_claimed_row(row, lease_token)
+    }
+
+    async fn list_suspended_runs(
+        &self,
+        account: &crate::SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<crate::SuspendedActionRun>, ActionStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(ActionStoreError::InvalidData(
+                "suspended run list limit must be in 1..=100".into(),
+            ));
+        }
+        let rows = SuspendedRunRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT r.run_id,
+                      JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.checkpoint_id')) AS checkpoint_id,
+                      JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.proposal_id')) AS proposal_id,
+                      r.command_source_event_id
+               FROM secretary_action_runs r
+               INNER JOIN secretary_accounts a ON a.id = r.account_id
+               WHERE r.status = 'suspended'
+                 AND a.source_channel = ? AND a.platform_account_id = ?
+                 AND JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.checkpoint_id')) IS NOT NULL
+                 AND JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.proposal_id')) IS NOT NULL
+               ORDER BY r.updated_at DESC, r.run_id DESC LIMIT ?"#,
+            [
+                account.channel.as_str().into(),
+                account.account_id.clone().into(),
+                limit.into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(crate::SuspendedActionRun {
+                    run_id: ActionRunId::new(row.run_id)?,
+                    checkpoint_id: row.checkpoint_id,
+                    proposal_id: row.proposal_id,
+                    command_source_event_id: crate::SourceEventId::new(
+                        row.command_source_event_id,
+                    )?,
+                })
+            })
+            .collect()
     }
 
     async fn mark_suspended(

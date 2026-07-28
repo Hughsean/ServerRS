@@ -185,7 +185,9 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [ ] `PARTIAL FUP-007` 平台无关 Outbox 已接入按账号隔离领取、租约 fencing、指数退避、送达
   回执和 `unknown_commit`；官方 Bot 只向配置的 Owner OpenID 发送。隔离 MySQL 已覆盖跨账号、
   错误租约、重试、送达和提交结果不明；真实 QQ 投递仍待替换凭据后的联机验收。
-- [ ] `TODO FUP-008` 支持 Owner 确认、稍后提醒、完成、忽略、改期和关闭线程。
+- [ ] `PARTIAL FUP-008` Agenda 写操作已支持 Owner 确认/拒绝、稍后提醒、完成、取消和改期；
+  全部经 L2 Suspend/Resume、账号验权、单次消费、版本 fencing 和不可变审计。忽略通用跟进及
+  关闭线程仍待实现。
 - [ ] `TODO FUP-009` 记录“为何提醒”和“为何未提醒”，支持重要/不重要反馈。
 - [x] `DONE FUP-010` NapCat 业务路径不含主动发送；官方通道也只消费 Owner 通知 Outbox，禁止
   自动催促客户、负责人或群成员。
@@ -203,9 +205,10 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   原始信封持久化后推进 sequence、Owner OpenID 绑定和官方 C2C 通知；真实联机和交互回执待验收。
 - [ ] `PARTIAL CMD-003` 线程关联审核已强制验证 `OwnerCommand`、本地 Owner 账号绑定及同一
   被管理账号；普通观察、未绑定和跨账号命令默认拒绝。其余命令类型仍须逐项接入同一边界。
-- [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿和
-  Owner 澄清的受约束 LLM Planner、Retriever 与 L0 Effect；结果使用来源化有界摘要并持久化
-  Receipt/Response。日程、任务、真实提醒创建和 Owner 消息仍未进入可执行白名单。
+- [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿、
+  Owner 澄清及类型化 Agenda Action；支持创建日程/任务/提醒、查询、改期、稍后提醒、完成和
+  取消。L2 写操作经既有 Suspend/Resume 审批后写入 MySQL，并以版本化 Outbox 仅通知 Owner；
+  真实 QQ 开放平台联机投递仍待凭据确认后的人工验收。
 - [ ] `TODO CMD-005` 定义类型化策略 Action：群提醒、重要联系人、静默时间和自动回复禁用。
 - [ ] `TODO CMD-006` 定义反馈 Action：重要、不重要、类似消息规则和联系人策略。
 - [ ] `TODO CMD-007` 定义记忆 Action：查看来源、修正、删除、TTL 和会话长期记忆开关。

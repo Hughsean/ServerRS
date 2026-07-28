@@ -11,10 +11,10 @@ use super::ConfigError;
 use super::action_planner::ActionPlannerConfig;
 use super::database::DatabaseConfig;
 use super::env::{
-    apply_artifact_env, apply_backfill_env, apply_follow_up_env, apply_health_env, apply_llm_env,
-    apply_qq_open_platform_env, apply_recall_wal_env, apply_thread_links_env,
-    apply_thread_projection_env, apply_thread_semantics_env, apply_whitelist_env, parse_bool,
-    parse_positive,
+    apply_agenda_env, apply_artifact_env, apply_backfill_env, apply_follow_up_env,
+    apply_health_env, apply_llm_env, apply_qq_open_platform_env, apply_recall_wal_env,
+    apply_thread_links_env, apply_thread_projection_env, apply_thread_semantics_env,
+    apply_whitelist_env, parse_bool, parse_positive,
 };
 use super::llm::LlmConfig;
 use super::napcat::NapCatConfig;
@@ -22,8 +22,8 @@ use super::qq_open_platform::QqOpenPlatformConfig;
 use super::validation::{validate_loopback_url, validate_url};
 use super::whitelist::WhitelistConfig;
 use super::workers::{
-    ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig, HealthConfig,
-    IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
+    HealthConfig, IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
     ThreadSemanticsConfig,
 };
 
@@ -44,6 +44,8 @@ pub struct AppConfig {
     pub thread_links: ThreadLinksConfig,
     #[serde(default)]
     pub follow_up: FollowUpConfig,
+    #[serde(default)]
+    pub agenda: AgendaConfig,
     #[serde(default)]
     pub directory_sync: DirectorySyncConfig,
     #[serde(default)]
@@ -129,10 +131,21 @@ impl AppConfig {
         apply_thread_semantics_env(&mut self.thread_semantics)?;
         apply_thread_links_env(&mut self.thread_links)?;
         apply_follow_up_env(&mut self.follow_up)?;
+        apply_agenda_env(&mut self.agenda)?;
         apply_artifact_env(&mut self.artifact)?;
         apply_recall_wal_env(&mut self.recall_wal)?;
         apply_health_env(&mut self.health)?;
         apply_llm_env(&mut self.llm)?;
+        apply_env_fields!(&mut self.action_planner;
+            bool { enabled => "QQBOT_ACTION_PLANNER_ENABLED" },
+            positive {
+                max_batches_per_scan => "QQBOT_ACTION_PLANNER_MAX_BATCHES_PER_SCAN",
+                lease_secs => "QQBOT_ACTION_PLANNER_LEASE_SECS",
+                scan_interval_ms => "QQBOT_ACTION_PLANNER_SCAN_INTERVAL_MS",
+                retry_initial_ms => "QQBOT_ACTION_PLANNER_RETRY_INITIAL_MS",
+                retry_max_ms => "QQBOT_ACTION_PLANNER_RETRY_MAX_MS",
+            },
+        );
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         apply_whitelist_env(&mut self.whitelist)?;
         Ok(())
@@ -200,6 +213,7 @@ impl AppConfig {
         self.thread_semantics.validate()?;
         self.thread_links.validate()?;
         self.follow_up.validate()?;
+        self.agenda.validate()?;
         self.directory_sync.validate()?;
         self.artifact.validate()?;
         self.recall_wal.validate()?;

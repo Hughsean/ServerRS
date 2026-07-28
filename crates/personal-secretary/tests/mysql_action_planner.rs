@@ -204,10 +204,27 @@ async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
             n if n.contains("_artifacts.sql") => 17,
             n if n.contains("_recall_inbox.sql") => 18,
             n if n.contains("_artifact_derivations.sql") => 19,
+            n if n.contains("_owner_agenda.sql") => 20,
             _ => 99,
         }
     });
     for path in entries {
+        let migration_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if migration_name.contains("_owner_agenda.sql")
+            && db
+                .query_one_raw(Statement::from_string(
+                    DatabaseBackend::MySql,
+                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
+                ))
+                .await
+                .expect("agenda migration sentinel query failed")
+                .is_some()
+        {
+            continue;
+        }
         let sql = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         let stripped: String = sql
@@ -284,6 +301,7 @@ async fn mysql_action_planner_full_lifecycle_restart_no_duplicate() {
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_000,
         timezone_offset_secs: 0,
+        timezone: "UTC".into(),
         recent_events: vec![RecentEventRef {
             source_event_id: source_event_id.clone(),
             summary: "Owner 命令".into(),
@@ -412,6 +430,7 @@ async fn mysql_action_planner_lease_expiry_allows_reclaim() {
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_000,
         timezone_offset_secs: 0,
+        timezone: "UTC".into(),
         recent_events: Vec::new(),
     };
     action_store
@@ -532,6 +551,7 @@ async fn mysql_action_planner_retriever_effect_response_roundtrip() {
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_000,
         timezone_offset_secs: 0,
+        timezone: "UTC".into(),
         recent_events: Vec::new(),
     };
     action_store
@@ -693,6 +713,7 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_000,
         timezone_offset_secs: 0,
+        timezone: "UTC".into(),
         recent_events: Vec::new(),
     };
     action_store
@@ -765,6 +786,7 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
                 proposal_id: "wrong-proposal".into(),
                 decision: personal_secretary::SecretaryApprovalDecision::Reject,
                 command_source_event_id: source_event_id.clone(),
+                approval_source_event_id: None,
             },
         )
         .await;
@@ -776,6 +798,7 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
         proposal_id: proposal_id.clone(),
         decision: personal_secretary::SecretaryApprovalDecision::Reject,
         command_source_event_id: source_event_id.clone(),
+        approval_source_event_id: None,
     };
     let resume_report = new_use_case
         .resume_run(&run_id, &checkpoint_id, resume_input)
@@ -795,6 +818,7 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
                 proposal_id,
                 decision: personal_secretary::SecretaryApprovalDecision::Reject,
                 command_source_event_id: source_event_id,
+                approval_source_event_id: None,
             },
         )
         .await;

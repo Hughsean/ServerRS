@@ -6,9 +6,9 @@ use sea_orm::{
 use tracing::{debug, info};
 
 use crate::{
-    ClaimedOwnerNotification, FollowUpScanReport, FollowUpStoreT, InboundEventStoreError,
-    MemoryFact, MemoryPayload, MessageSource, NotificationFailureKind, NotificationId,
-    NotificationLeaseToken, SourceAccountRef,
+    AgendaItemKind, ClaimedOwnerNotification, FollowUpScanReport, FollowUpStoreT,
+    InboundEventStoreError, MemoryFact, MemoryPayload, MessageSource, NotificationFailureKind,
+    NotificationId, NotificationLeaseToken, OwnerNotificationContent, SourceAccountRef,
 };
 
 use super::mysql_inbound::store_error;
@@ -182,15 +182,26 @@ impl FollowUpStoreT for MySqlFollowUpStore {
             DatabaseBackend::MySql,
             r#"SELECT notification.notification_id, notification.attempts,
                       account.source_channel, account.platform_account_id,
-                      item.due_at_unix_secs, CAST(fact.fact_json AS CHAR) AS fact_json
+                      notification.scheduled_at_unix_secs,
+                      notification.follow_up_id, notification.agenda_item_id,
+                      CAST(fact.fact_json AS CHAR) AS fact_json,
+                      agenda.item_kind AS agenda_kind, agenda.title AS agenda_title
                FROM secretary_notification_outbox notification
-               JOIN secretary_follow_up_items item ON item.follow_up_id = notification.follow_up_id
-               JOIN secretary_memory_facts fact ON fact.fact_id = item.source_memory_fact_id
                JOIN secretary_accounts account ON account.id = notification.account_id
+               LEFT JOIN secretary_follow_up_items item
+                 ON item.follow_up_id = notification.follow_up_id
+               LEFT JOIN secretary_memory_facts fact
+                 ON fact.fact_id = item.source_memory_fact_id
+               LEFT JOIN secretary_agenda_items agenda
+                 ON agenda.item_id = notification.agenda_item_id
+                AND agenda.version = notification.agenda_version
                WHERE notification.delivery_status = 'pending'
                  AND notification.scheduled_at_unix_secs <= ?
-                 AND item.status = 'scheduled' AND fact.fact_status = 'confirmed'
                  AND account.source_channel = ? AND account.platform_account_id = ?
+                 AND ((notification.follow_up_id IS NOT NULL
+                       AND item.status = 'scheduled' AND fact.fact_status = 'confirmed')
+                   OR (notification.agenda_item_id IS NOT NULL
+                       AND agenda.item_status = 'scheduled'))
                ORDER BY notification.scheduled_at_unix_secs, notification.notification_id
                LIMIT 1 FOR UPDATE SKIP LOCKED"#,
             [
@@ -226,15 +237,42 @@ impl FollowUpStoreT for MySqlFollowUpStore {
             return Err(InboundEventStoreError::LeaseLost);
         }
         transaction.commit().await.map_err(store_error)?;
-        let fact: MemoryFact = serde_json::from_str(&row.fact_json).map_err(|error| {
-            InboundEventStoreError::InvalidData(format!(
-                "notification source memory is invalid: {error}"
-            ))
-        })?;
-        let MemoryPayload::Commitment(commitment) = fact.payload else {
-            return Err(InboundEventStoreError::InvalidData(
-                "notification source is not a commitment".into(),
-            ));
+        let content = match (row.follow_up_id.as_deref(), row.agenda_item_id.as_deref()) {
+            (Some(_), None) => {
+                let fact_json = row.fact_json.ok_or_else(|| {
+                    InboundEventStoreError::InvalidData(
+                        "notification follow-up source memory is missing".into(),
+                    )
+                })?;
+                let fact: MemoryFact = serde_json::from_str(&fact_json).map_err(|error| {
+                    InboundEventStoreError::InvalidData(format!(
+                        "notification source memory is invalid: {error}"
+                    ))
+                })?;
+                let MemoryPayload::Commitment(commitment) = fact.payload else {
+                    return Err(InboundEventStoreError::InvalidData(
+                        "notification source is not a commitment".into(),
+                    ));
+                };
+                OwnerNotificationContent::FollowUp { commitment }
+            }
+            (None, Some(_)) => OwnerNotificationContent::Agenda {
+                kind: parse_agenda_kind(row.agenda_kind.as_deref().ok_or_else(|| {
+                    InboundEventStoreError::InvalidData(
+                        "notification agenda kind is missing".into(),
+                    )
+                })?)?,
+                title: row.agenda_title.ok_or_else(|| {
+                    InboundEventStoreError::InvalidData(
+                        "notification agenda title is missing".into(),
+                    )
+                })?,
+            },
+            _ => {
+                return Err(InboundEventStoreError::InvalidData(
+                    "notification source is invalid".into(),
+                ));
+            }
         };
         Ok(Some(ClaimedOwnerNotification {
             notification_id: NotificationId::new(row.notification_id)
@@ -245,8 +283,8 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                 row.platform_account_id,
             )
             .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
-            commitment,
-            due_at_unix_secs: row.due_at_unix_secs,
+            content,
+            due_at_unix_secs: row.scheduled_at_unix_secs,
             attempt: row.attempts.saturating_add(1),
         }))
     }
@@ -340,8 +378,23 @@ struct NotificationClaimRow {
     attempts: u32,
     source_channel: String,
     platform_account_id: String,
-    due_at_unix_secs: i64,
-    fact_json: String,
+    scheduled_at_unix_secs: i64,
+    follow_up_id: Option<String>,
+    agenda_item_id: Option<String>,
+    fact_json: Option<String>,
+    agenda_kind: Option<String>,
+    agenda_title: Option<String>,
+}
+
+fn parse_agenda_kind(value: &str) -> Result<AgendaItemKind, InboundEventStoreError> {
+    match value {
+        "schedule" => Ok(AgendaItemKind::Schedule),
+        "task" => Ok(AgendaItemKind::Task),
+        "reminder" => Ok(AgendaItemKind::Reminder),
+        _ => Err(InboundEventStoreError::InvalidData(
+            "notification agenda kind is invalid".into(),
+        )),
+    }
 }
 
 fn parse_source(value: &str) -> Result<MessageSource, InboundEventStoreError> {

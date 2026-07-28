@@ -85,6 +85,18 @@ async fn run_with_shutdown(
         tracing::info!("承诺提醒调度已禁用（follow_up.enabled=false）");
     }
 
+    // Agenda 扫描必须在 QQ Open Platform 前启动：它仅入队，实际发送仍由统一 Outbox worker 完成。
+    if let Err(error) = bootstrap::agenda::assemble_agenda_notification_worker(
+        &mut handles,
+        infra.db.clone(),
+        &config,
+    ) {
+        tracing::error!(error = %error, "Agenda 通知扫描装配失败，正在回收已启动的任务");
+        let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
+        handles_to_clean.shutdown_all().await;
+        return Err(error);
+    }
+
     // P0 修复：Action Planner 必须在 QQ Open Platform 之前装配，
     // 因为 OwnerCommand 入站时需要 PlannerUseCase 创建 action_run。
     let action_planner_use_case = match bootstrap::action_planner::assemble_action_planner(

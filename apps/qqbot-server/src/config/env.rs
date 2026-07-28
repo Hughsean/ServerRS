@@ -11,7 +11,7 @@ use super::llm::{LlmConfig, LlmReasoningMode};
 use super::qq_open_platform::QqOpenPlatformConfig;
 use super::whitelist::WhitelistConfig;
 use super::workers::{
-    ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig, RecallWalConfig,
+    AgendaConfig, ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig, RecallWalConfig,
     ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
@@ -145,6 +145,19 @@ pub(super) fn apply_thread_links_env(config: &mut ThreadLinksConfig) -> Result<(
     Ok(())
 }
 
+pub(super) fn apply_agenda_env(config: &mut AgendaConfig) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_AGENDA_ENABLED" },
+        positive {
+            scan_interval_ms => "QQBOT_AGENDA_SCAN_INTERVAL_MS",
+            batch_size => "QQBOT_AGENDA_BATCH_SIZE",
+            retry_initial_ms => "QQBOT_AGENDA_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_AGENDA_RETRY_MAX_MS",
+        },
+    );
+    Ok(())
+}
+
 pub(super) fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), ConfigError> {
     apply_env_fields!(config;
         bool { enabled => "QQBOT_FOLLOW_UP_ENABLED" },
@@ -251,6 +264,7 @@ pub(super) fn apply_qq_open_platform_env(
         non_empty {
             app_id => "QQBOT_OPEN_PLATFORM_APP_ID",
             owner_openid => "QQBOT_OPEN_PLATFORM_OWNER_OPENID",
+            owner_timezone => "QQBOT_OWNER_TIMEZONE",
         },
         path { client_secret_file => "QQBOT_OPEN_PLATFORM_CLIENT_SECRET_FILE" },
         positive {

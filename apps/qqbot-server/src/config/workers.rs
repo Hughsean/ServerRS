@@ -327,6 +327,50 @@ impl ThreadLinksConfig {
     }
 }
 
+/// Owner Agenda 到期扫描。只将已到期的当前版本事项写入统一通知 Outbox。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgendaConfig {
+    pub enabled: bool,
+    pub scan_interval_ms: u64,
+    pub batch_size: u32,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for AgendaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_interval_ms: 30_000,
+            batch_size: 200,
+            retry_initial_ms: 1_000,
+            retry_max_ms: 60_000,
+        }
+    }
+}
+
+impl AgendaConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_ms < 1_000 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "agenda.scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "agenda.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "agenda retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// 结构化记忆维护与承诺提醒调度。只写持久化 Outbox，不直接发送消息。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]

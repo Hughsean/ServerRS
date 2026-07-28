@@ -4,6 +4,8 @@
 //! QQ 开放平台、数据库或 Web 框架。
 
 mod action_graph;
+mod agenda;
+mod agenda_service;
 mod agent_runtime;
 mod artifact;
 mod artifact_service;
@@ -41,9 +43,14 @@ mod infra;
 pub use action_graph::{
     ActionGraphError, ActionGraphRuntime, ActionLeaseToken, ActionRunContext, ActionRunId,
     ActionRunSeed, ActionStoreError, ActionStoreT, ClaimedActionRun, L0ExecuteNode, NoActionNode,
-    PlanNode, SecretaryActionEffectExecutor, SuspendedRunClaim, backoff_ms, build_action_graph,
-    is_l0_direct_execute,
+    PlanNode, SecretaryActionEffectExecutor, SuspendedActionRun, SuspendedRunClaim, backoff_ms,
+    build_action_graph, is_l0_direct_execute,
 };
+pub use agenda::{
+    AgendaError, AgendaItem, AgendaItemId, AgendaItemKind, AgendaItemStatus, AgendaMutation,
+    validate_agenda_mutation,
+};
+pub use agenda_service::{AgendaApplyRequest, AgendaMutationReceipt, AgendaStoreT, AgendaUseCase};
 pub use agent_runtime::{
     OwnerResponseDraft, RecentEventRef, ResponseSegment, SecretaryAction,
     SecretaryActionApprovalRequest, SecretaryActionEffect, SecretaryActionProposal,
@@ -72,7 +79,7 @@ pub use directory_service::{
 };
 pub use follow_up::{
     ClaimedOwnerNotification, FollowUpScanReport, FollowUpStatus, NotificationFailureKind,
-    NotificationId, NotificationLeaseToken,
+    NotificationId, NotificationLeaseToken, OwnerNotificationContent,
 };
 pub use follow_up_service::{FollowUpStoreT, FollowUpUseCase};
 pub use health::{HealthSnapshot, HealthStatus, SubsystemHealth};
@@ -174,12 +181,13 @@ pub use backfill_service::{
 };
 
 pub use infra::{
-    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_artifact_store,
-    build_mysql_backfill_store, build_mysql_directory_store, build_mysql_follow_up_store,
-    build_mysql_inbound_event_store, build_mysql_memory_store, build_mysql_owner_binding_store,
-    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_agenda_store,
+    build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_owner_binding_store, build_mysql_recall_store, build_mysql_retriever_store,
+    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
+    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。

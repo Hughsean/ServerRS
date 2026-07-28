@@ -30,7 +30,9 @@ const ACTION_PLANNER_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的动
   {"kind":"clarification","question":"...","evidence":["event-id-1"]}
   {"kind":"proposal","tool":"search_recent_events","query":"...","limit":20,"rationale":"...","evidence":["event-id-1"]}
 允许的 tool：search_recent_events, read_source_event, search_event_threads, resolve_reference,
-list_upcoming_items, draft_reminder, ask_owner_clarification。不要输出其他 tool。"#;
+list_upcoming_items, draft_reminder, ask_owner_clarification, create_schedule, create_task,
+create_reminder, reschedule_item, cancel_item, complete_item, snooze_item。写操作必须提供 IANA timezone、
+未来 UTC 时间（除 complete/cancel）和目标 item_id/version；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -51,7 +53,11 @@ impl LlmActionPlanner {
     }
 
     /// 把模型 JSON 输出转为类型化 PlannerOutput。
-    fn map_output(&self, value: serde_json::Value) -> Result<PlannerOutput, PlannerError> {
+    fn map_output(
+        &self,
+        input: &PlannerInput,
+        value: serde_json::Value,
+    ) -> Result<PlannerOutput, PlannerError> {
         let raw: RawPlannerOutput = serde_json::from_value(value)
             .map_err(|e| PlannerError::UnparseableOutput(e.to_string()))?;
         match raw {
@@ -63,18 +69,23 @@ impl LlmActionPlanner {
                     .collect();
                 Ok(PlannerOutput::Clarification { question, evidence })
             }
-            RawPlannerOutput::Proposal {
-                tool,
-                rationale,
-                evidence,
-                query,
-                limit,
-                source_event_id,
-                expression,
-                horizon_secs,
-                text,
-                due_at_unix,
-            } => {
+            RawPlannerOutput::Proposal(raw) => {
+                let RawProposalOutput {
+                    tool,
+                    rationale,
+                    evidence,
+                    query,
+                    limit,
+                    source_event_id,
+                    expression,
+                    horizon_secs,
+                    text,
+                    due_at_unix,
+                    title,
+                    item_id,
+                    expected_version,
+                    timezone,
+                } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
                     query,
@@ -84,14 +95,21 @@ impl LlmActionPlanner {
                     horizon_secs,
                     text,
                     due_at_unix,
+                    title,
+                    item_id,
+                    expected_version,
+                    timezone,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
                     .into_iter()
                     .filter_map(|id| SourceEventId::new(id).ok())
                     .collect();
-                let proposal = SecretaryActionProposal::new(action, rationale, evidence, None)
-                    .map_err(|e| PlannerError::InvalidOutput(e.to_string()))?;
+                let idempotency_key =
+                    server_idempotency_key(&input.command.source_event_id, &action)?;
+                let proposal =
+                    SecretaryActionProposal::new(action, rationale, evidence, idempotency_key)
+                        .map_err(|e| PlannerError::InvalidOutput(e.to_string()))?;
                 let output = PlannerOutput::Proposal(proposal);
                 // 校验白名单 + 领域约束
                 validate_planner_output(&output)?;
@@ -109,6 +127,7 @@ impl ActionPlannerT for LlmActionPlanner {
             recent_events: &input.recent_events,
             now_unix_secs: input.now_unix_secs,
             timezone_offset_secs: input.timezone_offset_secs,
+            timezone: &input.timezone,
         })
         .map_err(|e| PlannerError::LlmCall(e.to_string()))?;
 
@@ -119,10 +138,28 @@ impl ActionPlannerT for LlmActionPlanner {
             .map_err(map_llm_error)?;
 
         debug!(usage = ?response.usage, "LLM action planner response received");
-        self.map_output(response.value)
+        self.map_output(input, response.value)
     }
 }
 
+fn server_idempotency_key(
+    command_source_event_id: &SourceEventId,
+    action: &SecretaryAction,
+) -> Result<Option<String>, PlannerError> {
+    if !action.kind().policy().requires_confirmation {
+        return Ok(None);
+    }
+
+    let canonical = serde_json::to_string(action)
+        .map_err(|error| PlannerError::InvalidOutput(format!("无法序列化动作幂等键: {error}")))?;
+    Ok(Some(
+        uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_OID,
+            format!("agenda:{}:{canonical}", command_source_event_id.as_str()).as_bytes(),
+        )
+        .to_string(),
+    ))
+}
 fn map_llm_error(error: LlmClientError) -> PlannerError {
     use LlmClientError::*;
     match error {
@@ -151,6 +188,10 @@ struct RawProposalFields<'a> {
     horizon_secs: Option<u64>,
     text: Option<String>,
     due_at_unix: Option<i64>,
+    title: Option<String>,
+    item_id: Option<String>,
+    expected_version: Option<u64>,
+    timezone: Option<String>,
 }
 
 fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerError> {
@@ -193,6 +234,97 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
                 .ok_or_else(|| PlannerError::InvalidOutput("missing text".into()))?,
             due_at_unix: raw.due_at_unix.unwrap_or(0),
         }),
+        "create_schedule" => Ok(SecretaryAction::CreateSchedule {
+            title: raw
+                .title
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing title".into()))?,
+            starts_at_unix: raw
+                .due_at_unix
+                .ok_or_else(|| PlannerError::InvalidOutput("missing starts_at_unix".into()))?,
+            timezone: raw
+                .timezone
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing timezone".into()))?,
+        }),
+        "create_task" => Ok(SecretaryAction::CreateTask {
+            title: raw
+                .title
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing title".into()))?,
+            due_at_unix: raw.due_at_unix,
+            timezone: raw
+                .timezone
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing timezone".into()))?,
+        }),
+        "create_reminder" => Ok(SecretaryAction::CreateReminder {
+            text: raw
+                .text
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing text".into()))?,
+            due_at_unix: raw
+                .due_at_unix
+                .ok_or_else(|| PlannerError::InvalidOutput("missing due_at_unix".into()))?,
+            timezone: raw
+                .timezone
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing timezone".into()))?,
+        }),
+        "reschedule_item" => Ok(SecretaryAction::RescheduleItem {
+            item_id: raw
+                .item_id
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing item_id".into()))?,
+            expected_version: raw
+                .expected_version
+                .ok_or_else(|| PlannerError::InvalidOutput("missing expected_version".into()))?,
+            starts_at_unix: raw
+                .due_at_unix
+                .ok_or_else(|| PlannerError::InvalidOutput("missing starts_at_unix".into()))?,
+            timezone: raw
+                .timezone
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing timezone".into()))?,
+        }),
+        "cancel_item" => Ok(SecretaryAction::CancelItem {
+            item_id: raw
+                .item_id
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing item_id".into()))?,
+            expected_version: raw
+                .expected_version
+                .ok_or_else(|| PlannerError::InvalidOutput("missing expected_version".into()))?,
+            reason: raw
+                .text
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "complete_item" => Ok(SecretaryAction::CompleteItem {
+            item_id: raw
+                .item_id
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing item_id".into()))?,
+            expected_version: raw
+                .expected_version
+                .ok_or_else(|| PlannerError::InvalidOutput("missing expected_version".into()))?,
+        }),
+        "snooze_item" => Ok(SecretaryAction::SnoozeItem {
+            item_id: raw
+                .item_id
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing item_id".into()))?,
+            expected_version: raw
+                .expected_version
+                .ok_or_else(|| PlannerError::InvalidOutput("missing expected_version".into()))?,
+            due_at_unix: raw
+                .due_at_unix
+                .ok_or_else(|| PlannerError::InvalidOutput("missing due_at_unix".into()))?,
+            timezone: raw
+                .timezone
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing timezone".into()))?,
+        }),
         "ask_owner_clarification" => Ok(SecretaryAction::AskOwnerClarification {
             question: raw
                 .text
@@ -212,6 +344,7 @@ struct PlannerLlmInput<'a> {
     recent_events: &'a [personal_secretary::RecentEventRef],
     now_unix_secs: i64,
     timezone_offset_secs: i64,
+    timezone: &'a str,
 }
 
 /// LLM 输出 DTO（deny_unknown_fields 拒绝多余字段）。
@@ -227,26 +360,39 @@ enum RawPlannerOutput {
         evidence: Vec<String>,
     },
     #[serde(rename = "proposal")]
-    Proposal {
-        tool: String,
-        rationale: String,
-        #[serde(default)]
-        evidence: Vec<String>,
-        #[serde(default)]
-        query: Option<String>,
-        #[serde(default)]
-        limit: Option<u16>,
-        #[serde(default)]
-        source_event_id: Option<String>,
-        #[serde(default)]
-        expression: Option<String>,
-        #[serde(default)]
-        horizon_secs: Option<u64>,
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        due_at_unix: Option<i64>,
-    },
+    Proposal(Box<RawProposalOutput>),
+}
+
+/// Proposal 字段单独装箱，避免不可信模型输出 DTO 拉大枚举所有分支的栈占用。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProposalOutput {
+    tool: String,
+    rationale: String,
+    #[serde(default)]
+    evidence: Vec<String>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    limit: Option<u16>,
+    #[serde(default)]
+    source_event_id: Option<String>,
+    #[serde(default)]
+    expression: Option<String>,
+    #[serde(default)]
+    horizon_secs: Option<u64>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    due_at_unix: Option<i64>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    item_id: Option<String>,
+    #[serde(default)]
+    expected_version: Option<u64>,
+    #[serde(default)]
+    timezone: Option<String>,
 }
 
 #[cfg(test)]
@@ -275,6 +421,7 @@ mod tests {
             },
             recent_events: Vec::new(),
             timezone_offset_secs: 28_800,
+            timezone: "Asia/Shanghai".into(),
             now_unix_secs: 1000,
             retrieved: Vec::new(),
         }

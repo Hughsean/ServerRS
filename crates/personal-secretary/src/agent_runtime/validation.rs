@@ -159,10 +159,14 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         | SecretaryAction::CreateTask { title, .. } => {
             bounded_text("title", title, 1, 500)?;
         }
-        SecretaryAction::RescheduleItem { item_id, .. } => {
+        SecretaryAction::RescheduleItem { item_id, .. }
+        | SecretaryAction::CompleteItem { item_id, .. }
+        | SecretaryAction::SnoozeItem { item_id, .. } => {
             bounded_text("item_id", item_id, 1, 191)?;
         }
-        SecretaryAction::CancelItem { item_id, reason } => {
+        SecretaryAction::CancelItem {
+            item_id, reason, ..
+        } => {
             bounded_text("item_id", item_id, 1, 191)?;
             bounded_text("reason", reason, 1, 1_000)?;
         }

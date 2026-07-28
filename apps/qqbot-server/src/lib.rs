@@ -6,6 +6,7 @@
 
 mod action_planner;
 mod action_planner_worker;
+mod agenda_notification_worker;
 mod artifact_ttl_worker;
 mod backfill;
 mod bootstrap;
@@ -16,6 +17,7 @@ mod health_runtime;
 mod inbound;
 mod ingestion_worker;
 mod llm;
+pub mod owner_approval;
 mod qq_open_platform;
 mod recall;
 pub mod runtime;

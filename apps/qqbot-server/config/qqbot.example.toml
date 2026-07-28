@@ -91,6 +91,15 @@ batch_size = 200
 retry_initial_ms = 1000
 retry_max_ms = 60000
 
+[agenda]
+# 仅将已到期且仍为当前版本的 Owner Agenda 写入统一通知 Outbox。
+# 领取、租约、失败重试与 QQ C2C 投递仍由 qq_open_platform 处理。
+enabled = true
+scan_interval_ms = 30000
+batch_size = 200
+retry_initial_ms = 1000
+retry_max_ms = 60000
+
 [artifact]
 enabled = true
 default_ttl_secs = 86400

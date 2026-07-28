@@ -71,6 +71,7 @@ pub struct PlannerUseCase {
     store: Arc<dyn ActionStoreT>,
     planner: Arc<dyn crate::ActionPlannerT>,
     retriever: Option<Arc<crate::RetrieverUseCase>>,
+    agenda: Option<Arc<crate::AgendaUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -90,6 +91,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            agenda: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -110,6 +112,11 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_agenda(mut self, agenda: Arc<crate::AgendaUseCase>) -> Self {
+        self.agenda = Some(agenda);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -121,6 +128,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            agenda: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -190,18 +198,24 @@ impl PlannerUseCase {
             conversation_id: claimed.conversation_id.clone(),
             occurred_at_unix_secs: claimed.occurred_at_unix_secs,
             timezone_offset_secs: claimed.timezone_offset_secs,
+            timezone: claimed.timezone.clone(),
             now_unix_secs: self.clock.now_unix_secs(),
             lease_token: lease_token.clone(),
         });
 
-        let effect_executor = Arc::new(SecretaryActionEffectExecutor::new(
+        let mut effect_executor = SecretaryActionEffectExecutor::new(
             Arc::clone(&self.store),
             claimed.run_id.clone(),
             lease_token.clone(),
             self.retriever.clone(),
             claimed.account.clone(),
             self.clock.now_unix_secs(),
-        ));
+        );
+        if let Some(agenda) = &self.agenda {
+            effect_executor = effect_executor
+                .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());
+        }
+        let effect_executor = Arc::new(effect_executor);
 
         // P0-3 修复：per-run 构造绑定业务 ActionRunId 的 CheckpointStore。
         // 生产用 MySQL（checkpoint_db 已注入），测试回退 InMemoryCheckpointStore。
@@ -312,6 +326,18 @@ impl PlannerUseCase {
         .ok()
     }
 
+    /// 查询指定账号等待 Owner 审批的运行；调用方负责处理零项与多项歧义。
+    pub async fn list_suspended_runs(
+        &self,
+        account: &crate::SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<crate::SuspendedActionRun>, PlannerUseCaseError> {
+        self.store
+            .list_suspended_runs(account, limit)
+            .await
+            .map_err(PlannerUseCaseError::from)
+    }
+
     /// P0-5: 恢复挂起的 action_run。Owner 审批后调用。
     /// 加载 Checkpoint、CAS 单次消费、恢复 Graph 运行、标记完成。
     pub async fn resume_run(
@@ -343,14 +369,19 @@ impl PlannerUseCase {
             } else {
                 Arc::new(agent_core::graph::InMemoryCheckpointStore::new())
             };
-        let effect_executor = Arc::new(SecretaryActionEffectExecutor::new(
+        let mut effect_executor = SecretaryActionEffectExecutor::new(
             Arc::clone(&self.store),
             run_id.clone(),
             claimed.lease_token.clone(),
             self.retriever.clone(),
             claimed.account.clone(),
             self.clock.now_unix_secs(),
-        ));
+        );
+        if let Some(agenda) = &self.agenda {
+            effect_executor = effect_executor
+                .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());
+        }
+        let effect_executor = Arc::new(effect_executor);
         let context = Arc::new(ActionRunContext {
             account: claimed.account,
             command_source_event_id: claimed.command_source_event_id,
@@ -358,6 +389,7 @@ impl PlannerUseCase {
             conversation_id: claimed.conversation_id,
             occurred_at_unix_secs: claimed.occurred_at_unix_secs,
             timezone_offset_secs: claimed.timezone_offset_secs,
+            timezone: claimed.timezone.clone(),
             now_unix_secs: self.clock.now_unix_secs(),
             lease_token: claimed.lease_token.clone(),
         });
@@ -369,7 +401,16 @@ impl PlannerUseCase {
             effect_executor,
         )
         .map_err(|e| PlannerUseCaseError::GraphRun(e.to_string()))?;
-        self.store.append_audit(run_id, "resumed", "{}").await?;
+        let resumed_audit = serde_json::json!({
+            "approval_source_event_id": resume_input
+                .approval_source_event_id
+                .as_ref()
+                .map(crate::SourceEventId::as_str),
+        })
+        .to_string();
+        self.store
+            .append_audit(run_id, "resumed", &resumed_audit)
+            .await?;
         let result = graph
             .resume(cid, resume_input)
             .await
@@ -511,6 +552,7 @@ mod tests {
                 conversation_id: "conv-1".into(),
                 occurred_at_unix_secs: 1000,
                 timezone_offset_secs: 28_800,
+                timezone: "Asia/Shanghai".into(),
                 recent_events: vec![RecentEventRef {
                     source_event_id: SourceEventId::new("event-1").unwrap(),
                     summary: "Owner 命令".into(),
@@ -522,6 +564,13 @@ mod tests {
             _claim: &SuspendedRunClaim,
         ) -> Result<Option<ClaimedActionRun>, ActionStoreError> {
             Ok(None)
+        }
+        async fn list_suspended_runs(
+            &self,
+            _account: &SourceAccountRef,
+            _limit: u32,
+        ) -> Result<Vec<crate::SuspendedActionRun>, ActionStoreError> {
+            Ok(Vec::new())
         }
         async fn mark_suspended(
             &self,
