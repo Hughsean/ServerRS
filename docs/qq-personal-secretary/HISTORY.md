@@ -5,10 +5,10 @@
 
 ## 当前阶段
 
-- 主干分支：`Main`（`d8777a1`）；Release Hardening 检查点为 `d66f4eb`。QQBot 运行数据库使用独立容器、独立数据库和
+- 主干分支：`main`（`93710d3`）；Release Hardening 与 Owner Agenda/Reminder v1 已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 进行中分支：`gpt/qqbot-owner-agenda-v1`（基于 `d66f4eb`，未提交、未推送），承载 Owner
-  Agenda/Reminder v1；Release Hardening 已在前一分支建立检查点。
+- 最近完成分支：`gpt/qqbot-owner-agenda-v1`，功能提交 `79a04f7`，通过非快进合并提交
+  `93710d3` 进入 `main`；未推送远端。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -22,8 +22,8 @@
   在 MySQL 8.4.10 从空 schema 完成真实迁移与业务闭环，Action Planner MySQL 5/5 通过。
   合并门禁仍为 `REJECTED`，原因是 GitHub protected Environment、固定可信公钥/签发密钥托管
   和 required check 尚未配置，当前运行没有受保护的仓库外 L4/L5 attestation。
-- 下一开发项：整理 Agenda 功能检查点提交；随后在明确通知用户并重新确认本地凭据与测试范围后，
-  验收真实 Owner 指令→审批/拒绝→到期通知链路。GitHub 管理侧仍需配置 protected Environment、
+- 下一开发项：在明确通知用户并重新确认本地凭据与测试范围后，验收真实 Owner 指令→审批/拒绝
+  →到期通知链路。GitHub 管理侧仍需配置 protected Environment、
   固定可信公钥与 `QQBot Acceptance Gate / acceptance` required check。
 
 ## 历史分块
@@ -33,6 +33,9 @@
 | 2026-07-23～2026-07-24 | 个人秘书立项、NapCat 验证、可靠入站、Gap 回补、线程与 Owner 审核 | [2026-07 归档](history/2026-07.md) |
 
 ## 最近事件
+
+- `2026-07-28 11:48（Asia/Shanghai）`：将 Release Hardening 检查点 `d66f4eb` 与 Owner Agenda
+  功能提交 `79a04f7` 通过非快进提交 `93710d3` 安全合并至 `main`；未推送远端。
 
 - `2026-07-28 11:22（Asia/Shanghai）`：Owner Agenda/Reminder v1 代码与真实 MySQL 收口；Codex
   修复 `UNIX_TIMESTAMP` DECIMAL 解码和新迁移重复执行冲突。Agenda MySQL 1/1、Action Planner
