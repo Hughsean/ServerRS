@@ -5,6 +5,42 @@ pub(crate) fn fallback_reply() -> String {
     FALLBACK_REPLY.to_string()
 }
 
+/// 移除推理模型混入 `content` 的思考过程。
+///
+/// 部分 OpenAI-compatible 服务不会把 reasoning 单独放在字段中，而是返回
+/// `<think>...</think>最终回答`；也有模型只返回 `</think>` 结束标签。最终回复在
+/// 持久化、TTS 和 API 返回前必须统一清理这些内容。
+fn strip_reasoning_artifacts(content: &str) -> &str {
+    const OPENING_TAG: &str = "<think>";
+    const CLOSING_TAG: &str = "</think>";
+
+    let content = content.trim();
+    if let Some(closing_index) = rfind_ascii_case_insensitive(content, CLOSING_TAG) {
+        return content[closing_index + CLOSING_TAG.len()..].trim();
+    }
+
+    if let Some(opening_index) = find_ascii_case_insensitive(content, OPENING_TAG) {
+        // 未闭合的思考块不能安全地区分思考和最终答案；只保留标签前已经完成的内容。
+        return content[..opening_index].trim();
+    }
+
+    content
+}
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+fn rfind_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .rposition(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 /// 移除某些模型在最终答案前回显的序列化工具调用。
 fn strip_leading_tool_call_artifacts(content: &str) -> &str {
     const CLOSING_TAG: &str = "</tool_call>";
@@ -34,7 +70,16 @@ fn strip_leading_tool_call_artifacts(content: &str) -> &str {
 
 /// 确保最终内容干净且非空；必要时返回兼容的中文回退文本。
 pub(crate) fn normalize_final_content(content: String) -> String {
-    let content = strip_leading_tool_call_artifacts(&content);
+    let reasoning_artifact_detected = find_ascii_case_insensitive(&content, "<think>").is_some()
+        || find_ascii_case_insensitive(&content, "</think>").is_some();
+    let content = strip_reasoning_artifacts(&content);
+    let content = strip_leading_tool_call_artifacts(content);
+    if reasoning_artifact_detected {
+        tracing::warn!(
+            cleaned_length = content.chars().count(),
+            "模型回复包含思考内容，已在持久化和返回前清理"
+        );
+    }
     if content.is_empty() {
         fallback_reply()
     } else {
@@ -62,6 +107,30 @@ mod tests {
         );
 
         assert_eq!(normalize_final_content(content.into()), "合肥今天多云。");
+    }
+
+    #[test]
+    fn normalization_strips_paired_reasoning_block() {
+        let content = "<think>需要先分析用户意图。</think>嗨，今天过得怎么样？";
+
+        assert_eq!(
+            normalize_final_content(content.into()),
+            "嗨，今天过得怎么样？"
+        );
+    }
+
+    #[test]
+    fn normalization_strips_reasoning_before_orphaned_closing_tag() {
+        let content = "好的，现在用户说您好，我需要保持自然对话。\n</think>嗨！最近怎么样？";
+
+        assert_eq!(normalize_final_content(content.into()), "嗨！最近怎么样？");
+    }
+
+    #[test]
+    fn normalization_uses_fallback_for_unclosed_reasoning_block() {
+        let content = "<THINK>需要分析用户意图，但模型没有输出结束标签。";
+
+        assert_eq!(normalize_final_content(content.into()), fallback_reply());
     }
 
     #[test]

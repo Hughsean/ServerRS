@@ -33,12 +33,12 @@ impl PromptBuilder {
         // ── Persona preamble ───────────────────────────────────────────
         if tools_available {
             parts.push(
-                "你像朋友一样自然聊天，口语化表达，不要用序号、标题、列表或分段格式把回复写成文章。你可以使用工具获取信息。"
+                "你像朋友一样自然聊天，口语化表达，不要用序号、标题、列表或分段格式把回复写成文章。你可以使用工具获取信息。只输出给用户的最终回答，不要输出思考过程、reasoning 内容、<think> 或 </think> 标签。"
                     .to_string(),
             );
         } else {
             parts.push(
-                "你像朋友一样自然聊天，口语化表达，不要用序号、标题、列表或分段格式把回复写成文章。本轮没有可用工具，请基于已有上下文直接回复，不要声称已经查询或调用工具。"
+                "你像朋友一样自然聊天，口语化表达，不要用序号、标题、列表或分段格式把回复写成文章。本轮没有可用工具，请基于已有上下文直接回复，不要声称已经查询或调用工具。只输出给用户的最终回答，不要输出思考过程、reasoning 内容、<think> 或 </think> 标签。"
                     .to_string(),
             );
         }
@@ -178,6 +178,8 @@ mod tests {
             !msg.contains("本轮没有可用工具"),
             "no-tools preamble must NOT be present when tools_available=true"
         );
+        assert!(msg.contains("不要输出思考过程"));
+        assert!(msg.contains("</think>"));
     }
 
     #[test]
