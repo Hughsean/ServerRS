@@ -146,9 +146,11 @@ try {
     const scales = await client.depression.scales()
     if (scales.length === 0) return
     const scale = scales[0]
+    assert(Array.isArray(scale.questions) && scale.questions.length > 0, 'scale questions are missing')
+    assert(Array.isArray(scale.severityRanges) && scale.severityRanges.length > 0, 'scale severity ranges are missing')
     const assessment = await client.depression.createAssessment({
       scaleId: scale.scaleId,
-      answers: [scale.minScore],
+      answers: scale.questions.map(question => question.options[0]?.score ?? 0),
       notes: 'SDK smoke',
     })
     assessmentId = assessment.assessmentId

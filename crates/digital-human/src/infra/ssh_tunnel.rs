@@ -1,6 +1,9 @@
-use std::net::TcpListener;
+use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 use tracing::info;
@@ -43,6 +46,77 @@ fn ensure_local_forward_port_available(config: &SshTunnelConfig) -> Result<(), S
                 config.local_port
             )
         })
+}
+
+const SSH_TUNNEL_START_TIMEOUT: Duration = Duration::from_secs(10);
+const SSH_REMOTE_TUNNEL_OBSERVATION: Duration = Duration::from_millis(250);
+const SSH_TUNNEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// 等待 SSH 真正建立本地监听，避免后续依赖在隧道尚未就绪时立即发起连接。
+fn wait_until_tunnel_ready(
+    name: &str,
+    config: &SshTunnelConfig,
+    child: &mut Child,
+) -> Result<(), String> {
+    let probe_addr = local_forward_probe_addr(config);
+    let timeout = if probe_addr.is_some() {
+        SSH_TUNNEL_START_TIMEOUT
+    } else {
+        SSH_REMOTE_TUNNEL_OBSERVATION
+    };
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("检查 SSH 隧道 '{name}' 进程失败: {error}"))?
+        {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            let detail = stderr.trim();
+            return Err(if detail.is_empty() {
+                format!("SSH 隧道 '{name}' 在就绪前退出: {status}")
+            } else {
+                format!("SSH 隧道 '{name}' 在就绪前退出: {status}: {detail}")
+            });
+        }
+
+        match probe_addr {
+            Some(addr) if TcpStream::connect_timeout(&addr, SSH_TUNNEL_POLL_INTERVAL).is_ok() => {
+                return Ok(());
+            }
+            // 远程转发没有本地监听端口；短暂观察进程，捕获常见的即时启动失败。
+            None if Instant::now() + SSH_TUNNEL_POLL_INTERVAL >= deadline => return Ok(()),
+            _ if Instant::now() >= deadline => {
+                return Err(format!(
+                    "等待 SSH 隧道 '{name}' 本地端口 {} 就绪超时",
+                    config.local_port
+                ));
+            }
+            _ => thread::sleep(SSH_TUNNEL_POLL_INTERVAL),
+        }
+    }
+}
+
+fn local_forward_probe_addr(config: &SshTunnelConfig) -> Option<SocketAddr> {
+    if !matches!(config.direction, TunnelDirection::Local) {
+        return None;
+    }
+
+    let ip = config
+        .bind_address
+        .as_deref()
+        .and_then(|address| address.parse::<IpAddr>().ok())
+        .map(|address| match address {
+            IpAddr::V4(address) if address.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(address) if address.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+            address => address,
+        })
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+    Some(SocketAddr::new(ip, config.local_port))
 }
 
 /// 单个 SSH 隧道实例，持有 ssh 子进程句柄。
@@ -178,6 +252,12 @@ impl SshTunnel {
             }
         };
 
+        if let Err(error) = wait_until_tunnel_ready(name, config, &mut child) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+
         info!(
             "SSH 隧道 '{}' 已启动: {} {} → {} (bind={})",
             name,
@@ -258,7 +338,6 @@ impl SshTunnelManager {
 mod tests {
     use super::*;
     use crate::shared::config::TunnelDirection;
-    use std::time::Duration;
 
     fn make_config(
         local_port: u16,
@@ -321,6 +400,20 @@ mod tests {
 
         ensure_local_forward_port_available(&cfg)
             .expect("remote forwarding must not preflight the local service port");
+    }
+
+    #[test]
+    fn local_forward_waits_until_the_port_is_listening() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("test listener address").port();
+        let config = make_config(port, 6334, TunnelDirection::Local, None);
+        let mut child = spawn_sleep_child();
+
+        let result = wait_until_tunnel_ready("test", &config, &mut child);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(result.is_ok());
     }
 
     #[test]

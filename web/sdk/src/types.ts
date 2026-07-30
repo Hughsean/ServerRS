@@ -284,12 +284,38 @@ export interface ConversationMessage {
 
 // ── Depression ─────────────────────────────────────────────────────────────
 
+export interface DepressionScaleOption {
+  score: number
+  label: string
+}
+
+export interface DepressionScaleQuestion {
+  id: number
+  text: string
+  period?: string
+  reverse_scored?: boolean
+  risk_item?: boolean
+  risk_message?: string
+  options: DepressionScaleOption[]
+}
+
+export interface DepressionSeverityRange {
+  min: number
+  max: number
+  level: string
+  label?: string
+  guidance?: string
+  standard_score?: string
+}
+
 export interface DepressionScale {
   scaleId: number
   scaleName: string
   scaleDescription: string | null
   minScore: number
   maxScore: number
+  questions: DepressionScaleQuestion[]
+  severityRanges: DepressionSeverityRange[]
 }
 
 export interface DepressionAssessment {

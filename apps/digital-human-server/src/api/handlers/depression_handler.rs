@@ -9,6 +9,7 @@ use crate::api::DepressionState;
 use crate::api::error::ApiError as AppError;
 use crate::app::auth::auth_service::AuthenticatedUser;
 use crate::app::depression::depression_service::AssessmentDetail;
+use crate::domain::depression::DepressionScale;
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
@@ -47,6 +48,22 @@ pub struct ScaleDto {
     pub scale_description: Option<String>,
     pub min_score: i16,
     pub max_score: i16,
+    pub questions: serde_json::Value,
+    pub severity_ranges: serde_json::Value,
+}
+
+impl From<DepressionScale> for ScaleDto {
+    fn from(scale: DepressionScale) -> Self {
+        Self {
+            scale_id: scale.scale_id,
+            scale_name: scale.scale_name,
+            scale_description: scale.scale_description,
+            min_score: scale.min_score,
+            max_score: scale.max_score,
+            questions: scale.questions,
+            severity_ranges: scale.severity_ranges,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -79,16 +96,7 @@ pub async fn list_scales(
     State(state): State<DepressionState>,
 ) -> Result<Json<Vec<ScaleDto>>, AppError> {
     let scales = state.depression.list_scales().await?;
-    let dtos: Vec<ScaleDto> = scales
-        .into_iter()
-        .map(|s| ScaleDto {
-            scale_id: s.scale_id,
-            scale_name: s.scale_name,
-            scale_description: s.scale_description,
-            min_score: s.min_score,
-            max_score: s.max_score,
-        })
-        .collect();
+    let dtos: Vec<ScaleDto> = scales.into_iter().map(ScaleDto::from).collect();
     Ok(Json(dtos))
 }
 
@@ -98,13 +106,7 @@ pub async fn get_scale(
     Path(scale_id): Path<u16>,
 ) -> Result<Json<ScaleDto>, AppError> {
     let scale = state.depression.get_scale(scale_id).await?;
-    Ok(Json(ScaleDto {
-        scale_id: scale.scale_id,
-        scale_name: scale.scale_name,
-        scale_description: scale.scale_description,
-        min_score: scale.min_score,
-        max_score: scale.max_score,
-    }))
+    Ok(Json(ScaleDto::from(scale)))
 }
 
 /// GET /api/v1/depression/assessments
@@ -214,4 +216,32 @@ pub async fn delete_assessment(
         .delete_assessment(auth_user.user_id, assessment_id)
         .await?;
     Ok(Json(serde_json::json!({ "deleted": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ScaleDto;
+    use crate::domain::depression::DepressionScale;
+
+    #[test]
+    fn scale_dto_exposes_questions_and_camel_case_severity_ranges() {
+        let dto = ScaleDto::from(DepressionScale {
+            scale_id: 1,
+            scale_name: "PHQ-9".into(),
+            scale_description: Some("description".into()),
+            min_score: 0,
+            max_score: 27,
+            questions: json!([{"id": 1, "text": "question", "options": []}]),
+            severity_ranges: json!([{"min": 0, "max": 4, "level": "minimal"}]),
+            created_at: None,
+            updated_at: None,
+        });
+
+        let value = serde_json::to_value(dto).expect("ScaleDto should serialize");
+        assert_eq!(value["questions"][0]["id"], 1);
+        assert_eq!(value["severityRanges"][0]["max"], 4);
+        assert!(value.get("severity_ranges").is_none());
+    }
 }
