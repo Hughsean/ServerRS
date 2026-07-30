@@ -371,6 +371,317 @@
           "evidence": "L4"
         }
       ]
+    },
+    {
+      "id": "NPOLICY-PERSISTENCE-001",
+      "title": "通知策略 Family/Revision、反馈提升与自动回复拒绝持久化",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "crates/personal-secretary/src/notification_policy_service.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs"
+      ],
+      "invariants": [
+        "策略 Revision 只追加，Family Head 通过 generation CAS 更新，成功写入同步递增 account policy_epoch",
+        "同一 OwnerCommand 的策略写入和反馈提升保持幂等，未知匹配元数据不得提升为长期规则",
+        "自动回复拒绝只按 account_id、canonical_scope_key=contact:{actor_id} 与当前 rule Head 精确匹配；错误 actor、跨账号、tombstone 均不命中",
+        "自动回复 Gate 对未知身份和持久化读取失败一律拒绝"
+      ],
+      "checks": [
+        {
+          "id": "NPOLICY-PERSISTENCE-001-FAMILY",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_family_create_replace_tombstone_advances_epoch_and_keeps_revisions_immutable",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-PERSISTENCE-001-IDEMPOTENCY",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_write_is_idempotent_for_the_same_owner_command",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-PERSISTENCE-001-FEEDBACK",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_feedback_promotion_persists_a_durable_rule_once",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-PERSISTENCE-001-AUTOMATIC-REPLY",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "automatic_reply_denial_scopes_by_account_actor_and_current_head",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
+    },
+    {
+      "id": "NPOLICY-MIGRATION-001",
+      "title": "通知策略迁移使用无符号 epoch 且共用加载器可重复执行",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "apps/qqbot-server/database/migrations/20260728_owner_notification_policy_feedback_v1.sql",
+        "apps/qqbot-server/database/test_support/qqbot_migrations.rs"
+      ],
+      "invariants": [
+        "secretary_accounts.policy_epoch 是 BIGINT UNSIGNED",
+        "每份成功应用的迁移有唯一记录，重复加载不重复执行 DDL",
+        "Family Head 只能引用同一 Family 的 Revision"
+      ],
+      "checks": [
+        {
+          "id": "NPOLICY-MIGRATION-001-EPOCH",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "notification_policy_migration_uses_unsigned_epoch",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-MIGRATION-001-LOADER",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "notification_policy_migration_loader_records_and_repeats_idempotently",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-MIGRATION-001-FAMILY-HEAD",
+          "kind": "cargo_test",
+          "package": "qqbot-server",
+          "test_target": "qqbot_acceptance_runtime",
+          "test_file": "apps/qqbot-server/tests/qqbot_acceptance_runtime.rs",
+          "test_name": "notification_policy_migration_fences_family_head_to_own_revision",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
+    },
+    {
+      "id": "NPOLICY-EVALUATION-001",
+      "title": "通知策略求值以可复现快照和最终 fencing 原子提交",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "crates/personal-secretary/src/notification_policy_service.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs",
+        "apps/qqbot-server/database/migrations/20260729_owner_notification_policy_evaluation_v1.sql"
+      ],
+      "invariants": [
+        "短事务领取租约后，纯 evaluator 只能使用包含 managed account、command account、Owner actor、候选元数据和类型化规则 Head 的有界快照",
+        "Remind 在同一事务内写入 Decision、verified command recipient 的稳定 occurrence outbox，并消费租约",
+        "Delay 仅追加带 previous_decision_id 的 Decision，将同一 request 重新置为 pending 并保留 next_allowed_at，不写 outbox",
+        "旧租约或漂移快照不会写入 Decision 或 outbox"
+      ],
+      "checks": [
+        {
+          "id": "NPOLICY-EVALUATION-001-REMIND",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_remind_is_fenced_and_uses_verified_command_recipient",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-DELAY",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_delay_reclaims_and_appends_decision_without_outbox",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-CLAIM",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_claim_reclaims_expired_lease_and_rejects_old_token",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-STALE",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_stale_candidate_requeues_without_decision_or_outbox",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-SUPPRESS",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_suppress_is_terminal_without_outbox_or_recovery",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-IDEMPOTENT-OUTBOX",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_remind_duplicate_occurrence_is_idempotent",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-EPOCH-FENCE",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_epoch_drift_requeues_empty_snapshot",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-FAMILY-FENCE",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_family_head_drift_rejects_old_snapshot",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-BINDING-FENCE",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_owner_binding_drift_rejects_old_snapshot",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-TERMINAL",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_terminal_outcomes_do_not_enqueue_or_recover",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        },
+        {
+          "id": "NPOLICY-EVALUATION-001-OUTBOX-ROLLBACK",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "qqbot_acceptance_mysql",
+          "test_file": "crates/personal-secretary/tests/qqbot_acceptance_mysql.rs",
+          "test_name": "notification_policy_evaluation_outbox_failure_rolls_back_decision_and_lease",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
+    },
+    {
+      "id": "NPOLICY-DELIVERY-001",
+      "title": "通知 Outbox 仅将可能已提交的投递标记为 unknown_commit",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "crates/personal-secretary/src/infra/repo/mysql_follow_up.rs"
+      ],
+      "invariants": [
+        "UnknownCommit 只用于投递结果可能已提交但无法确认的场景",
+        "unknown_commit 通知不能被盲目重新领取投递"
+      ],
+      "checks": [
+        {
+          "id": "NPOLICY-DELIVERY-001-UNKNOWN-COMMIT",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "mysql_ingestion",
+          "test_file": "crates/personal-secretary/tests/mysql_ingestion.rs",
+          "test_name": "notification_outbox_fences_leases_and_stops_on_unknown_commit",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
+    },
+    {
+      "id": "NPOLICY-RECONCILIATION-001",
+      "title": "遗留 Outbox 在全局租约下只从当前可信来源重建",
+      "severity": "P1",
+      "required_for_merge": true,
+      "minimum_evidence": "L3",
+      "production_entries": [
+        "crates/personal-secretary/src/infra/repo/mysql_follow_up.rs",
+        "crates/personal-secretary/src/infra/repo/mysql_notification_candidate_producer.rs",
+        "apps/qqbot-server/database/migrations/20260729_owner_notification_policy_task7_reconciliation.sql"
+      ],
+      "invariants": [
+        "legacy pending 或 failed 行先终态化 suppressed，且只从锁定的当前来源重建 Candidate 与 generation-1 Request",
+        "活动 claimed 行保持不变并阻塞启动；重复协调不产生重复候选或请求"
+      ],
+      "checks": [
+        {
+          "id": "NPOLICY-RECONCILIATION-001-FOLLOW-UP",
+          "kind": "cargo_test",
+          "package": "personal-secretary",
+          "test_target": "mysql_ingestion",
+          "test_file": "crates/personal-secretary/tests/mysql_ingestion.rs",
+          "test_name": "legacy_reconciliation_rebuilds_only_current_follow_up_sources_and_blocks_active_claims",
+          "ignored": true,
+          "requires_mysql": true,
+          "evidence": "L3"
+        }
+      ]
     }
   ]
 }

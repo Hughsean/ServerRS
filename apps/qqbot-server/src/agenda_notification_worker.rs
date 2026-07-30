@@ -1,13 +1,13 @@
 //! Agenda 到期通知扫描 Worker。
 //!
-//! 该 Worker 只将当前版本且已到期的事项写入既有 Owner Outbox；领取、租约与发送仍由
-//! QQ Open Platform 的统一投递循环负责，避免形成第二套通知状态机。
+//! 该 Worker 只将当前版本且已到期的事项生成 Notification Candidate 与 Evaluation Request；
+//! 策略求值与 QQ Outbox 投递由后续独立 Worker 负责，禁止来源扫描绕过统一策略。
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use personal_secretary::{AgendaError, AgendaUseCase};
+use personal_secretary::{AgendaError, AgendaUseCase, NotificationCandidateProductionReport};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -16,13 +16,19 @@ use crate::worker_lifecycle::WorkerHandle;
 
 #[async_trait]
 trait AgendaNotificationRunner: Send + Sync {
-    async fn enqueue_due_notifications(&self, limit: u32) -> Result<u64, AgendaError>;
+    async fn produce_due_notification_candidates(
+        &self,
+        limit: u32,
+    ) -> Result<NotificationCandidateProductionReport, AgendaError>;
 }
 
 #[async_trait]
 impl AgendaNotificationRunner for AgendaUseCase {
-    async fn enqueue_due_notifications(&self, limit: u32) -> Result<u64, AgendaError> {
-        AgendaUseCase::enqueue_due_notifications(self, limit).await
+    async fn produce_due_notification_candidates(
+        &self,
+        limit: u32,
+    ) -> Result<NotificationCandidateProductionReport, AgendaError> {
+        AgendaUseCase::produce_due_notification_candidates(self, limit).await
     }
 }
 
@@ -65,10 +71,18 @@ async fn run_worker<R: AgendaNotificationRunner + 'static>(
         if *shutdown.borrow() {
             return;
         }
-        match runner.enqueue_due_notifications(config.batch_size).await {
-            Ok(enqueued) => {
+        match runner
+            .produce_due_notification_candidates(config.batch_size)
+            .await
+        {
+            Ok(report) => {
                 consecutive_errors = 0;
-                tracing::debug!(enqueued, "agenda due-notification scan completed");
+                tracing::debug!(
+                    candidates_created = report.candidates_created,
+                    requests_created = report.requests_created,
+                    sources_skipped_stale = report.sources_skipped_stale,
+                    "agenda notification-candidate scan completed"
+                );
             }
             Err(error) => {
                 consecutive_errors = consecutive_errors.saturating_add(1);
@@ -102,9 +116,12 @@ mod tests {
 
     #[async_trait]
     impl AgendaNotificationRunner for FakeRunner {
-        async fn enqueue_due_notifications(&self, _limit: u32) -> Result<u64, AgendaError> {
+        async fn produce_due_notification_candidates(
+            &self,
+            _limit: u32,
+        ) -> Result<NotificationCandidateProductionReport, AgendaError> {
             self.0.fetch_add(1, Ordering::Relaxed);
-            Ok(0)
+            Ok(NotificationCandidateProductionReport::default())
         }
     }
 

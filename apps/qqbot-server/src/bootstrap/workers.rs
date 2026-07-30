@@ -6,7 +6,10 @@
 
 use std::sync::Arc;
 
-use personal_secretary::{FollowUpUseCase, PlannerUseCase, build_mysql_inbound_event_store};
+use personal_secretary::{
+    FollowUpUseCase, LegacyNotificationReconciliationConfig, PlannerUseCase,
+    build_mysql_inbound_event_store,
+};
 use sea_orm::DatabaseConnection;
 
 use crate::action_planner_worker::ActionPlannerHandle;
@@ -17,6 +20,7 @@ use crate::config::AppConfig;
 use crate::directory_sync::DirectorySyncHandle;
 use crate::follow_up_worker::FollowUpHandle;
 use crate::health_runtime::{HealthLogHandle, HealthReader};
+use crate::notification_policy_worker::NotificationPolicyHandle;
 use crate::qq_open_platform::{OfficialPlatformHandle, spawn_official_platform};
 use crate::recall::RecallWorkerHandle;
 use crate::runtime::RuntimeError;
@@ -40,6 +44,7 @@ pub(crate) struct WorkerHandles {
     pub(crate) thread_links: Option<ThreadLinksHandle>,
     pub(crate) follow_up: Option<FollowUpHandle>,
     pub(crate) agenda_notification: Option<AgendaNotificationHandle>,
+    pub(crate) notification_policy: Option<NotificationPolicyHandle>,
     pub(crate) official_platform: Option<OfficialPlatformHandle>,
     pub(crate) action_planner: Option<ActionPlannerHandle>,
     pub(crate) directory_sync: Option<DirectorySyncHandle>,
@@ -58,6 +63,7 @@ impl WorkerHandles {
             thread_links: None,
             follow_up: None,
             agenda_notification: None,
+            notification_policy: None,
             official_platform: None,
             action_planner: None,
             directory_sync: None,
@@ -89,6 +95,9 @@ impl WorkerHandles {
         if let Some(handle) = self.agenda_notification {
             workers.push(handle.signal_and_detach());
         }
+        if let Some(handle) = self.notification_policy {
+            workers.push(handle.signal_and_detach());
+        }
         if let Some(handle) = self.official_platform {
             workers.push(handle.signal_and_detach());
         }
@@ -109,6 +118,45 @@ impl WorkerHandles {
         }
         workers.shutdown_all(WORKER_SHUTDOWN_DEADLINE).await;
     }
+}
+
+pub(crate) async fn reconcile_legacy_notification_outbox(
+    db: sea_orm::DatabaseConnection,
+    config: &crate::config::NotificationPolicyConfig,
+) -> Result<(), RuntimeError> {
+    let follow_up = FollowUpUseCase::new(
+        personal_secretary::build_mysql_follow_up_store(db.clone()),
+        personal_secretary::build_mysql_memory_store(db),
+    );
+    let report = follow_up
+        .reconcile_legacy_notifications(&LegacyNotificationReconciliationConfig {
+            worker_id: config.reconciliation_worker_id.clone(),
+            lease_secs: config.reconciliation_lease_secs,
+            page_size: config.reconciliation_page_size,
+            max_rows: config.reconciliation_max_rows,
+            deadline_secs: config.reconciliation_deadline_secs,
+        })
+        .await
+        .map_err(RuntimeError::Store)?;
+    if report.blocked || !report.completed {
+        return Err(RuntimeError::Store(
+            personal_secretary::InboundEventStoreError::InvalidData(
+                "legacy Owner Outbox reconciliation remains blocked".into(),
+            ),
+        ));
+    }
+    tracing::info!(
+        rows_scanned = report.rows_scanned,
+        legacy_outbox_suppressed = report.legacy_outbox_suppressed,
+        legacy_sources_rebuilt = report.legacy_sources_rebuilt,
+        legacy_sources_unverifiable = report.legacy_sources_unverifiable,
+        candidates_created = report.candidates_created,
+        requests_created = report.requests_created,
+        sources_skipped_stale = report.sources_skipped_stale,
+        expired_claims_marked_unknown_commit = report.expired_claims_marked_unknown_commit,
+        "legacy Owner Outbox reconciliation completed; delivery startup barrier released"
+    );
+    Ok(())
 }
 
 /// 装配 QQ 开放平台通道。必须在 Action Planner 之后、线程派生 Worker 之前装配。

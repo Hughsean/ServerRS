@@ -18,12 +18,11 @@
   以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
   **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
   L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
-- 当前边界：NapCat 保持只读；B4/B3/B6/B7 生产链的独立验收矩阵 15/15 实际通过；Agenda
-  在 MySQL 8.4.10 从空 schema 完成真实迁移与业务闭环，Action Planner MySQL 5/5 通过。
-  合并门禁仍为 `REJECTED`，原因是 GitHub protected Environment、固定可信公钥/签发密钥托管
-  和 required check 尚未配置，当前运行没有受保护的仓库外 L4/L5 attestation。
-- 下一开发项：在明确通知用户并重新确认本地凭据与测试范围后，验收真实 Owner 指令→审批/拒绝
-  →到期通知链路。GitHub 管理侧仍需配置 protected Environment、
+- 当前边界：NapCat 保持只读；Task 7 的五项 L3 验收以及
+  `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查均实际通过。全局门禁仍为 `REJECTED`：
+  多项 B3/B4/B6/B7 缺少 L4/L5 独立证明，B3 requirement 因缺少 L5 attestation 显示 FAIL；
+  不把 `REJECTED` 改写为 `APPROVED`。
+- 下一开发项：进行当前分支完整差异审查和检查点准备；Task 7 分支暂不提交或合并。GitHub 管理侧仍需配置 protected Environment、
   固定可信公钥与 `QQBot Acceptance Gate / acceptance` required check。
 
 ## 历史分块
@@ -33,6 +32,34 @@
 | 2026-07-23～2026-07-24 | 个人秘书立项、NapCat 验证、可靠入站、Gap 回补、线程与 Owner 审核 | [2026-07 归档](history/2026-07.md) |
 
 ## 最近事件
+
+- `2026-07-30 10:19（Asia/Shanghai）`：验收脚本凭据 P1 已关闭。隔离 schema 的创建和清理改为
+  仅在容器内部通过 `MYSQL_PWD="$MYSQL_ROOT_PASSWORD"` 认证，宿主机 `docker` 命令行只保留
+  字面环境变量引用，不含 root 密码。PowerShell 5.1 解析、`B3-RECALL-004-RESILIENCE` 隔离
+  MySQL smoke 和 `git diff --check` 均通过；smoke schema
+  `qqbot_accept_20260730101342_6c0e95c5` 已清理。盘点确认有 4 个既有遗留 schema，均未在无授权下
+  删除：`qqbot_accept_20260729142255_697e4cce`、`qqbot_accept_20260729214037_978a58d9`、
+  `qqbot_accept_20260729214904_ba276172`、`qqbot_accept_20260730000216_ef44aea1`。未提交、未推送、
+  未合并、未 stash，未连接或发送 QQ。
+
+- `2026-07-29 23:29（Asia/Shanghai）`：完成 `B3-RECALL-004-RESILIENCE` 的 L3 修复与真实
+  隔离 MySQL 验收。根因是验收注入器删除 `secretary_recall_inbox` 后仍保留
+  `qqbot_test_schema_migrations` 记录，幂等加载器因此跳过已记录迁移，MySQL 从未恢复该表，并非
+  Recall WAL Worker 的 wake/retry/checkpoint 状态机故障。注入器现同步删除该迁移记录，恢复时
+  确实重建 inbox；既有 Worker 自动周期 drain，无需新 Recall，且仅在 enqueue 成功后 checkpoint。
+  `B3-RECALL-004-RESILIENCE` 实际 PASS，五项 `NPOLICY-*` 仍 PASS；本轮随机隔离 schema 均已
+  清理。验收脚本同时兼容本机 PowerShell 5.1/.NET Framework 的 JSON、SHA-256、相对路径、原生命令
+  stderr、Docker port 与 schema 命令调用。无数据库迁移，无真实 QQ 连接或消息发送；未提交、未推送、
+  未合并、未 stash。完整 Release Gate 仍为 `REJECTED`，因为缺 L4/L5 独立 attestation。
+
+- `2026-07-29 22:57（Asia/Shanghai）`：Owner Notification Policy Feedback v1 的 Task 7
+  代码与 L3 验收完成。`NPOLICY-PERSISTENCE-001`、`NPOLICY-MIGRATION-001`、
+  `NPOLICY-EVALUATION-001`、`NPOLICY-DELIVERY-001`、`NPOLICY-RECONCILIATION-001`
+  全部 PASS；修复的是第二条 FollowUp 投递状态机测试遗漏 legacy Outbox fixture，而非恢复
+  扫描直写 Outbox 的旧行为。完整门禁仍为 `REJECTED`：B3/B4/B6/B7 多项缺 L4/L5 独立证明，
+  且 `B3-RECALL-004-RESILIENCE` 确有 WAL 在 MySQL 恢复后未于超时内转存的失败。验收脚本本轮
+  创建的隔离 schema 已清理；后续盘点确认有 4 个先前遗留的 `qqbot_accept_*` schema，未在无明确授权下删除。
+  未提交、未推送、未合并，未连接或发送 QQ 消息。
 
 - `2026-07-28 11:48（Asia/Shanghai）`：将 Release Hardening 检查点 `d66f4eb` 与 Owner Agenda
   功能提交 `79a04f7` 通过非快进提交 `93710d3` 安全合并至 `main`；未推送远端。

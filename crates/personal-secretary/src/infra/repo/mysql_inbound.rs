@@ -222,6 +222,7 @@ pub(super) async fn ensure_account_ref(
         source_channel: Set(account.channel.as_str().into()),
         platform_account_id: Set(account.account_id.clone()),
         status: Set(ACCOUNT_ACTIVE.into()),
+        policy_epoch: Set(0),
         created_at: Set(now),
         updated_at: Set(now),
     };

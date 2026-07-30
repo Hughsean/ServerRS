@@ -28,6 +28,27 @@ function Resolve-RepositoryPath {
     return [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $Path))
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $bytes = [System.IO.File]::ReadAllBytes($LiteralPath)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Get-RepositoryRelativePath {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $rootUri = [Uri]::new($repositoryRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar)
+    $fileUri = [Uri]::new($LiteralPath)
+    return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($fileUri).ToString()).Replace('\', '/')
+}
+
 $matrixFullPath = Resolve-RepositoryPath $MatrixPath
 if (-not (Test-Path -LiteralPath $matrixFullPath -PathType Leaf)) {
     throw "Acceptance matrix does not exist: $matrixFullPath"
@@ -39,8 +60,8 @@ New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
 Get-ChildItem -LiteralPath $logsPath -Filter "*.log" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
 
-$matrix = Get-Content -LiteralPath $matrixFullPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100
-$matrixSha256 = (Get-FileHash -LiteralPath $matrixFullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$matrix = Get-Content -LiteralPath $matrixFullPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$matrixSha256 = Get-Sha256Hex -LiteralPath $matrixFullPath
 $attestations = @{}
 $attestationFullPath = $null
 if ($EvidenceAttestationPath) {
@@ -69,7 +90,7 @@ if ($EvidenceAttestationPath) {
         throw "Trusted attestation public key must exist outside the repository working tree"
     }
     $attestationDocument = Get-Content -LiteralPath $attestationFullPath -Raw -Encoding UTF8 |
-        ConvertFrom-Json -Depth 100
+        ConvertFrom-Json
     $currentHead = (& git rev-parse HEAD).Trim()
     $currentTree = (& git rev-parse 'HEAD^{tree}').Trim()
     $dirty = -not [string]::IsNullOrWhiteSpace(((& git status --porcelain=v1) -join "`n"))
@@ -106,7 +127,7 @@ if ($EvidenceAttestationPath) {
         -not (Test-Path -LiteralPath $runReportPath -PathType Leaf)) {
         throw "Attested run report must exist outside the repository working tree"
     }
-    $runReportHash = (Get-FileHash -LiteralPath $runReportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $runReportHash = Get-Sha256Hex -LiteralPath $runReportPath
     if ($runReportHash -ne [string]$attestationDocument.run_report_sha256) {
         throw "Attested run report SHA-256 does not match"
     }
@@ -208,7 +229,16 @@ function Invoke-LoggedCommand {
     [System.IO.File]::WriteAllText($logFile, "")
     $startedAt = [DateTimeOffset]::Now
     Write-Host "[$Id] $Program $($Arguments -join ' ')"
-    & $Program @Arguments 2>&1 | Tee-Object -FilePath $logFile | Out-Host
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Cargo emits ordinary progress to stderr even with exit code 0. Keep that output in the
+        # per-check log and decide pass/fail exclusively from the native process exit code.
+        $ErrorActionPreference = "Continue"
+        & $Program @Arguments 2>&1 | Tee-Object -FilePath $logFile | Out-Host
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $exitCode = $LASTEXITCODE
     $finishedAt = [DateTimeOffset]::Now
     return [pscustomobject]@{
@@ -217,7 +247,7 @@ function Invoke-LoggedCommand {
         started_at = $startedAt.ToString("o")
         finished_at = $finishedAt.ToString("o")
         duration_ms = [int64]($finishedAt - $startedAt).TotalMilliseconds
-        log = [System.IO.Path]::GetRelativePath($repositoryRoot, $logFile).Replace('\', '/')
+        log = Get-RepositoryRelativePath -LiteralPath $logFile
     }
 }
 
@@ -236,18 +266,10 @@ function New-DockerAcceptanceDatabase {
         throw "Docker MySQL container is not running: $Container"
     }
 
-    $environment = & docker inspect $Container --format '{{range .Config.Env}}{{println .}}{{end}}'
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect Docker container: $Container"
-    }
-    $passwordLine = $environment | Where-Object { $_ -like 'MYSQL_ROOT_PASSWORD=*' } | Select-Object -First 1
-    if (-not $passwordLine) {
-        throw "MYSQL_ROOT_PASSWORD is not available inside Docker container: $Container"
-    }
-    $rootPassword = $passwordLine.Substring('MYSQL_ROOT_PASSWORD='.Length)
-
-    $portOutput = & docker port $Container '3306/tcp' | Select-Object -First 1
-    if ($LASTEXITCODE -ne 0 -or -not $portOutput) {
+    $portLines = & docker port $Container '3306/tcp'
+    $portExitCode = $LASTEXITCODE
+    $portOutput = @($portLines) | Select-Object -First 1
+    if ($portExitCode -ne 0 -or -not $portOutput) {
         throw "Unable to resolve mapped MySQL port for $Container"
     }
     $hostPort = ([string]$portOutput).Trim().Split(':')[-1]
@@ -259,15 +281,26 @@ function New-DockerAcceptanceDatabase {
     if ($schemaName -notmatch '^qqbot_accept_[A-Za-z0-9_]+$') {
         throw "Unsafe generated schema name: $schemaName"
     }
-
     # schemaName 已由上面的严格正则限制为安全标识符，避免把反引号传给 sh 后触发命令替换。
+    # schemaName is restricted above to a safe SQL identifier. Expand
+    # MYSQL_ROOT_PASSWORD only inside the container, never in the host-side
+    # docker command-line arguments.
     $createSql = "CREATE DATABASE $schemaName CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-    $mysqlCommand = "mysql -uroot -p`"`$MYSQL_ROOT_PASSWORD`" -e `"$createSql`""
-    & docker exec $Container sh -lc $mysqlCommand | Out-Null
+    $createCommand = "MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`" exec mysql -uroot -e '$createSql'"
+    & docker exec $Container sh '-c' $createCommand | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create isolated acceptance schema: $schemaName"
     }
 
+    $environment = & docker inspect $Container --format '{{range .Config.Env}}{{println .}}{{end}}'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect Docker container: $Container"
+    }
+    $passwordLine = $environment | Where-Object { $_ -like 'MYSQL_ROOT_PASSWORD=*' } | Select-Object -First 1
+    if (-not $passwordLine) {
+        throw "MYSQL_ROOT_PASSWORD is not available inside Docker container: $Container"
+    }
+    $rootPassword = $passwordLine.Substring('MYSQL_ROOT_PASSWORD='.Length)
     $escapedPassword = [Uri]::EscapeDataString($rootPassword)
     return [pscustomobject]@{
         url = "mysql://root:$escapedPassword@127.0.0.1:$hostPort/$schemaName"
@@ -288,8 +321,8 @@ function Remove-DockerAcceptanceDatabase {
         throw "Refusing to drop unsafe schema name: $schemaName"
     }
     $dropSql = "DROP DATABASE IF EXISTS $schemaName"
-    $mysqlCommand = "mysql -uroot -p`"`$MYSQL_ROOT_PASSWORD`" -e `"$dropSql`""
-    & docker exec ([string]$Database.container) sh -lc $mysqlCommand | Out-Null
+    $dropCommand = "MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`" exec mysql -uroot -e '$dropSql'"
+    & docker exec ([string]$Database.container) sh '-c' $dropCommand | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to remove isolated acceptance schema: $schemaName"
     }
@@ -331,23 +364,17 @@ try {
     }
 
     $needsMysql = @($matrix.requirements.checks | Where-Object { $_.requires_mysql }).Count -gt 0
-    if ($needsMysql -and -not $ListOnly) {
-        if ($DatabaseUrl) {
-            $providedSchema = Get-DatabaseNameFromUrl $DatabaseUrl
-            if ($providedSchema -notmatch '^qqbot_accept_[A-Za-z0-9_]+$') {
-                throw "Refusing non-isolated DatabaseUrl schema '$providedSchema'; expected qqbot_accept_*"
-            }
-            $database = [pscustomobject]@{
-                url = $DatabaseUrl
-                schema = $providedSchema
-                container = $null
-                owned = $false
-            }
-        } else {
-            $database = New-DockerAcceptanceDatabase -Container $DockerContainer
+    if ($needsMysql -and -not $ListOnly -and $DatabaseUrl) {
+        $providedSchema = Get-DatabaseNameFromUrl $DatabaseUrl
+        if ($providedSchema -notmatch '^qqbot_accept_[A-Za-z0-9_]+$') {
+            throw "Refusing non-isolated DatabaseUrl schema '$providedSchema'; expected qqbot_accept_*"
         }
-        [Environment]::SetEnvironmentVariable("QQBOT_TEST_DATABASE_URL", [string]$database.url, "Process")
-        Write-Host "Using isolated MySQL schema: $($database.schema)"
+        $database = [pscustomobject]@{
+            url = $DatabaseUrl
+            schema = $providedSchema
+            container = $null
+            owned = $false
+        }
     }
 
     $inventoryCache = @{}
@@ -370,7 +397,7 @@ try {
                 continue
             }
 
-            $testFileHash = (Get-FileHash -LiteralPath $testFile -Algorithm SHA256).Hash.ToLowerInvariant()
+            $testFileHash = Get-Sha256Hex -LiteralPath $testFile
             $effectiveEvidence = Get-EffectiveEvidence -Check $check -TestFileHash $testFileHash
 
             $inventoryKey = "$($check.package)|$($check.test_target)"
@@ -427,7 +454,7 @@ try {
                 })
                 continue
             }
-            if ($check.requires_mysql -and -not $database) {
+            if ($check.requires_mysql -and -not $database -and $ListOnly) {
                 $checkResults.Add([pscustomobject]@{
                     requirement_id = [string]$requirement.id
                     check_id = [string]$check.id
@@ -443,32 +470,56 @@ try {
                 continue
             }
 
-            $arguments = [System.Collections.Generic.List[object]]::new()
-            foreach ($argument in @(
-                "test", "-p", [string]$check.package, "--test", [string]$check.test_target,
-                [string]$check.test_name, "--", "--exact", "--test-threads=1"
-            )) {
-                $arguments.Add($argument)
+            $checkDatabase = $null
+            try {
+                if ($check.requires_mysql) {
+                    if ($database) {
+                        $checkDatabase = $database
+                    } else {
+                        $checkDatabase = New-DockerAcceptanceDatabase -Container $DockerContainer
+                    }
+                    [Environment]::SetEnvironmentVariable(
+                        "QQBOT_TEST_DATABASE_URL",
+                        [string]$checkDatabase.url,
+                        "Process"
+                    )
+                    Write-Host "Using isolated MySQL schema for $($check.id): $($checkDatabase.schema)"
+                }
+
+                $arguments = [System.Collections.Generic.List[object]]::new()
+                foreach ($argument in @(
+                    "test", "-p", [string]$check.package, "--test", [string]$check.test_target,
+                    [string]$check.test_name, "--", "--exact", "--test-threads=1"
+                )) {
+                    $arguments.Add($argument)
+                }
+                if ($check.ignored) {
+                    $arguments.Add("--ignored")
+                }
+                $execution = Invoke-LoggedCommand `
+                    -Id ([string]$check.id) `
+                    -Program "cargo" `
+                    -Arguments @($arguments)
+                $checkResults.Add([pscustomobject]@{
+                    requirement_id = [string]$requirement.id
+                    check_id = [string]$check.id
+                    test_name = [string]$check.test_name
+                    requested_evidence = [string]$check.evidence
+                    evidence = $effectiveEvidence
+                    test_file_sha256 = $testFileHash
+                    status = if ($execution.exit_code -eq 0) { "PASS" } else { "FAIL" }
+                    reason = if ($execution.exit_code -eq 0) { $null } else { "test exited with code $($execution.exit_code)" }
+                    duration_ms = $execution.duration_ms
+                    log = $execution.log
+                })
             }
-            if ($check.ignored) {
-                $arguments.Add("--ignored")
+            finally {
+                [Environment]::SetEnvironmentVariable("QQBOT_TEST_DATABASE_URL", $previousDatabaseUrl, "Process")
+                if ($checkDatabase -and $checkDatabase.owned -and -not $KeepDatabase) {
+                    Remove-DockerAcceptanceDatabase -Database $checkDatabase
+                    Write-Host "Removed isolated MySQL schema for $($check.id): $($checkDatabase.schema)"
+                }
             }
-            $execution = Invoke-LoggedCommand `
-                -Id ([string]$check.id) `
-                -Program "cargo" `
-                -Arguments @($arguments)
-            $checkResults.Add([pscustomobject]@{
-                requirement_id = [string]$requirement.id
-                check_id = [string]$check.id
-                test_name = [string]$check.test_name
-                requested_evidence = [string]$check.evidence
-                evidence = $effectiveEvidence
-                test_file_sha256 = $testFileHash
-                status = if ($execution.exit_code -eq 0) { "PASS" } else { "FAIL" }
-                reason = if ($execution.exit_code -eq 0) { $null } else { "test exited with code $($execution.exit_code)" }
-                duration_ms = $execution.duration_ms
-                log = $execution.log
-            })
         }
     }
 }

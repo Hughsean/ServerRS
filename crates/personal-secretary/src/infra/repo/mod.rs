@@ -8,6 +8,8 @@ mod mysql_directory;
 mod mysql_follow_up;
 mod mysql_inbound;
 mod mysql_memory;
+mod mysql_notification_candidate_producer;
+mod mysql_notification_policy;
 mod mysql_owner_binding;
 mod mysql_recall;
 mod mysql_retriever;
@@ -23,6 +25,8 @@ pub(crate) use mysql_directory::MySqlDirectoryStore;
 pub(crate) use mysql_follow_up::MySqlFollowUpStore;
 pub(crate) use mysql_inbound::MySqlInboundEventStore;
 pub(crate) use mysql_memory::MySqlMemoryStore;
+#[allow(dead_code)]
+pub(crate) use mysql_notification_policy::MySqlNotificationPolicyStore;
 pub(crate) use mysql_owner_binding::MySqlOwnerBindingStore;
 pub(crate) use mysql_recall::MySqlRecallStore;
 pub(crate) use mysql_retriever::MySqlRetrieverStore;

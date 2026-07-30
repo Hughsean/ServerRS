@@ -1,13 +1,13 @@
 # 个人 QQ 智能秘书 Todo
 
-> 最后更新：2026-07-26
+> 最后更新：2026-07-29
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
-> 当前开发阶段：NapCat 数据完整性、撤回与 Artifact 生命周期闭环 v1
-> （分支 `glm/qqbot-continuity-recall-v1`，未提交待 Codex 评审）：
-> B4 账号会话目录与历史完整性证据、B3 消息撤回闭环、B6 富消息 Artifact 引用、
-> B7 健康状态与结构化日志领域层已完成并通过单元测试 + clippy + fmt + build + workspace_boundaries；
-> NapCat 只读保持，不发送消息，不启用 QQ 开放平台。
+> 当前开发阶段：Owner Notification Policy Feedback v1 的 Task 7 已完成代码与 L3 验收，
+> `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查也已 PASS，但 B3 requirement 仍因缺少
+> L5 独立 attestation 显示 FAIL。分支 `gpt/qqbot-owner-policy-feedback-v1` 暂不提交或合并；
+> 验收脚本凭据 P1 已关闭；下一项是当前分支完整差异审查和检查点准备。NapCat 保持只读，
+> 不发送消息，不连接 QQ 开放平台。
 
 ## 0. 当前完成与阻塞
 
@@ -24,6 +24,24 @@
 - [ ] `BLOCKED QA-004` GitHub 管理侧尚未配置：protected Environment、受保护 runner 使用的
   固定可信公钥/签发密钥托管，以及 branch protection 的
   `QQBot Acceptance Gate / acceptance` required check。本轮仅记录，不伪造完成。
+- [x] `DONE NPOLICY-007` Owner Notification Policy Feedback v1 的 Task 7 完成代码与 L3
+  验收：`NPOLICY-PERSISTENCE-001`、`NPOLICY-MIGRATION-001`、
+  `NPOLICY-EVALUATION-001`、`NPOLICY-DELIVERY-001`、
+  `NPOLICY-RECONCILIATION-001` 均为 PASS。FollowUp/Agenda 扫描只生成
+  Candidate/Request，不直接写 legacy Outbox；legacy Outbox 仅保留给明确的兼容状态机 fixture
+  与全局租约协调。完整门禁仍为 `REJECTED`，不得据此声称 Release Gate 已批准。
+- [x] `DONE B3-RECALL-004` `2026-07-29 23:29（Asia/Shanghai）` 修复 Recall WAL 恢复韧性
+  验收注入器：删除 `secretary_recall_inbox` 后同步删除其测试迁移记录，确保恢复步骤确实重建
+  inbox；Worker 无需新 Recall 即按现有周期重试，WAL 仅在 MySQL enqueue 成功后 checkpoint。
+  `B3-RECALL-004-RESILIENCE` 实际 PASS（L3），五项 `NPOLICY-*` 仍 PASS；完整 Release Gate
+  仍为 `REJECTED`，因 L4/L5 独立 attestation 缺失。隔离 schema 已清理，未连接或发送 QQ。
+- [x] `DONE QA-005` `2026-07-30 10:19（Asia/Shanghai）` 验收脚本凭据 P1 已关闭：隔离 schema
+  的创建和清理仅由容器内 `MYSQL_PWD="$MYSQL_ROOT_PASSWORD"` 展开认证，宿主机 `docker`
+  命令行不再包含 root 密码。PowerShell 5.1 解析、`B3-RECALL-004-RESILIENCE` 隔离 MySQL smoke
+  和 `git diff --check` 均通过；smoke schema `qqbot_accept_20260730101342_6c0e95c5` 已清理。
+  当前发现 4 个既有遗留 schema，均未删除：`qqbot_accept_20260729142255_697e4cce`、
+  `qqbot_accept_20260729214037_978a58d9`、`qqbot_accept_20260729214904_ba276172`、
+  `qqbot_accept_20260730000216_ef44aea1`。
 
 - [x] `DONE ID-002` 建模来源账号、会话、可信发送者、消息角色和账号作用域幂等键。
 - [x] `DONE ID-003` 保证 NapCat Owner 消息只能是 Observation。

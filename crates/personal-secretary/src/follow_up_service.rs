@@ -37,6 +37,59 @@ pub trait FollowUpStoreT: Send + Sync {
         error_code: &str,
         kind: NotificationFailureKind,
     ) -> Result<(), InboundEventStoreError>;
+
+    /// 启动屏障：在任何平台投递任务启动前，同步处理历史来源直写 Outbox。
+    ///
+    /// 活跃 `claimed` 行不可安全改写，必须返回阻塞错误；过期租约会终态化为
+    /// `unknown_commit`。本方法不会从旧 payload 推断或重建候选。
+    async fn reconcile_legacy_notifications(
+        &self,
+        config: &LegacyNotificationReconciliationConfig,
+    ) -> Result<LegacyNotificationReconciliationReport, InboundEventStoreError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyNotificationReconciliationConfig {
+    pub worker_id: String,
+    pub lease_secs: u64,
+    pub page_size: u32,
+    pub max_rows: u32,
+    pub deadline_secs: u64,
+}
+
+impl LegacyNotificationReconciliationConfig {
+    pub fn validate(&self) -> Result<(), InboundEventStoreError> {
+        if self.worker_id.trim().is_empty() || self.worker_id.len() > 128 {
+            return Err(InboundEventStoreError::InvalidData(
+                "legacy reconciliation worker_id must be non-empty and at most 128 bytes".into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.lease_secs)
+            || !(1..=1000).contains(&self.page_size)
+            || !(1..=100_000).contains(&self.max_rows)
+            || !(1..=300).contains(&self.deadline_secs)
+        {
+            return Err(InboundEventStoreError::InvalidData(
+                "legacy reconciliation bounds are invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LegacyNotificationReconciliationReport {
+    pub rows_scanned: u64,
+    pub legacy_outbox_suppressed: u64,
+    pub legacy_sources_rebuilt: u64,
+    pub legacy_sources_unverifiable: u64,
+    pub candidates_created: u64,
+    pub requests_created: u64,
+    pub sources_skipped_stale: u64,
+    pub active_claimed: u64,
+    pub expired_claims_marked_unknown_commit: u64,
+    pub completed: bool,
+    pub blocked: bool,
 }
 
 pub struct FollowUpUseCase {
@@ -70,6 +123,14 @@ impl FollowUpUseCase {
             .await?;
         report.memories_expired = memories_expired;
         Ok(report)
+    }
+
+    pub async fn reconcile_legacy_notifications(
+        &self,
+        config: &LegacyNotificationReconciliationConfig,
+    ) -> Result<LegacyNotificationReconciliationReport, InboundEventStoreError> {
+        config.validate()?;
+        self.follow_ups.reconcile_legacy_notifications(config).await
     }
 
     pub async fn claim_due_notification(

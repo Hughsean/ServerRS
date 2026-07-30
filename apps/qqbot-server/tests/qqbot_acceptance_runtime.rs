@@ -24,6 +24,9 @@ use qqbot_server::config::{
 };
 use qqbot_server::production;
 
+#[path = "../database/test_support/qqbot_migrations.rs"]
+mod qqbot_migrations;
+
 fn account(subject: &str) -> SourceAccountRef {
     SourceAccountRef::new(MessageSource::NapCat, subject.to_owned()).expect("valid account fixture")
 }
@@ -62,108 +65,12 @@ async fn isolated_db() -> DatabaseConnection {
     let db = sea_orm::Database::connect(url)
         .await
         .expect("connect isolated acceptance MySQL");
-    apply_qqbot_migrations(&db).await;
+    qqbot_migrations::apply_qqbot_migrations(
+        &db,
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("database/migrations"),
+    )
+    .await;
     db
-}
-
-async fn apply_qqbot_migrations(db: &DatabaseConnection) {
-    let migrations_dir = format!(
-        "{}/../../apps/qqbot-server/database/migrations",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&migrations_dir)
-        .unwrap_or_else(|error| panic!("failed to read migrations directory: {error}"))
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
-        .collect();
-    entries.sort_by_key(|path| migration_order(path));
-    for path in entries {
-        let migration_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if migration_name.contains("_owner_agenda.sql")
-            && db
-                .query_one_raw(Statement::from_string(
-                    DatabaseBackend::MySql,
-                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
-                ))
-                .await
-                .expect("agenda migration sentinel query failed")
-                .is_some()
-        {
-            continue;
-        }
-        let sql = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let stripped = sql
-            .lines()
-            .map(|line| line.split_once("--").map_or(line, |(prefix, _)| prefix))
-            .collect::<Vec<_>>()
-            .join("\n");
-        for statement in stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|sql| !sql.is_empty())
-        {
-            db.execute_raw(Statement::from_string(DatabaseBackend::MySql, statement))
-                .await
-                .unwrap_or_else(|error| panic!("migration {} failed: {error}", path.display()));
-        }
-    }
-}
-
-fn migration_order(path: &std::path::Path) -> u8 {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    if name.contains("_ingestion.sql") {
-        0
-    } else if name.contains("_continuity.sql") {
-        1
-    } else if name.contains("_backfill.sql") {
-        2
-    } else if name.contains("_threads.sql") {
-        3
-    } else if name.contains("_thread_links.sql") {
-        4
-    } else if name.contains("_thread_semantics.sql") {
-        5
-    } else if name.contains("_thread_mutations.sql") {
-        6
-    } else if name.contains("_thread_revisions.sql") {
-        7
-    } else if name.contains("_memory.sql") {
-        8
-    } else if name.contains("_memory_controls_followups.sql") {
-        9
-    } else if name.contains("_qq_open_platform.sql") {
-        10
-    } else if name.contains("_action_planner.sql") {
-        11
-    } else if name.contains("_action_planner_hardening.sql") {
-        12
-    } else if name.contains("_directory.sql") {
-        13
-    } else if name.contains("_gap_freeze_hardening.sql") {
-        14
-    } else if name.contains("_event_type_recall.sql") {
-        15
-    } else if name.contains("_recall.sql") {
-        16
-    } else if name.contains("_artifacts.sql") {
-        17
-    } else if name.contains("_recall_inbox.sql") {
-        18
-    } else if name.contains("_artifact_derivations.sql") {
-        19
-    } else if name.contains("_owner_agenda.sql") {
-        20
-    } else {
-        99
-    }
 }
 
 async fn scalar_u64(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm::Value>) -> u64 {
@@ -192,6 +99,187 @@ async fn scalar_string(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm::
     .expect("acceptance query must return one row")
     .try_get::<String>("", "value")
     .expect("acceptance scalar must decode as string")
+}
+
+/// 迁移只能在 `qqbot_accept_*` 隔离 schema 中验证；断言本版本的关键表与账户 fencing 字段。
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn acceptance_notification_policy_migration_creates_fenced_schema() {
+    let db = isolated_db().await;
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT COUNT(*) AS value FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_name IN \
+             ('secretary_notification_policy_families', \
+              'secretary_notification_policy_revisions', \
+              'secretary_notification_candidates', \
+              'secretary_notification_evaluation_requests', \
+              'secretary_notification_decisions', \
+              'secretary_notification_feedback')",
+            Vec::new(),
+        )
+        .await,
+        6,
+        "通知策略迁移必须创建全部六张策略与反馈表",
+    );
+}
+
+/// 账户策略 epoch 必须用无符号列，避免 SeaORM 将 MySQL `BIGINT UNSIGNED` 解码为 `i64`。
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_migration_uses_unsigned_epoch() {
+    let db = isolated_db().await;
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT COUNT(*) AS value FROM information_schema.columns \
+             WHERE table_schema = DATABASE() \
+               AND table_name = 'secretary_accounts' \
+               AND column_name = 'policy_epoch' \
+               AND column_type = 'bigint unsigned'",
+            Vec::new(),
+        )
+        .await,
+        1,
+        "账户策略 epoch 必须使用 BIGINT UNSIGNED",
+    );
+}
+
+/// Family Head 必须引用同一 Family 的 Revision，防止跨策略族篡改当前生效策略。
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_migration_fences_family_head_to_own_revision() {
+    let db = isolated_db().await;
+    let account_id = 9_000_000_u64 + (Uuid::new_v4().as_u128() % 1_000_000) as u64;
+    let first_family_id = Uuid::new_v4().to_string();
+    let second_family_id = Uuid::new_v4().to_string();
+    let first_revision_id = Uuid::new_v4().to_string();
+    let second_revision_id = Uuid::new_v4().to_string();
+
+    for statement in [
+        Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_accounts \
+             (id, source_channel, platform_account_id, status, policy_epoch) \
+             VALUES (?, 'napcat', ?, 'active', 0)",
+            [
+                account_id.into(),
+                format!("family-head-{account_id}").into(),
+            ],
+        ),
+        Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_policy_families \
+             (policy_family_id, account_id, canonical_scope_key, policy_kind, current_revision_id, generation) \
+             VALUES (?, ?, ?, 'account_default', NULL, 1)",
+            [
+                first_family_id.clone().into(),
+                account_id.into(),
+                "first".into(),
+            ],
+        ),
+        Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_policy_families \
+             (policy_family_id, account_id, canonical_scope_key, policy_kind, current_revision_id, generation) \
+             VALUES (?, ?, ?, 'account_default', NULL, 1)",
+            [
+                second_family_id.clone().into(),
+                account_id.into(),
+                "second".into(),
+            ],
+        ),
+        Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_policy_revisions \
+             (policy_revision_id, policy_family_id, revision_number, revision_kind, rule_json, audit_summary) \
+             VALUES (?, ?, 1, 'rule', JSON_OBJECT(), 'first revision')",
+            [
+                first_revision_id.clone().into(),
+                first_family_id.clone().into(),
+            ],
+        ),
+        Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_policy_revisions \
+             (policy_revision_id, policy_family_id, revision_number, revision_kind, rule_json, audit_summary) \
+             VALUES (?, ?, 1, 'rule', JSON_OBJECT(), 'second revision')",
+            [
+                second_revision_id.clone().into(),
+                second_family_id.clone().into(),
+            ],
+        ),
+    ] {
+        db.execute_raw(statement)
+            .await
+            .expect("Family Head fixture must persist");
+    }
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_notification_policy_families \
+         SET current_revision_id = ? WHERE policy_family_id = ?",
+        [
+            first_revision_id.clone().into(),
+            first_family_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("Family must accept its own revision as Head");
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT current_revision_id AS value FROM secretary_notification_policy_families \
+             WHERE policy_family_id = ?",
+            vec![first_family_id.clone().into()],
+        )
+        .await,
+        first_revision_id,
+        "成功提交后 Family Head 不得为空",
+    );
+
+    let cross_family_update = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_notification_policy_families \
+             SET current_revision_id = ? WHERE policy_family_id = ?",
+            [second_revision_id.into(), first_family_id.into()],
+        ))
+        .await;
+    assert!(
+        cross_family_update.is_err(),
+        "MySQL 必须拒绝把另一 Family 的 Revision 写入当前 Family Head"
+    );
+}
+
+/// 共用迁移加载器必须记录每个已提交迁移；第二次加载不得重复执行任何 DDL。
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_migration_loader_records_and_repeats_idempotently() {
+    let db = isolated_db().await;
+    let migrations_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("database/migrations");
+
+    let recorded_before = scalar_u64(
+        &db,
+        "SELECT COUNT(*) AS value FROM qqbot_test_schema_migrations \
+         WHERE migration_name = '20260728_owner_notification_policy_feedback_v1.sql'",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(recorded_before, 1, "新迁移必须在首次成功后记录一次");
+
+    qqbot_migrations::apply_qqbot_migrations(&db, &migrations_dir).await;
+
+    let recorded_after = scalar_u64(
+        &db,
+        "SELECT COUNT(*) AS value FROM qqbot_test_schema_migrations \
+         WHERE migration_name = '20260728_owner_notification_policy_feedback_v1.sql'",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(recorded_after, 1, "重复加载不得重复记录或执行新迁移");
 }
 
 async fn drain_handle(handle: qqbot_server::worker_lifecycle::WorkerHandle) {
@@ -395,6 +483,13 @@ async fn acceptance_stalled_recall_store_does_not_block_websocket_and_retries() 
     ))
     .await
     .expect("failure injection must remove inbox table");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE FROM qqbot_test_schema_migrations WHERE migration_name = ?",
+        ["20260727_personal_secretary_recall_inbox.sql".into()],
+    ))
+    .await
+    .expect("failure injection must make the recall inbox migration runnable for recovery");
     let inbound_store = build_mysql_inbound_event_store(db.clone());
     let epoch = inbound_store
         .begin_connection(&acc)
@@ -463,7 +558,11 @@ async fn acceptance_stalled_recall_store_does_not_block_websocket_and_retries() 
         .expect("ingestion worker panic");
     assert_eq!(report.accepted, 1);
 
-    apply_qqbot_migrations(&db).await;
+    qqbot_migrations::apply_qqbot_migrations(
+        &db,
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("database/migrations"),
+    )
+    .await;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let count = scalar_u64(

@@ -45,11 +45,12 @@ pub trait AgendaStoreT: Send + Sync {
         limit: u32,
     ) -> Result<Vec<AgendaItem>, AgendaError>;
 
-    async fn enqueue_due_notifications(
+    /// 只生成版本化 Candidate 与 generation-1 Evaluation Request；绝不直接写 Owner Outbox。
+    async fn produce_due_notification_candidates(
         &self,
         now_unix_secs: i64,
         limit: u32,
-    ) -> Result<u64, AgendaError>;
+    ) -> Result<crate::NotificationCandidateProductionReport, AgendaError>;
 }
 
 pub struct AgendaUseCase {
@@ -95,14 +96,18 @@ impl AgendaUseCase {
             .await
     }
 
-    pub async fn enqueue_due_notifications(&self, limit: u32) -> Result<u64, AgendaError> {
+    /// 扫描当前到期 Agenda 项，只生产通知候选；策略求值和 Outbox 投递由独立 worker 负责。
+    pub async fn produce_due_notification_candidates(
+        &self,
+        limit: u32,
+    ) -> Result<crate::NotificationCandidateProductionReport, AgendaError> {
         if !(1..=1000).contains(&limit) {
             return Err(AgendaError::Invalid(
-                "agenda notification scan limit must be in 1..=1000".into(),
+                "agenda notification candidate scan limit must be in 1..=1000".into(),
             ));
         }
         self.store
-            .enqueue_due_notifications(self.clock.now_unix_secs(), limit)
+            .produce_due_notification_candidates(self.clock.now_unix_secs(), limit)
             .await
     }
 }

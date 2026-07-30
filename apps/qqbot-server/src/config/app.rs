@@ -12,9 +12,9 @@ use super::action_planner::ActionPlannerConfig;
 use super::database::DatabaseConfig;
 use super::env::{
     apply_agenda_env, apply_artifact_env, apply_backfill_env, apply_follow_up_env,
-    apply_health_env, apply_llm_env, apply_qq_open_platform_env, apply_recall_wal_env,
-    apply_thread_links_env, apply_thread_projection_env, apply_thread_semantics_env,
-    apply_whitelist_env, parse_bool, parse_positive,
+    apply_health_env, apply_llm_env, apply_notification_policy_env, apply_qq_open_platform_env,
+    apply_recall_wal_env, apply_thread_links_env, apply_thread_projection_env,
+    apply_thread_semantics_env, apply_whitelist_env, parse_bool, parse_positive,
 };
 use super::llm::LlmConfig;
 use super::napcat::NapCatConfig;
@@ -23,8 +23,8 @@ use super::validation::{validate_loopback_url, validate_url};
 use super::whitelist::WhitelistConfig;
 use super::workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
-    HealthConfig, IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
-    ThreadSemanticsConfig,
+    HealthConfig, IngestionConfig, NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig,
+    ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,6 +46,8 @@ pub struct AppConfig {
     pub follow_up: FollowUpConfig,
     #[serde(default)]
     pub agenda: AgendaConfig,
+    #[serde(default)]
+    pub notification_policy: NotificationPolicyConfig,
     #[serde(default)]
     pub directory_sync: DirectorySyncConfig,
     #[serde(default)]
@@ -132,6 +134,7 @@ impl AppConfig {
         apply_thread_links_env(&mut self.thread_links)?;
         apply_follow_up_env(&mut self.follow_up)?;
         apply_agenda_env(&mut self.agenda)?;
+        apply_notification_policy_env(&mut self.notification_policy)?;
         apply_artifact_env(&mut self.artifact)?;
         apply_recall_wal_env(&mut self.recall_wal)?;
         apply_health_env(&mut self.health)?;
@@ -214,6 +217,7 @@ impl AppConfig {
         self.thread_links.validate()?;
         self.follow_up.validate()?;
         self.agenda.validate()?;
+        self.notification_policy.validate()?;
         self.directory_sync.validate()?;
         self.artifact.validate()?;
         self.recall_wal.validate()?;

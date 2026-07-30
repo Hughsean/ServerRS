@@ -31,8 +31,8 @@ pub use qq_open_platform::QqOpenPlatformConfig;
 pub use whitelist::WhitelistConfig;
 pub use workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
-    HealthConfig, IngestionConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
-    ThreadSemanticsConfig,
+    HealthConfig, IngestionConfig, NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig,
+    ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 /// 配置加载或校验错误。

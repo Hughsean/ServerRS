@@ -17,6 +17,7 @@ mod health_runtime;
 mod inbound;
 mod ingestion_worker;
 mod llm;
+mod notification_policy_worker;
 pub mod owner_approval;
 mod qq_open_platform;
 mod recall;

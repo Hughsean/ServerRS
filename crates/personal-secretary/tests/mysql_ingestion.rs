@@ -11,26 +11,29 @@ use personal_secretary::{
     ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
     DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EventThreadId,
     HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
-    IngestionGapReason, IngestionGapStatus, MemoryDeleteInput, MemoryFact, MemoryFactId,
-    MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource, PersonMemory, ProjectMemory,
-    ScopeProgress, SourceAccountRef, SourceMessageRef, ThreadActorRef, ThreadLinkCandidateId,
-    ThreadLinkReviewAction, ThreadLinkReviewUseCase, ThreadLinkUseCase, ThreadMutationApprovalNode,
-    ThreadMutationDecision, ThreadMutationDecisionNode, ThreadMutationEffect,
-    ThreadMutationEffectExecutor, ThreadMutationImpact, ThreadMutationKind,
-    ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationRevertInput,
-    ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
-    ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor, VerifiedActorKind,
-    build_mysql_agenda_store, build_mysql_backfill_store, build_mysql_directory_store,
-    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
-    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
+    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase,
+    MessageSource, PersonMemory, ProjectMemory, ScopeProgress, SourceAccountRef, SourceMessageRef,
+    ThreadActorRef, ThreadLinkCandidateId, ThreadLinkReviewAction, ThreadLinkReviewUseCase,
+    ThreadLinkUseCase, ThreadMutationApprovalNode, ThreadMutationDecision,
+    ThreadMutationDecisionNode, ThreadMutationEffect, ThreadMutationEffectExecutor,
+    ThreadMutationImpact, ThreadMutationKind, ThreadMutationProposalId, ThreadMutationResumeInput,
+    ThreadMutationRevertInput, ThreadMutationRevertUseCase, ThreadMutationStoreT,
+    ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
+    VerifiedActorKind, build_mysql_agenda_store, build_mysql_backfill_store,
+    build_mysql_directory_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
+    build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
+
+#[path = "../../../apps/qqbot-server/database/test_support/qqbot_migrations.rs"]
+mod qqbot_migrations;
 
 fn thread_mutation_runtime(
     db: sea_orm::DatabaseConnection,
@@ -1115,10 +1118,12 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     );
     let report = follow_up.scan(70_000, 86_400, 100).await.unwrap();
     assert_eq!(report.commitments_materialized, 1);
-    assert_eq!(report.notifications_enqueued, 1);
+    assert_eq!(report.notification_candidates_created, 1);
+    assert_eq!(report.notification_evaluation_requests_created, 1);
     let replay = follow_up.scan(70_000, 86_400, 100).await.unwrap();
     assert_eq!(replay.commitments_materialized, 0);
-    assert_eq!(replay.notifications_enqueued, 0);
+    assert_eq!(replay.notification_candidates_created, 0);
+    assert_eq!(replay.notification_evaluation_requests_created, 0);
 
     let command_account = format!("follow-up-control-{run_id}");
     let owner_command = InboundMessageEnvelope::new(
@@ -1167,16 +1172,16 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     let report = follow_up.scan(70_101, 86_400, 100).await.unwrap();
     assert_eq!(report.items_reconciled, 1);
     assert_eq!(
-        scalar_string(
+        scalar_i64(
             &db,
-            "SELECT delivery_status AS value FROM secretary_notification_outbox outbox \
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox outbox \
              JOIN secretary_follow_up_items item ON item.follow_up_id = outbox.follow_up_id \
              WHERE item.source_memory_fact_id = ?",
             [fact.fact_id.as_str()],
         )
-        .await
-        .unwrap(),
-        "suppressed"
+        .await,
+        0,
+        "follow-up scans must not create legacy Outbox rows before policy evaluation"
     );
 }
 
@@ -1231,33 +1236,31 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         .unwrap()
         .source_event_id()
         .clone();
-    memory
-        .remember(&MemoryFact {
-            fact_id: MemoryFactId::generate(),
-            account: foreign_account.clone(),
-            subject_key: "commitment:foreign-outbox".into(),
-            payload: MemoryPayload::Commitment(CommitmentMemory {
-                promisor: ThreadActorRef {
-                    account: foreign_account.clone(),
-                    actor_id: "bob".into(),
-                },
-                beneficiary: ThreadActorRef {
-                    account: foreign_account.clone(),
-                    actor_id: "foreign-owner".into(),
-                },
-                action: "提交其他账号材料".into(),
-                due_at_unix_secs: Some(80_100),
-                status: CommitmentStatus::Pending,
-                completion_source_event_id: None,
-            }),
-            status: MemoryFactStatus::Confirmed,
-            confidence_bps: 9_500,
-            source_event_ids: vec![foreign_source_id],
-            valid_until_unix_secs: None,
-            supersedes_fact_id: None,
-        })
-        .await
-        .unwrap();
+    let foreign_fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: foreign_account.clone(),
+        subject_key: "commitment:foreign-outbox".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: foreign_account.clone(),
+                actor_id: "bob".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: foreign_account.clone(),
+                actor_id: "foreign-owner".into(),
+            },
+            action: "提交其他账号材料".into(),
+            due_at_unix_secs: Some(80_100),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![foreign_source_id],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&foreign_fact).await.unwrap();
     let first_fact = MemoryFact {
         fact_id: MemoryFactId::generate(),
         account: account.clone(),
@@ -1288,6 +1291,61 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         memory_store.clone(),
     );
     follow_up.scan(80_100, 86_400, 100).await.unwrap();
+    // Task 7 后扫描只创建 Candidate/Request；此处显式构造两条历史 Outbox，
+    // 保留该测试对旧投递状态机（含跨账号领取）的覆盖。
+    let first_follow_up_id = scalar_string(
+        &db,
+        "SELECT item.follow_up_id AS value FROM secretary_follow_up_items item \
+         JOIN secretary_accounts account ON account.id = item.account_id \
+         WHERE account.source_channel = 'napcat' AND account.platform_account_id = ? \
+         AND item.source_memory_fact_id = ?",
+        [&account_id, first_fact.fact_id.as_str()],
+    )
+    .await
+    .expect("first follow-up must be materialized");
+    let foreign_follow_up_id = scalar_string(
+        &db,
+        "SELECT item.follow_up_id AS value FROM secretary_follow_up_items item \
+         JOIN secretary_accounts account ON account.id = item.account_id \
+         WHERE account.source_channel = 'napcat' AND account.platform_account_id = ? \
+         AND item.source_memory_fact_id = ?",
+        [&foreign_account_id, foreign_fact.fact_id.as_str()],
+    )
+    .await
+    .expect("foreign follow-up must be materialized");
+    for (notification_id, platform_account_id, follow_up_id) in [
+        (
+            Uuid::new_v4().to_string(),
+            account_id.clone(),
+            first_follow_up_id,
+        ),
+        (
+            Uuid::new_v4().to_string(),
+            foreign_account_id.clone(),
+            foreign_follow_up_id,
+        ),
+    ] {
+        let inserted = db
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_notification_outbox \
+                 (notification_id, account_id, follow_up_id, scheduled_at_unix_secs, notification_kind, payload_json, delivery_status) \
+                 SELECT ?, id, ?, 80100, 'owner_reminder', JSON_OBJECT('legacy_fixture', true), 'pending' \
+                 FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+                [
+                    notification_id.into(),
+                    follow_up_id.into(),
+                    platform_account_id.into(),
+                ],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            inserted.rows_affected(),
+            1,
+            "legacy Outbox fixture must insert once"
+        );
+    }
 
     let first = follow_up
         .claim_due_notification(&account, 80_100, 60)
@@ -1383,7 +1441,79 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         supersedes_fact_id: None,
     };
     memory.remember(&delivered_fact).await.unwrap();
-    follow_up.scan(100_001, 86_400, 100).await.unwrap();
+    let scan = follow_up.scan(100_001, 86_400, 100).await.unwrap();
+    assert_eq!(scan.commitments_materialized, 1);
+    assert_eq!(scan.notification_candidates_created, 1);
+    assert_eq!(scan.notification_evaluation_requests_created, 1);
+    let delivered_follow_up_id = scalar_exactly_one_string(
+        &db,
+        "SELECT item.follow_up_id AS value FROM secretary_follow_up_items item \
+         JOIN secretary_accounts account ON account.id = item.account_id \
+         WHERE account.source_channel = 'napcat' AND account.platform_account_id = ? \
+         AND item.source_memory_fact_id = ?",
+        [&account_id, delivered_fact.fact_id.as_str()],
+        "delivered fact must materialize exactly one follow-up item",
+    )
+    .await;
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_candidates candidate \
+             WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+            [&delivered_follow_up_id],
+        )
+        .await,
+        1,
+        "follow-up scan must produce one policy Candidate"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_evaluation_requests request \
+             JOIN secretary_notification_candidates candidate \
+               ON candidate.notification_candidate_id = request.notification_candidate_id \
+             WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+            [&delivered_follow_up_id],
+        )
+        .await,
+        1,
+        "follow-up scan must produce one policy evaluation Request"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox outbox \
+             JOIN secretary_follow_up_items item ON item.follow_up_id = outbox.follow_up_id \
+             JOIN secretary_accounts account ON account.id = outbox.account_id \
+             WHERE account.source_channel = 'napcat' AND account.platform_account_id = ? \
+             AND item.source_memory_fact_id = ?",
+            [&account_id, delivered_fact.fact_id.as_str()],
+        )
+        .await,
+        0,
+        "FollowUp 扫描不得直接创建 legacy Outbox"
+    );
+    // legacy Outbox 仅是本测试投递状态机的显式 fixture，不属于扫描生产行为。
+    let inserted = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_outbox \
+             (notification_id, account_id, follow_up_id, scheduled_at_unix_secs, notification_kind, payload_json, delivery_status) \
+             SELECT ?, id, ?, 100001, 'owner_reminder', JSON_OBJECT('legacy_fixture', true), 'pending' \
+             FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+            [
+                Uuid::new_v4().to_string().into(),
+                delivered_follow_up_id.into(),
+                account_id.clone().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        inserted.rows_affected(),
+        1,
+        "delivered legacy Outbox fixture must insert exactly one row"
+    );
     let delivered = follow_up
         .claim_due_notification(&account, 100_001, 60)
         .await
@@ -1487,13 +1617,23 @@ async fn agenda_due_outbox_is_idempotent_version_fenced_and_lease_fenced() {
         build_mysql_agenda_store(db.clone()),
         Arc::new(FixedClock { now: 100_001 }),
     );
-    assert_eq!(due.enqueue_due_notifications(100).await.unwrap(), 1);
-    assert_eq!(due.enqueue_due_notifications(100).await.unwrap(), 0);
-
-    let follow_up = personal_secretary::FollowUpUseCase::new(
-        build_mysql_follow_up_store(db.clone()),
-        build_mysql_memory_store(db.clone()),
+    let first_report = due.produce_due_notification_candidates(100).await.unwrap();
+    assert_eq!(first_report.candidates_created, 1);
+    assert_eq!(first_report.requests_created, 1);
+    let repeated_report = due.produce_due_notification_candidates(100).await.unwrap();
+    assert_eq!(repeated_report.candidates_created, 0);
+    assert_eq!(repeated_report.requests_created, 0);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox WHERE agenda_item_id = ?",
+            [created.item.item_id.as_str()],
+        )
+        .await,
+        0,
+        "Agenda source scan must not bypass policy evaluation by writing legacy Outbox"
     );
+
     let reschedule = AgendaUseCase::new(
         build_mysql_agenda_store(db.clone()),
         Arc::new(FixedClock { now: 100_001 }),
@@ -1525,68 +1665,215 @@ async fn agenda_due_outbox_is_idempotent_version_fenced_and_lease_fenced() {
             [created.item.item_id.as_str()],
         )
         .await,
-        1
+        0,
+        "candidate-only Agenda scans must not leave legacy Outbox rows to suppress"
     );
 
     let rescheduled_due = AgendaUseCase::new(
         build_mysql_agenda_store(db.clone()),
         Arc::new(FixedClock { now: 100_002 }),
     );
+    let rescheduled_report = rescheduled_due
+        .produce_due_notification_candidates(100)
+        .await
+        .unwrap();
+    assert_eq!(rescheduled_report.candidates_created, 1);
+    assert_eq!(rescheduled_report.requests_created, 1);
     assert_eq!(
-        rescheduled_due
-            .enqueue_due_notifications(100)
-            .await
-            .unwrap(),
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox WHERE agenda_item_id = ?",
+            [created.item.item_id.as_str()],
+        )
+        .await,
+        0,
+        "rescheduled source scan still must not create an Outbox row before policy evaluation"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_candidates WHERE source_kind = 'agenda' AND source_id = ? AND source_version = 2",
+            [created.item.item_id.as_str()],
+        )
+        .await,
         1
     );
-    let current_claim = follow_up
-        .claim_due_notification(&account, 100_002, 60)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        current_claim.content,
-        personal_secretary::OwnerNotificationContent::Agenda {
-            kind: AgendaItemKind::Reminder,
-            ref title,
-        } if title == "续费提醒"
-    ));
-    assert!(matches!(
-        follow_up
-            .mark_notification_delivered(
-                &current_claim.notification_id,
-                &personal_secretary::NotificationLeaseToken::generate(),
-                "must-not-be-recorded",
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn legacy_reconciliation_rebuilds_only_current_follow_up_sources_and_blocks_active_claims() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+
+    let run_id = Uuid::new_v4().simple().to_string();
+    let platform_account_id = format!("task7-reconcile-{run_id}");
+    let account = SourceAccountRef::new(MessageSource::NapCat, &platform_account_id).unwrap();
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let source_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::NapCat, &platform_account_id, "source")
+                    .unwrap(),
+                ConversationRef::new(ConversationKind::Private, "owner").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+                90_000,
+                "我会提交材料",
+                Vec::new(),
             )
-            .await,
-        Err(personal_secretary::InboundEventStoreError::LeaseLost)
-    ));
-    assert_eq!(current_claim.attempt, 1);
-    follow_up
-        .mark_notification_failed(
-            &current_claim.notification_id,
-            &current_claim.lease_token,
-            "ambiguous_post",
-            personal_secretary::NotificationFailureKind::UnknownCommit,
+            .unwrap(),
         )
         .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let memory_store = build_mysql_memory_store(db.clone());
+    let fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: account.clone(),
+        subject_key: "commitment:task7-reconcile".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: account.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "提交材料".into(),
+            due_at_unix_secs: Some(90_001),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![source_event_id],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    MemoryUseCase::new(memory_store.clone())
+        .remember(&fact)
+        .await
         .unwrap();
-    assert!(
-        follow_up
-            .claim_due_notification(&account, 2_000_000_000, 60)
-            .await
-            .unwrap()
-            .is_none()
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        memory_store,
+    );
+    follow_up.scan(90_001, 86_400, 100).await.unwrap();
+    let follow_up_id = scalar_string(
+        &db,
+        "SELECT follow_up_id AS value FROM secretary_follow_up_items WHERE source_memory_fact_id = ?",
+        [fact.fact_id.as_str()],
+    )
+    .await
+    .unwrap();
+
+    // 删除扫描产生的链路，证明协调只能从当前受锁定来源重新建立 Candidate/Request。
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE candidate FROM secretary_notification_candidates candidate WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+        [follow_up_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_notification_outbox \
+         (notification_id, account_id, follow_up_id, scheduled_at_unix_secs, notification_kind, payload_json, delivery_status) \
+         SELECT ?, id, ?, 90001, 'owner_reminder', JSON_OBJECT('legacy', true), 'pending' \
+         FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            follow_up_id.clone().into(),
+            platform_account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+
+    let config = LegacyNotificationReconciliationConfig {
+        worker_id: "task7-mysql-test".into(),
+        lease_secs: 60,
+        page_size: 10,
+        max_rows: 10,
+        deadline_secs: 10,
+    };
+    let report = follow_up
+        .reconcile_legacy_notifications(&config)
+        .await
+        .unwrap();
+    assert!(report.completed);
+    assert!(!report.blocked);
+    assert_eq!(report.rows_scanned, 1);
+    assert_eq!(report.legacy_outbox_suppressed, 1);
+    assert_eq!(report.legacy_sources_rebuilt, 1);
+    assert_eq!(report.candidates_created, 1);
+    assert_eq!(report.requests_created, 1);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_candidates WHERE source_kind = 'follow_up' AND source_id = ? AND source_version = 1",
+            [&follow_up_id],
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_evaluation_requests request JOIN secretary_notification_candidates candidate ON candidate.notification_candidate_id = request.notification_candidate_id WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ? AND request.evaluation_generation = 1",
+            [&follow_up_id],
+        )
+        .await,
+        1
     );
     assert_eq!(
         scalar_string(
             &db,
-            "SELECT delivery_status AS value FROM secretary_notification_outbox WHERE notification_id = ?",
-            [current_claim.notification_id.as_str()],
+            "SELECT delivery_status AS value FROM secretary_notification_outbox WHERE follow_up_id = ?",
+            [&follow_up_id],
         )
         .await
         .as_deref(),
-        Some("unknown_commit")
+        Some("suppressed")
+    );
+
+    let replay = follow_up
+        .reconcile_legacy_notifications(&config)
+        .await
+        .unwrap();
+    assert!(replay.completed);
+    assert_eq!(replay.rows_scanned, 0);
+    assert_eq!(replay.candidates_created, 0);
+    assert_eq!(replay.requests_created, 0);
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_notification_outbox SET delivery_status = 'claimed', lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 60 SECOND) WHERE follow_up_id = ?",
+        [Uuid::new_v4().to_string().into(), follow_up_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+    let blocked = follow_up
+        .reconcile_legacy_notifications(&config)
+        .await
+        .unwrap();
+    assert!(blocked.blocked);
+    assert!(!blocked.completed);
+    assert_eq!(blocked.active_claimed, 1);
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox WHERE follow_up_id = ?",
+            [&follow_up_id],
+        )
+        .await
+        .as_deref(),
+        Some("claimed"),
+        "活跃租约必须保持原状并阻塞启动"
     );
 }
 
@@ -1618,93 +1905,32 @@ async fn scalar_i64<const N: usize>(
     .unwrap()
 }
 
-/// 读取 QQBot 迁移目录并按依赖顺序执行（ingestion → continuity → backfill）。
-/// 文件名按字母序会得到 backfill < continuity < ingestion，与外键依赖相反，因此显式排序。
+async fn scalar_exactly_one_string<const N: usize>(
+    db: &sea_orm::DatabaseConnection,
+    sql: &str,
+    values: [&str; N],
+    assertion: &str,
+) -> String {
+    let rows = db
+        .query_all_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            sql,
+            values.map(Into::into),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{assertion}");
+    rows[0].try_get::<String>("", "value").unwrap()
+}
+
+/// 测试 schema 的生命周期由外层脚本负责；这里复用唯一迁移加载器。
 async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let migrations_dir = format!("{manifest_dir}/../../apps/qqbot-server/database/migrations");
-    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&migrations_dir)
-        .unwrap_or_else(|error| panic!("failed to read migrations dir: {error}"))
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
-        .collect();
-    // 显式依赖顺序：ingestion（账号/会话/事件）→ continuity（连接/游标/空窗）→
-    // backfill → threads → thread_links/thread_semantics。
-    entries.sort_by_key(|path| {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        match name {
-            n if n.contains("_ingestion.sql") => 0,
-            n if n.contains("_continuity.sql") => 1,
-            n if n.contains("_backfill.sql") => 2,
-            n if n.contains("_threads.sql") => 3,
-            n if n.contains("_thread_links.sql") => 4,
-            n if n.contains("_thread_semantics.sql") => 5,
-            n if n.contains("_thread_mutations.sql") => 6,
-            n if n.contains("_thread_revisions.sql") => 7,
-            n if n.contains("_memory.sql") => 8,
-            n if n.contains("_memory_controls_followups.sql") => 9,
-            n if n.contains("_qq_open_platform.sql") => 10,
-            n if n.contains("_action_planner.sql") => 11,
-            n if n.contains("_action_planner_hardening.sql") => 12,
-            n if n.contains("_directory.sql") => 13,
-            n if n.contains("_gap_freeze_hardening.sql") => 14,
-            n if n.contains("_event_type_recall.sql") => 15,
-            n if n.contains("_recall.sql") => 16,
-            n if n.contains("_artifacts.sql") => 17,
-            n if n.contains("_recall_inbox.sql") => 18,
-            n if n.contains("_owner_agenda.sql") => 20,
-            _ => 99,
-        }
-    });
-    for path in entries {
-        let migration_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if migration_name.contains("_owner_agenda.sql")
-            && db
-                .query_one_raw(Statement::from_string(
-                    DatabaseBackend::MySql,
-                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
-                ))
-                .await
-                .expect("agenda migration sentinel query failed")
-                .is_some()
-        {
-            continue;
-        }
-        let sql = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        // 移除整行注释，再按分号拆分语句；空语句跳过。
-        let stripped: String = sql
-            .lines()
-            .map(|line| {
-                if let Some(idx) = line.find("--") {
-                    &line[..idx]
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for statement in stripped.split(';') {
-            let trimmed = statement.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            db.execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::MySql,
-                trimmed,
-                <[&str; 0]>::default().map(Into::into),
-            ))
-            .await
-            .unwrap_or_else(|error| panic!("migration statement failed: {error}"));
-        }
-    }
+    qqbot_migrations::apply_qqbot_migrations(
+        db,
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/qqbot-server/database/migrations"),
+    )
+    .await;
 }
 
 #[tokio::test]

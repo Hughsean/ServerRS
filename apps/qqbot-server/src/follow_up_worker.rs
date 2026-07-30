@@ -84,7 +84,9 @@ async fn run_worker<R: FollowUpRunner + 'static>(
                 tracing::debug!(
                     commitments_materialized = report.commitments_materialized,
                     items_reconciled = report.items_reconciled,
-                    notifications_enqueued = report.notifications_enqueued,
+                    notification_candidates_created = report.notification_candidates_created,
+                    notification_evaluation_requests_created =
+                        report.notification_evaluation_requests_created,
                     memories_expired = report.memories_expired,
                     "follow-up maintenance scan completed"
                 );

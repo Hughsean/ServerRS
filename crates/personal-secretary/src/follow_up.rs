@@ -16,7 +16,10 @@ pub enum FollowUpStatus {
 pub struct FollowUpScanReport {
     pub commitments_materialized: u64,
     pub items_reconciled: u64,
-    pub notifications_enqueued: u64,
+    /// 本次由仍有效的 FollowUp 来源新建的通知候选数。
+    pub notification_candidates_created: u64,
+    /// 本次由上述候选新建的 generation-1 求值请求数。
+    pub notification_evaluation_requests_created: u64,
     pub memories_expired: u64,
 }
 
