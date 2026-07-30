@@ -13,8 +13,10 @@ pub struct Model {
     pub title: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
-    #[sea_orm(column_type = "custom(\"longblob\")", select_as = "text", nullable)]
-    pub file_data: Option<String>,
+    // Keep binary data binary. Casting a LONGBLOB to `text` produces invalid
+    // MySQL SQL and also cannot safely represent arbitrary resource bytes.
+    #[sea_orm(column_type = "custom(\"longblob\")", nullable)]
+    pub file_data: Option<Vec<u8>>,
     pub external_url: Option<String>,
     pub file_size: Option<u64>,
     pub mime_type: Option<String>,

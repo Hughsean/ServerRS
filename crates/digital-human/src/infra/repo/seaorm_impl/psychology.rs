@@ -370,8 +370,7 @@ impl PsychologyRepoT for PsychologyRepo {
             .await
             .map_err(map_err)?;
         if let Some(_m) = opt {
-            // Increment view_count via raw SQL because content is ignore-marked,
-            // so the ActiveModel cannot round-trip through update safely.
+            // Increment the counter without rewriting the article's LONGTEXT body.
             let sql = format!(
                 "UPDATE psychology_articles SET view_count = view_count + 1 WHERE article_id = {}",
                 id
@@ -538,7 +537,7 @@ impl PsychologyRepoT for PsychologyRepo {
             .await
             .map_err(map_err)?;
         if let Some(_m) = opt {
-            // Increment view_count via raw SQL (answer is ignore-marked)
+            // Increment the counter without rewriting the Q&A LONGTEXT answer.
             let sql = format!(
                 "UPDATE psychology_qna SET view_count = view_count + 1 WHERE qna_id = {}",
                 id
@@ -689,7 +688,7 @@ impl PsychologyRepoT for PsychologyRepo {
             .await
             .map_err(map_err)?;
         if let Some(_m) = opt {
-            // Increment view_count via raw SQL (file_data is ignore-marked BLOB alias)
+            // Increment the counter without rewriting the resource's LONGBLOB payload.
             let sql = format!(
                 "UPDATE psychology_resources SET view_count = view_count + 1 WHERE resource_id = {}",
                 id

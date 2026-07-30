@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-use tower_http::trace::TraceLayer;
 
 use super::AppState;
 use super::handlers::admin_handler::{
@@ -53,6 +52,7 @@ use super::handlers::stats_handler::{stats_music, stats_reviews, stats_risks, st
 use super::handlers::tts_handler::get_signed_audio;
 use super::handlers::user_handler::{delete_me, get_me, get_profile, patch_me, put_profile};
 use super::middleware::auth_middleware::{require_admin_role, require_bearer_auth};
+use super::middleware::request_logging::log_http_failures;
 
 pub fn build_router(state: AppState) -> Router {
     build_router_with_origins(state, &["http://localhost:3000".to_string()])
@@ -301,7 +301,7 @@ pub fn build_router_with_origins(
     Ok(router
         .layer(DefaultBodyLimit::max(max_upload_bytes))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(log_http_failures))
         .with_state(state))
 }
 

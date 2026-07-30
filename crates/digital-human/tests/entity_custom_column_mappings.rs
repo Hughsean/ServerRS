@@ -2,14 +2,16 @@ use digital_human::infra::repo::entities::{
     community_post_media, fresh_items, fresh_topics, knowledge_ingestion_runs, music,
     psychology_articles, psychology_qna, psychology_resources,
 };
-use sea_orm::ActiveValue;
+use sea_orm::{ActiveValue, DatabaseBackend, EntityTrait, QueryTrait};
 
 fn assert_active_string(_: ActiveValue<String>) {}
 
 fn assert_active_optional_string(_: ActiveValue<Option<String>>) {}
 
+fn assert_active_optional_bytes(_: ActiveValue<Option<Vec<u8>>>) {}
+
 #[test]
-fn mysql_custom_text_and_blob_columns_are_writable_string_fields() {
+fn mysql_custom_text_and_blob_columns_have_expected_active_types() {
     let community_post_media = community_post_media::ActiveModel::default();
     assert_active_string(community_post_media.media_data);
     let _ = community_post_media::Column::MediaData;
@@ -45,6 +47,28 @@ fn mysql_custom_text_and_blob_columns_are_writable_string_fields() {
     let _ = psychology_qna::Column::Answer;
 
     let psychology_resources = psychology_resources::ActiveModel::default();
-    assert_active_optional_string(psychology_resources.file_data);
+    assert_active_optional_bytes(psychology_resources.file_data);
     let _ = psychology_resources::Column::FileData;
+}
+
+#[test]
+fn psychology_mysql_selects_do_not_cast_columns_as_text() {
+    let statements = [
+        psychology_articles::Entity::find()
+            .build(DatabaseBackend::MySql)
+            .to_string(),
+        psychology_qna::Entity::find()
+            .build(DatabaseBackend::MySql)
+            .to_string(),
+        psychology_resources::Entity::find()
+            .build(DatabaseBackend::MySql)
+            .to_string(),
+    ];
+
+    for statement in statements {
+        assert!(
+            !statement.to_ascii_lowercase().contains(" as text"),
+            "MySQL query contains unsupported CAST target: {statement}"
+        );
+    }
 }

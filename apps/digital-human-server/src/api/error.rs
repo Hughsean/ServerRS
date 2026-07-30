@@ -66,16 +66,50 @@ impl IntoResponse for ApiError {
             Self::Gone(_) => (StatusCode::GONE, "GONE"),
         };
 
-        let body = Json(ErrorResponse {
+        let log_context = ApiErrorLogContext {
             code,
             message: self.to_string(),
+        };
+        let body = Json(ErrorResponse {
+            code,
+            message: log_context.message.clone(),
         });
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        response.extensions_mut().insert(log_context);
+        response
     }
+}
+
+/// Internal response metadata consumed by the HTTP logging middleware. Keeping
+/// it in extensions lets the middleware log the original error together with
+/// the request method and URI without exposing extra fields in the API body.
+#[derive(Debug, Clone)]
+pub(crate) struct ApiErrorLogContext {
+    pub code: &'static str,
+    pub message: String,
 }
 
 #[derive(Serialize)]
 struct ErrorResponse {
     code: &'static str,
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+
+    use super::{ApiError, ApiErrorLogContext};
+
+    #[test]
+    fn internal_error_preserves_original_detail_for_request_logging() {
+        let response = ApiError::Internal("database exploded".into()).into_response();
+        let context = response
+            .extensions()
+            .get::<ApiErrorLogContext>()
+            .expect("ApiError response should carry logging context");
+
+        assert_eq!(context.code, "INTERNAL_ERROR");
+        assert_eq!(context.message, "internal error: database exploded");
+    }
 }

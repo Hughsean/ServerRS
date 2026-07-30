@@ -11,7 +11,9 @@ pub struct Model {
     pub category_id: u16,
     #[sea_orm(column_type = "Text")]
     pub question: String,
-    #[sea_orm(column_type = "custom(\"LONGTEXT\")", select_as = "text")]
+    // Do not use `select_as = "text"` here: on MySQL it generates
+    // `CAST(answer AS text)`, but TEXT is not a supported CAST target.
+    #[sea_orm(column_type = "custom(\"LONGTEXT\")")]
     pub answer: String,
     pub expert_name: Option<String>,
     pub expert_title: Option<String>,
