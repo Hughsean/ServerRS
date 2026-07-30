@@ -90,6 +90,14 @@ pub fn build_mysql_artifact_store(db: DatabaseConnection) -> Arc<dyn crate::Arti
     Arc::new(repo::MySqlArtifactStore::new(db))
 }
 
+/// 构造通知策略仓储。策略 Family/Revision、账号 epoch 与反馈写入均通过短事务持久化。
+#[allow(dead_code)]
+pub fn build_mysql_notification_policy_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::NotificationPolicyStoreT> {
+    Arc::new(repo::MySqlNotificationPolicyStore::new(db))
+}
+
 /// 构造 Owner Retriever 仓储。查询严格限定在账号作用域内，跨账号查询被 SQL 拒绝。
 pub fn build_mysql_retriever_store(db: DatabaseConnection) -> Arc<dyn crate::RetrieverStoreT> {
     Arc::new(repo::MySqlRetrieverStore::new(db))

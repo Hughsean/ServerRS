@@ -6,7 +6,10 @@
 
 use std::path::PathBuf;
 
-use personal_secretary::{FollowUpUseCase, build_mysql_follow_up_store, build_mysql_memory_store};
+use personal_secretary::{
+    FollowUpUseCase, NotificationPolicyUseCase, SystemClock, build_mysql_follow_up_store,
+    build_mysql_memory_store, build_mysql_notification_policy_store,
+};
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -14,6 +17,7 @@ use crate::bootstrap;
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::follow_up_worker::spawn_follow_up_worker;
+use crate::notification_policy_worker::spawn_notification_policy_worker;
 use crate::runtime::connection_loop::run_connection_loop;
 use crate::runtime::shutdown::ShutdownSource;
 
@@ -66,6 +70,24 @@ async fn run_with_shutdown(
 
     let mut handles = WorkerHandles::new();
 
+    if let Err(error) = bootstrap::workers::reconcile_legacy_notification_outbox(
+        infra.db.clone(),
+        &config.notification_policy,
+    )
+    .await
+    {
+        let _ = &error;
+        tracing::error!(
+            error_code = "legacy_outbox_reconciliation_failed",
+            "legacy Owner Outbox 协调失败或存在活跃租约，拒绝启动任何投递相关 Worker"
+        );
+        return Err(error);
+    }
+
+    let notification_policy_use_case = std::sync::Arc::new(NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(infra.db.clone()),
+        std::sync::Arc::new(SystemClock),
+    ));
     let follow_up_use_case = std::sync::Arc::new(FollowUpUseCase::new(
         build_mysql_follow_up_store(infra.db.clone()),
         build_mysql_memory_store(infra.db.clone()),
@@ -75,7 +97,7 @@ async fn run_with_shutdown(
             scan_interval_ms = config.follow_up.scan_interval_ms,
             horizon_secs = config.follow_up.horizon_secs,
             batch_size = config.follow_up.batch_size,
-            "结构化记忆维护与承诺提醒调度已启用；通知仅写入 Outbox"
+            "结构化记忆维护与承诺提醒调度已启用；仅生成统一策略候选"
         );
         handles.follow_up = Some(spawn_follow_up_worker(
             std::sync::Arc::clone(&follow_up_use_case),
@@ -95,6 +117,20 @@ async fn run_with_shutdown(
         let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
         handles_to_clean.shutdown_all().await;
         return Err(error);
+    }
+
+    if config.notification_policy.enabled {
+        handles.notification_policy = Some(spawn_notification_policy_worker(
+            std::sync::Arc::clone(&notification_policy_use_case),
+            config.notification_policy.clone(),
+        ));
+        tracing::info!(
+            worker_id = config.notification_policy.worker_id,
+            batch_size = config.notification_policy.batch_size,
+            "统一通知策略求值 Worker 已启用"
+        );
+    } else {
+        tracing::info!("统一通知策略求值 Worker 已禁用（notification_policy.enabled=false）");
     }
 
     // P0 修复：Action Planner 必须在 QQ Open Platform 之前装配，

@@ -17,6 +17,18 @@ use personal_secretary::{
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
+#[path = "../../../apps/qqbot-server/database/test_support/qqbot_migrations.rs"]
+mod qqbot_migrations;
+
+async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
+    qqbot_migrations::apply_qqbot_migrations(
+        db,
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/qqbot-server/database/migrations"),
+    )
+    .await;
+}
+
 /// 保守 Planner：固定返回 NoAction，不调用 LLM。
 /// 用于验证完整闭环而不依赖外部 LLM。
 struct NoopPlanner;
@@ -166,91 +178,6 @@ struct FixedClock {
 impl Clock for FixedClock {
     fn now_unix_secs(&self) -> i64 {
         self.now
-    }
-}
-
-async fn apply_qqbot_migrations(db: &sea_orm::DatabaseConnection) {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let migrations_dir = format!("{manifest_dir}/../../apps/qqbot-server/database/migrations");
-    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&migrations_dir)
-        .unwrap_or_else(|error| panic!("failed to read migrations dir: {error}"))
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
-        .collect();
-    entries.sort_by_key(|path| {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        match name {
-            n if n.contains("_ingestion.sql") => 0,
-            n if n.contains("_continuity.sql") => 1,
-            n if n.contains("_backfill.sql") => 2,
-            n if n.contains("_threads.sql") => 3,
-            n if n.contains("_thread_links.sql") => 4,
-            n if n.contains("_thread_semantics.sql") => 5,
-            n if n.contains("_thread_mutations.sql") => 6,
-            n if n.contains("_thread_revisions.sql") => 7,
-            n if n.contains("_memory.sql") => 8,
-            n if n.contains("_memory_controls_followups.sql") => 9,
-            n if n.contains("_qq_open_platform.sql") => 10,
-            n if n.contains("_action_planner.sql") => 11,
-            n if n.contains("_action_planner_hardening.sql") => 12,
-            n if n.contains("_directory.sql") => 13,
-            n if n.contains("_gap_freeze_hardening.sql") => 14,
-            n if n.contains("_event_type_recall.sql") => 15,
-            n if n.contains("_recall.sql") => 16,
-            n if n.contains("_artifacts.sql") => 17,
-            n if n.contains("_recall_inbox.sql") => 18,
-            n if n.contains("_artifact_derivations.sql") => 19,
-            n if n.contains("_owner_agenda.sql") => 20,
-            _ => 99,
-        }
-    });
-    for path in entries {
-        let migration_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if migration_name.contains("_owner_agenda.sql")
-            && db
-                .query_one_raw(Statement::from_string(
-                    DatabaseBackend::MySql,
-                    "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'secretary_notification_outbox' AND index_name = 'uk_secretary_notification_agenda' LIMIT 1",
-                ))
-                .await
-                .expect("agenda migration sentinel query failed")
-                .is_some()
-        {
-            continue;
-        }
-        let sql = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let stripped: String = sql
-            .lines()
-            .map(|line| {
-                if let Some(idx) = line.find("--") {
-                    &line[..idx]
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for statement in stripped.split(';') {
-            let trimmed = statement.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            db.execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::MySql,
-                trimmed,
-                Vec::<sea_orm::Value>::new(),
-            ))
-            .await
-            .unwrap_or_else(|error| panic!("migration failed for {}: {error}", path.display()));
-        }
     }
 }
 

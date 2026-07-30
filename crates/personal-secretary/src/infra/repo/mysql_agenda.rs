@@ -6,10 +6,14 @@ use sea_orm::{
 
 use crate::{
     AgendaApplyRequest, AgendaError, AgendaItem, AgendaItemId, AgendaItemKind, AgendaItemStatus,
-    AgendaMutation, AgendaMutationReceipt, AgendaStoreT, SourceAccountRef, SourceEventId,
+    AgendaMutation, AgendaMutationReceipt, AgendaStoreT, NotificationCandidateProductionReport,
+    SourceAccountRef, SourceEventId,
 };
 
 use super::mysql_inbound::store_error;
+use super::mysql_notification_candidate_producer::{
+    LockedNotificationSource, produce_from_locked_source,
+};
 
 pub(crate) struct MySqlAgendaStore {
     db: DatabaseConnection,
@@ -270,32 +274,44 @@ impl AgendaStoreT for MySqlAgendaStore {
             .collect()
     }
 
-    async fn enqueue_due_notifications(
+    async fn produce_due_notification_candidates(
         &self,
         now_unix_secs: i64,
         limit: u32,
-    ) -> Result<u64, AgendaError> {
-        let result = self
-            .db
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::MySql,
-                r#"INSERT IGNORE INTO secretary_notification_outbox
-                 (notification_id, account_id, follow_up_id, agenda_item_id, agenda_version,
-                  scheduled_at_unix_secs, notification_kind, payload_json, delivery_status)
-               SELECT UUID(), item.account_id, NULL, item.item_id, item.version,
-                      item.scheduled_at_unix_secs, 'owner_agenda_reminder',
-                      JSON_OBJECT('item_id', item.item_id, 'version', item.version,
-                                  'kind', item.item_kind, 'title', item.title,
-                                  'scheduled_at_unix_secs', item.scheduled_at_unix_secs),
-                      'pending'
-               FROM secretary_agenda_items item
-               WHERE item.item_status = 'scheduled' AND item.scheduled_at_unix_secs <= ?
-               ORDER BY item.scheduled_at_unix_secs, item.item_id LIMIT ?"#,
-                [now_unix_secs.into(), limit.into()],
-            ))
+    ) -> Result<NotificationCandidateProductionReport, AgendaError> {
+        let transaction = self.db.begin().await.map_err(map_db)?;
+        let items = DueAgendaItemRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT item.item_id, item.account_id, item.version, account.source_channel, \
+                    account.platform_account_id \
+             FROM secretary_agenda_items AS item \
+             INNER JOIN secretary_accounts AS account ON account.id = item.account_id \
+             WHERE item.item_status = 'scheduled' AND item.scheduled_at_unix_secs <= ? \
+             ORDER BY item.scheduled_at_unix_secs, item.item_id LIMIT ? FOR UPDATE SKIP LOCKED",
+            [now_unix_secs.into(), limit.into()],
+        ))
+        .all(&transaction)
+        .await
+        .map_err(map_db)?;
+        let mut report = NotificationCandidateProductionReport::default();
+        for item in items {
+            let production = produce_from_locked_source(
+                &transaction,
+                &LockedNotificationSource::Agenda {
+                    account_id: item.account_id,
+                    item_id: item.item_id,
+                    version: item.version,
+                    source_channel: item.source_channel,
+                    platform_account_id: item.platform_account_id,
+                },
+            )
             .await
-            .map_err(map_db)?;
-        Ok(result.rows_affected())
+            .map_err(|error| AgendaError::Store(error.to_string()))?;
+            report.candidates_created += u64::from(production.candidate_created);
+            report.requests_created += u64::from(production.request_created);
+        }
+        transaction.commit().await.map_err(map_db)?;
+        Ok(report)
     }
 }
 
@@ -422,6 +438,15 @@ fn map_row(row: AgendaRow, account: SourceAccountRef) -> Result<AgendaItem, Agen
 fn map_db(error: sea_orm::DbErr) -> AgendaError {
     let mapped = store_error(error);
     AgendaError::Store(mapped.to_string())
+}
+
+#[derive(Debug, FromQueryResult)]
+struct DueAgendaItemRow {
+    item_id: String,
+    account_id: u64,
+    version: u64,
+    source_channel: String,
+    platform_account_id: String,
 }
 
 #[derive(Debug, FromQueryResult)]

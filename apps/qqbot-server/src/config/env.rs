@@ -11,8 +11,9 @@ use super::llm::{LlmConfig, LlmReasoningMode};
 use super::qq_open_platform::QqOpenPlatformConfig;
 use super::whitelist::WhitelistConfig;
 use super::workers::{
-    AgendaConfig, ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig, RecallWalConfig,
-    ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
+    AgendaConfig, ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig,
+    NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    ThreadSemanticsConfig,
 };
 
 macro_rules! apply_env_field {
@@ -169,6 +170,33 @@ pub(super) fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), Con
             retry_max_ms => "QQBOT_FOLLOW_UP_RETRY_MAX_MS",
         },
     );
+    Ok(())
+}
+
+pub(super) fn apply_notification_policy_env(
+    config: &mut NotificationPolicyConfig,
+) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_NOTIFICATION_POLICY_ENABLED" },
+        non_empty { worker_id => "QQBOT_NOTIFICATION_POLICY_WORKER_ID" },
+        positive {
+            batch_size => "QQBOT_NOTIFICATION_POLICY_BATCH_SIZE",
+            lease_secs => "QQBOT_NOTIFICATION_POLICY_LEASE_SECS",
+            scan_interval_ms => "QQBOT_NOTIFICATION_POLICY_SCAN_INTERVAL_MS",
+            retry_initial_ms => "QQBOT_NOTIFICATION_POLICY_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_NOTIFICATION_POLICY_RETRY_MAX_MS",
+            recovery_limit => "QQBOT_NOTIFICATION_POLICY_RECOVERY_LIMIT",
+            reconciliation_lease_secs => "QQBOT_NOTIFICATION_POLICY_RECONCILIATION_LEASE_SECS",
+            reconciliation_page_size => "QQBOT_NOTIFICATION_POLICY_RECONCILIATION_PAGE_SIZE",
+            reconciliation_max_rows => "QQBOT_NOTIFICATION_POLICY_RECONCILIATION_MAX_ROWS",
+            reconciliation_deadline_secs => "QQBOT_NOTIFICATION_POLICY_RECONCILIATION_DEADLINE_SECS",
+        },
+    );
+    if let Ok(value) = std::env::var("QQBOT_NOTIFICATION_POLICY_RECONCILIATION_WORKER_ID")
+        && !value.trim().is_empty()
+    {
+        config.reconciliation_worker_id = value;
+    }
     Ok(())
 }
 

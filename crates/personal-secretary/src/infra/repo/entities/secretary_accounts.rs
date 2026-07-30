@@ -8,6 +8,7 @@ pub struct Model {
     pub source_channel: String,
     pub platform_account_id: String,
     pub status: String,
+    pub policy_epoch: u64,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }

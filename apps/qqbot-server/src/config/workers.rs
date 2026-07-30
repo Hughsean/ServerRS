@@ -327,7 +327,7 @@ impl ThreadLinksConfig {
     }
 }
 
-/// Owner Agenda 到期扫描。只将已到期的当前版本事项写入统一通知 Outbox。
+/// Owner Agenda 到期扫描。只将已到期的当前版本事项生成统一策略候选。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AgendaConfig {
@@ -371,7 +371,7 @@ impl AgendaConfig {
     }
 }
 
-/// 结构化记忆维护与承诺提醒调度。只写持久化 Outbox，不直接发送消息。
+/// 结构化记忆维护与承诺提醒调度；只生成统一策略候选，不直接写 Outbox。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct FollowUpConfig {
@@ -416,6 +416,99 @@ impl FollowUpConfig {
         if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
             return Err(ConfigError::Invalid(
                 "follow_up retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 统一 Notification Policy 求值 Worker 配置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NotificationPolicyConfig {
+    pub enabled: bool,
+    pub worker_id: String,
+    pub batch_size: u32,
+    pub lease_secs: u64,
+    pub scan_interval_ms: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+    pub recovery_limit: u32,
+    /// 启动时历史直写 Outbox 协调的全局租约持有者标识。
+    pub reconciliation_worker_id: String,
+    pub reconciliation_lease_secs: u64,
+    pub reconciliation_page_size: u32,
+    pub reconciliation_max_rows: u32,
+    pub reconciliation_deadline_secs: u64,
+}
+
+impl Default for NotificationPolicyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            worker_id: "qqbot-notification-policy-v1".into(),
+            batch_size: 100,
+            lease_secs: 60,
+            scan_interval_ms: 1_000,
+            retry_initial_ms: 1_000,
+            retry_max_ms: 60_000,
+            recovery_limit: 1_000,
+            reconciliation_worker_id: "qqbot-legacy-owner-outbox-v1".into(),
+            reconciliation_lease_secs: 60,
+            reconciliation_page_size: 100,
+            reconciliation_max_rows: 10_000,
+            reconciliation_deadline_secs: 120,
+        }
+    }
+}
+
+impl NotificationPolicyConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.worker_id.trim().is_empty() || self.worker_id.len() > 128 {
+            return Err(ConfigError::Invalid(
+                "notification_policy.worker_id must be non-empty and at most 128 bytes".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "notification_policy.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.lease_secs) {
+            return Err(ConfigError::Invalid(
+                "notification_policy.lease_secs must be between 1 and 3600".into(),
+            ));
+        }
+        if self.scan_interval_ms < 100 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "notification_policy.scan_interval_ms must be between 100 and 3600000".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "notification_policy retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.recovery_limit) {
+            return Err(ConfigError::Invalid(
+                "notification_policy.recovery_limit must be between 1 and 1000".into(),
+            ));
+        }
+        if self.reconciliation_worker_id.trim().is_empty()
+            || self.reconciliation_worker_id.len() > 128
+        {
+            return Err(ConfigError::Invalid(
+                "notification_policy.reconciliation_worker_id must be non-empty and at most 128 bytes"
+                    .into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.reconciliation_lease_secs)
+            || !(1..=1000).contains(&self.reconciliation_page_size)
+            || !(1..=100_000).contains(&self.reconciliation_max_rows)
+            || !(1..=300).contains(&self.reconciliation_deadline_secs)
+        {
+            return Err(ConfigError::Invalid(
+                "notification_policy reconciliation bounds are invalid".into(),
             ));
         }
         Ok(())

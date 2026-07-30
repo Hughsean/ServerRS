@@ -10,7 +10,7 @@ use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::runtime::RuntimeError;
 
-/// 创建唯一的 Agenda 到期扫描任务；该任务仅写统一通知 Outbox。
+/// 创建唯一的 Agenda 到期扫描任务；该任务仅生成统一策略候选与求值请求。
 pub(crate) fn assemble_agenda_notification_worker(
     handles: &mut WorkerHandles,
     db: DatabaseConnection,
@@ -31,7 +31,7 @@ pub(crate) fn assemble_agenda_notification_worker(
     tracing::info!(
         scan_interval_ms = config.agenda.scan_interval_ms,
         batch_size = config.agenda.batch_size,
-        "Agenda 到期通知扫描已启用；通知仅写入 Outbox"
+        "Agenda 到期通知扫描已启用；仅生成统一策略候选与求值请求"
     );
     Ok(())
 }

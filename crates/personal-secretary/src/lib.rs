@@ -19,6 +19,8 @@ mod health_service;
 mod inbound;
 mod memory;
 mod memory_service;
+mod notification_policy;
+mod notification_policy_service;
 mod planner;
 mod planner_service;
 mod recall;
@@ -81,7 +83,10 @@ pub use follow_up::{
     ClaimedOwnerNotification, FollowUpScanReport, FollowUpStatus, NotificationFailureKind,
     NotificationId, NotificationLeaseToken, OwnerNotificationContent,
 };
-pub use follow_up_service::{FollowUpStoreT, FollowUpUseCase};
+pub use follow_up_service::{
+    FollowUpStoreT, FollowUpUseCase, LegacyNotificationReconciliationConfig,
+    LegacyNotificationReconciliationReport,
+};
 pub use health::{HealthSnapshot, HealthStatus, SubsystemHealth};
 pub use health_service::{HealthAggregator, HealthSnapshotProducer};
 pub use inbound::{
@@ -96,6 +101,26 @@ pub use memory::{
     validate_memory_fact,
 };
 pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
+pub use notification_policy::{
+    ConversationMode, ConversationNotificationRule, DecisionReason, EvaluationInput,
+    EvaluationPlan, EvaluationRequestId, EventKind, MAX_CANONICAL_SCOPE_KEY_BYTES,
+    MAX_NOTIFICATION_AUDIT_SUMMARY_BYTES, MAX_NOTIFICATION_JSON_BYTES,
+    MAX_NOTIFICATION_POLICY_ID_BYTES, MAX_NOTIFICATION_REASON_BYTES, MatchField,
+    NotificationCandidateId, NotificationCandidateRef, NotificationCategory,
+    NotificationDecisionId, NotificationMatchKeyV1, NotificationOutcome, NotificationPolicyError,
+    NotificationPolicyEvaluator, NotificationPolicyFamily, NotificationPolicyKind,
+    NotificationPolicyRevision, NotificationPolicyRule, PolicyFamilyId, PolicyRevisionId,
+    QuietHoursRule, RevisionKind, StructuredImportance, validate_quiet_hours,
+};
+pub use notification_policy_service::{
+    AutomaticReplyGateDecision, AutomaticReplyPolicyGate, ClaimedEvaluation, EvaluationCommit,
+    EvaluationCommitResult, EvaluationSnapshot, FamilyGenerationSnapshot,
+    MAX_EVALUATION_POLICY_FAMILIES, NotificationCandidateProductionReport,
+    NotificationFeedbackRequest, NotificationPolicyAuthorizationContext,
+    NotificationPolicyDisableRequest, NotificationPolicyStoreError, NotificationPolicyStoreT,
+    NotificationPolicyUseCase, NotificationPolicyUseCaseError, NotificationPolicyWriteRequest,
+    OwnerBindingSnapshot, PolicyRuleSnapshot, authorize_notification_policy_action,
+};
 pub use planner::{
     ActionPlannerT, Clock, PlannerCommandEvent, PlannerError, PlannerInput, PlannerOutput,
     PlannerRetrievedExcerpt, SystemClock, TimeParseError, is_allowed_action_in_batch,
@@ -184,10 +209,10 @@ pub use infra::{
     build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_agenda_store,
     build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
     build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_owner_binding_store, build_mysql_recall_store, build_mysql_retriever_store,
-    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
-    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    build_mysql_notification_policy_store, build_mysql_owner_binding_store,
+    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_link_store,
+    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。

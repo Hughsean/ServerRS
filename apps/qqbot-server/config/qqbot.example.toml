@@ -92,13 +92,30 @@ retry_initial_ms = 1000
 retry_max_ms = 60000
 
 [agenda]
-# 仅将已到期且仍为当前版本的 Owner Agenda 写入统一通知 Outbox。
-# 领取、租约、失败重试与 QQ C2C 投递仍由 qq_open_platform 处理。
+# 仅为已到期且仍为当前版本的 Owner Agenda 生成统一策略 Candidate。
+# 只有 Notification Policy 判定为 Remind 后才会写入 Outbox。
 enabled = true
 scan_interval_ms = 30000
 batch_size = 200
 retry_initial_ms = 1000
 retry_max_ms = 60000
+
+[notification_policy]
+# 统一领取 Evaluation Request 并执行纯策略求值；不直接调用 QQ transport。
+enabled = true
+worker_id = "qqbot-notification-policy-v1"
+batch_size = 100
+lease_secs = 60
+scan_interval_ms = 1000
+retry_initial_ms = 1000
+retry_max_ms = 60000
+recovery_limit = 1000
+# 启动前独占协调遗留的来源直写 Outbox；未清除屏障则拒绝启动投递 Worker。
+reconciliation_worker_id = "qqbot-legacy-owner-outbox-v1"
+reconciliation_lease_secs = 60
+reconciliation_page_size = 100
+reconciliation_max_rows = 10000
+reconciliation_deadline_secs = 120
 
 [artifact]
 enabled = true
