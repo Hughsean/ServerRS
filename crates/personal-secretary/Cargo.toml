@@ -21,3 +21,4 @@ chrono-tz = "0.10.4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tokio-util = "0.7"

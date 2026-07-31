@@ -32,14 +32,8 @@ const MAX_OFFSET_SECS: i64 = 50_400;
 
 // ===== 本批允许的 Action 白名单（约束 5）=====
 
-/// 判定 Action 是否在本批允许 Planner 直接生成的白名单内。
-///
-/// 允许直接执行：`SearchRecentEvents`、`ReadSourceEvent`、`SearchEventThreads`、
-/// `ResolveReference`、`ListUpcomingItems`、`DraftReminder`、`AskOwnerClarification`。
-///
-/// `CreateReminder/CreateTask/CreateSchedule/Reschedule/Cancel/SendOwnerMessage`
-/// 可由 Planner 生成类型化 Proposal 并进入 Suspend，但在执行器完成前不能标记为执行成功；
-/// 本批 Planner 默认不生成这些 Action，由上层 `validate_planner_output` 拒绝。
+/// 本批 Planner 可以生成的 Action 仅限于已类型化白名单；所有策略写仍须在
+/// Effect 层完成 OwnerCommand 授权、审批与持久化 Receipt 后才可宣告成功。
 pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
     use SecretaryAction::*;
     matches!(
@@ -58,6 +52,17 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | CancelItem { .. }
             | CompleteItem { .. }
             | SnoozeItem { .. }
+            | ListNotificationPolicies { .. }
+            | ExplainNotificationDecision { .. }
+            | SetAccountDefaultNotificationMode { .. }
+            | SetConversationNotificationMode { .. }
+            | SetQuietHours { .. }
+            | SetImportantContact { .. }
+            | SetNotificationCategoryImportance { .. }
+            | RecordNotificationFeedback { .. }
+            | CreateSimilarNotificationRule { .. }
+            | DisableNotificationPolicy { .. }
+            | SetAutomaticReplyDeniedForContact { .. }
     )
 }
 
@@ -114,6 +119,10 @@ pub struct PlannerInput {
 // ===== PlannerOutput =====
 
 /// Planner 输出。复用 `SecretaryActionProposal`，不新建状态机。
+///
+/// `SecretaryActionProposal` 是公共协议类型，对其 Boxing 会破坏所有调用方与序列化兼容性，
+/// 因此在没有独立兼容迁移方案之前抑制该枚举尺寸警告。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum PlannerOutput {
     /// Planner 判定无需执行任何动作。

@@ -117,7 +117,8 @@ pub use notification_policy_service::{
     EvaluationCommitResult, EvaluationSnapshot, FamilyGenerationSnapshot,
     MAX_EVALUATION_POLICY_FAMILIES, NotificationCandidateProductionReport,
     NotificationFeedbackRequest, NotificationPolicyAuthorizationContext,
-    NotificationPolicyDisableRequest, NotificationPolicyStoreError, NotificationPolicyStoreT,
+    NotificationPolicyDisableRequest, NotificationPolicyEffectRequest,
+    NotificationPolicyResponseArtifact, NotificationPolicyStoreError, NotificationPolicyStoreT,
     NotificationPolicyUseCase, NotificationPolicyUseCaseError, NotificationPolicyWriteRequest,
     OwnerBindingSnapshot, PolicyRuleSnapshot, authorize_notification_policy_action,
 };

@@ -119,12 +119,7 @@ impl NotificationMatchKeyV1 {
         structured_importance: MatchField<StructuredImportance>,
         event_kind: MatchField<EventKind>,
     ) -> Result<Self, NotificationPolicyError> {
-        if matches!(&actor_id, MatchField::Known(value) if value.trim().is_empty()) {
-            return Err(NotificationPolicyError::InvalidMatchKey(
-                "actor id must not be empty when known".into(),
-            ));
-        }
-        Ok(Self {
+        let key = Self {
             account,
             conversation,
             actor_id,
@@ -132,7 +127,18 @@ impl NotificationMatchKeyV1 {
             mentioned_owner,
             structured_importance,
             event_kind,
-        })
+        };
+        key.validate()?;
+        Ok(key)
+    }
+
+    pub fn validate(&self) -> Result<(), NotificationPolicyError> {
+        if matches!(&self.actor_id, MatchField::Known(value) if value.trim().is_empty()) {
+            return Err(NotificationPolicyError::InvalidMatchKey(
+                "actor id must not be empty when known".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn eligibility_for_long_term_rule(&self) -> Result<(), NotificationPolicyError> {
@@ -214,6 +220,11 @@ pub struct NotificationPolicyRule {
     pub match_key: NotificationMatchKeyV1,
     pub outcome: NotificationOutcome,
     pub bypass_quiet: bool,
+    /// 旧 Revision JSON 不含这些可选字段；serde 默认值保证历史规则仍可读取。
+    #[serde(default)]
+    pub conversation: Option<ConversationNotificationRule>,
+    #[serde(default)]
+    pub quiet_hours: Option<QuietHoursRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,6 +315,9 @@ pub struct QuietHoursRule {
     pub end_local_time: String,
     pub effective_from_local_date: Option<String>,
     pub effective_until_local_date: Option<String>,
+    /// 只有命中规则也显式 `bypass_quiet` 时才允许绕过静默时段。
+    #[serde(default)]
+    pub allow_bypass: bool,
 }
 
 impl QuietHoursRule {
@@ -401,27 +415,40 @@ impl NotificationPolicyEvaluator {
                 DecisionReason::ConversationFullySilent,
             );
         }
-        if let Some(rule) = &input.matching_rule {
-            return EvaluationPlan::new(rule.outcome, DecisionReason::ConversationPolicy);
-        }
-        for (rule, reason) in [
-            (&input.contact_rule, DecisionReason::ContactPolicy),
-            (&input.category_rule, DecisionReason::CategoryPolicy),
-            (
-                &input.account_default_rule,
-                DecisionReason::AccountDefaultPolicy,
-            ),
-        ] {
-            if let Some(rule) = rule {
-                return EvaluationPlan::new(rule.outcome, reason);
-            }
-        }
+        let selected_rule = input
+            .matching_rule
+            .as_ref()
+            .map(|rule| (rule, DecisionReason::ConversationPolicy))
+            .or_else(|| {
+                input
+                    .contact_rule
+                    .as_ref()
+                    .map(|rule| (rule, DecisionReason::ContactPolicy))
+            })
+            .or_else(|| {
+                input
+                    .category_rule
+                    .as_ref()
+                    .map(|rule| (rule, DecisionReason::CategoryPolicy))
+            })
+            .or_else(|| {
+                input
+                    .account_default_rule
+                    .as_ref()
+                    .map(|rule| (rule, DecisionReason::AccountDefaultPolicy))
+            });
         match input
             .quiet_hours
             .as_ref()
             .map(|rule| quiet_hours_result(rule, input.now_unix_secs))
         {
-            Some(Ok(true)) => {
+            Some(Ok(true))
+                if !matches!(
+                    selected_rule,
+                    Some((rule, _)) if rule.bypass_quiet
+                        && input.quiet_hours.as_ref().is_some_and(|rule| rule.allow_bypass)
+                ) =>
+            {
                 EvaluationPlan::new(NotificationOutcome::Suppress, DecisionReason::QuietHours)
             }
             Some(Err(NotificationPolicyError::ScheduleTimeAmbiguous)) => EvaluationPlan::new(
@@ -432,10 +459,13 @@ impl NotificationPolicyEvaluator {
                 NotificationOutcome::EvaluationFailedTerminal,
                 DecisionReason::InvalidQuietHours,
             ),
-            Some(Ok(false)) | None => EvaluationPlan::new(
-                NotificationOutcome::Remind,
-                DecisionReason::AccountDefaultPolicy,
-            ),
+            Some(Ok(true)) | Some(Ok(false)) | None => match selected_rule {
+                Some((rule, reason)) => EvaluationPlan::new(rule.outcome, reason),
+                None => EvaluationPlan::new(
+                    NotificationOutcome::Remind,
+                    DecisionReason::AccountDefaultPolicy,
+                ),
+            },
         }
     }
 }
@@ -583,6 +613,8 @@ mod tests {
             match_key: key(MatchField::Absent),
             outcome,
             bypass_quiet,
+            conversation: None,
+            quiet_hours: None,
         }
     }
 
@@ -622,6 +654,36 @@ mod tests {
     }
 
     #[test]
+    fn quiet_hours_bypass_requires_rule_and_quiet_hours_grants() {
+        let mut input = input(1_704_125_700);
+        input.quiet_hours = Some(QuietHoursRule {
+            timezone_name: "Asia/Shanghai".into(),
+            start_local_time: "23:00".into(),
+            end_local_time: "07:00".into(),
+            effective_from_local_date: None,
+            effective_until_local_date: None,
+            allow_bypass: true,
+        });
+        input.contact_rule = Some(rule(NotificationOutcome::Remind, false));
+        assert_eq!(
+            NotificationPolicyEvaluator.evaluate(&input).reason,
+            DecisionReason::QuietHours
+        );
+
+        input.contact_rule = Some(rule(NotificationOutcome::Remind, true));
+        assert_eq!(
+            NotificationPolicyEvaluator.evaluate(&input).outcome,
+            NotificationOutcome::Remind
+        );
+
+        input.quiet_hours.as_mut().unwrap().allow_bypass = false;
+        assert_eq!(
+            NotificationPolicyEvaluator.evaluate(&input).reason,
+            DecisionReason::QuietHours
+        );
+    }
+
+    #[test]
     fn quiet_hours_cross_midnight_are_suppressed() {
         // 2024-01-01T16:15:00Z，即 Asia/Shanghai 的 2024-01-02 00:15。
         let mut input = input(1_704_125_700);
@@ -631,6 +693,7 @@ mod tests {
             end_local_time: "07:00".into(),
             effective_from_local_date: None,
             effective_until_local_date: None,
+            allow_bypass: false,
         });
         assert_eq!(
             NotificationPolicyEvaluator.evaluate(&input).reason,
@@ -655,6 +718,7 @@ mod tests {
             end_local_time: "07:00".into(),
             effective_from_local_date: None,
             effective_until_local_date: None,
+            allow_bypass: false,
         });
         let decision = NotificationPolicyEvaluator.evaluate(&input);
         assert_eq!(
@@ -672,6 +736,7 @@ mod tests {
             end_local_time: "03:30".into(),
             effective_from_local_date: Some("2026-03-08".into()),
             effective_until_local_date: Some("2026-03-08".into()),
+            allow_bypass: false,
         };
         assert_eq!(
             validate_quiet_hours(&nonexistent, &FixedClock(1_772_928_000)),
@@ -684,6 +749,7 @@ mod tests {
             end_local_time: "02:30".into(),
             effective_from_local_date: Some("2026-11-01".into()),
             effective_until_local_date: Some("2026-11-01".into()),
+            allow_bypass: false,
         };
         assert_eq!(
             validate_quiet_hours(&repeated, &FixedClock(1_793_491_200)),

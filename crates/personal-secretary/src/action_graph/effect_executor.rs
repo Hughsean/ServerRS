@@ -10,9 +10,10 @@ use agent_core::graph::{EffectEnvelope, EffectError, EffectErrorKind, EffectExec
 use async_trait::async_trait;
 
 use crate::{
-    AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, EventQuery, ReferenceContext,
-    RetrieverUseCase, SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt,
-    SourceAccountRef, SourceEventId,
+    AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, EventQuery,
+    NotificationPolicyEffectRequest, NotificationPolicyUseCase, ReferenceContext, RetrieverUseCase,
+    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
+    SourceEventId,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -26,6 +27,7 @@ pub struct SecretaryActionEffectExecutor {
     run_id: ActionRunId,
     lease_token: ActionLeaseToken,
     retriever: Option<Arc<RetrieverUseCase>>,
+    notification_policy: Option<Arc<NotificationPolicyUseCase>>,
     agenda: Option<Arc<AgendaUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
@@ -46,11 +48,22 @@ impl SecretaryActionEffectExecutor {
             run_id,
             lease_token,
             retriever,
+            notification_policy: None,
             agenda: None,
             command_source_event_id: None,
             account,
             now_unix_secs,
         }
+    }
+
+    pub fn with_notification_policy(
+        mut self,
+        notification_policy: Arc<NotificationPolicyUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.notification_policy = Some(notification_policy);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
     }
 
     pub fn with_agenda(
@@ -181,6 +194,83 @@ impl SecretaryActionEffectExecutor {
             result_ref: receipt.result_ref,
         }))
     }
+    async fn execute_notification_policy(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<NotificationPolicyExecution, EffectError> {
+        let Some(policy) = &self.notification_policy else {
+            return Ok(NotificationPolicyExecution::NotHandled);
+        };
+        let Some(command_source_event_id) = &self.command_source_event_id else {
+            return Err(EffectError::new(
+                EffectErrorKind::Permanent,
+                "通知策略 Action 缺少原始 OwnerCommand 身份",
+            ));
+        };
+        match &proposal.action {
+            SecretaryAction::ListNotificationPolicies { limit } => {
+                let authorization = policy
+                    .authorization_for_owner_command(&self.account, command_source_event_id)
+                    .await
+                    .map_err(policy_effect_error)?;
+                let artifacts = policy
+                    .list_authorized_policy_artifacts(&authorization, *limit)
+                    .await
+                    .map_err(policy_effect_error)?;
+                let result_ref = serde_json::to_string(&artifacts).map_err(|error| {
+                    EffectError::new(EffectErrorKind::Permanent, error.to_string())
+                })?;
+                Ok(NotificationPolicyExecution::ReadOnly(result_ref))
+            }
+            SecretaryAction::ExplainNotificationDecision { decision_id } => {
+                let authorization = policy
+                    .authorization_for_owner_command(&self.account, command_source_event_id)
+                    .await
+                    .map_err(policy_effect_error)?;
+                let decision_id =
+                    crate::NotificationDecisionId::new(decision_id.clone()).map_err(|error| {
+                        EffectError::new(EffectErrorKind::Permanent, error.to_string())
+                    })?;
+                let artifact = policy
+                    .explain_authorized_decision(&authorization, &decision_id)
+                    .await
+                    .map_err(policy_effect_error)?;
+                let result_ref = serde_json::to_string(&artifact).map_err(|error| {
+                    EffectError::new(EffectErrorKind::Permanent, error.to_string())
+                })?;
+                Ok(NotificationPolicyExecution::ReadOnly(result_ref))
+            }
+            action if is_mutable_notification_policy_action(action) => {
+                let proposal_json = serde_json::to_string(proposal).map_err(|error| {
+                    EffectError::new(EffectErrorKind::Permanent, error.to_string())
+                })?;
+                let request = NotificationPolicyEffectRequest {
+                    account: self.account.clone(),
+                    command_source_event_id: command_source_event_id.clone(),
+                    run_id: self.run_id.as_str().to_owned(),
+                    effect_id: effect_id.to_owned(),
+                    proposal_id: proposal.proposal_id.clone(),
+                    proposal_json,
+                    lease_token: self.lease_token.as_str().to_owned(),
+                    action: action.clone(),
+                };
+                let receipt = match policy
+                    .authorization_for_owner_command(&self.account, command_source_event_id)
+                    .await
+                {
+                    Ok(authorization) => policy.apply_effect(&authorization, &request).await,
+                    // 历史回执没有新写入；预检授权漂移后仍必须由仓储的精确身份比较决定
+                    // 是否回放，而不是在事务外提前拒绝。
+                    Err(_) => policy.apply_effect_with_repository_fencing(&request).await,
+                }
+                .map_err(policy_effect_error)?;
+                Ok(NotificationPolicyExecution::Mutable(receipt))
+            }
+            _ => Ok(NotificationPolicyExecution::NotHandled),
+        }
+    }
+
     /// 根据 Action 类型执行真实查询，返回结果摘要作为 result_ref。
     /// Effect 不再只写 executed:{effect_id}，而是调用 Retriever 生成真实结果。
     async fn execute_action(&self, action: &SecretaryAction) -> Result<String, EffectError> {
@@ -287,13 +377,38 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         envelope: &EffectEnvelope<SecretaryActionEffect>,
         _context: &RunContext,
     ) -> Result<SecretaryActionReceipt, EffectError> {
-        if let Some(receipt) = self
-            .store
-            .load_effect_receipt(&self.run_id, &envelope.id.to_string())
-            .await
-            .map_err(ActionStoreError::to_effect_error)?
+        // 可变策略 Action 的 receipt 由策略仓储校验 run、proposal 与完整 Action，不能用
+        // 通用 store 仅按 (run_id, effect_id) 的快速读取绕过碰撞检查。
+        let is_mutable_policy =
+            is_mutable_notification_policy_action(&envelope.effect.proposal.action);
+        if !is_mutable_policy
+            && let Some(receipt) = self
+                .store
+                .load_effect_receipt(&self.run_id, &envelope.id.to_string())
+                .await
+                .map_err(ActionStoreError::to_effect_error)?
         {
             return Ok(receipt);
+        }
+        match self
+            .execute_notification_policy(&envelope.effect.proposal, &envelope.id.to_string())
+            .await?
+        {
+            NotificationPolicyExecution::ReadOnly(result_ref) => {
+                return self
+                    .store
+                    .apply_effect(
+                        &self.run_id,
+                        &envelope.effect,
+                        &envelope.id.to_string(),
+                        &result_ref,
+                        &self.lease_token,
+                    )
+                    .await
+                    .map_err(ActionStoreError::to_effect_error);
+            }
+            NotificationPolicyExecution::Mutable(receipt) => return Ok(receipt),
+            NotificationPolicyExecution::NotHandled => {}
         }
         if let Some(receipt) = self
             .execute_agenda(&envelope.effect.proposal, &envelope.id.to_string())
@@ -316,6 +431,38 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
             .await
             .map_err(|e| e.to_effect_error())
     }
+}
+
+fn policy_effect_error(error: crate::NotificationPolicyUseCaseError) -> EffectError {
+    let kind = match error {
+        crate::NotificationPolicyUseCaseError::Store(
+            crate::NotificationPolicyStoreError::Unavailable
+            | crate::NotificationPolicyStoreError::Database,
+        ) => EffectErrorKind::Transient,
+        _ => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+enum NotificationPolicyExecution {
+    NotHandled,
+    ReadOnly(String),
+    Mutable(SecretaryActionReceipt),
+}
+
+fn is_mutable_notification_policy_action(action: &SecretaryAction) -> bool {
+    matches!(
+        action,
+        SecretaryAction::SetAccountDefaultNotificationMode { .. }
+            | SecretaryAction::SetConversationNotificationMode { .. }
+            | SecretaryAction::SetQuietHours { .. }
+            | SecretaryAction::SetImportantContact { .. }
+            | SecretaryAction::SetNotificationCategoryImportance { .. }
+            | SecretaryAction::RecordNotificationFeedback { .. }
+            | SecretaryAction::CreateSimilarNotificationRule { .. }
+            | SecretaryAction::DisableNotificationPolicy { .. }
+            | SecretaryAction::SetAutomaticReplyDeniedForContact { .. }
+    )
 }
 
 /// 格式化事件检索结果为有界摘要（含来源、时间、Actor、摘录、命中数）。

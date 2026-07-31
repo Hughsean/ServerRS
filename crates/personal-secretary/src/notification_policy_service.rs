@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     Clock, EvaluationInput, EvaluationPlan, EvaluationRequestId, MatchField, MessageRole,
     NotificationCandidateRef, NotificationMatchKeyV1, NotificationPolicyKind,
-    NotificationPolicyRule, PolicyFamilyId, PolicyRevisionId, SourceAccountRef,
+    NotificationPolicyRule, PolicyFamilyId, PolicyRevisionId, SourceAccountRef, SourceEventId,
 };
 
 /// 一个账号在同一快照中最多参与的策略 Family 数。上限避免异常配置扩大 worker 内存和提交 fencing。
@@ -57,19 +57,34 @@ impl EvaluationSnapshot {
         &self,
         now_unix_secs: i64,
     ) -> Result<EvaluationInput, NotificationPolicyUseCaseError> {
-        let matching = |kind| self.rule_for(kind);
+        let conversation = self.rule_for(NotificationPolicyKind::Conversation)?;
         Ok(EvaluationInput {
             candidate_is_current: self.candidate_is_current,
-            matching_rule: matching(NotificationPolicyKind::Conversation)?,
-            conversation_rule: None,
-            contact_rule: matching(NotificationPolicyKind::Contact)?,
-            category_rule: matching(NotificationPolicyKind::Category)?,
-            account_default_rule: matching(NotificationPolicyKind::AccountDefault)?,
-            // v1 的持久化 rule JSON 是 NotificationPolicyRule；QuietHoursRule 由后续专用
-            // schema 接入前不从未验证 JSON 猜测，保持无静默时间规则。
-            quiet_hours: None,
+            conversation_rule: conversation.as_ref().and_then(|rule| rule.conversation),
+            matching_rule: conversation,
+            contact_rule: self.rule_for(NotificationPolicyKind::Contact)?,
+            category_rule: self.rule_for(NotificationPolicyKind::Category)?,
+            account_default_rule: self.rule_for(NotificationPolicyKind::AccountDefault)?,
+            quiet_hours: self
+                .configured_rule_for(NotificationPolicyKind::QuietHours)?
+                .and_then(|rule| rule.quiet_hours),
             now_unix_secs,
         })
+    }
+
+    fn configured_rule_for(
+        &self,
+        kind: NotificationPolicyKind,
+    ) -> Result<Option<NotificationPolicyRule>, NotificationPolicyUseCaseError> {
+        let mut rules = self
+            .active_rules
+            .iter()
+            .filter(|snapshot| snapshot.policy_kind == kind);
+        let first = rules.next();
+        if rules.next().is_some() {
+            return Err(NotificationPolicyUseCaseError::AmbiguousPolicyRules);
+        }
+        Ok(first.map(|snapshot| snapshot.rule.clone()))
     }
 
     fn rule_for(
@@ -181,8 +196,44 @@ pub struct NotificationPolicyDisableRequest {
     pub audit_summary: String,
 }
 
+/// Owner 策略控制面唯一允许进入响应的有界审计视图。
+/// 不包含规则 JSON、命令正文或候选正文，避免把策略执行细节泄漏到回复工件。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NotificationPolicyResponseArtifact {
+    pub scope: String,
+    pub policy_family_id: Option<PolicyFamilyId>,
+    pub policy_revision_id: Option<PolicyRevisionId>,
+    pub decision_id: Option<crate::NotificationDecisionId>,
+    pub status: String,
+    pub priority: String,
+    pub typed_reason: String,
+    pub audit_reference: String,
+}
+
+/// 策略 Action 的事务化 Effect 输入。策略变更与通用 Effect Receipt 必须同一事务提交，
+/// 否则进程在两次提交之间崩溃会造成“已写策略但没有成功回执”的不可恢复状态。
+#[derive(Debug, Clone)]
+pub struct NotificationPolicyEffectRequest {
+    pub account: SourceAccountRef,
+    pub command_source_event_id: SourceEventId,
+    pub run_id: String,
+    pub effect_id: String,
+    pub proposal_id: String,
+    pub proposal_json: String,
+    pub lease_token: String,
+    pub action: crate::SecretaryAction,
+}
+
 #[async_trait]
 pub trait NotificationPolicyStoreT: Send + Sync {
+    /// 基于持久化 OwnerCommand 与 active Owner binding 构造授权上下文。
+    /// 不允许执行器相信模型、审批消息或 ActionRun 中未经验证的身份字段。
+    async fn authorization_for_owner_command(
+        &self,
+        target_account: &SourceAccountRef,
+        command_source_event_id: &crate::SourceEventId,
+    ) -> Result<NotificationPolicyAuthorizationContext, NotificationPolicyStoreError>;
+
     async fn create_or_replace(
         &self,
         request: &NotificationPolicyWriteRequest,
@@ -197,6 +248,27 @@ pub trait NotificationPolicyStoreT: Send + Sync {
         &self,
         request: &NotificationFeedbackRequest,
     ) -> Result<(), NotificationPolicyStoreError>;
+
+    /// 原子提交可变策略 Action 与通用 Effect Receipt。仓储必须在同一个数据库事务中
+    /// 校验 Action 租约、写入策略数据和写入 Receipt；不得由调用方拆分这三个步骤。
+    async fn apply_effect(
+        &self,
+        request: &NotificationPolicyEffectRequest,
+    ) -> Result<crate::SecretaryActionReceipt, NotificationPolicyStoreError>;
+
+    /// 返回账号内当前策略 Head 的有界列表视图。
+    async fn list_policy_artifacts(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError>;
+
+    /// 返回一个已提交决策的有界解释视图；跨账号或未知 ID 均不得泄漏。
+    async fn explain_decision_artifact(
+        &self,
+        account: &SourceAccountRef,
+        decision_id: &crate::NotificationDecisionId,
+    ) -> Result<Option<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError>;
 
     async fn claim_evaluation(
         &self,
@@ -253,9 +325,9 @@ pub fn authorize_notification_policy_action(
     {
         return Err(NotificationPolicyUseCaseError::OwnerBindingMismatch);
     }
-    if context.owner_binding_account != context.command_account
-        || context.command_account != context.target_account
-    {
+    // OwnerCommand 可来自 QQ Open Platform，而被管理账号可来自 NapCat；二者由持久化
+    // OwnerBinding 关联，不能错误地要求 command account 与 managed account 相同。
+    if context.owner_binding_account != context.target_account {
         return Err(NotificationPolicyUseCaseError::CrossAccountAction);
     }
     Ok(())
@@ -308,6 +380,50 @@ impl NotificationPolicyUseCase {
         Self { store, clock }
     }
 
+    /// 从持久化身份记录获取授权上下文，并在用例层再次执行统一约束。
+    pub async fn authorization_for_owner_command(
+        &self,
+        target_account: &SourceAccountRef,
+        command_source_event_id: &crate::SourceEventId,
+    ) -> Result<NotificationPolicyAuthorizationContext, NotificationPolicyUseCaseError> {
+        let context = self
+            .store
+            .authorization_for_owner_command(target_account, command_source_event_id)
+            .await?;
+        authorize_notification_policy_action(&context)?;
+        Ok(context)
+    }
+
+    /// 写入策略前在应用层集中执行 Owner 授权与静默时段 DST 预检，
+    /// 仓储只负责不可变 Revision 与 generation CAS。
+    pub async fn create_or_replace(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        request: &NotificationPolicyWriteRequest,
+    ) -> Result<crate::NotificationPolicyFamily, NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        if authorization.target_account != request.account {
+            return Err(NotificationPolicyUseCaseError::CrossAccountAction);
+        }
+        if let Some(quiet_hours) = request.rule.quiet_hours.as_ref() {
+            crate::validate_quiet_hours(quiet_hours, self.clock.as_ref())?;
+        }
+        Ok(self.store.create_or_replace(request).await?)
+    }
+
+    /// 停用只追加 tombstone Revision；调用方必须携带当前 Family generation。
+    pub async fn disable(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        request: &NotificationPolicyDisableRequest,
+    ) -> Result<crate::NotificationPolicyFamily, NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        if authorization.target_account != request.account {
+            return Err(NotificationPolicyUseCaseError::CrossAccountAction);
+        }
+        Ok(self.store.disable(request).await?)
+    }
+
     pub async fn record_feedback(
         &self,
         request: &NotificationFeedbackRequest,
@@ -317,6 +433,79 @@ impl NotificationPolicyUseCase {
         }
         self.store.record_feedback(request).await?;
         Ok(())
+    }
+
+    /// 反馈是可撤销的 L1 记录，但仍不得绕过 OwnerCommand 的账号授权。
+    pub async fn record_authorized_feedback(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        request: &NotificationFeedbackRequest,
+    ) -> Result<(), NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        if authorization.target_account != request.candidate.account
+            || request.candidate.account != request.match_key.account
+        {
+            return Err(NotificationPolicyUseCaseError::CrossAccountAction);
+        }
+        self.record_feedback(request).await
+    }
+
+    /// 原子执行会改变策略状态的 Action。授权检查在应用层完成，仓储随后把策略写入与
+    /// Effect Receipt 放入同一事务，成功响应只能建立在这个回执之上。
+    pub async fn apply_effect(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        request: &NotificationPolicyEffectRequest,
+    ) -> Result<crate::SecretaryActionReceipt, NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        if authorization.target_account != request.account {
+            return Err(NotificationPolicyUseCaseError::CrossAccountAction);
+        }
+        if let crate::SecretaryAction::SetQuietHours { quiet_hours, .. } = &request.action {
+            crate::validate_quiet_hours(quiet_hours, self.clock.as_ref())?;
+        }
+        self.store.apply_effect(request).await.map_err(Into::into)
+    }
+
+    /// 仅供 EffectExecutor 在预检授权已失效时读取精确历史回执或执行仓储最终授权。
+    /// 仓储会在同一事务内校验 OwnerBinding 与运行租约，因此此路径不能绕过新写入授权。
+    pub async fn apply_effect_with_repository_fencing(
+        &self,
+        request: &NotificationPolicyEffectRequest,
+    ) -> Result<crate::SecretaryActionReceipt, NotificationPolicyUseCaseError> {
+        if let crate::SecretaryAction::SetQuietHours { quiet_hours, .. } = &request.action {
+            crate::validate_quiet_hours(quiet_hours, self.clock.as_ref())?;
+        }
+        self.store.apply_effect(request).await.map_err(Into::into)
+    }
+
+    /// 只读策略查询也必须绑定已验证 OwnerCommand，避免由普通聊天内容枚举配置。
+    pub async fn list_authorized_policy_artifacts(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        limit: u16,
+    ) -> Result<Vec<NotificationPolicyResponseArtifact>, NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        if !(1..=20).contains(&limit) {
+            return Err(NotificationPolicyUseCaseError::InvalidListLimit);
+        }
+        Ok(self
+            .store
+            .list_policy_artifacts(&authorization.target_account, limit)
+            .await?)
+    }
+
+    /// 决策说明限定于目标账号；未知决策返回 `None`，不暴露跨账号存在性。
+    pub async fn explain_authorized_decision(
+        &self,
+        authorization: &NotificationPolicyAuthorizationContext,
+        decision_id: &crate::NotificationDecisionId,
+    ) -> Result<Option<NotificationPolicyResponseArtifact>, NotificationPolicyUseCaseError> {
+        authorize_notification_policy_action(authorization)?;
+        Ok(self
+            .store
+            .explain_decision_artifact(&authorization.target_account, decision_id)
+            .await?)
     }
 
     pub async fn recover_expired_evaluations(
@@ -360,6 +549,8 @@ impl NotificationPolicyUseCase {
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum NotificationPolicyStoreError {
+    #[error("notification policy authorization is no longer valid")]
+    Unauthorized,
     #[error("notification policy storage is unavailable")]
     Unavailable,
     #[error("notification policy storage rejected the request")]
@@ -382,6 +573,8 @@ pub enum NotificationPolicyUseCaseError {
     CrossAccountAction,
     #[error("notification policy recovery limit must be between 1 and 1000")]
     InvalidRecoveryLimit,
+    #[error("notification policy list limit must be between 1 and 20")]
+    InvalidListLimit,
     #[error("multiple current notification rules match the same evaluation priority")]
     AmbiguousPolicyRules,
 }
@@ -417,6 +610,14 @@ mod tests {
 
     #[async_trait]
     impl NotificationPolicyStoreT for FakeStore {
+        async fn authorization_for_owner_command(
+            &self,
+            _target_account: &SourceAccountRef,
+            _command_source_event_id: &crate::SourceEventId,
+        ) -> Result<NotificationPolicyAuthorizationContext, NotificationPolicyStoreError> {
+            Err(NotificationPolicyStoreError::Conflict)
+        }
+
         async fn create_or_replace(
             &self,
             _request: &NotificationPolicyWriteRequest,
@@ -437,6 +638,30 @@ mod tests {
         ) -> Result<(), NotificationPolicyStoreError> {
             *self.feedback_calls.lock().unwrap() += 1;
             Ok(())
+        }
+
+        async fn apply_effect(
+            &self,
+            _request: &NotificationPolicyEffectRequest,
+        ) -> Result<crate::SecretaryActionReceipt, NotificationPolicyStoreError> {
+            Err(NotificationPolicyStoreError::Conflict)
+        }
+
+        async fn list_policy_artifacts(
+            &self,
+            _account: &SourceAccountRef,
+            _limit: u16,
+        ) -> Result<Vec<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn explain_decision_artifact(
+            &self,
+            _account: &SourceAccountRef,
+            _decision_id: &crate::NotificationDecisionId,
+        ) -> Result<Option<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError>
+        {
+            Ok(None)
         }
 
         async fn claim_evaluation(

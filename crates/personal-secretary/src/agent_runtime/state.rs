@@ -31,6 +31,9 @@ pub enum SecretaryAgentPhase {
     Completed,
 }
 
+/// `SecretaryActionProposal` 是公共协议类型，对其 Boxing 会破坏所有调用方与序列化兼容性，
+/// 因此在没有独立兼容迁移方案之前抑制该枚举尺寸警告。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SecretaryAgentUpdate {
     ProposalAccepted(SecretaryActionProposal),

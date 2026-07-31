@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::SourceEventId;
+use crate::{
+    NotificationCandidateRef, NotificationMatchKeyV1, NotificationOutcome, PolicyFamilyId,
+    QuietHoursRule, SourceEventId,
+};
 
 use super::state::SecretaryAgentUpdate;
 use super::validation::{SecretaryAgentRuntimeError, validate_action_proposal};
@@ -36,6 +39,17 @@ pub enum SecretaryToolKind {
     SnoozeItem,
     SendOwnerMessage,
     AskOwnerClarification,
+    ListNotificationPolicies,
+    ExplainNotificationDecision,
+    SetAccountDefaultNotificationMode,
+    SetConversationNotificationMode,
+    SetQuietHours,
+    SetImportantContact,
+    SetNotificationCategoryImportance,
+    RecordNotificationFeedback,
+    CreateSimilarNotificationRule,
+    DisableNotificationPolicy,
+    SetAutomaticReplyDeniedForContact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,14 +69,16 @@ impl SecretaryToolKind {
             | Self::ReadSourceEvent
             | Self::SearchEventThreads
             | Self::ResolveReference
-            | Self::ListUpcomingItems => SecretaryToolPolicy {
+            | Self::ListUpcomingItems
+            | Self::ListNotificationPolicies
+            | Self::ExplainNotificationDecision => SecretaryToolPolicy {
                 risk: L0ReadOnly,
                 requires_confirmation: false,
                 reversible: true,
                 timeout_ms: 10_000,
                 max_retries: 2,
             },
-            Self::DraftReminder => SecretaryToolPolicy {
+            Self::DraftReminder | Self::RecordNotificationFeedback => SecretaryToolPolicy {
                 risk: L1Reversible,
                 requires_confirmation: false,
                 reversible: true,
@@ -75,7 +91,15 @@ impl SecretaryToolKind {
             | Self::CreateTask
             | Self::CreateReminder
             | Self::CompleteItem
-            | Self::SnoozeItem => SecretaryToolPolicy {
+            | Self::SnoozeItem
+            | Self::SetAccountDefaultNotificationMode
+            | Self::SetConversationNotificationMode
+            | Self::SetQuietHours
+            | Self::SetImportantContact
+            | Self::SetNotificationCategoryImportance
+            | Self::CreateSimilarNotificationRule
+            | Self::DisableNotificationPolicy
+            | Self::SetAutomaticReplyDeniedForContact => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -167,6 +191,63 @@ pub enum SecretaryAction {
     AskOwnerClarification {
         question: String,
     },
+    ListNotificationPolicies {
+        limit: u16,
+    },
+    ExplainNotificationDecision {
+        decision_id: String,
+    },
+    SetAccountDefaultNotificationMode {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        outcome: NotificationOutcome,
+        bypass_quiet: bool,
+    },
+    SetConversationNotificationMode {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        outcome: NotificationOutcome,
+        bypass_quiet: bool,
+        fully_silent: bool,
+        allow_bypass: bool,
+    },
+    SetQuietHours {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        quiet_hours: QuietHoursRule,
+    },
+    SetImportantContact {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        outcome: NotificationOutcome,
+        bypass_quiet: bool,
+    },
+    SetNotificationCategoryImportance {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        outcome: NotificationOutcome,
+        bypass_quiet: bool,
+    },
+    RecordNotificationFeedback {
+        candidate: NotificationCandidateRef,
+        match_key: NotificationMatchKeyV1,
+        important: bool,
+        promote_to_rule: bool,
+    },
+    CreateSimilarNotificationRule {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+        outcome: NotificationOutcome,
+        bypass_quiet: bool,
+    },
+    DisableNotificationPolicy {
+        policy_family_id: PolicyFamilyId,
+        expected_generation: u64,
+    },
+    SetAutomaticReplyDeniedForContact {
+        canonical_scope_key: String,
+        match_key: NotificationMatchKeyV1,
+    },
 }
 
 impl SecretaryAction {
@@ -187,6 +268,31 @@ impl SecretaryAction {
             Self::SnoozeItem { .. } => SecretaryToolKind::SnoozeItem,
             Self::SendOwnerMessage { .. } => SecretaryToolKind::SendOwnerMessage,
             Self::AskOwnerClarification { .. } => SecretaryToolKind::AskOwnerClarification,
+            Self::ListNotificationPolicies { .. } => SecretaryToolKind::ListNotificationPolicies,
+            Self::ExplainNotificationDecision { .. } => {
+                SecretaryToolKind::ExplainNotificationDecision
+            }
+            Self::SetAccountDefaultNotificationMode { .. } => {
+                SecretaryToolKind::SetAccountDefaultNotificationMode
+            }
+            Self::SetConversationNotificationMode { .. } => {
+                SecretaryToolKind::SetConversationNotificationMode
+            }
+            Self::SetQuietHours { .. } => SecretaryToolKind::SetQuietHours,
+            Self::SetImportantContact { .. } => SecretaryToolKind::SetImportantContact,
+            Self::SetNotificationCategoryImportance { .. } => {
+                SecretaryToolKind::SetNotificationCategoryImportance
+            }
+            Self::RecordNotificationFeedback { .. } => {
+                SecretaryToolKind::RecordNotificationFeedback
+            }
+            Self::CreateSimilarNotificationRule { .. } => {
+                SecretaryToolKind::CreateSimilarNotificationRule
+            }
+            Self::DisableNotificationPolicy { .. } => SecretaryToolKind::DisableNotificationPolicy,
+            Self::SetAutomaticReplyDeniedForContact { .. } => {
+                SecretaryToolKind::SetAutomaticReplyDeniedForContact
+            }
         }
     }
 }

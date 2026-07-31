@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseConnection, FromQueryResult, Statement,
-    TransactionTrait,
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, FromQueryResult, RuntimeErr,
+    Statement, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
@@ -9,10 +9,10 @@ use crate::{
     ClaimedEvaluation, DecisionReason, EvaluationCommit, EvaluationCommitResult,
     EvaluationSnapshot, FamilyGenerationSnapshot, MAX_EVALUATION_POLICY_FAMILIES, MessageSource,
     NotificationFeedbackRequest, NotificationOutcome, NotificationPolicyDisableRequest,
-    NotificationPolicyFamily, NotificationPolicyKind, NotificationPolicyRevision,
-    NotificationPolicyRule, NotificationPolicyStoreError, NotificationPolicyStoreT,
-    NotificationPolicyWriteRequest, OwnerBindingSnapshot, PolicyFamilyId, PolicyRevisionId,
-    PolicyRuleSnapshot, RevisionKind, SourceAccountRef,
+    NotificationPolicyFamily, NotificationPolicyKind, NotificationPolicyResponseArtifact,
+    NotificationPolicyRevision, NotificationPolicyRule, NotificationPolicyStoreError,
+    NotificationPolicyStoreT, NotificationPolicyWriteRequest, OwnerBindingSnapshot, PolicyFamilyId,
+    PolicyRevisionId, PolicyRuleSnapshot, RevisionKind, SecretaryActionReceipt, SourceAccountRef,
 };
 
 pub(crate) struct MySqlNotificationPolicyStore {
@@ -27,6 +27,84 @@ impl MySqlNotificationPolicyStore {
 
 #[async_trait]
 impl NotificationPolicyStoreT for MySqlNotificationPolicyStore {
+    async fn authorization_for_owner_command(
+        &self,
+        target_account: &SourceAccountRef,
+        command_source_event_id: &crate::SourceEventId,
+    ) -> Result<crate::NotificationPolicyAuthorizationContext, NotificationPolicyStoreError> {
+        #[derive(FromQueryResult)]
+        struct AuthorizationRow {
+            owner_binding_source_channel: String,
+            owner_binding_platform_account_id: String,
+            command_source_channel: String,
+            command_platform_account_id: String,
+            owner_actor_id: String,
+            command_actor_id: String,
+            command_role: String,
+            target_source_channel: String,
+            target_platform_account_id: String,
+        }
+        let rows = AuthorizationRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT managed.source_channel AS owner_binding_source_channel,
+                       managed.platform_account_id AS owner_binding_platform_account_id,
+                       command_account.source_channel AS command_source_channel,
+                       command_account.platform_account_id AS command_platform_account_id,
+                       binding.owner_actor_id,
+                       command.actor_platform_id AS command_actor_id,
+                       command.message_role AS command_role,
+                       target.source_channel AS target_source_channel,
+                       target.platform_account_id AS target_platform_account_id
+                FROM secretary_source_events AS command
+                INNER JOIN secretary_accounts AS command_account ON command_account.id = command.account_id
+                INNER JOIN secretary_owner_bindings AS binding
+                  ON binding.command_account_id = command.account_id
+                 AND binding.owner_actor_id = command.actor_platform_id
+                 AND binding.status = 'active'
+                INNER JOIN secretary_accounts AS managed ON managed.id = binding.managed_account_id
+                INNER JOIN secretary_accounts AS target
+                  ON target.source_channel = ? AND target.platform_account_id = ?
+                WHERE command.source_event_id = ?
+                  AND managed.id = target.id
+                LIMIT 2"#,
+            [
+                target_account.channel.as_str().into(),
+                target_account.account_id.clone().into(),
+                command_source_event_id.as_str().into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(database_error)?;
+        let row = match rows.as_slice() {
+            [] => return Err(NotificationPolicyStoreError::Unauthorized),
+            [row] => row,
+            // 授权不可依赖查询顺序；重复的精确 active binding 一律拒绝。
+            _ => return Err(NotificationPolicyStoreError::Conflict),
+        };
+        Ok(crate::NotificationPolicyAuthorizationContext {
+            owner_binding_account: source_account_from_db(
+                &row.owner_binding_source_channel,
+                row.owner_binding_platform_account_id.clone(),
+            )?,
+            owner_actor_id: row.owner_actor_id.clone(),
+            command_account: source_account_from_db(
+                &row.command_source_channel,
+                row.command_platform_account_id.clone(),
+            )?,
+            command_actor_id: row.command_actor_id.clone(),
+            command_role: match row.command_role.as_str() {
+                "owner_command" => crate::MessageRole::OwnerCommand,
+                "external_observation" => crate::MessageRole::ExternalObservation,
+                _ => return Err(NotificationPolicyStoreError::Database),
+            },
+            target_account: source_account_from_db(
+                &row.target_source_channel,
+                row.target_platform_account_id.clone(),
+            )?,
+        })
+    }
+
     async fn create_or_replace(
         &self,
         request: &NotificationPolicyWriteRequest,
@@ -52,7 +130,17 @@ impl NotificationPolicyStoreT for MySqlNotificationPolicyStore {
         }
         let family = match &request.policy_family_id {
             Some(family_id) => load_family_for_update(&transaction, account_id, family_id).await?,
-            None => create_family(&transaction, account_id, request).await?,
+            None => match find_family_by_scope_for_update(
+                &transaction,
+                account_id,
+                &request.canonical_scope_key,
+                request.policy_kind,
+            )
+            .await?
+            {
+                Some(family) => family,
+                None => create_family(&transaction, account_id, request).await?,
+            },
         };
         let revision = append_revision(
             &transaction,
@@ -162,6 +250,167 @@ impl NotificationPolicyStoreT for MySqlNotificationPolicyStore {
         }
         transaction.commit().await.map_err(database_error)?;
         Ok(())
+    }
+
+    async fn apply_effect(
+        &self,
+        request: &crate::NotificationPolicyEffectRequest,
+    ) -> Result<SecretaryActionReceipt, NotificationPolicyStoreError> {
+        let transaction = self.db.begin().await.map_err(database_error)?;
+        if let Some(receipt) = load_policy_effect_receipt(&transaction, request).await? {
+            transaction.commit().await.map_err(database_error)?;
+            return Ok(receipt);
+        }
+        let account_id = lock_account(&transaction, &request.account).await?;
+        verify_action_lease(&transaction, request, account_id).await?;
+        verify_effect_owner_authorization(&transaction, request, account_id).await?;
+        if let Some(receipt) = load_policy_effect_receipt(&transaction, request).await? {
+            transaction.commit().await.map_err(database_error)?;
+            return Ok(receipt);
+        }
+
+        let result_ref = apply_policy_effect_action(&transaction, request, account_id).await?;
+        let inserted = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT IGNORE INTO secretary_action_effect_receipts \
+                 (effect_id, run_id, proposal_json, result_ref) VALUES (?, ?, ?, ?)",
+                [
+                    request.effect_id.clone().into(),
+                    request.run_id.clone().into(),
+                    request.proposal_json.clone().into(),
+                    result_ref.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(database_error)?;
+        if inserted.rows_affected() == 0 {
+            let receipt = load_policy_effect_receipt(&transaction, request)
+                .await?
+                .ok_or(NotificationPolicyStoreError::Database)?;
+            transaction.commit().await.map_err(database_error)?;
+            return Ok(receipt);
+        }
+        if inserted.rows_affected() != 1 {
+            return Err(NotificationPolicyStoreError::Database);
+        }
+        transaction.commit().await.map_err(database_error)?;
+        Ok(SecretaryActionReceipt {
+            proposal_id: request.proposal_id.clone(),
+            result_ref,
+        })
+    }
+
+    async fn list_policy_artifacts(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError> {
+        if !(1..=20).contains(&limit) {
+            return Err(NotificationPolicyStoreError::Conflict);
+        }
+        let account_id = load_account_id(&self.db, account).await?;
+        #[derive(FromQueryResult)]
+        struct PolicyArtifactRow {
+            canonical_scope_key: String,
+            policy_family_id: String,
+            current_revision_id: String,
+            generation: u64,
+            policy_kind: String,
+            revision_kind: String,
+        }
+        let rows = PolicyArtifactRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT family.canonical_scope_key, family.policy_family_id, family.current_revision_id, \
+                    family.generation, family.policy_kind, revision.revision_kind \
+             FROM secretary_notification_policy_families AS family \
+             INNER JOIN secretary_notification_policy_revisions AS revision \
+               ON revision.policy_family_id = family.policy_family_id \
+              AND revision.policy_revision_id = family.current_revision_id \
+             WHERE family.account_id = ? \
+             ORDER BY family.policy_kind, family.canonical_scope_key, family.policy_family_id \
+             LIMIT ?",
+            [account_id.into(), u64::from(limit).into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(database_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let priority = policy_kind_name(parse_policy_kind(&row.policy_kind)?).to_owned();
+                Ok(NotificationPolicyResponseArtifact {
+                    scope: row.canonical_scope_key,
+                    policy_family_id: Some(
+                        PolicyFamilyId::new(row.policy_family_id).map_err(policy_error)?,
+                    ),
+                    policy_revision_id: Some(
+                        PolicyRevisionId::new(row.current_revision_id).map_err(policy_error)?,
+                    ),
+                    decision_id: None,
+                    status: row.revision_kind,
+                    priority,
+                    typed_reason: format!("generation:{}", row.generation),
+                    audit_reference: "policy_family_head".into(),
+                })
+            })
+            .collect()
+    }
+
+    async fn explain_decision_artifact(
+        &self,
+        account: &SourceAccountRef,
+        decision_id: &crate::NotificationDecisionId,
+    ) -> Result<Option<NotificationPolicyResponseArtifact>, NotificationPolicyStoreError> {
+        let account_id = load_account_id(&self.db, account).await?;
+        #[derive(FromQueryResult)]
+        struct DecisionArtifactRow {
+            notification_decision_id: String,
+            policy_family_id: Option<String>,
+            policy_revision_id: Option<String>,
+            outcome: String,
+            reason_code: String,
+            audit_reference: String,
+        }
+        let row = DecisionArtifactRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT decision.notification_decision_id, revision.policy_family_id, \
+                    decision.policy_revision_id, decision.outcome, decision.reason_code, \
+                    decision.evaluation_request_id AS audit_reference \
+             FROM secretary_notification_decisions AS decision \
+             INNER JOIN secretary_notification_candidates AS candidate \
+               ON candidate.notification_candidate_id = decision.notification_candidate_id \
+             LEFT JOIN secretary_notification_policy_revisions AS revision \
+               ON revision.policy_revision_id = decision.policy_revision_id \
+             WHERE decision.notification_decision_id = ? AND candidate.account_id = ?",
+            [decision_id.as_str().into(), account_id.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(database_error)?;
+        row.map(|row| {
+            Ok(NotificationPolicyResponseArtifact {
+                scope: "notification_decision".into(),
+                policy_family_id: row
+                    .policy_family_id
+                    .map(PolicyFamilyId::new)
+                    .transpose()
+                    .map_err(policy_error)?,
+                policy_revision_id: row
+                    .policy_revision_id
+                    .map(PolicyRevisionId::new)
+                    .transpose()
+                    .map_err(policy_error)?,
+                decision_id: Some(
+                    crate::NotificationDecisionId::new(row.notification_decision_id)
+                        .map_err(policy_error)?,
+                ),
+                status: row.outcome,
+                priority: "decision".into(),
+                typed_reason: row.reason_code,
+                audit_reference: row.audit_reference,
+            })
+        })
+        .transpose()
     }
 
     async fn claim_evaluation(
@@ -737,6 +986,492 @@ impl FromQueryResult for FamilyRow {
     }
 }
 
+#[derive(FromQueryResult)]
+struct PolicyEffectReceiptRow {
+    proposal_json: String,
+    result_ref: String,
+    run_id: String,
+}
+
+async fn verify_action_lease(
+    db: &sea_orm::DatabaseTransaction,
+    request: &crate::NotificationPolicyEffectRequest,
+    account_id: u64,
+) -> Result<(), NotificationPolicyStoreError> {
+    let verified = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_action_runs SET updated_at = UTC_TIMESTAMP(6) \
+             WHERE run_id = ? AND lease_token = ? AND status = 'running' AND account_id = ? \
+               AND command_source_event_id = ? AND lease_expires_at IS NOT NULL \
+               AND lease_expires_at >= UTC_TIMESTAMP(6)",
+            [
+                request.run_id.clone().into(),
+                request.lease_token.clone().into(),
+                account_id.into(),
+                request.command_source_event_id.as_str().into(),
+            ],
+        ))
+        .await
+        .map_err(database_error)?;
+    if verified.rows_affected() != 1 {
+        return Err(NotificationPolicyStoreError::Conflict);
+    }
+    Ok(())
+}
+
+async fn verify_effect_owner_authorization(
+    db: &sea_orm::DatabaseTransaction,
+    request: &crate::NotificationPolicyEffectRequest,
+    managed_account_id: u64,
+) -> Result<(), NotificationPolicyStoreError> {
+    // 第一步：读取命令事件并锁定，确认其为 owner_command。
+    let command_row = CommandAuthRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT account_id, actor_platform_id, message_role \
+         FROM secretary_source_events \
+         WHERE source_event_id = ? FOR UPDATE",
+        [request.command_source_event_id.as_str().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(database_error)?
+    .ok_or(NotificationPolicyStoreError::Unauthorized)?;
+    if command_row.message_role != "owner_command" {
+        return Err(NotificationPolicyStoreError::Unauthorized);
+    }
+
+    // 第二步：读取目标账号的所有 active OwnerBinding（最多 2 条用于检测重复），
+    // 不做按 command account 的预先 JOIN，确保重复 binding 能被显式捕获。
+    let bindings = BindingAuthRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT binding_id, command_account_id, owner_actor_id \
+         FROM secretary_owner_bindings \
+         WHERE managed_account_id = ? AND status = 'active' \
+         LIMIT 2 FOR UPDATE",
+        [managed_account_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(database_error)?;
+    match bindings.as_slice() {
+        [] => Err(NotificationPolicyStoreError::Unauthorized),
+        [binding] => {
+            if binding.command_account_id == command_row.account_id
+                && binding.owner_actor_id == command_row.actor_platform_id
+            {
+                Ok(())
+            } else {
+                Err(NotificationPolicyStoreError::Unauthorized)
+            }
+        }
+        _ => Err(NotificationPolicyStoreError::Conflict),
+    }
+}
+
+#[derive(FromQueryResult)]
+struct CommandAuthRow {
+    account_id: u64,
+    actor_platform_id: String,
+    message_role: String,
+}
+
+#[derive(FromQueryResult)]
+struct BindingAuthRow {
+    #[allow(dead_code)]
+    binding_id: String,
+    command_account_id: u64,
+    owner_actor_id: String,
+}
+
+async fn load_policy_effect_receipt(
+    db: &sea_orm::DatabaseTransaction,
+    request: &crate::NotificationPolicyEffectRequest,
+) -> Result<Option<SecretaryActionReceipt>, NotificationPolicyStoreError> {
+    let row = PolicyEffectReceiptRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT CAST(proposal_json AS CHAR) AS proposal_json, result_ref, run_id \
+         FROM secretary_action_effect_receipts WHERE effect_id = ?",
+        [request.effect_id.clone().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(database_error)?;
+    row.map(|row| {
+        if row.run_id != request.run_id {
+            return Err(NotificationPolicyStoreError::Conflict);
+        }
+        let proposal: crate::SecretaryActionProposal = serde_json::from_str(&row.proposal_json)
+            .map_err(|_| NotificationPolicyStoreError::Database)?;
+        if proposal.proposal_id != request.proposal_id || proposal.action != request.action {
+            return Err(NotificationPolicyStoreError::Conflict);
+        }
+        Ok(SecretaryActionReceipt {
+            proposal_id: proposal.proposal_id,
+            result_ref: row.result_ref,
+        })
+    })
+    .transpose()
+}
+
+async fn apply_policy_effect_action(
+    db: &sea_orm::DatabaseTransaction,
+    request: &crate::NotificationPolicyEffectRequest,
+    account_id: u64,
+) -> Result<String, NotificationPolicyStoreError> {
+    match &request.action {
+        crate::SecretaryAction::SetAccountDefaultNotificationMode {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            bypass_quiet,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::AccountDefault,
+                crate::NotificationPolicyRule {
+                    match_key: match_key.clone(),
+                    outcome: *outcome,
+                    bypass_quiet: *bypass_quiet,
+                    conversation: None,
+                    quiet_hours: None,
+                },
+                "owner set account default notification mode",
+            )
+            .await
+        }
+        crate::SecretaryAction::SetConversationNotificationMode {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            bypass_quiet,
+            fully_silent,
+            allow_bypass,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::Conversation,
+                crate::NotificationPolicyRule {
+                    match_key: match_key.clone(),
+                    outcome: *outcome,
+                    bypass_quiet: *bypass_quiet,
+                    conversation: Some(crate::ConversationNotificationRule {
+                        mode: if *fully_silent {
+                            crate::ConversationMode::FullySilent
+                        } else {
+                            crate::ConversationMode::Normal
+                        },
+                        allow_bypass: *allow_bypass,
+                    }),
+                    quiet_hours: None,
+                },
+                "owner set conversation notification mode",
+            )
+            .await
+        }
+        crate::SecretaryAction::SetQuietHours {
+            canonical_scope_key,
+            match_key,
+            quiet_hours,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::QuietHours,
+                crate::NotificationPolicyRule {
+                    match_key: match_key.clone(),
+                    outcome: crate::NotificationOutcome::Suppress,
+                    bypass_quiet: false,
+                    conversation: None,
+                    quiet_hours: Some(quiet_hours.clone()),
+                },
+                "owner set notification quiet hours",
+            )
+            .await
+        }
+        crate::SecretaryAction::SetImportantContact {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            bypass_quiet,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::Contact,
+                basic_policy_rule(match_key, *outcome, *bypass_quiet),
+                "owner set important notification contact",
+            )
+            .await
+        }
+        crate::SecretaryAction::SetNotificationCategoryImportance {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            bypass_quiet,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::Category,
+                basic_policy_rule(match_key, *outcome, *bypass_quiet),
+                "owner set notification category importance",
+            )
+            .await
+        }
+        crate::SecretaryAction::CreateSimilarNotificationRule {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            bypass_quiet,
+        } => {
+            match_key
+                .eligibility_for_long_term_rule()
+                .map_err(policy_error)?;
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::SimilarNotification,
+                basic_policy_rule(match_key, *outcome, *bypass_quiet),
+                "owner created similar notification rule",
+            )
+            .await
+        }
+        crate::SecretaryAction::SetAutomaticReplyDeniedForContact {
+            canonical_scope_key,
+            match_key,
+        } => {
+            apply_policy_write_effect(
+                db,
+                request,
+                account_id,
+                canonical_scope_key,
+                crate::NotificationPolicyKind::AutomaticReplyDenied,
+                basic_policy_rule(match_key, crate::NotificationOutcome::Suppress, false),
+                "owner denied automatic reply for contact",
+            )
+            .await
+        }
+        crate::SecretaryAction::DisableNotificationPolicy {
+            policy_family_id,
+            expected_generation,
+        } => {
+            let family = load_family_for_update(db, account_id, policy_family_id).await?;
+            if family.generation != *expected_generation {
+                return Err(NotificationPolicyStoreError::Conflict);
+            }
+            let revision = append_revision(
+                db,
+                &family,
+                RevisionKind::Tombstone,
+                None,
+                Some(request.command_source_event_id.as_str()),
+                "owner disabled notification policy",
+            )
+            .await?;
+            let updated = update_family_head(
+                db,
+                &family.policy_family_id,
+                family.generation,
+                &revision.policy_revision_id,
+            )
+            .await?;
+            increment_policy_epoch(db, account_id).await?;
+            policy_family_result_ref(
+                updated,
+                request.account.clone(),
+                "tombstone",
+                "policy_disabled",
+            )
+        }
+        crate::SecretaryAction::RecordNotificationFeedback {
+            candidate,
+            match_key,
+            important,
+            promote_to_rule,
+        } => {
+            if candidate.account != request.account || match_key.account != request.account {
+                return Err(NotificationPolicyStoreError::Conflict);
+            }
+            if *promote_to_rule {
+                match_key
+                    .eligibility_for_long_term_rule()
+                    .map_err(policy_error)?;
+            }
+            let feedback = NotificationFeedbackRequest {
+                candidate: candidate.clone(),
+                match_key: match_key.clone(),
+                important: *important,
+                promote_to_rule: *promote_to_rule,
+                command_source_event_id: request.command_source_event_id.as_str().to_owned(),
+            };
+            let candidate_id = candidate_id(db, account_id, &feedback.candidate).await?;
+            let inserted = db
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "INSERT IGNORE INTO secretary_notification_feedback \
+                     (feedback_id, account_id, notification_candidate_id, important, promote_to_rule, \
+                      command_source_event_id, audit_summary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        feedback_id(&feedback).into(),
+                        account_id.into(),
+                        candidate_id.into(),
+                        feedback.important.into(),
+                        feedback.promote_to_rule.into(),
+                        feedback.command_source_event_id.clone().into(),
+                        "owner notification feedback".into(),
+                    ],
+                ))
+                .await
+                .map_err(database_error)?;
+            if inserted.rows_affected() > 1 {
+                return Err(NotificationPolicyStoreError::Database);
+            }
+            if inserted.rows_affected() == 1 && feedback.promote_to_rule {
+                promote_feedback_to_rule(db, account_id, &feedback).await?;
+            }
+            Ok("{\"scope\":\"notification_feedback\",\"status\":\"recorded\",\"priority\":\"feedback\",\"typed_reason\":\"feedback_recorded\",\"audit_reference\":\"notification_feedback\"}".into())
+        }
+        _ => Err(NotificationPolicyStoreError::Conflict),
+    }
+}
+
+fn basic_policy_rule(
+    match_key: &crate::NotificationMatchKeyV1,
+    outcome: crate::NotificationOutcome,
+    bypass_quiet: bool,
+) -> crate::NotificationPolicyRule {
+    crate::NotificationPolicyRule {
+        match_key: match_key.clone(),
+        outcome,
+        bypass_quiet,
+        conversation: None,
+        quiet_hours: None,
+    }
+}
+
+async fn apply_policy_write_effect(
+    db: &sea_orm::DatabaseTransaction,
+    request: &crate::NotificationPolicyEffectRequest,
+    account_id: u64,
+    canonical_scope_key: &str,
+    policy_kind: crate::NotificationPolicyKind,
+    rule: crate::NotificationPolicyRule,
+    audit_summary: &str,
+) -> Result<String, NotificationPolicyStoreError> {
+    rule.match_key
+        .eligibility_for_long_term_rule()
+        .map_err(policy_error)?;
+    if canonical_scope_key.trim().is_empty()
+        || canonical_scope_key.len() > crate::MAX_CANONICAL_SCOPE_KEY_BYTES
+    {
+        return Err(NotificationPolicyStoreError::Conflict);
+    }
+    let family =
+        match find_family_by_scope_for_update(db, account_id, canonical_scope_key, policy_kind)
+            .await?
+        {
+            Some(family) => family,
+            None => {
+                match create_policy_family(db, account_id, canonical_scope_key, policy_kind).await {
+                    Ok(family) => family,
+                    Err(error) if is_policy_family_duplicate_key(&error) => {
+                        find_family_by_scope_for_update(
+                            db,
+                            account_id,
+                            canonical_scope_key,
+                            policy_kind,
+                        )
+                        .await?
+                        .ok_or(NotificationPolicyStoreError::Database)?
+                    }
+                    Err(error) => return Err(database_error(error)),
+                }
+            }
+        };
+    let revision = append_revision(
+        db,
+        &family,
+        RevisionKind::Rule,
+        Some(&rule),
+        Some(request.command_source_event_id.as_str()),
+        audit_summary,
+    )
+    .await?;
+    let updated = update_family_head(
+        db,
+        &family.policy_family_id,
+        family.generation,
+        &revision.policy_revision_id,
+    )
+    .await?;
+    increment_policy_epoch(db, account_id).await?;
+    policy_family_result_ref(updated, request.account.clone(), "rule", "policy_written")
+}
+
+async fn create_policy_family(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    canonical_scope_key: &str,
+    policy_kind: crate::NotificationPolicyKind,
+) -> Result<FamilyRow, DbErr> {
+    let policy_family_id = PolicyFamilyId::generate();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_notification_policy_families \
+         (policy_family_id, account_id, canonical_scope_key, policy_kind, current_revision_id, generation) \
+         VALUES (?, ?, ?, ?, NULL, 1)",
+        [
+            policy_family_id.as_str().into(),
+            account_id.into(),
+            canonical_scope_key.to_owned().into(),
+            policy_kind_name(policy_kind).into(),
+        ],
+    ))
+    .await?;
+    Ok(FamilyRow {
+        policy_family_id: policy_family_id.as_str().to_owned(),
+        canonical_scope_key: canonical_scope_key.to_owned(),
+        policy_kind: policy_kind_name(policy_kind).to_owned(),
+        current_revision_id: None,
+        generation: 1,
+    })
+}
+
+fn policy_family_result_ref(
+    family: FamilyRow,
+    account: SourceAccountRef,
+    status: &str,
+    typed_reason: &str,
+) -> Result<String, NotificationPolicyStoreError> {
+    let family = to_domain_family(family, account)?;
+    serde_json::to_string(&serde_json::json!({
+        "scope": family.canonical_scope_key,
+        "policy_family_id": family.policy_family_id,
+        "policy_revision_id": family.current_revision_id,
+        "decision_id": null,
+        "status": status,
+        "priority": policy_kind_name(family.policy_kind),
+        "typed_reason": typed_reason,
+        "audit_reference": format!("generation:{}", family.generation),
+    }))
+    .map_err(|_| NotificationPolicyStoreError::Database)
+}
+
 async fn load_account_id(
     db: &DatabaseConnection,
     account: &crate::SourceAccountRef,
@@ -803,6 +1538,8 @@ async fn promote_feedback_to_rule(
             crate::NotificationOutcome::Suppress
         },
         bypass_quiet: false,
+        conversation: None,
+        quiet_hours: None,
     };
     let revision = append_revision(
         db,
@@ -1452,6 +2189,22 @@ async fn complete_request_and_candidate(
     .await
     .map_err(database_error)?;
     Ok(())
+}
+
+fn is_policy_family_duplicate_key(error: &DbErr) -> bool {
+    let sqlx_error = match error {
+        DbErr::Exec(RuntimeErr::SqlxError(error)) | DbErr::Query(RuntimeErr::SqlxError(error)) => {
+            error.as_ref()
+        }
+        _ => return false,
+    };
+    let sea_orm::sqlx::Error::Database(database_error) = sqlx_error else {
+        return false;
+    };
+    database_error.code().as_deref() == Some("1062")
+        && database_error
+            .message()
+            .contains("uk_secretary_notification_policy_family")
 }
 
 fn policy_error(_: crate::NotificationPolicyError) -> NotificationPolicyStoreError {

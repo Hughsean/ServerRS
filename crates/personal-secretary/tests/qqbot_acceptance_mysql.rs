@@ -1,25 +1,32 @@
 //! 独立 QQBot 验收测试。
 //!
 //! 这些测试描述跨模块业务不变量，不复用生产实现中的 helper，也不把 Fake Store 当作
-//! 生产闭环证据。除纯身份约束外，测试必须指向隔离 MySQL schema，并由
-//! `scripts/verify-qqbot-acceptance.ps1` 逐项运行。
+//! 生产闭环证据。除纯身份约束外，测试必须指向隔离 MySQL schema。
 
 use std::sync::Arc;
 
+use agent_core::graph::{
+    EffectEnvelope, EffectExecutor, EffectId, NodeId, RunBudget, RunContext, RunId, RunStep,
+    RunTrace,
+};
+use tokio_util::sync::CancellationToken;
+
 use personal_secretary::{
-    ArtifactEnvelope, ArtifactId, ArtifactKind, ArtifactUseCase, ConnectionEndReason,
-    ContentSegment, ContentTrustLevel, ConversationKind, ConversationRef, ConversationScope,
-    DecisionReason, DirectoryEvidence, DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi,
-    DirectoryStatus, EvaluationCommit, EvaluationCommitResult, EvaluationPlan, EventKind,
-    InboundMessageEnvelope, MatchField, MessageSource, NotificationCategory,
-    NotificationFeedbackRequest, NotificationOutcome, NotificationPolicyDisableRequest,
-    NotificationPolicyEvaluator, NotificationPolicyKind, NotificationPolicyRule,
-    NotificationPolicyStoreError, NotificationPolicyStoreT, NotificationPolicyWriteRequest,
-    RecallCorrelationKey, RecallEvent, RecallEventId, RecallKind, RecallUseCase, ScopeKind,
-    SourceAccountRef, SourceMessageRef, StructuredImportance, TombstoneStatus, VerifiedActor,
-    VerifiedActorKind, build_mysql_artifact_store, build_mysql_directory_store,
-    build_mysql_inbound_event_store, build_mysql_notification_policy_store,
-    build_mysql_recall_store,
+    ActionLeaseToken, ActionRunId, ActionRunSeed, ArtifactEnvelope, ArtifactId, ArtifactKind,
+    ArtifactUseCase, ConnectionEndReason, ContentSegment, ContentTrustLevel, ConversationKind,
+    ConversationRef, ConversationScope, DecisionReason, DirectoryEvidence, DirectorySnapshot,
+    DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EvaluationCommit,
+    EvaluationCommitResult, EvaluationPlan, EventKind, InboundMessageEnvelope, MatchField,
+    MessageSource, NotificationCategory, NotificationFeedbackRequest, NotificationOutcome,
+    NotificationPolicyDisableRequest, NotificationPolicyEffectRequest, NotificationPolicyEvaluator,
+    NotificationPolicyKind, NotificationPolicyRule, NotificationPolicyStoreError,
+    NotificationPolicyStoreT, NotificationPolicyWriteRequest, RecallCorrelationKey, RecallEvent,
+    RecallEventId, RecallKind, RecallUseCase, RecentEventRef, ScopeKind, SecretaryAction,
+    SecretaryActionEffect, SecretaryActionEffectExecutor, SecretaryActionProposal,
+    SourceAccountRef, SourceEventId, SourceMessageRef, StructuredImportance, SystemClock,
+    TombstoneStatus, VerifiedActor, VerifiedActorKind, build_mysql_action_store,
+    build_mysql_artifact_store, build_mysql_directory_store, build_mysql_inbound_event_store,
+    build_mysql_notification_policy_store, build_mysql_recall_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use sha2::{Digest, Sha256};
@@ -48,6 +55,29 @@ fn message(account_subject: &str, group_id: &str, message_id: &str) -> InboundMe
         Vec::new(),
     )
     .expect("valid inbound fixture")
+}
+
+fn owner_command(
+    command_account_id: &str,
+    message_id: &str,
+    owner_actor_id: &str,
+) -> InboundMessageEnvelope {
+    InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::QqOpenPlatform,
+            command_account_id,
+            message_id,
+        )
+        .expect("valid owner command source fixture"),
+        ConversationRef::new(ConversationKind::OwnerControl, "acceptance-owner-control")
+            .expect("valid owner command conversation fixture"),
+        VerifiedActor::new(VerifiedActorKind::Owner, owner_actor_id)
+            .expect("valid owner command actor fixture"),
+        1_800_000_000,
+        "set notification policy",
+        Vec::new(),
+    )
+    .expect("valid owner command fixture")
 }
 
 fn recall(
@@ -111,6 +141,8 @@ fn policy_rule(account: SourceAccountRef) -> NotificationPolicyRule {
         .expect("valid policy rule match key"),
         outcome: NotificationOutcome::Suppress,
         bypass_quiet: false,
+        conversation: None,
+        quiet_hours: None,
     }
 }
 
@@ -129,6 +161,638 @@ fn policy_write_request(
     }
 }
 
+struct PolicyEffectFixture {
+    managed_account: SourceAccountRef,
+    command_source_event_id: SourceEventId,
+    request: NotificationPolicyEffectRequest,
+}
+
+fn effect_context() -> RunContext {
+    RunContext::new(
+        RunBudget::new(
+            std::num::NonZeroU32::new(2).expect("effect fixture budget must be non-zero"),
+            std::time::Duration::from_secs(30),
+        ),
+        CancellationToken::new(),
+        RunTrace::default(),
+    )
+}
+
+fn policy_effect_envelope(
+    effect_id: EffectId,
+    proposal: SecretaryActionProposal,
+) -> EffectEnvelope<SecretaryActionEffect> {
+    EffectEnvelope {
+        id: effect_id,
+        effect: SecretaryActionEffect { proposal },
+    }
+}
+
+async fn revoke_policy_effect_binding(db: &DatabaseConnection, fixture: &PolicyEffectFixture) {
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_owner_bindings SET status = 'revoked' \
+         WHERE managed_account_id = (SELECT id FROM secretary_accounts \
+                                     WHERE source_channel = ? AND platform_account_id = ?)",
+        [
+            fixture.managed_account.channel.as_str().into(),
+            fixture.managed_account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("binding revocation fixture must persist");
+}
+
+async fn insert_policy_effect_fixture(db: &DatabaseConnection) -> PolicyEffectFixture {
+    let managed_account = account(&format!("accept-policy-effect-{}", Uuid::new_v4().simple()));
+    let command_account_id = format!("accept-command-effect-{}", Uuid::new_v4().simple());
+    let owner_actor_id = "accept-policy-owner";
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    inbound
+        .begin_connection(&managed_account)
+        .await
+        .expect("managed account bootstrap must succeed");
+    let command_source_event_id = inbound
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            &format!("accept-command-message-{}", Uuid::new_v4().simple()),
+            owner_actor_id,
+        ))
+        .await
+        .expect("owner command fixture must persist")
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, ?, 'active' \
+         FROM secretary_accounts AS managed CROSS JOIN secretary_accounts AS command \
+         WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            owner_actor_id.into(),
+            managed_account.channel.as_str().into(),
+            managed_account.account_id.clone().into(),
+            command_account_id.into(),
+        ],
+    ))
+    .await
+    .expect("exact active owner binding fixture must persist");
+
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_source_event_id, "policy-effect-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed_account.clone(),
+                command_source_event_id: command_source_event_id.clone(),
+                command_text: "set notification policy".into(),
+                conversation_id: "acceptance-owner-control".into(),
+                occurred_at_unix_secs: 1_800_000_000,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![RecentEventRef {
+                    source_event_id: command_source_event_id.clone(),
+                    summary: "Owner command".into(),
+                }],
+            },
+        )
+        .await
+        .expect("policy effect action run must persist");
+    let lease_token = Uuid::new_v4().to_string();
+    let claimed = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_action_runs \
+             SET status = 'running', worker_id = 'acceptance-policy-effect', lease_token = ?, \
+                 lease_expires_at = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 60 SECOND) \
+             WHERE run_id = ? AND status = 'pending'",
+            [lease_token.clone().into(), run_id.as_str().into()],
+        ))
+        .await
+        .expect("policy effect action run claim must succeed");
+    assert_eq!(
+        claimed.rows_affected(),
+        1,
+        "fixture action run must be claimed"
+    );
+
+    let action = SecretaryAction::SetNotificationCategoryImportance {
+        canonical_scope_key: "category:agenda".into(),
+        match_key: policy_rule(managed_account.clone()).match_key,
+        outcome: NotificationOutcome::Suppress,
+        bypass_quiet: false,
+    };
+    let proposal = SecretaryActionProposal {
+        proposal_id: Uuid::new_v4().to_string(),
+        action: action.clone(),
+        rationale: "isolated MySQL policy effect acceptance fixture".into(),
+        source_event_ids: vec![command_source_event_id.clone()],
+        idempotency_key: None,
+    };
+    let request = NotificationPolicyEffectRequest {
+        account: managed_account.clone(),
+        command_source_event_id: command_source_event_id.clone(),
+        run_id: run_id.as_str().to_owned(),
+        effect_id: format!("accept-policy-effect-{}", Uuid::new_v4().simple()),
+        proposal_id: proposal.proposal_id.clone(),
+        proposal_json: serde_json::to_string(&proposal).expect("proposal fixture serializes"),
+        lease_token,
+        action,
+    };
+    PolicyEffectFixture {
+        managed_account,
+        command_source_event_id,
+        request,
+    }
+}
+
+async fn assert_policy_effect_counts(
+    db: &DatabaseConnection,
+    fixture: &PolicyEffectFixture,
+    receipt_effect_id: &str,
+    expected: u64,
+) {
+    let account_values = vec![
+        fixture.managed_account.channel.as_str().into(),
+        fixture.managed_account.account_id.clone().into(),
+    ];
+    assert_eq!(
+        scalar_u64(
+            db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_notification_policy_families AS family \
+             INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+             WHERE account.source_channel = ? AND account.platform_account_id = ?",
+            account_values.clone(),
+        )
+        .await,
+        expected,
+        "policy family count must be scoped to this managed account",
+    );
+    assert_eq!(
+        scalar_u64(
+            db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_notification_policy_revisions AS revision \
+             INNER JOIN secretary_notification_policy_families AS family \
+               ON family.policy_family_id = revision.policy_family_id \
+             INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+             WHERE account.source_channel = ? AND account.platform_account_id = ?",
+            account_values,
+        )
+        .await,
+        expected,
+        "policy revision count must be scoped to this managed account",
+    );
+    assert_eq!(
+        scalar_u64(
+            db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE effect_id = ?",
+            vec![receipt_effect_id.into()],
+        )
+        .await,
+        expected,
+        "effect receipt count must be scoped to this effect identity",
+    );
+}
+
+struct TriggerGuard {
+    db: DatabaseConnection,
+    name: String,
+}
+
+impl TriggerGuard {
+    async fn remove(self) {
+        self.db
+            .execute_unprepared(&format!("DROP TRIGGER IF EXISTS {}", self.name))
+            .await
+            .expect("policy effect fault must be removed");
+    }
+}
+
+async fn install_policy_effect_fault(
+    db: &DatabaseConnection,
+    fixture: &PolicyEffectFixture,
+    table: &str,
+) -> TriggerGuard {
+    let trigger_name = format!("policy_effect_fail_{}", Uuid::new_v4().simple());
+    let body = match table {
+        "secretary_notification_policy_revisions" => format!(
+            "IF NEW.command_source_event_id = '{}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'policy effect revision fault'; END IF;",
+            fixture.command_source_event_id.as_str(),
+        ),
+        "secretary_action_effect_receipts" => format!(
+            "IF NEW.effect_id = '{}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'policy effect receipt fault'; END IF;",
+            fixture.request.effect_id,
+        ),
+        _ => panic!("unsupported policy-effect fault target"),
+    };
+    db.execute_unprepared(&format!(
+        "CREATE TRIGGER {trigger_name} BEFORE INSERT ON {table} FOR EACH ROW BEGIN {body} END"
+    ))
+    .await
+    .expect("isolated fixture must install policy effect fault");
+    TriggerGuard {
+        db: db.clone(),
+        name: trigger_name,
+    }
+}
+
+async fn assert_policy_effect_database_error(
+    db: &DatabaseConnection,
+    fixture: &PolicyEffectFixture,
+    table: &str,
+) {
+    let store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let before_epoch = policy_epoch(db, &fixture.managed_account).await;
+    let fault = install_policy_effect_fault(db, fixture, table).await;
+    let result = store.apply_effect(&fixture.request).await;
+    fault.remove().await;
+    assert_eq!(
+        result,
+        Err(NotificationPolicyStoreError::Database),
+        "fault in {table} must make the whole effect transaction fail",
+    );
+    assert_eq!(
+        policy_epoch(db, &fixture.managed_account).await,
+        before_epoch,
+        "fault in {table} must not leave a policy epoch update",
+    );
+    assert_policy_effect_counts(db, fixture, &fixture.request.effect_id, 0).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_accepts_cross_account_owner_binding_once() {
+    let db = isolated_db().await;
+    let fixture = insert_policy_effect_fixture(&db).await;
+    let store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    let receipt = store
+        .apply_effect(&fixture.request)
+        .await
+        .expect("cross-account owner binding must authorize policy effect");
+
+    assert_eq!(receipt.proposal_id, fixture.request.proposal_id);
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch + 1
+    );
+    assert_policy_effect_counts(&db, &fixture, &fixture.request.effect_id, 1).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_rechecks_owner_binding_before_mutation() {
+    let db = isolated_db().await;
+    let fixture = insert_policy_effect_fixture(&db).await;
+    let store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    // 模拟 executor 事务外预检通过后，管理员在最终 effect 事务开始前撤销绑定。
+    store
+        .authorization_for_owner_command(&fixture.managed_account, &fixture.command_source_event_id)
+        .await
+        .expect("fixture must pass authorization preflight before binding drift");
+    revoke_policy_effect_binding(&db, &fixture).await;
+
+    assert_eq!(
+        store.apply_effect(&fixture.request).await,
+        Err(NotificationPolicyStoreError::Unauthorized),
+    );
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch
+    );
+    assert_policy_effect_counts(&db, &fixture, &fixture.request.effect_id, 0).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_rejects_each_owner_binding_tuple_mismatch() {
+    let db = isolated_db().await;
+
+    let actor_fixture = insert_policy_effect_fixture(&db).await;
+    let actor_store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let actor_epoch = policy_epoch(&db, &actor_fixture.managed_account).await;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_owner_bindings SET owner_actor_id = 'different-owner' \
+         WHERE managed_account_id = (SELECT id FROM secretary_accounts \
+                                     WHERE source_channel = ? AND platform_account_id = ?)",
+        [
+            actor_fixture.managed_account.channel.as_str().into(),
+            actor_fixture.managed_account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("actor mismatch fixture must persist");
+    assert_eq!(
+        actor_store.apply_effect(&actor_fixture.request).await,
+        Err(NotificationPolicyStoreError::Unauthorized),
+    );
+    assert_eq!(
+        policy_epoch(&db, &actor_fixture.managed_account).await,
+        actor_epoch
+    );
+    assert_policy_effect_counts(&db, &actor_fixture, &actor_fixture.request.effect_id, 0).await;
+
+    let command_fixture = insert_policy_effect_fixture(&db).await;
+    let command_store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let command_epoch = policy_epoch(&db, &command_fixture.managed_account).await;
+    let other_command_account = format!("accept-other-command-{}", Uuid::new_v4().simple());
+    build_mysql_inbound_event_store(db.clone())
+        .insert_message_if_absent(&owner_command(
+            &other_command_account,
+            &format!("accept-other-command-message-{}", Uuid::new_v4().simple()),
+            "accept-policy-owner",
+        ))
+        .await
+        .expect("other command account fixture must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_owner_bindings SET command_account_id = ( \
+             SELECT id FROM secretary_accounts \
+             WHERE source_channel = 'qq_open_platform' AND platform_account_id = ? \
+         ) WHERE managed_account_id = ( \
+             SELECT id FROM secretary_accounts \
+             WHERE source_channel = ? AND platform_account_id = ? \
+         )",
+        [
+            other_command_account.into(),
+            command_fixture.managed_account.channel.as_str().into(),
+            command_fixture.managed_account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("command account mismatch fixture must persist");
+    assert_eq!(
+        command_store.apply_effect(&command_fixture.request).await,
+        Err(NotificationPolicyStoreError::Unauthorized),
+    );
+    assert_eq!(
+        policy_epoch(&db, &command_fixture.managed_account).await,
+        command_epoch
+    );
+    assert_policy_effect_counts(&db, &command_fixture, &command_fixture.request.effect_id, 0).await;
+
+    let duplicate_fixture = insert_policy_effect_fixture(&db).await;
+    let duplicate_store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let duplicate_epoch = policy_epoch(&db, &duplicate_fixture.managed_account).await;
+    let duplicate_command_account = format!("accept-duplicate-command-{}", Uuid::new_v4().simple());
+    build_mysql_inbound_event_store(db.clone())
+        .insert_message_if_absent(&owner_command(
+            &duplicate_command_account,
+            &format!(
+                "accept-duplicate-command-message-{}",
+                Uuid::new_v4().simple()
+            ),
+            "accept-policy-owner",
+        ))
+        .await
+        .expect("duplicate command account fixture must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'accept-policy-owner', 'active' \
+         FROM secretary_accounts AS managed CROSS JOIN secretary_accounts AS command \
+         WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            duplicate_fixture.managed_account.channel.as_str().into(),
+            duplicate_fixture.managed_account.account_id.clone().into(),
+            duplicate_command_account.into(),
+        ],
+    ))
+    .await
+    .expect("duplicate active binding fixture must persist");
+    assert_eq!(
+        duplicate_store
+            .apply_effect(&duplicate_fixture.request)
+            .await,
+        Err(NotificationPolicyStoreError::Conflict),
+    );
+    assert_eq!(
+        policy_epoch(&db, &duplicate_fixture.managed_account).await,
+        duplicate_epoch
+    );
+    assert_policy_effect_counts(
+        &db,
+        &duplicate_fixture,
+        &duplicate_fixture.request.effect_id,
+        0,
+    )
+    .await;
+
+    let managed_fixture = insert_policy_effect_fixture(&db).await;
+    let managed_store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let managed_epoch = policy_epoch(&db, &managed_fixture.managed_account).await;
+    let other_managed_account =
+        account(&format!("accept-other-managed-{}", Uuid::new_v4().simple()));
+    build_mysql_inbound_event_store(db.clone())
+        .begin_connection(&other_managed_account)
+        .await
+        .expect("other managed account fixture must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_owner_bindings SET managed_account_id = ( \
+             SELECT id FROM secretary_accounts \
+             WHERE source_channel = ? AND platform_account_id = ? \
+         ) WHERE managed_account_id = ( \
+             SELECT id FROM secretary_accounts \
+             WHERE source_channel = ? AND platform_account_id = ? \
+         )",
+        [
+            other_managed_account.channel.as_str().into(),
+            other_managed_account.account_id.clone().into(),
+            managed_fixture.managed_account.channel.as_str().into(),
+            managed_fixture.managed_account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("managed account mismatch fixture must persist");
+    assert_eq!(
+        managed_store.apply_effect(&managed_fixture.request).await,
+        Err(NotificationPolicyStoreError::Unauthorized),
+    );
+    assert_eq!(
+        policy_epoch(&db, &managed_fixture.managed_account).await,
+        managed_epoch
+    );
+    assert_policy_effect_counts(&db, &managed_fixture, &managed_fixture.request.effect_id, 0).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_rejects_expired_lease_until_normal_reclaim() {
+    let db = isolated_db().await;
+    let mut fixture = insert_policy_effect_fixture(&db).await;
+    let store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_action_runs SET lease_expires_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) \
+         WHERE run_id = ?",
+        [fixture.request.run_id.clone().into()],
+    ))
+    .await
+    .expect("expired lease fixture must persist");
+    assert_eq!(
+        store.apply_effect(&fixture.request).await,
+        Err(NotificationPolicyStoreError::Conflict),
+    );
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch
+    );
+    assert_policy_effect_counts(&db, &fixture, &fixture.request.effect_id, 0).await;
+
+    let action_store = build_mysql_action_store(db.clone());
+    let reclaimed = action_store
+        .claim_pending_run("acceptance-policy-effect-reclaim", 60, unix_now_secs())
+        .await
+        .expect("normal action-run reclaim must succeed")
+        .expect("expired fixture run must be reclaimed");
+    assert_eq!(reclaimed.run_id.as_str(), fixture.request.run_id);
+    fixture.request.lease_token = reclaimed.lease_token.as_str().to_owned();
+    let receipt = store
+        .apply_effect(&fixture.request)
+        .await
+        .expect("reclaimed lease may commit the policy effect once");
+    assert_eq!(receipt.proposal_id, fixture.request.proposal_id);
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch + 1
+    );
+    assert_policy_effect_counts(&db, &fixture, &fixture.request.effect_id, 1).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_executor_replays_exact_history_after_authorization_drift() {
+    let db = isolated_db().await;
+    let fixture = insert_policy_effect_fixture(&db).await;
+    let policy = Arc::new(personal_secretary::NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    ));
+    let executor = SecretaryActionEffectExecutor::new(
+        build_mysql_action_store(db.clone()),
+        ActionRunId::new(fixture.request.run_id.clone()).expect("valid fixture run id"),
+        ActionLeaseToken::new(fixture.request.lease_token.clone()).expect("valid fixture lease"),
+        None,
+        fixture.managed_account.clone(),
+        unix_now_secs(),
+    )
+    .with_notification_policy(policy, fixture.command_source_event_id.clone());
+    let proposal: SecretaryActionProposal = serde_json::from_str(&fixture.request.proposal_json)
+        .expect("fixture proposal must deserialize");
+    let effect_id = EffectId::new(
+        RunId::new(),
+        RunStep::try_from(1).expect("valid graph step"),
+        NodeId::try_from("policy-effect").expect("valid graph node"),
+        0,
+    );
+    // 执行器将 envelope.id.to_string() 持久化为 receipt 的 effect_id，
+    // 而非 fixture.request.effect_id，因此后续断言必须使用此字符串。
+    let persisted_effect_id = effect_id.to_string();
+    let envelope = policy_effect_envelope(effect_id.clone(), proposal.clone());
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    let first = executor
+        .execute(&envelope, &effect_context())
+        .await
+        .expect("initial policy effect must commit");
+    assert_eq!(first.proposal_id, proposal.proposal_id);
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch + 1
+    );
+    assert_policy_effect_counts(&db, &fixture, &persisted_effect_id, 1).await;
+
+    revoke_policy_effect_binding(&db, &fixture).await;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_action_runs SET lease_token = NULL, lease_expires_at = NULL \
+         WHERE run_id = ?",
+        [fixture.request.run_id.clone().into()],
+    ))
+    .await
+    .expect("historical replay fixture must release lease");
+
+    let replayed = executor
+        .execute(&envelope, &effect_context())
+        .await
+        .expect("exact historical policy receipt must replay after authorization drift");
+    assert_eq!(replayed, first);
+
+    let mut changed_proposal = proposal.clone();
+    changed_proposal.proposal_id = Uuid::new_v4().to_string();
+    let changed_proposal_result = executor
+        .execute(
+            &policy_effect_envelope(effect_id.clone(), changed_proposal),
+            &effect_context(),
+        )
+        .await;
+    assert!(
+        changed_proposal_result.is_err(),
+        "same effect_id with a different proposal_id must be rejected"
+    );
+
+    let mut changed_action = proposal;
+    changed_action.action = SecretaryAction::SetNotificationCategoryImportance {
+        canonical_scope_key: "category:other".into(),
+        match_key: policy_rule(fixture.managed_account.clone()).match_key,
+        outcome: NotificationOutcome::Remind,
+        bypass_quiet: false,
+    };
+    let changed_action_result = executor
+        .execute(
+            &policy_effect_envelope(effect_id, changed_action),
+            &effect_context(),
+        )
+        .await;
+    assert!(
+        changed_action_result.is_err(),
+        "same effect_id with a different action payload must be rejected"
+    );
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch + 1
+    );
+    assert_policy_effect_counts(&db, &fixture, &persisted_effect_id, 1).await;
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated qqbot_accept_* schema"]
+async fn notification_policy_effect_rolls_back_policy_or_receipt_write_failure() {
+    for table in [
+        "secretary_notification_policy_revisions",
+        "secretary_action_effect_receipts",
+    ] {
+        let db = isolated_db().await;
+        let fixture = insert_policy_effect_fixture(&db).await;
+        assert_policy_effect_database_error(&db, &fixture, table).await;
+    }
+}
+
 fn automatic_reply_rule(account: SourceAccountRef, actor_id: &str) -> NotificationPolicyRule {
     NotificationPolicyRule {
         match_key: personal_secretary::NotificationMatchKeyV1::new(
@@ -143,6 +807,8 @@ fn automatic_reply_rule(account: SourceAccountRef, actor_id: &str) -> Notificati
         .expect("valid automatic reply match key"),
         outcome: NotificationOutcome::Suppress,
         bypass_quiet: false,
+        conversation: None,
+        quiet_hours: None,
     }
 }
 
@@ -1867,4 +2533,157 @@ async fn acceptance_artifact_poison_job_fails_without_starving_later_work() {
         .await,
         1
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_family_concurrent_create_produces_single_family_with_legal_head() {
+    let db = isolated_db().await;
+    let fixture = insert_policy_effect_fixture(&db).await;
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    // 构造第二个请求：相同 scope/kind，不同 effect/proposal 标识
+    let mut request2 = fixture.request.clone();
+    request2.effect_id = format!("accept-policy-effect-2-{}", Uuid::new_v4().simple());
+    request2.proposal_id = Uuid::new_v4().to_string();
+    let mut proposal2: SecretaryActionProposal =
+        serde_json::from_str(&fixture.request.proposal_json)
+            .expect("fixture proposal must deserialize");
+    proposal2.proposal_id = request2.proposal_id.clone();
+    request2.proposal_json =
+        serde_json::to_string(&proposal2).expect("second proposal must serialize");
+
+    // 两个独立连接并发提交同一 scope 的 effect
+    let db2 = isolated_db().await;
+    let store1: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let store2: Arc<dyn NotificationPolicyStoreT> = build_mysql_notification_policy_store(db2);
+
+    let (r1, r2) = tokio::join!(
+        store1.apply_effect(&fixture.request),
+        store2.apply_effect(&request2),
+    );
+
+    let receipt1 = r1.expect("first concurrent effect must succeed");
+    let receipt2 = r2.expect("second concurrent effect must succeed");
+    assert_eq!(receipt1.proposal_id, fixture.request.proposal_id);
+    assert_eq!(receipt2.proposal_id, request2.proposal_id);
+
+    // 同一 scope 只有一个 family
+    let account_values = vec![
+        fixture.managed_account.channel.as_str().into(),
+        fixture.managed_account.account_id.clone().into(),
+    ];
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_notification_policy_families AS family \
+             INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+             WHERE account.source_channel = ? AND account.platform_account_id = ?",
+            account_values.clone(),
+        )
+        .await,
+        1,
+        "并发创建同一 scope family 不得产生重复行",
+    );
+    // 该 family 下有两个 revision
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_notification_policy_revisions AS revision \
+             INNER JOIN secretary_notification_policy_families AS family \
+               ON family.policy_family_id = revision.policy_family_id \
+             INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+             WHERE account.source_channel = ? AND account.platform_account_id = ?",
+            account_values,
+        )
+        .await,
+        2,
+        "两次 effect 写入必须在同一 family 下产生两个 revision",
+    );
+    // generation 固定为 3：family 创建为 1，两个 revision 各推进 1
+    let generation = scalar_u64(
+        &db,
+        "SELECT generation AS value FROM secretary_notification_policy_families AS family \
+         INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+         WHERE account.source_channel = ? AND account.platform_account_id = ?",
+        vec![
+            fixture.managed_account.channel.as_str().into(),
+            fixture.managed_account.account_id.clone().into(),
+        ],
+    )
+    .await;
+    assert_eq!(
+        generation, 3,
+        "generation 必须精确为 3（create=1 + 两个 revision 各推进 1），多余的推进表示意外写入",
+    );
+    // epoch 推进两次
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch + 2,
+    );
+    // 两个 receipt 各自独立
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE effect_id = ?",
+            vec![fixture.request.effect_id.clone().into()],
+        )
+        .await,
+        1,
+    );
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE effect_id = ?",
+            vec![request2.effect_id.into()],
+        )
+        .await,
+        1,
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
+async fn notification_policy_effect_rejects_non_1062_family_create_fault_as_database() {
+    let db = isolated_db().await;
+    let fixture = insert_policy_effect_fixture(&db).await;
+    let before_epoch = policy_epoch(&db, &fixture.managed_account).await;
+
+    // 注入非 1062 故障：trigger 对 family INSERT 抛出通用 SQLSTATE
+    let trigger_name = format!("policy_effect_fault_non1062_{}", Uuid::new_v4().simple());
+    db.execute_unprepared(&format!(
+        "CREATE TRIGGER {trigger_name} BEFORE INSERT \
+         ON secretary_notification_policy_families FOR EACH ROW BEGIN \
+           SIGNAL SQLSTATE '45000' \
+             SET MESSAGE_TEXT = 'injected non-1062 family fault for acceptance test'; \
+         END"
+    ))
+    .await
+    .expect("isolated fixture must install non-1062 family fault");
+
+    let store: Arc<dyn NotificationPolicyStoreT> =
+        build_mysql_notification_policy_store(db.clone());
+    let result = store.apply_effect(&fixture.request).await;
+
+    // 清理故障注入
+    db.execute_unprepared(&format!("DROP TRIGGER IF EXISTS {trigger_name}"))
+        .await
+        .expect("non-1062 family fault must be cleaned up");
+
+    assert_eq!(
+        result,
+        Err(NotificationPolicyStoreError::Database),
+        "非 1062 的 family 创建故障必须返回 Database，不能被 is_policy_family_duplicate_key 静默吃掉",
+    );
+    assert_eq!(
+        policy_epoch(&db, &fixture.managed_account).await,
+        before_epoch,
+        "非 1062 故障必须回滚 epoch",
+    );
+    assert_policy_effect_counts(&db, &fixture, &fixture.request.effect_id, 0).await;
 }

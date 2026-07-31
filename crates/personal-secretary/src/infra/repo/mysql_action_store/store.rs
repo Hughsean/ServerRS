@@ -340,17 +340,43 @@ impl ActionStoreT for MySqlActionStore {
         run_id: &ActionRunId,
         lease_token: &ActionLeaseToken,
     ) -> Result<Option<String>, ActionStoreError> {
+        let transaction = self.db.begin().await.map_err(store_error)?;
         let row = CheckpointRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT CAST(last_checkpoint_json AS CHAR) AS last_checkpoint_json
                FROM secretary_action_runs
-               WHERE run_id = ? AND lease_token = ?"#,
+               WHERE run_id = ? AND lease_token = ? AND status = 'running'
+               FOR UPDATE"#,
             vec![run_id.as_str().into(), lease_token.as_str().into()],
         ))
-        .one(&self.db)
+        .one(&transaction)
         .await
         .map_err(store_error)?;
-        Ok(row.and_then(|r| r.last_checkpoint_json))
+        let Some(checkpoint_json) = row.and_then(|row| row.last_checkpoint_json) else {
+            transaction.commit().await.map_err(store_error)?;
+            return Ok(None);
+        };
+        let result = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"UPDATE secretary_action_runs
+                   SET last_checkpoint_json = NULL, updated_at = ?
+                   WHERE run_id = ? AND lease_token = ? AND status = 'running'
+                     AND last_checkpoint_json IS NOT NULL"#,
+                [
+                    Utc::now().naive_utc().into(),
+                    run_id.as_str().into(),
+                    lease_token.as_str().into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        if result.rows_affected() != 1 {
+            transaction.rollback().await.map_err(store_error)?;
+            return Err(ActionStoreError::LeaseLost);
+        }
+        transaction.commit().await.map_err(store_error)?;
+        Ok(Some(checkpoint_json))
     }
 
     async fn load_effect_receipt(

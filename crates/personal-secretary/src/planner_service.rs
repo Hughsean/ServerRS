@@ -71,6 +71,7 @@ pub struct PlannerUseCase {
     store: Arc<dyn ActionStoreT>,
     planner: Arc<dyn crate::ActionPlannerT>,
     retriever: Option<Arc<crate::RetrieverUseCase>>,
+    notification_policy: Option<Arc<crate::NotificationPolicyUseCase>>,
     agenda: Option<Arc<crate::AgendaUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
@@ -91,6 +92,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            notification_policy: None,
             agenda: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
@@ -112,6 +114,14 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_notification_policy(
+        mut self,
+        notification_policy: Arc<crate::NotificationPolicyUseCase>,
+    ) -> Self {
+        self.notification_policy = Some(notification_policy);
+        self
+    }
+
     pub fn with_agenda(mut self, agenda: Arc<crate::AgendaUseCase>) -> Self {
         self.agenda = Some(agenda);
         self
@@ -128,6 +138,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            notification_policy: None,
             agenda: None,
             checkpoint_db: None,
             clock,
@@ -211,6 +222,12 @@ impl PlannerUseCase {
             claimed.account.clone(),
             self.clock.now_unix_secs(),
         );
+        if let Some(notification_policy) = &self.notification_policy {
+            effect_executor = effect_executor.with_notification_policy(
+                Arc::clone(notification_policy),
+                claimed.command_source_event_id.clone(),
+            );
+        }
         if let Some(agenda) = &self.agenda {
             effect_executor = effect_executor
                 .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());
@@ -377,6 +394,12 @@ impl PlannerUseCase {
             claimed.account.clone(),
             self.clock.now_unix_secs(),
         );
+        if let Some(notification_policy) = &self.notification_policy {
+            effect_executor = effect_executor.with_notification_policy(
+                Arc::clone(notification_policy),
+                claimed.command_source_event_id.clone(),
+            );
+        }
         if let Some(agenda) = &self.agenda {
             effect_executor = effect_executor
                 .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());

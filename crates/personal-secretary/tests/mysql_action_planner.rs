@@ -9,11 +9,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use personal_secretary::{
     ActionPlannerT, ActionRunId, ActionRunSeed, CheckpointStore, Clock, ContentTrustLevel,
-    ConversationKind, ConversationRef, InMemoryCheckpointStore, InboundMessageEnvelope,
-    IngestMessageOutcome, MessageSource, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase,
-    RecentEventRef, RetrieverPolicy, RetrieverUseCase, SecretaryAgentState, SourceAccountRef,
-    SourceMessageRef, VerifiedActor, VerifiedActorKind, build_mysql_action_store,
-    build_mysql_inbound_event_store, build_mysql_retriever_store,
+    ConversationKind, ConversationRef, EventKind, InMemoryCheckpointStore, InboundMessageEnvelope,
+    IngestMessageOutcome, MatchField, MessageSource, NotificationCategory, NotificationOutcome,
+    NotificationPolicyUseCase, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase,
+    RecentEventRef, RetrieverPolicy, RetrieverUseCase, SecretaryAction, SecretaryActionProposal,
+    SecretaryAgentState, SourceAccountRef, SourceMessageRef, StructuredImportance, SystemClock,
+    VerifiedActor, VerifiedActorKind, build_mysql_action_store, build_mysql_inbound_event_store,
+    build_mysql_notification_policy_store, build_mysql_retriever_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
@@ -179,6 +181,36 @@ impl Clock for FixedClock {
     fn now_unix_secs(&self) -> i64 {
         self.now
     }
+}
+
+async fn scalar_u64(
+    db: &sea_orm::DatabaseConnection,
+    sql: &str,
+    values: Vec<sea_orm::Value>,
+) -> u64 {
+    db.query_one_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        sql,
+        values,
+    ))
+    .await
+    .expect("MySQL scalar query must succeed")
+    .expect("MySQL scalar query must return one row")
+    .try_get::<u64>("", "value")
+    .expect("MySQL BIGINT UNSIGNED scalar must decode as u64")
+}
+
+async fn policy_epoch(db: &sea_orm::DatabaseConnection, account: &SourceAccountRef) -> u64 {
+    scalar_u64(
+        db,
+        "SELECT policy_epoch AS value FROM secretary_accounts \
+         WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            account.channel.as_str().into(),
+            account.account_id.clone().into(),
+        ],
+    )
+    .await
 }
 
 fn owner_command(account_id: &str, message_id: &str, text: &str) -> InboundMessageEnvelope {
@@ -592,6 +624,234 @@ async fn mysql_action_planner_retriever_effect_response_roundtrip() {
     ))
     .await
     .ok();
+}
+
+/// 生成需审批的通知策略 Proposal，用于验证重启后执行真实 MySQL effect。
+struct SuspendPolicyPlanner {
+    account: SourceAccountRef,
+}
+
+#[async_trait]
+impl ActionPlannerT for SuspendPolicyPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                SecretaryAction::SetNotificationCategoryImportance {
+                    canonical_scope_key: "category:agenda".into(),
+                    match_key: personal_secretary::NotificationMatchKeyV1::new(
+                        self.account.clone(),
+                        MatchField::Absent,
+                        MatchField::Absent,
+                        MatchField::Known(NotificationCategory::Agenda),
+                        MatchField::Known(false),
+                        MatchField::Known(StructuredImportance::Normal),
+                        MatchField::Known(EventKind::AgendaDue),
+                    )
+                    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+                    outcome: NotificationOutcome::Suppress,
+                    bypass_quiet: false,
+                },
+                "测试重启后确认通知策略变更",
+                Vec::new(),
+                Some("resume-policy-effect-v1".into()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn mysql_action_planner_restart_resume_approved_policy_effect_once() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let managed_account =
+        SourceAccountRef::new(MessageSource::NapCat, format!("resume-policy-{suffix}"))
+            .expect("valid managed account");
+    let command_account_id = format!("resume-command-{suffix}");
+    let inbound_store = build_mysql_inbound_event_store(db.clone());
+    inbound_store
+        .begin_connection(&managed_account)
+        .await
+        .expect("managed account bootstrap must succeed");
+    let source_event_id = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "msg-1",
+            "确认创建日程提醒策略",
+        ))
+        .await
+        .expect("owner command must persist")
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+         FROM secretary_accounts AS managed CROSS JOIN secretary_accounts AS command \
+         WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        vec![
+            uuid::Uuid::new_v4().to_string().into(),
+            managed_account.channel.as_str().into(),
+            managed_account.account_id.clone().into(),
+            command_account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("cross-account owner binding must persist");
+
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&source_event_id, "resume-policy-effect-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed_account.clone(),
+                command_source_event_id: source_event_id.clone(),
+                command_text: "确认创建日程提醒策略".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 1_800_000_000,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![RecentEventRef {
+                    source_event_id: source_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .expect("policy action run must persist");
+    let before_epoch = policy_epoch(&db, &managed_account).await;
+    let initial = PlannerUseCase::with_clock(
+        action_store,
+        Arc::new(SuspendPolicyPlanner {
+            account: managed_account.clone(),
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+        Arc::new(FixedClock { now: 1_800_000_100 }),
+    )
+    .with_checkpoint_db(db.clone());
+
+    let report = initial
+        .run_once("test-worker")
+        .await
+        .expect("policy proposal run must succeed")
+        .expect("policy proposal run must be claimed");
+    assert!(report.suspended, "L2 policy action must await approval");
+    let checkpoint_id = report
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal_id = report
+        .proposal_id
+        .expect("suspended run must have proposal");
+
+    // 进程重建后必须重新装配 MySQL 策略用例；不能复用先前的内存对象。
+    let resumed = PlannerUseCase::with_clock(
+        build_mysql_action_store(db.clone()),
+        Arc::new(NoopPlanner) as Arc<dyn ActionPlannerT>,
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+        Arc::new(FixedClock { now: 1_800_000_200 }),
+    )
+    .with_checkpoint_db(db.clone())
+    .with_notification_policy(Arc::new(NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    )));
+    let first_resume = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            personal_secretary::SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: personal_secretary::SecretaryApprovalDecision::Approve,
+                command_source_event_id: source_event_id.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved policy resume must execute effect");
+    assert!(
+        first_resume.completed,
+        "approved resume must complete action run"
+    );
+    assert_eq!(policy_epoch(&db, &managed_account).await, before_epoch + 1);
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_notification_policy_revisions AS revision \
+             INNER JOIN secretary_notification_policy_families AS family \
+               ON family.policy_family_id = revision.policy_family_id \
+             INNER JOIN secretary_accounts AS account ON account.id = family.account_id \
+             WHERE account.source_channel = ? AND account.platform_account_id = ?",
+            vec![
+                managed_account.channel.as_str().into(),
+                managed_account.account_id.clone().into(),
+            ],
+        )
+        .await,
+        1,
+        "approved resume must create exactly one policy revision",
+    );
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "approved resume must persist exactly one effect receipt",
+    );
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_responses WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "completed resume must persist one response",
+    );
+
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                personal_secretary::SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: personal_secretary::SecretaryApprovalDecision::Approve,
+                    command_source_event_id: source_event_id,
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject the second approved resume",
+    );
+    assert_eq!(policy_epoch(&db, &managed_account).await, before_epoch + 1);
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "rejected second resume must not create another effect receipt",
+    );
 }
 
 /// 生成 Owner 澄清请求的 Planner，用于测试允许动作上的 Suspend→Resume 基础设施。

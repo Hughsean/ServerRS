@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use personal_secretary::{
-    ActionPlannerT, AgendaUseCase, CheckpointStore, InMemoryCheckpointStore, PlannerError,
-    PlannerInput, PlannerOutput, PlannerUseCase, RetrieverPolicy, RetrieverUseCase,
-    SecretaryAgentState, SystemClock, build_mysql_action_store, build_mysql_agenda_store,
-    build_mysql_retriever_store,
+    ActionPlannerT, AgendaUseCase, CheckpointStore, InMemoryCheckpointStore,
+    NotificationPolicyUseCase, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase,
+    RetrieverPolicy, RetrieverUseCase, SecretaryAgentState, SystemClock, build_mysql_action_store,
+    build_mysql_agenda_store, build_mysql_notification_policy_store, build_mysql_retriever_store,
 };
 use sea_orm::DatabaseConnection;
 
@@ -69,6 +69,10 @@ pub(crate) async fn assemble_action_planner(
         build_mysql_agenda_store(db.clone()),
         Arc::new(SystemClock),
     ));
+    let notification_policy = Arc::new(NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    ));
     let use_case = Arc::new(
         PlannerUseCase::new(
             action_store,
@@ -77,6 +81,7 @@ pub(crate) async fn assemble_action_planner(
             config.action_planner.lease_secs,
         )
         .with_retriever(retriever)
+        .with_notification_policy(notification_policy)
         .with_agenda(agenda)
         .with_checkpoint_db(db),
     );

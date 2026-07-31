@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use crate::{
     ConversationKind, ConversationRef, EventQuery, OwnerResponseDraft, PlannerInput, PlannerOutput,
     PlannerRetrievedExcerpt, ResponseSegment, SecretaryAction, SecretaryActionApprovalRequest,
-    SecretaryActionEffect, SecretaryActionProposal, SecretaryAgentState, SecretaryAgentUpdate,
-    gate_secretary_action, validate_planner_output,
+    SecretaryActionEffect, SecretaryActionProposal, SecretaryAgentPhase, SecretaryAgentState,
+    SecretaryAgentUpdate, gate_secretary_action, validate_planner_output,
 };
 
 use super::port::ActionRunContext;
@@ -153,8 +153,9 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
     }
 }
 
-/// L0Execute 节点：只读 Action 的 Effect 由 PlanNode 通过 gate 已返回，
-/// 此节点用于 Suspend 恢复后的流转占位。
+/// L0Execute 节点：L0/L1 Action 的 Effect 已在 Plan 节点通过 gate 返回；
+/// 此节点也为 Suspend→Approve 恢复后的 L2 Action 生成 Effect，使其能通过
+/// EffectExecutor 完成策略持久化。
 pub struct L0ExecuteNode {
     id: NodeId,
 }
@@ -175,12 +176,28 @@ impl AgentNode<SecretaryAgentState> for L0ExecuteNode {
 
     async fn execute(
         &self,
-        _state: &AgentState<SecretaryAgentState>,
+        state: &AgentState<SecretaryAgentState>,
         _context: &RunContext,
     ) -> Result<
         NodeResult<SecretaryAgentUpdate, SecretaryActionEffect, SecretaryActionApprovalRequest>,
         NodeError,
     > {
+        let business = state.business();
+        // Suspend→Approve 恢复后 phase 为 Execute 且 pending_proposal 未清除；
+        // 此时必须生成 Effect 以使 EffectExecutor 真正执行策略持久化。
+        // L0/L1 Action 的 pending_proposal 已在 Plan→Effect→ActionCompleted 中被清除，
+        // 因此该分支不会重复执行它们。
+        if business.phase() == SecretaryAgentPhase::Execute
+            && let Some(proposal) = business.pending_proposal()
+        {
+            return Ok(NodeResult::with_effect(
+                Vec::new(),
+                SecretaryActionEffect {
+                    proposal: proposal.clone(),
+                },
+                UsageDelta::default(),
+            ));
+        }
         Ok(NodeResult::empty())
     }
 }

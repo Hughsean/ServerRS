@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
-use crate::SourceEventId;
+use crate::{NotificationOutcome, NotificationPolicyError, SourceEventId};
 
 use super::action::{SecretaryAction, SecretaryActionProposal, SecretaryRiskLevel};
 use super::response::{OwnerResponseDraft, ResponseSegment};
@@ -174,6 +174,155 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             bounded_text("question", question, 1, 1_000)?;
         }
         SecretaryAction::ReadSourceEvent { .. } | SecretaryAction::ListUpcomingItems { .. } => {}
+        SecretaryAction::ListNotificationPolicies { limit } => {
+            if !(1..=20).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "notification policy list limit must be in 1..=20".into(),
+                ));
+            }
+        }
+        SecretaryAction::ExplainNotificationDecision { decision_id } => {
+            bounded_text("decision_id", decision_id, 1, 191)?;
+        }
+        SecretaryAction::SetAccountDefaultNotificationMode {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            ..
+        }
+        | SecretaryAction::SetImportantContact {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            ..
+        }
+        | SecretaryAction::SetNotificationCategoryImportance {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            ..
+        }
+        | SecretaryAction::CreateSimilarNotificationRule {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            ..
+        } => {
+            validate_policy_scope(canonical_scope_key, match_key)?;
+            validate_policy_outcome(*outcome)?;
+        }
+        SecretaryAction::SetConversationNotificationMode {
+            canonical_scope_key,
+            match_key,
+            outcome,
+            ..
+        } => {
+            validate_policy_scope(canonical_scope_key, match_key)?;
+            validate_policy_outcome(*outcome)?;
+        }
+        SecretaryAction::SetQuietHours {
+            canonical_scope_key,
+            match_key,
+            quiet_hours,
+        } => {
+            validate_policy_scope(canonical_scope_key, match_key)?;
+            validate_quiet_hours_shape(quiet_hours)?;
+        }
+        SecretaryAction::RecordNotificationFeedback {
+            candidate,
+            match_key,
+            promote_to_rule,
+            ..
+        } => {
+            if candidate.account != match_key.account {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "notification feedback candidate and match key accounts must agree".into(),
+                ));
+            }
+            if *promote_to_rule {
+                match_key
+                    .eligibility_for_long_term_rule()
+                    .map_err(|error| {
+                        SecretaryAgentRuntimeError::InvalidProposal(match error {
+                            NotificationPolicyError::UnknownMatchMetadata => {
+                                "similar notification rule requires known or absent metadata".into()
+                            }
+                            _ => "invalid similar notification match key".into(),
+                        })
+                    })?;
+            }
+        }
+        SecretaryAction::DisableNotificationPolicy {
+            expected_generation,
+            ..
+        } if *expected_generation == 0 => {
+            return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                "policy expected_generation must be positive".into(),
+            ));
+        }
+        SecretaryAction::DisableNotificationPolicy { .. } => {}
+        SecretaryAction::SetAutomaticReplyDeniedForContact {
+            canonical_scope_key,
+            match_key,
+        } => {
+            validate_policy_scope(canonical_scope_key, match_key)?;
+            if !matches!(match_key.actor_id, crate::MatchField::Known(_)) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "automatic reply denial requires a known actor identity".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy_scope(
+    canonical_scope_key: &str,
+    match_key: &crate::NotificationMatchKeyV1,
+) -> Result<(), SecretaryAgentRuntimeError> {
+    if canonical_scope_key.trim().is_empty()
+        || canonical_scope_key.len() > crate::MAX_CANONICAL_SCOPE_KEY_BYTES
+    {
+        return Err(SecretaryAgentRuntimeError::InvalidProposal(
+            "canonical_scope_key must contain 1..=512 bytes".into(),
+        ));
+    }
+    match_key
+        .validate()
+        .map_err(|_| SecretaryAgentRuntimeError::InvalidProposal("invalid policy match key".into()))
+}
+
+fn validate_policy_outcome(outcome: NotificationOutcome) -> Result<(), SecretaryAgentRuntimeError> {
+    if !matches!(
+        outcome,
+        NotificationOutcome::Remind | NotificationOutcome::Delay | NotificationOutcome::Suppress
+    ) {
+        return Err(SecretaryAgentRuntimeError::InvalidProposal(
+            "policy outcome must be remind, delay, or suppress".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_quiet_hours_shape(
+    rule: &crate::QuietHoursRule,
+) -> Result<(), SecretaryAgentRuntimeError> {
+    if rule.timezone_name.trim().is_empty()
+        || rule.timezone_name.len() > 128
+        || rule.start_local_time.len() != 5
+        || rule.end_local_time.len() != 5
+        || rule
+            .effective_from_local_date
+            .as_deref()
+            .is_some_and(|date| date.len() != 10)
+        || rule
+            .effective_until_local_date
+            .as_deref()
+            .is_some_and(|date| date.len() != 10)
+    {
+        return Err(SecretaryAgentRuntimeError::InvalidProposal(
+            "quiet-hours fields must use bounded IANA timezone and local date/time shapes".into(),
+        ));
     }
     Ok(())
 }
