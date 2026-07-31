@@ -130,6 +130,81 @@ pub struct UpcomingItem {
     pub source_event_id: SourceEventId,
 }
 
+/// Owner 可见的秘书运行状态。所有计数均限定在单一被管理账号内。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretaryStatusView {
+    pub unresolved_gap_count: u64,
+    pub open_gap_count: u64,
+    pub earliest_gap_started_at_unix_secs: Option<i64>,
+    pub open_thread_count: u64,
+    pub waiting_thread_count: u64,
+    pub active_response_expectation_count: u64,
+    pub scheduled_follow_up_count: u64,
+    pub pending_evaluation_count: u64,
+    pub pending_outbox_count: u64,
+    pub failed_outbox_count: u64,
+}
+
+/// 一条需要 Owner 关注的有界事项；`summary` 只用于导航，事实仍由来源 ID 回读。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingOwnerWorkItem {
+    pub source_kind: String,
+    pub source_id: String,
+    pub due_at_unix_secs: Option<i64>,
+    pub status: String,
+    pub summary: String,
+}
+
+/// 线程参与者的账号作用域统计。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadActorSummary {
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub event_count: u64,
+}
+
+/// 谁提出了什么要求或意见，以及对应来源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadClaimSummary {
+    pub claim_id: String,
+    pub claim_kind: String,
+    pub claimant_actor_id: String,
+    pub status: String,
+    pub statement: String,
+    pub source_event_ids: Vec<SourceEventId>,
+}
+
+/// 已形成或仍在修订的线程结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadDecisionSummary {
+    pub decision_id: String,
+    pub status: String,
+    pub statement: String,
+    pub source_event_ids: Vec<SourceEventId>,
+}
+
+/// 尚未达成一致或仍待回答的问题。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadQuestionSummary {
+    pub question_id: String,
+    pub raised_by_actor_id: String,
+    pub status: String,
+    pub question: String,
+    pub source_event_ids: Vec<SourceEventId>,
+}
+
+/// 单线程的有界因果上下文。正文摘要只导航，来源 ID 提供可审计回读。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadContextView {
+    pub thread_id: EventThreadId,
+    pub status: ThreadStatus,
+    pub event_count: u64,
+    pub actors: Vec<ThreadActorSummary>,
+    pub claims: Vec<ThreadClaimSummary>,
+    pub decisions: Vec<ThreadDecisionSummary>,
+    pub open_questions: Vec<ThreadQuestionSummary>,
+}
+
 // ===== 参与者身份（EVT-001）=====
 
 /// 账号作用域的参与者身份。比 `VerifiedActor` 更丰富，包含群名片、昵称、别名和可信等级。
@@ -334,6 +409,26 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         horizon_secs: u64,
     ) -> Result<Vec<UpcomingItem>, InboundEventStoreError>;
+
+    /// 查询账号级连续性、线程、跟进、求值和 Outbox 状态。
+    async fn secretary_status(
+        &self,
+        account: &SourceAccountRef,
+    ) -> Result<SecretaryStatusView, InboundEventStoreError>;
+
+    /// 查询需要 Owner 处理的事项；结果必须有界且按到期时间排序。
+    async fn list_pending_owner_work(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<PendingOwnerWorkItem>, InboundEventStoreError>;
+
+    /// 查询单线程的参与者、要求、结论和未决问题；严格限定账号。
+    async fn thread_context(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &EventThreadId,
+    ) -> Result<Option<ThreadContextView>, InboundEventStoreError>;
 }
 
 // ===== 错误类型 =====

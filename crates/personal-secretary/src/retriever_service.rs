@@ -7,10 +7,11 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    Clock, ContentTrustLevel, EventQuery, EventSearchResult, InboundEventStoreError,
-    ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT, SourceAccountRef,
-    SourceEventDetail, SystemClock, ThreadSearchResult, UpcomingItem, filter_for_model,
-    resolve_reference_from_candidates, validate_event_query,
+    Clock, ContentTrustLevel, EventQuery, EventSearchResult, EventThreadId, InboundEventStoreError,
+    PendingOwnerWorkItem, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
+    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SystemClock, ThreadContextView,
+    ThreadSearchResult, UpcomingItem, filter_for_model, resolve_reference_from_candidates,
+    validate_event_query,
 };
 
 /// Retriever 内容策略（约束 6/7）。默认 `allow_local_only_to_loopback_llm = false`（保守安全）。
@@ -118,6 +119,34 @@ impl RetrieverUseCase {
         Ok(self.store.list_upcoming(account, horizon_secs).await?)
     }
 
+    pub async fn secretary_status(
+        &self,
+        account: &SourceAccountRef,
+    ) -> Result<SecretaryStatusView, RetrieverUseCaseError> {
+        Ok(self.store.secretary_status(account).await?)
+    }
+
+    pub async fn list_pending_owner_work(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<PendingOwnerWorkItem>, RetrieverUseCaseError> {
+        if !(1..=20).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "pending owner work limit must be in 1..=20".into(),
+            ));
+        }
+        Ok(self.store.list_pending_owner_work(account, limit).await?)
+    }
+
+    pub async fn thread_context(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &EventThreadId,
+    ) -> Result<Option<ThreadContextView>, RetrieverUseCaseError> {
+        Ok(self.store.thread_context(account, thread_id).await?)
+    }
+
     /// 解析指代。Store 返回候选，用例层判定唯一/歧义/无结果。
     pub async fn resolve_reference(
         &self,
@@ -206,6 +235,37 @@ mod tests {
             _horizon_secs: u64,
         ) -> Result<Vec<UpcomingItem>, InboundEventStoreError> {
             Ok(Vec::new())
+        }
+        async fn secretary_status(
+            &self,
+            _account: &SourceAccountRef,
+        ) -> Result<SecretaryStatusView, InboundEventStoreError> {
+            Ok(SecretaryStatusView {
+                unresolved_gap_count: 0,
+                open_gap_count: 0,
+                earliest_gap_started_at_unix_secs: None,
+                open_thread_count: 0,
+                waiting_thread_count: 0,
+                active_response_expectation_count: 0,
+                scheduled_follow_up_count: 0,
+                pending_evaluation_count: 0,
+                pending_outbox_count: 0,
+                failed_outbox_count: 0,
+            })
+        }
+        async fn list_pending_owner_work(
+            &self,
+            _account: &SourceAccountRef,
+            _limit: u16,
+        ) -> Result<Vec<PendingOwnerWorkItem>, InboundEventStoreError> {
+            Ok(Vec::new())
+        }
+        async fn thread_context(
+            &self,
+            _account: &SourceAccountRef,
+            _thread_id: &EventThreadId,
+        ) -> Result<Option<ThreadContextView>, InboundEventStoreError> {
+            Ok(None)
         }
     }
 

@@ -137,9 +137,11 @@ pub use recall::{
 pub use recall_service::{RecallStoreError, RecallStoreT, RecallUseCase};
 pub use retriever::{
     ContentTrustLevel, EventQuery, EventSearchResult, IdentityTrust, ParticipantIdentity,
-    ParticipantRef, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
-    ReferenceResolution, RetrieverError, RetrieverStoreT, SourceEventDetail, ThreadSearchResult,
-    UpcomingItem, filter_for_model, is_allowed_for_model, resolve_reference_from_candidates,
+    ParticipantRef, PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate,
+    ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT, SecretaryStatusView,
+    SourceEventDetail, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
+    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, UpcomingItem,
+    filter_for_model, is_allowed_for_model, resolve_reference_from_candidates,
     validate_event_query,
 };
 pub use retriever_service::{RetrieverPolicy, RetrieverUseCase, RetrieverUseCaseError};

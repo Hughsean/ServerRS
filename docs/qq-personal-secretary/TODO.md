@@ -118,7 +118,9 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   回补（运行表 gap_id 无唯一键）且不饿死后续 Gap；回补边界读 `secretary_gap_boundaries`
   创建时快照（非实时漂移游标），按平台消息 ID 匹配。每次领取/接管轮换租约令牌，进度续租
   和终态提交均执行 fencing，旧 Worker 不可迟到覆盖；恢复继承已消耗事件预算。
-- [ ] `TODO GAP-006` 通过官方 Bot/控制面向 Owner 展示空窗，不把“已重连”说成“已补齐”。
+- [x] `DONE GAP-006` 新增 Owner 只读 `GetSecretaryStatus` Action，按被管理账号展示未闭合空窗、
+  仍开放空窗与最早起点；文案明确区分“无未闭合空窗”和“仍存在不确定/不可恢复空窗”，不会
+  把传输重连表述为历史已补齐。结果进入既有 OwnerResponseDraft，不新增 QQ 写接口。
 - [ ] `TODO GAP-007` 评估本地磁盘 Spool 与开机自启；记录容量、加密和损坏恢复策略。
 - [ ] `TODO GAP-008` 对电脑关机/休眠、NapCat 离线、MySQL 离线分别做故障演练。
 
@@ -137,7 +139,8 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [ ] `PARTIAL THR-004` 已实现协议无关提取端口、保守批量提取器、可选 LLM 批量提取器和 MySQL
   候选闭环。模型只消费有界线程事件，不接收完整历史；返回的发言人和来源必须映射到当前批次，
   再经过领域来源/身份/数量/修订链校验后形成 `proposed` 候选。本机 Qwen3 单请求质量冒烟已
-  通过；跨线程检索、复杂指代和成组质量基准仍待实现。
+  通过；Owner 现可按 Thread ID 有界查询参与者、要求/意见、结论、开放问题及来源 ID。跨线程
+  排序检索、复杂指代和成组质量基准仍待实现。
 - [ ] `PARTIAL THR-005` 已持久化结论与 `supersedes_id` 唯一修订链，并禁止候选引用本线程外
   或非 confirmed 旧结论；Owner 确认、撤销和查看完整修订链的控制面仍待实现。
 - [ ] `PARTIAL THR-006` 已实现 `open/waiting/resolved/closed/reopened` 状态机、不可变状态历史和
@@ -226,8 +229,9 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   被管理账号；普通观察、未绑定和跨账号命令默认拒绝。其余命令类型仍须逐项接入同一边界。
 - [ ] `PARTIAL CMD-004` 已接入事件检索、来源回读、线程检索、指代解析、近期事项、提醒草稿、
   Owner 澄清及类型化 Agenda Action；支持创建日程/任务/提醒、查询、改期、稍后提醒、完成和
-  取消。L2 写操作经既有 Suspend/Resume 审批后写入 MySQL，并以版本化 Outbox 仅通知 Owner；
-  真实 QQ 开放平台联机投递仍待凭据确认后的人工验收。
+  取消；新增秘书状态、待处理事项和单线程因果上下文三类 L0 查询。L2 写操作经既有
+  Suspend/Resume 审批后写入 MySQL，并以版本化 Outbox 仅通知 Owner；真实 QQ 开放平台联机
+  投递仍待凭据确认后的人工验收。
 - [x] `DONE CMD-005` 已定义并接入类型化策略 Action：账号/群会话提醒、重要联系人、静默时间、
   类别优先级和独立的联系人自动回复禁用门，所有变更均为 L2 Suspend/Resume。
 - [x] `DONE CMD-006` 已定义并接入重要/不重要反馈、确定性“类似消息”规则和联系人策略 Action；
@@ -251,12 +255,15 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 ## 7. 控制面、可观测性和生产强化
 
 - [ ] `PARTIAL OPS-001` 已通过内部 reader 与周期结构化日志展示 WebSocket、历史完整性、MySQL、
-  Worker 和 Recall Spool 健康状态；尚无经安全边界评审的 Owner/控制面展示入口。
+  Worker 和 Recall Spool 健康状态；Owner 只读 Action 已展示账号级 Gap、线程、跟进、通知求值
+  和 Outbox 状态。运行期 WebSocket/Worker/Spool 快照仍待安全地并入 Owner 查询。
 - [ ] `PARTIAL OPS-002` 已为连接周期、入队、幂等结果、重试、溢出 Gap、Worker 排空、官方
   Gateway/Token/Outbox、线程 Effect/撤销、LLM 输入/响应预算与 Token Usage、结构记忆写入/
   过期/来源回读/删除和跟进扫描增加结构化日志；Recall Spool 已提供 backlog、最老记录年龄、
   容量占比、quarantine 数量与 allowlist 最近错误。控制面展示和回补进度仍待实现。
-- [ ] `TODO OPS-003` 展示线程、记忆、承诺、提醒、Outbox 和来源。
+- [ ] `PARTIAL OPS-003` 已通过类型化 Owner Action 展示记忆及来源、待处理承诺/项目阻塞/回复
+  期待/Agenda、Outbox 异常、线程参与者、要求、结论、开放问题和来源 ID；分页、跨线程聚合和
+  运行期健康详情仍待完成。
 - [ ] `TODO OPS-004` 提供修正、删除、策略和重新处理入口，所有操作审计。
 - [ ] `TODO OPS-005` 建立吞吐、延迟、LLM 调用率、误关联和提醒误报指标。
 - [ ] `TODO OPS-006` 压测高流量群，验证背压、批处理和成本上限。

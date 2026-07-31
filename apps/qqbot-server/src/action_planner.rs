@@ -15,8 +15,8 @@ use serde::Deserialize;
 use tracing::debug;
 
 use personal_secretary::{
-    ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, MemoryFactId,
-    MemoryPayload, PlannerError, PlannerInput, PlannerOutput, SecretaryAction,
+    ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
+    MemoryFactId, MemoryPayload, PlannerError, PlannerInput, PlannerOutput, SecretaryAction,
     SecretaryActionProposal, SourceEventId, SystemClock, validate_planner_output,
 };
 
@@ -34,7 +34,8 @@ const ACTION_PLANNER_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的动
 list_upcoming_items, draft_reminder, ask_owner_clarification, create_schedule, create_task,
 create_reminder, reschedule_item, cancel_item, complete_item, snooze_item, list_memory_facts,
 read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fact_ttl,
-set_conversation_memory_mode。记忆修改和会话记忆模式属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
+get_thread_context。记忆修改和会话记忆模式属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
@@ -96,6 +97,7 @@ impl LlmActionPlanner {
                     conversation_kind,
                     conversation_id,
                     memory_mode,
+                    thread_id,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -118,6 +120,7 @@ impl LlmActionPlanner {
                     conversation_kind,
                     conversation_id,
                     memory_mode,
+                    thread_id,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -219,6 +222,7 @@ struct RawProposalFields<'a> {
     conversation_kind: Option<ConversationKind>,
     conversation_id: Option<String>,
     memory_mode: Option<ContentTrustLevel>,
+    thread_id: Option<String>,
 }
 
 fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerError> {
@@ -253,6 +257,18 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
         }),
         "list_upcoming_items" => Ok(SecretaryAction::ListUpcomingItems {
             horizon_secs: raw.horizon_secs.unwrap_or(86_400),
+        }),
+        "get_secretary_status" => Ok(SecretaryAction::GetSecretaryStatus),
+        "list_pending_owner_work" => Ok(SecretaryAction::ListPendingOwnerWork {
+            limit: raw.limit.unwrap_or(10),
+        }),
+        "get_thread_context" => Ok(SecretaryAction::GetThreadContext {
+            thread_id: EventThreadId::new(
+                raw.thread_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing thread_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
         }),
         "draft_reminder" => Ok(SecretaryAction::DraftReminder {
             text: raw
@@ -496,6 +512,8 @@ struct RawProposalOutput {
     conversation_id: Option<String>,
     #[serde(default)]
     memory_mode: Option<ContentTrustLevel>,
+    #[serde(default)]
+    thread_id: Option<String>,
 }
 
 #[cfg(test)]

@@ -33,6 +33,14 @@
 
 ## 最近事件
 
+- `2026-07-31 22:32（Asia/Shanghai）`：完成 Owner 状态、待办与线程因果上下文只读切片。
+  新增 `GetSecretaryStatus`、`ListPendingOwnerWork`、`GetThreadContext` 三类 L0 Action，复用
+  Retriever/Action Graph/Receipt/OwnerResponseDraft；所有 MySQL 查询强制账号过滤并限制数量和
+  展示长度。状态明确展示未闭合 Gap，待办聚合回复期待、跟进、Agenda 与异常 Outbox，线程上下文
+  返回参与者、要求/意见、结论、开放问题及来源 ID。真实 MySQL 首轮发现 `COUNT(*)` 在 8.4 返回
+  有符号 BIGINT，已改为非负校验后转换；两条隔离 MySQL 场景通过，随机 schema 已清理。未连接
+  NapCat/QQ 开放平台，未发送消息，数据库无迁移。
+
 - `2026-07-31 22:14（Asia/Shanghai）`：项目记忆中的非空 blockers 现会在默认持续 24 小时后
   生成 `project_blocked` 跟进，进入统一 Notification Policy，而不是扫描时直接写 Outbox。项目
   事实修订、删除或过期后沿既有来源版本 reconciliation 自动终止旧跟进。Owner 通知仅展示有界

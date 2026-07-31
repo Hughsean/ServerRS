@@ -29,6 +29,9 @@ pub enum SecretaryToolKind {
     SearchEventThreads,
     ResolveReference,
     ListUpcomingItems,
+    GetSecretaryStatus,
+    ListPendingOwnerWork,
+    GetThreadContext,
     DraftReminder,
     CreateSchedule,
     RescheduleItem,
@@ -76,6 +79,9 @@ impl SecretaryToolKind {
             | Self::SearchEventThreads
             | Self::ResolveReference
             | Self::ListUpcomingItems
+            | Self::GetSecretaryStatus
+            | Self::ListPendingOwnerWork
+            | Self::GetThreadContext
             | Self::ListNotificationPolicies
             | Self::ExplainNotificationDecision
             | Self::ListMemoryFacts
@@ -162,6 +168,13 @@ pub enum SecretaryAction {
     },
     ListUpcomingItems {
         horizon_secs: u64,
+    },
+    GetSecretaryStatus,
+    ListPendingOwnerWork {
+        limit: u16,
+    },
+    GetThreadContext {
+        thread_id: crate::EventThreadId,
     },
     DraftReminder {
         text: String,
@@ -302,6 +315,9 @@ impl SecretaryAction {
             Self::SearchEventThreads { .. } => SecretaryToolKind::SearchEventThreads,
             Self::ResolveReference { .. } => SecretaryToolKind::ResolveReference,
             Self::ListUpcomingItems { .. } => SecretaryToolKind::ListUpcomingItems,
+            Self::GetSecretaryStatus => SecretaryToolKind::GetSecretaryStatus,
+            Self::ListPendingOwnerWork { .. } => SecretaryToolKind::ListPendingOwnerWork,
+            Self::GetThreadContext { .. } => SecretaryToolKind::GetThreadContext,
             Self::DraftReminder { .. } => SecretaryToolKind::DraftReminder,
             Self::CreateSchedule { .. } => SecretaryToolKind::CreateSchedule,
             Self::RescheduleItem { .. } => SecretaryToolKind::RescheduleItem,

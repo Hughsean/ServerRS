@@ -43,6 +43,9 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | SearchEventThreads { .. }
             | ResolveReference { .. }
             | ListUpcomingItems { .. }
+            | GetSecretaryStatus
+            | ListPendingOwnerWork { .. }
+            | GetThreadContext { .. }
             | DraftReminder { .. }
             | AskOwnerClarification { .. }
             | CreateSchedule { .. }

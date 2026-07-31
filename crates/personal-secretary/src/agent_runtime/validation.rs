@@ -173,7 +173,17 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         SecretaryAction::AskOwnerClarification { question } => {
             bounded_text("question", question, 1, 1_000)?;
         }
-        SecretaryAction::ReadSourceEvent { .. } | SecretaryAction::ListUpcomingItems { .. } => {}
+        SecretaryAction::ReadSourceEvent { .. }
+        | SecretaryAction::ListUpcomingItems { .. }
+        | SecretaryAction::GetSecretaryStatus
+        | SecretaryAction::GetThreadContext { .. } => {}
+        SecretaryAction::ListPendingOwnerWork { limit } => {
+            if !(1..=20).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "pending owner work limit must be in 1..=20".into(),
+                ));
+            }
+        }
         SecretaryAction::ListNotificationPolicies { limit } => {
             if !(1..=20).contains(limit) {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(

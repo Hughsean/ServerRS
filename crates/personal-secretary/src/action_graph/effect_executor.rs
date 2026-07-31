@@ -528,6 +528,30 @@ impl SecretaryActionEffectExecutor {
                     format!("指代已解析：{}", resolution.evidence)
                 })
             }
+            SecretaryAction::GetSecretaryStatus => {
+                let status = retriever
+                    .secretary_status(&self.account)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                Ok(format_secretary_status(&status))
+            }
+            SecretaryAction::ListPendingOwnerWork { limit } => {
+                let items = retriever
+                    .list_pending_owner_work(&self.account, *limit)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                Ok(format_pending_owner_work(&items))
+            }
+            SecretaryAction::GetThreadContext { thread_id } => {
+                let context = retriever
+                    .thread_context(&self.account, thread_id)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                Ok(match context {
+                    Some(context) => format_thread_context(&context),
+                    None => format!("未找到当前账号下的线程 {}", thread_id.as_str()),
+                })
+            }
             SecretaryAction::ListUpcomingItems { .. } => Err(EffectError::new(
                 EffectErrorKind::Permanent,
                 "ListUpcomingItems 应由 AgendaUseCase 执行",
@@ -785,4 +809,107 @@ fn format_event_results(results: &[crate::EventSearchResult]) -> String {
         String::new()
     };
     format!("命中 {total} 条{truncation}: {}", parts.join("; "))
+}
+
+fn format_secretary_status(status: &crate::SecretaryStatusView) -> String {
+    let continuity = if status.unresolved_gap_count == 0 {
+        "无未闭合空窗".to_owned()
+    } else {
+        format!(
+            "{} 个未闭合空窗（其中 {} 个仍开放，最早起点 {:?}）",
+            status.unresolved_gap_count,
+            status.open_gap_count,
+            status.earliest_gap_started_at_unix_secs
+        )
+    };
+    format!(
+        "连续性：{continuity}；线程：开放 {}、等待 {}；待办：回复期待 {}、跟进 {}；通知：待求值 {}、待投递 {}、异常 {}",
+        status.open_thread_count,
+        status.waiting_thread_count,
+        status.active_response_expectation_count,
+        status.scheduled_follow_up_count,
+        status.pending_evaluation_count,
+        status.pending_outbox_count,
+        status.failed_outbox_count,
+    )
+}
+
+fn format_pending_owner_work(items: &[crate::PendingOwnerWorkItem]) -> String {
+    if items.is_empty() {
+        return "当前没有需要 Owner 处理的事项".into();
+    }
+    let mut output = format!("当前有 {} 项待处理：", items.len());
+    for item in items.iter().take(8) {
+        let line = format!(
+            "\n{}:{} | {} | 到期 {:?} | {}",
+            item.source_kind,
+            item.source_id,
+            item.status,
+            item.due_at_unix_secs,
+            item.summary.chars().take(80).collect::<String>()
+        );
+        if output.chars().count() + line.chars().count() > 900 {
+            output.push_str("\n其余事项已省略");
+            break;
+        }
+        output.push_str(&line);
+    }
+    output
+}
+
+fn format_thread_context(context: &crate::ThreadContextView) -> String {
+    let actors = context
+        .actors
+        .iter()
+        .take(5)
+        .map(|actor| {
+            format!(
+                "{}:{}({})",
+                actor.actor_kind, actor.actor_id, actor.event_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut output = format!(
+        "线程 {} | {:?} | {} 条事件 | 参与者 [{}]",
+        context.thread_id.as_str(),
+        context.status,
+        context.event_count,
+        actors
+    );
+    for claim in context.claims.iter().take(3) {
+        let line = format!(
+            "\n要求/意见 {}:{}:{} | {}",
+            claim.claim_kind,
+            claim.claimant_actor_id,
+            claim.status,
+            claim.statement.chars().take(80).collect::<String>()
+        );
+        append_bounded_line(&mut output, &line);
+    }
+    for decision in context.decisions.iter().take(3) {
+        let line = format!(
+            "\n结论 {}:{} | {}",
+            decision.decision_id,
+            decision.status,
+            decision.statement.chars().take(80).collect::<String>()
+        );
+        append_bounded_line(&mut output, &line);
+    }
+    for question in context.open_questions.iter().take(3) {
+        let line = format!(
+            "\n未决 {}:{} | {}",
+            question.question_id,
+            question.raised_by_actor_id,
+            question.question.chars().take(80).collect::<String>()
+        );
+        append_bounded_line(&mut output, &line);
+    }
+    output
+}
+
+fn append_bounded_line(output: &mut String, line: &str) {
+    if output.chars().count() + line.chars().count() <= 900 {
+        output.push_str(line);
+    }
 }

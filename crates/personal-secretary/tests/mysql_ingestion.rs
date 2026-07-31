@@ -24,9 +24,10 @@ use personal_secretary::{
     ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
     VerifiedActorKind, build_mysql_agenda_store, build_mysql_backfill_store,
     build_mysql_directory_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_notification_policy_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    build_mysql_memory_store, build_mysql_notification_policy_store, build_mysql_retriever_store,
+    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
+    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 use std::num::NonZeroU32;
@@ -1158,6 +1159,20 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     assert_eq!(replay.commitments_materialized, 0);
     assert_eq!(replay.notification_candidates_created, 0);
     assert_eq!(replay.notification_evaluation_requests_created, 0);
+
+    let retriever = build_mysql_retriever_store(db.clone());
+    let pending = retriever
+        .list_pending_owner_work(&fact.account, 10)
+        .await
+        .unwrap();
+    assert!(
+        pending
+            .iter()
+            .any(|item| item.source_kind == "follow_up" && item.summary.contains("quote-delivery"))
+    );
+    let status = retriever.secretary_status(&fact.account).await.unwrap();
+    assert_eq!(status.scheduled_follow_up_count, 1);
+    assert_eq!(status.pending_evaluation_count, 1);
 
     let command_account = format!("follow-up-control-{run_id}");
     let owner_command = InboundMessageEnvelope::new(
@@ -2452,6 +2467,31 @@ async fn thread_semantics_persist_typed_candidates_sources_and_privacy_filter() 
     )
     .await;
     assert_eq!(private_candidates, 0);
+
+    // Owner 只读查询复用同一账号边界，返回参与者、要求、结论、未决问题和来源。
+    let account = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+    let retriever = build_mysql_retriever_store(db.clone());
+    let thread_id =
+        EventThreadId::new(thread_id_for(&db, &account_id, "semantic-request").await).unwrap();
+    let context = retriever
+        .thread_context(&account, &thread_id)
+        .await
+        .unwrap()
+        .expect("account-scoped semantic thread must be visible");
+    assert_eq!(context.event_count, 5);
+    assert_eq!(context.actors.len(), 5);
+    assert_eq!(context.claims.len(), 3);
+    assert_eq!(context.decisions.len(), 1);
+    assert_eq!(context.open_questions.len(), 1);
+    assert!(
+        context
+            .claims
+            .iter()
+            .all(|claim| !claim.source_event_ids.is_empty())
+    );
+    let status = retriever.secretary_status(&account).await.unwrap();
+    assert!(status.open_thread_count >= 1);
+    assert_eq!(status.active_response_expectation_count, 0);
 }
 
 #[tokio::test]

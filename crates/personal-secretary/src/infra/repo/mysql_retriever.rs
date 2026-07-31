@@ -11,9 +11,10 @@ use tracing::debug;
 use super::mysql_inbound::store_error;
 use crate::{
     ConversationKind, ConversationRef, EventQuery, EventSearchResult, InboundEventStoreError,
-    MessageRole, ReferenceCandidate, ReferenceContext, RetrieverStoreT, SourceAccountRef,
-    SourceEventDetail, SourceEventId, ThreadSearchResult, UpcomingItem, VerifiedActor,
-    VerifiedActorKind,
+    MessageRole, PendingOwnerWorkItem, ReferenceCandidate, ReferenceContext, RetrieverStoreT,
+    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, ThreadActorSummary,
+    ThreadClaimSummary, ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary,
+    ThreadSearchResult, UpcomingItem, VerifiedActor, VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
@@ -296,6 +297,243 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         .map_err(store_error)?;
         rows.into_iter().map(map_upcoming_row).collect()
     }
+
+    async fn secretary_status(
+        &self,
+        account: &SourceAccountRef,
+    ) -> Result<SecretaryStatusView, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let row = SecretaryStatusRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT
+                (SELECT COUNT(*) FROM secretary_ingestion_gaps
+                 WHERE account_id = ? AND status IN ('uncertain', 'backfilling', 'unrecoverable'))
+                    AS unresolved_gap_count,
+                (SELECT COUNT(*) FROM secretary_ingestion_gaps
+                 WHERE account_id = ? AND gap_ended_at IS NULL) AS open_gap_count,
+                (SELECT CAST(UNIX_TIMESTAMP(MIN(gap_started_at)) AS SIGNED)
+                 FROM secretary_ingestion_gaps
+                 WHERE account_id = ? AND status IN ('uncertain', 'backfilling', 'unrecoverable'))
+                    AS earliest_gap_started_at_unix_secs,
+                (SELECT COUNT(*) FROM secretary_event_threads
+                 WHERE account_id = ? AND status IN ('open', 'reopened')) AS open_thread_count,
+                (SELECT COUNT(*) FROM secretary_event_threads
+                 WHERE account_id = ? AND status = 'waiting') AS waiting_thread_count,
+                (SELECT COUNT(*) FROM secretary_response_expectations
+                 WHERE account_id = ? AND expectation_status = 'active')
+                    AS active_response_expectation_count,
+                (SELECT COUNT(*) FROM secretary_follow_up_items
+                 WHERE account_id = ? AND status = 'scheduled') AS scheduled_follow_up_count,
+                (SELECT COUNT(*)
+                 FROM secretary_notification_evaluation_requests r
+                 INNER JOIN secretary_notification_candidates c
+                    ON c.notification_candidate_id = r.notification_candidate_id
+                 WHERE c.account_id = ? AND r.request_status IN ('pending', 'claimed'))
+                    AS pending_evaluation_count,
+                (SELECT COUNT(*) FROM secretary_notification_outbox
+                 WHERE account_id = ? AND delivery_status IN ('pending', 'claimed'))
+                    AS pending_outbox_count,
+                (SELECT COUNT(*) FROM secretary_notification_outbox
+                 WHERE account_id = ? AND delivery_status IN ('failed', 'unknown_commit'))
+                    AS failed_outbox_count"#,
+            vec![account_id.into(); 10],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            InboundEventStoreError::InvalidData("status query returned no row".into())
+        })?;
+        Ok(SecretaryStatusView {
+            unresolved_gap_count: checked_count(row.unresolved_gap_count)?,
+            open_gap_count: checked_count(row.open_gap_count)?,
+            earliest_gap_started_at_unix_secs: row.earliest_gap_started_at_unix_secs,
+            open_thread_count: checked_count(row.open_thread_count)?,
+            waiting_thread_count: checked_count(row.waiting_thread_count)?,
+            active_response_expectation_count: checked_count(
+                row.active_response_expectation_count,
+            )?,
+            scheduled_follow_up_count: checked_count(row.scheduled_follow_up_count)?,
+            pending_evaluation_count: checked_count(row.pending_evaluation_count)?,
+            pending_outbox_count: checked_count(row.pending_outbox_count)?,
+            failed_outbox_count: checked_count(row.failed_outbox_count)?,
+        })
+    }
+
+    async fn list_pending_owner_work(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<PendingOwnerWorkItem>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let rows = PendingOwnerWorkRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT source_kind, source_id, due_at_unix_secs, work_status, summary
+               FROM (
+                    SELECT 'response_expectation' AS source_kind,
+                           expectation_id AS source_id,
+                           due_at_unix_secs,
+                           expectation_status AS work_status,
+                           '外部联系人的问题仍待本人回复' AS summary
+                    FROM secretary_response_expectations
+                    WHERE account_id = ? AND expectation_status = 'active'
+                    UNION ALL
+                    SELECT 'follow_up', f.follow_up_id, f.due_at_unix_secs, f.status,
+                           SUBSTRING(CONCAT(f.reason_code, ':', m.subject_key), 1, 120)
+                    FROM secretary_follow_up_items f
+                    INNER JOIN secretary_memory_facts m
+                        ON m.fact_id = f.source_memory_fact_id AND m.account_id = f.account_id
+                    WHERE f.account_id = ? AND f.status = 'scheduled'
+                    UNION ALL
+                    SELECT 'agenda', item_id, scheduled_at_unix_secs, item_status,
+                           SUBSTRING(title, 1, 120)
+                    FROM secretary_agenda_items
+                    WHERE account_id = ? AND item_status = 'scheduled'
+                    UNION ALL
+                    SELECT 'outbox', notification_id, scheduled_at_unix_secs, delivery_status,
+                           CONCAT('Owner 通知投递状态: ', delivery_status)
+                    FROM secretary_notification_outbox
+                    WHERE account_id = ? AND delivery_status IN ('failed', 'unknown_commit')
+               ) work
+               ORDER BY due_at_unix_secs IS NULL, due_at_unix_secs, source_kind, source_id
+               LIMIT ?"#,
+            [
+                account_id.into(),
+                account_id.into(),
+                account_id.into(),
+                account_id.into(),
+                limit.into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PendingOwnerWorkItem {
+                source_kind: row.source_kind,
+                source_id: row.source_id,
+                due_at_unix_secs: row.due_at_unix_secs,
+                status: row.work_status,
+                summary: row.summary.chars().take(120).collect(),
+            })
+            .collect())
+    }
+
+    async fn thread_context(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &crate::EventThreadId,
+    ) -> Result<Option<ThreadContextView>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let Some(overview) = ThreadOverviewRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT t.thread_id, t.status,
+                          (SELECT COUNT(*) FROM secretary_thread_events te
+                           WHERE te.thread_id = t.thread_id) AS event_count
+                   FROM secretary_event_threads t
+                   WHERE t.thread_id = ? AND t.account_id = ?"#,
+            [thread_id.as_str().into(), account_id.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?
+        else {
+            return Ok(None);
+        };
+
+        let actors = ThreadActorRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT e.actor_kind, e.actor_platform_id, COUNT(*) AS event_count
+               FROM secretary_thread_events te
+               INNER JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+               WHERE te.thread_id = ? AND e.account_id = ?
+               GROUP BY e.actor_kind, e.actor_platform_id
+               ORDER BY event_count DESC, e.actor_platform_id
+               LIMIT 10"#,
+            [thread_id.as_str().into(), account_id.into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .map(|row| {
+            Ok(ThreadActorSummary {
+                actor_kind: row.actor_kind,
+                actor_id: row.actor_platform_id,
+                event_count: checked_count(row.event_count)?,
+            })
+        })
+        .collect::<Result<Vec<_>, InboundEventStoreError>>()?;
+
+        let claims = ThreadClaimRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT c.claim_id, c.claim_kind, c.claimant_actor_id, c.status,
+                      SUBSTRING(c.statement, 1, 120) AS statement,
+                      (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
+                       FROM secretary_thread_claim_sources s WHERE s.claim_id = c.claim_id)
+                        AS source_event_ids
+               FROM secretary_thread_claims c
+               WHERE c.thread_id = ?
+               ORDER BY c.created_at DESC, c.claim_id DESC LIMIT 5"#,
+            [thread_id.as_str().into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .map(map_thread_claim_row)
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let decisions = ThreadDecisionRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT d.decision_id, d.status, SUBSTRING(d.statement, 1, 120) AS statement,
+                      (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
+                       FROM secretary_thread_decision_sources s WHERE s.decision_id = d.decision_id)
+                        AS source_event_ids
+               FROM secretary_thread_decisions d
+               WHERE d.thread_id = ?
+               ORDER BY d.created_at DESC, d.decision_id DESC LIMIT 5"#,
+            [thread_id.as_str().into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .map(map_thread_decision_row)
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let open_questions = ThreadQuestionRow::find_by_statement(
+            Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"SELECT q.question_id, q.raised_by_actor_id, q.status,
+                          SUBSTRING(q.question, 1, 120) AS question,
+                          (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
+                           FROM secretary_thread_question_sources s WHERE s.question_id = q.question_id)
+                            AS source_event_ids
+                   FROM secretary_thread_open_questions q
+                   WHERE q.thread_id = ? AND q.status = 'open'
+                   ORDER BY q.created_at DESC, q.question_id DESC LIMIT 5"#,
+                [thread_id.as_str().into()],
+            ),
+        )
+        .all(&self.db)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .map(map_thread_question_row)
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(ThreadContextView {
+            thread_id: crate::EventThreadId::new(overview.thread_id).map_err(domain_err)?,
+            status: parse_thread_status(&overview.status)?,
+            event_count: checked_count(overview.event_count)?,
+            actors,
+            claims,
+            decisions,
+            open_questions,
+        }))
+    }
 }
 
 /// 通过 SourceAccountRef 解析 secretary_accounts.id。
@@ -477,6 +715,121 @@ fn parse_thread_status(value: &str) -> Result<crate::ThreadStatus, InboundEventS
             "unknown thread_status: {other}"
         ))),
     }
+}
+
+fn parse_source_event_id_list(
+    value: Option<String>,
+) -> Result<Vec<SourceEventId>, InboundEventStoreError> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(SourceEventId::new)
+        .collect()
+}
+
+fn checked_count(value: i64) -> Result<u64, InboundEventStoreError> {
+    u64::try_from(value).map_err(|_| {
+        InboundEventStoreError::InvalidData("database returned a negative aggregate count".into())
+    })
+}
+
+fn map_thread_claim_row(row: ThreadClaimRow) -> Result<ThreadClaimSummary, InboundEventStoreError> {
+    Ok(ThreadClaimSummary {
+        claim_id: row.claim_id,
+        claim_kind: row.claim_kind,
+        claimant_actor_id: row.claimant_actor_id,
+        status: row.status,
+        statement: row.statement,
+        source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
+    })
+}
+
+fn map_thread_decision_row(
+    row: ThreadDecisionRow,
+) -> Result<ThreadDecisionSummary, InboundEventStoreError> {
+    Ok(ThreadDecisionSummary {
+        decision_id: row.decision_id,
+        status: row.status,
+        statement: row.statement,
+        source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
+    })
+}
+
+fn map_thread_question_row(
+    row: ThreadQuestionRow,
+) -> Result<ThreadQuestionSummary, InboundEventStoreError> {
+    Ok(ThreadQuestionSummary {
+        question_id: row.question_id,
+        raised_by_actor_id: row.raised_by_actor_id,
+        status: row.status,
+        question: row.question,
+        source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
+    })
+}
+
+#[derive(Debug, FromQueryResult)]
+struct SecretaryStatusRow {
+    unresolved_gap_count: i64,
+    open_gap_count: i64,
+    earliest_gap_started_at_unix_secs: Option<i64>,
+    open_thread_count: i64,
+    waiting_thread_count: i64,
+    active_response_expectation_count: i64,
+    scheduled_follow_up_count: i64,
+    pending_evaluation_count: i64,
+    pending_outbox_count: i64,
+    failed_outbox_count: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct PendingOwnerWorkRow {
+    source_kind: String,
+    source_id: String,
+    due_at_unix_secs: Option<i64>,
+    work_status: String,
+    summary: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadOverviewRow {
+    thread_id: String,
+    status: String,
+    event_count: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadActorRow {
+    actor_kind: String,
+    actor_platform_id: String,
+    event_count: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadClaimRow {
+    claim_id: String,
+    claim_kind: String,
+    claimant_actor_id: String,
+    status: String,
+    statement: String,
+    source_event_ids: Option<String>,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadDecisionRow {
+    decision_id: String,
+    status: String,
+    statement: String,
+    source_event_ids: Option<String>,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadQuestionRow {
+    question_id: String,
+    raised_by_actor_id: String,
+    status: String,
+    question: String,
+    source_event_ids: Option<String>,
 }
 
 #[derive(Debug, FromQueryResult)]
