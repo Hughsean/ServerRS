@@ -21,6 +21,8 @@ pub struct FollowUpScanReport {
     /// 本次由上述候选新建的 generation-1 求值请求数。
     pub notification_evaluation_requests_created: u64,
     pub memories_expired: u64,
+    pub response_expectations_materialized: u64,
+    pub response_expectations_resolved: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,8 +59,19 @@ impl NotificationLeaseToken {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OwnerNotificationContent {
-    FollowUp { commitment: CommitmentMemory },
-    Agenda { kind: AgendaItemKind, title: String },
+    FollowUp {
+        commitment: CommitmentMemory,
+    },
+    Agenda {
+        kind: AgendaItemKind,
+        title: String,
+    },
+    ResponseExpectation {
+        question_id: String,
+        thread_id: String,
+        raised_by_actor_id: String,
+        question_excerpt: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

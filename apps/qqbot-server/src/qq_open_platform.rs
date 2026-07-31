@@ -179,6 +179,12 @@ async fn run_outbox_loop(
                         title,
                         due
                     ),
+                    OwnerNotificationContent::ResponseExpectation {
+                        question_excerpt, ..
+                    } => format!(
+                        "⏰ 待回复提醒\n有一条外部联系人的问题仍未见你的回复：{}",
+                        question_excerpt.chars().take(300).collect::<String>()
+                    ),
                 };
                 let target = QqTarget::C2c {
                     user_openid: config.owner_openid.clone(),

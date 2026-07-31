@@ -87,6 +87,8 @@ retry_max_ms = 10000
 enabled = true
 scan_interval_ms = 30000
 horizon_secs = 604800
+# 外部联系人开放问题在未见本人回复多久后形成 Owner 提醒候选（默认 4 小时）。
+response_timeout_secs = 14400
 batch_size = 200
 retry_initial_ms = 1000
 retry_max_ms = 60000

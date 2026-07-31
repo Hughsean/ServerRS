@@ -15,6 +15,7 @@ trait FollowUpRunner: Send + Sync {
         &self,
         now_unix_secs: i64,
         horizon_secs: i64,
+        response_timeout_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError>;
 }
@@ -25,9 +26,17 @@ impl FollowUpRunner for FollowUpUseCase {
         &self,
         now_unix_secs: i64,
         horizon_secs: i64,
+        response_timeout_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError> {
-        FollowUpUseCase::scan(self, now_unix_secs, horizon_secs, limit).await
+        FollowUpUseCase::scan(
+            self,
+            now_unix_secs,
+            horizon_secs,
+            response_timeout_secs,
+            limit,
+        )
+        .await
     }
 }
 
@@ -76,7 +85,12 @@ async fn run_worker<R: FollowUpRunner + 'static>(
             .as_secs()
             .min(i64::MAX as u64) as i64;
         match runner
-            .scan(now, config.horizon_secs, config.batch_size)
+            .scan(
+                now,
+                config.horizon_secs,
+                config.response_timeout_secs,
+                config.batch_size,
+            )
             .await
         {
             Ok(report) => {
@@ -88,6 +102,8 @@ async fn run_worker<R: FollowUpRunner + 'static>(
                     notification_evaluation_requests_created =
                         report.notification_evaluation_requests_created,
                     memories_expired = report.memories_expired,
+                    response_expectations_materialized = report.response_expectations_materialized,
+                    response_expectations_resolved = report.response_expectations_resolved,
                     "follow-up maintenance scan completed"
                 );
             }
@@ -127,6 +143,7 @@ mod tests {
             &self,
             _now_unix_secs: i64,
             _horizon_secs: i64,
+            _response_timeout_secs: i64,
             _limit: u32,
         ) -> Result<FollowUpScanReport, InboundEventStoreError> {
             self.0.fetch_add(1, Ordering::Relaxed);

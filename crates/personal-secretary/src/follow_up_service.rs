@@ -16,6 +16,14 @@ pub trait FollowUpStoreT: Send + Sync {
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError>;
 
+    async fn scan_response_expectations(
+        &self,
+        now_unix_secs: i64,
+        horizon_secs: i64,
+        response_timeout_secs: i64,
+        limit: u32,
+    ) -> Result<FollowUpScanReport, InboundEventStoreError>;
+
     async fn claim_due_notification(
         &self,
         account: &crate::SourceAccountRef,
@@ -109,11 +117,15 @@ impl FollowUpUseCase {
         &self,
         now_unix_secs: i64,
         horizon_secs: i64,
+        response_timeout_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError> {
-        if !(60..=31_536_000).contains(&horizon_secs) || !(1..=1000).contains(&limit) {
+        if !(60..=31_536_000).contains(&horizon_secs)
+            || !(300..=2_592_000).contains(&response_timeout_secs)
+            || !(1..=1000).contains(&limit)
+        {
             return Err(InboundEventStoreError::InvalidData(
-                "follow-up horizon must be 60..=31536000 seconds and limit 1..=1000".into(),
+                "follow-up horizon/response timeout/limit are outside safe bounds".into(),
             ));
         }
         let memories_expired = self.memories.expire_due(now_unix_secs, limit).await?;
@@ -121,6 +133,19 @@ impl FollowUpUseCase {
             .follow_ups
             .scan_commitments(now_unix_secs, horizon_secs, limit)
             .await?;
+        let response_report = self
+            .follow_ups
+            .scan_response_expectations(now_unix_secs, horizon_secs, response_timeout_secs, limit)
+            .await?;
+        report.response_expectations_materialized =
+            response_report.response_expectations_materialized;
+        report.response_expectations_resolved = response_report.response_expectations_resolved;
+        report.notification_candidates_created = report
+            .notification_candidates_created
+            .saturating_add(response_report.notification_candidates_created);
+        report.notification_evaluation_requests_created = report
+            .notification_evaluation_requests_created
+            .saturating_add(response_report.notification_evaluation_requests_created);
         report.memories_expired = memories_expired;
         Ok(report)
     }

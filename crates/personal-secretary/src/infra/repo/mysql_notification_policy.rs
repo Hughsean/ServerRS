@@ -1890,6 +1890,11 @@ async fn source_is_current(
                    IN ('pending', 'proposed') \
              FOR UPDATE"
         }
+        "response_expectation" => {
+            "SELECT 1 AS present FROM secretary_response_expectations \
+             WHERE expectation_id = ? AND account_id = ? AND source_version = ? \
+               AND expectation_status = 'active' FOR UPDATE"
+        }
         _ => return Ok(false),
     };
     let row = db

@@ -9,21 +9,22 @@ use personal_secretary::{
     BackfillOutcome, BackfillScopeStatus, Clock, CommitmentMemory, CommitmentStatus,
     ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ContentTrustLevel,
     ConversationKind, ConversationMemoryModeInput, ConversationRef, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, DirectoryEvidence,
-    DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EventThreadId,
+    DeterministicThreadPolicy, DirectoryEvidence, DirectorySnapshot, DirectorySnapshotId,
+    DirectorySourceApi, DirectoryStatus, EvaluationCommitResult, EventThreadId,
     HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
     IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
     MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase,
-    MessageSource, PersonMemory, ProjectMemory, ScopeProgress, SourceAccountRef, SourceMessageRef,
-    ThreadActorRef, ThreadLinkCandidateId, ThreadLinkReviewAction, ThreadLinkReviewUseCase,
-    ThreadLinkUseCase, ThreadMutationApprovalNode, ThreadMutationDecision,
+    MessageSource, NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
+    OwnerNotificationContent, PersonMemory, ProjectMemory, ScopeProgress, SourceAccountRef,
+    SourceMessageRef, SystemClock, ThreadActorRef, ThreadLinkCandidateId, ThreadLinkReviewAction,
+    ThreadLinkReviewUseCase, ThreadLinkUseCase, ThreadMutationApprovalNode, ThreadMutationDecision,
     ThreadMutationDecisionNode, ThreadMutationEffect, ThreadMutationEffectExecutor,
     ThreadMutationImpact, ThreadMutationKind, ThreadMutationProposalId, ThreadMutationResumeInput,
     ThreadMutationRevertInput, ThreadMutationRevertUseCase, ThreadMutationStoreT,
     ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
     VerifiedActorKind, build_mysql_agenda_store, build_mysql_backfill_store,
     build_mysql_directory_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_thread_link_store,
+    build_mysql_memory_store, build_mysql_notification_policy_store, build_mysql_thread_link_store,
     build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
@@ -1117,11 +1118,11 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
         build_mysql_follow_up_store(db.clone()),
         memory_store,
     );
-    let report = follow_up.scan(70_000, 86_400, 100).await.unwrap();
+    let report = follow_up.scan(70_000, 86_400, 14_400, 100).await.unwrap();
     assert_eq!(report.commitments_materialized, 1);
     assert_eq!(report.notification_candidates_created, 1);
     assert_eq!(report.notification_evaluation_requests_created, 1);
-    let replay = follow_up.scan(70_000, 86_400, 100).await.unwrap();
+    let replay = follow_up.scan(70_000, 86_400, 14_400, 100).await.unwrap();
     assert_eq!(replay.commitments_materialized, 0);
     assert_eq!(replay.notification_candidates_created, 0);
     assert_eq!(replay.notification_evaluation_requests_created, 0);
@@ -1195,7 +1196,7 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     };
     assert!(memory.delete_derived(&deletion).await.unwrap().changed);
     assert!(!memory.delete_derived(&deletion).await.unwrap().changed);
-    let report = follow_up.scan(70_101, 86_400, 100).await.unwrap();
+    let report = follow_up.scan(70_101, 86_400, 14_400, 100).await.unwrap();
     assert_eq!(report.items_reconciled, 1);
     assert_eq!(
         scalar_i64(
@@ -1208,6 +1209,229 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
         .await,
         0,
         "follow-up scans must not create legacy Outbox rows before policy evaluation"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn unanswered_external_question_becomes_policy_candidate_then_resolves_on_own_reply() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let account_id = format!("response-account-{suffix}");
+    let question = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "question-1").unwrap(),
+        ConversationRef::new(ConversationKind::Group, "response-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "customer").unwrap(),
+        1_000,
+        "报价单今天能发给我吗？",
+        Vec::new(),
+    )
+    .unwrap();
+    let question_event_id = inbound
+        .insert_message_if_absent(&question)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let thread_id = Uuid::new_v4().to_string();
+    let question_id = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_event_threads \
+         (thread_id, account_id, status, root_event_id, latest_event_id, \
+          opened_at_unix_secs, latest_occurred_at_unix_secs) \
+         SELECT ?, account_id, 'open', source_event_id, source_event_id, \
+                occurred_at_unix_secs, occurred_at_unix_secs \
+         FROM secretary_source_events WHERE source_event_id = ?",
+        [thread_id.clone().into(), question_event_id.as_str().into()],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_events (source_event_id, thread_id) VALUES (?, ?)",
+        [question_event_id.as_str().into(), thread_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_open_questions \
+         (question_id, thread_id, raised_by_channel, raised_by_account, \
+          raised_by_actor_id, question, status, confidence_bps) \
+         VALUES (?, ?, 'napcat', ?, 'customer', '报价单今天能发给我吗？', 'open', 9500)",
+        [
+            question_id.clone().into(),
+            thread_id.clone().into(),
+            account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_question_sources (question_id, source_event_id) VALUES (?, ?)",
+        [question_id.clone().into(), question_event_id.as_str().into()],
+    ))
+    .await
+    .unwrap();
+
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        build_mysql_memory_store(db.clone()),
+    );
+    let report = follow_up.scan(15_401, 86_400, 14_400, 100).await.unwrap();
+    assert_eq!(report.response_expectations_materialized, 1);
+    assert_eq!(report.notification_candidates_created, 1);
+    assert_eq!(report.notification_evaluation_requests_created, 1);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_candidates \
+             WHERE source_kind = 'response_expectation'",
+            [],
+        )
+        .await,
+        1,
+        "one overdue response expectation must create one policy candidate"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox",
+            [],
+        )
+        .await,
+        0,
+        "response expectation scan must not bypass policy evaluation"
+    );
+
+    let command_account_id = format!("response-control-{suffix}");
+    let owner_command = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::QqOpenPlatform,
+            &command_account_id,
+            "response-owner-command",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::OwnerControl, "response-owner-control").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::Owner, "owner").unwrap(),
+        15_500,
+        "检查需要我回复的消息",
+        Vec::new(),
+    )
+    .unwrap();
+    inbound
+        .insert_message_if_absent(&owner_command)
+        .await
+        .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner', 'active' \
+         FROM secretary_accounts managed JOIN secretary_accounts command \
+         WHERE managed.source_channel = 'napcat' AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' \
+           AND command.platform_account_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            account_id.clone().into(),
+            command_account_id.into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let policy = NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    );
+    let evaluation = policy
+        .evaluate_next("response-expectation-test", 60, |snapshot| {
+            NotificationPolicyEvaluator.evaluate(&snapshot.evaluation_input(15_501).unwrap())
+        })
+        .await
+        .unwrap();
+    assert_eq!(evaluation, Some(EvaluationCommitResult::Applied));
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &account_id).unwrap();
+    let claimed = follow_up
+        .claim_due_notification(&managed, i64::MAX, 60)
+        .await
+        .unwrap()
+        .expect("remind decision must materialize an Owner notification");
+    match &claimed.content {
+        OwnerNotificationContent::ResponseExpectation {
+            question_id: delivered_question_id,
+            thread_id: delivered_thread_id,
+            question_excerpt,
+            ..
+        } => {
+            assert_eq!(delivered_question_id, &question_id);
+            assert_eq!(delivered_thread_id, &thread_id);
+            assert!(question_excerpt.contains("报价单"));
+        }
+        other => panic!("expected response expectation notification, got {other:?}"),
+    }
+    follow_up
+        .mark_notification_failed(
+            &claimed.notification_id,
+            &claimed.lease_token,
+            "test_not_sent",
+            NotificationFailureKind::Permanent,
+        )
+        .await
+        .unwrap();
+
+    let reply = InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, &account_id, "owner-reply-1").unwrap(),
+        ConversationRef::new(ConversationKind::Group, "response-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::OfficialBot, "managed-account").unwrap(),
+        16_000,
+        "可以，今天下班前发送。",
+        Vec::new(),
+    )
+    .unwrap();
+    let reply_event_id = inbound
+        .insert_message_if_absent(&reply)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_events (source_event_id, thread_id) VALUES (?, ?)",
+        [reply_event_id.as_str().into(), thread_id.into()],
+    ))
+    .await
+    .unwrap();
+    let resolved = follow_up.scan(16_001, 86_400, 14_400, 100).await.unwrap();
+    assert_eq!(resolved.response_expectations_resolved, 1);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_response_expectations \
+             WHERE expectation_status = 'resolved' AND source_question_id = ?",
+            [question_id.as_str()],
+        )
+        .await,
+        1,
+        "an own reply in the same thread must resolve the expectation"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_notification_outbox \
+             WHERE delivery_status = 'suppressed' \
+               AND last_error_code = 'response_already_resolved'",
+            [],
+        )
+        .await,
+        1,
+        "resolved response expectations must suppress unsent notifications"
     );
 }
 
@@ -1316,7 +1540,7 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         build_mysql_follow_up_store(db.clone()),
         memory_store.clone(),
     );
-    follow_up.scan(80_100, 86_400, 100).await.unwrap();
+    follow_up.scan(80_100, 86_400, 14_400, 100).await.unwrap();
     // Task 7 后扫描只创建 Candidate/Request；此处显式构造两条历史 Outbox，
     // 保留该测试对旧投递状态机（含跨账号领取）的覆盖。
     let first_follow_up_id = scalar_string(
@@ -1467,7 +1691,7 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         supersedes_fact_id: None,
     };
     memory.remember(&delivered_fact).await.unwrap();
-    let scan = follow_up.scan(100_001, 86_400, 100).await.unwrap();
+    let scan = follow_up.scan(100_001, 86_400, 14_400, 100).await.unwrap();
     assert_eq!(scan.commitments_materialized, 1);
     assert_eq!(scan.notification_candidates_created, 1);
     assert_eq!(scan.notification_evaluation_requests_created, 1);
@@ -1788,7 +2012,7 @@ async fn legacy_reconciliation_rebuilds_only_current_follow_up_sources_and_block
         build_mysql_follow_up_store(db.clone()),
         memory_store,
     );
-    follow_up.scan(90_001, 86_400, 100).await.unwrap();
+    follow_up.scan(90_001, 86_400, 14_400, 100).await.unwrap();
     let follow_up_id = scalar_string(
         &db,
         "SELECT follow_up_id AS value FROM secretary_follow_up_items WHERE source_memory_fact_id = ?",

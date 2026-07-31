@@ -1,8 +1,8 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, FromQueryResult, Statement};
 
 use crate::{
-    EventKind, InboundEventStoreError, MatchField, MessageSource, NotificationCategory,
-    NotificationMatchKeyV1, SourceAccountRef, StructuredImportance,
+    ConversationRef, EventKind, InboundEventStoreError, MatchField, MessageSource,
+    NotificationCategory, NotificationMatchKeyV1, SourceAccountRef, StructuredImportance,
 };
 
 use super::mysql_inbound::store_error;
@@ -27,6 +27,15 @@ pub(crate) enum LockedNotificationSource {
         source_channel: String,
         platform_account_id: String,
     },
+    ResponseExpectation {
+        account_id: u64,
+        expectation_id: String,
+        source_version: u64,
+        source_channel: String,
+        platform_account_id: String,
+        conversation: ConversationRef,
+        actor_id: String,
+    },
 }
 
 pub(crate) struct NotificationCandidateProduction {
@@ -34,19 +43,21 @@ pub(crate) struct NotificationCandidateProduction {
     pub(crate) request_created: bool,
 }
 
+struct LockedNotificationSourceParts<'a> {
+    account_id: u64,
+    source_kind: &'static str,
+    source_id: &'a str,
+    source_version: u64,
+    source_channel: &'a str,
+    platform_account_id: &'a str,
+    category: NotificationCategory,
+    event_kind: EventKind,
+    conversation: MatchField<ConversationRef>,
+    actor_id: MatchField<String>,
+}
+
 impl LockedNotificationSource {
-    fn parts(
-        &self,
-    ) -> (
-        u64,
-        &'static str,
-        &str,
-        u64,
-        &str,
-        &str,
-        NotificationCategory,
-        EventKind,
-    ) {
+    fn parts(&self) -> LockedNotificationSourceParts<'_> {
         match self {
             Self::Agenda {
                 account_id,
@@ -54,32 +65,56 @@ impl LockedNotificationSource {
                 version,
                 source_channel,
                 platform_account_id,
-            } => (
-                *account_id,
-                "agenda",
-                item_id,
-                *version,
+            } => LockedNotificationSourceParts {
+                account_id: *account_id,
+                source_kind: "agenda",
+                source_id: item_id,
+                source_version: *version,
                 source_channel,
                 platform_account_id,
-                NotificationCategory::Agenda,
-                EventKind::AgendaDue,
-            ),
+                category: NotificationCategory::Agenda,
+                event_kind: EventKind::AgendaDue,
+                conversation: MatchField::Absent,
+                actor_id: MatchField::Absent,
+            },
             Self::FollowUp {
                 account_id,
                 follow_up_id,
                 source_version,
                 source_channel,
                 platform_account_id,
-            } => (
-                *account_id,
-                "follow_up",
-                follow_up_id,
-                *source_version,
+            } => LockedNotificationSourceParts {
+                account_id: *account_id,
+                source_kind: "follow_up",
+                source_id: follow_up_id,
+                source_version: *source_version,
                 source_channel,
                 platform_account_id,
-                NotificationCategory::FollowUp,
-                EventKind::FollowUpDue,
-            ),
+                category: NotificationCategory::FollowUp,
+                event_kind: EventKind::FollowUpDue,
+                conversation: MatchField::Absent,
+                actor_id: MatchField::Absent,
+            },
+            Self::ResponseExpectation {
+                account_id,
+                expectation_id,
+                source_version,
+                source_channel,
+                platform_account_id,
+                conversation,
+                actor_id,
+            } => LockedNotificationSourceParts {
+                account_id: *account_id,
+                source_kind: "response_expectation",
+                source_id: expectation_id,
+                source_version: *source_version,
+                source_channel,
+                platform_account_id,
+                category: NotificationCategory::FollowUp,
+                event_kind: EventKind::ResponseOverdue,
+                conversation: MatchField::Known(conversation.clone()),
+                actor_id: MatchField::Known(actor_id.clone()),
+            },
         }
     }
 }
@@ -91,7 +126,7 @@ pub(crate) async fn produce_from_locked_source<C: ConnectionTrait>(
     db: &C,
     source: &LockedNotificationSource,
 ) -> Result<NotificationCandidateProduction, InboundEventStoreError> {
-    let (
+    let LockedNotificationSourceParts {
         account_id,
         source_kind,
         source_id,
@@ -100,7 +135,9 @@ pub(crate) async fn produce_from_locked_source<C: ConnectionTrait>(
         platform_account_id,
         category,
         event_kind,
-    ) = source.parts();
+        conversation,
+        actor_id,
+    } = source.parts();
     let account = SourceAccountRef::new(
         parse_source(source_channel)?,
         platform_account_id.to_owned(),
@@ -108,8 +145,8 @@ pub(crate) async fn produce_from_locked_source<C: ConnectionTrait>(
     .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
     let match_key = NotificationMatchKeyV1::new(
         account,
-        MatchField::Absent,
-        MatchField::Absent,
+        conversation,
+        actor_id,
         MatchField::Known(category),
         MatchField::Known(false),
         MatchField::Known(StructuredImportance::Normal),

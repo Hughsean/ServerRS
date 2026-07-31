@@ -378,6 +378,7 @@ pub struct FollowUpConfig {
     pub enabled: bool,
     pub scan_interval_ms: u64,
     pub horizon_secs: i64,
+    pub response_timeout_secs: i64,
     pub batch_size: u32,
     pub retry_initial_ms: u64,
     pub retry_max_ms: u64,
@@ -389,6 +390,7 @@ impl Default for FollowUpConfig {
             enabled: true,
             scan_interval_ms: 30_000,
             horizon_secs: 604_800,
+            response_timeout_secs: 14_400,
             batch_size: 200,
             retry_initial_ms: 1_000,
             retry_max_ms: 60_000,
@@ -406,6 +408,11 @@ impl FollowUpConfig {
         if !(60..=31_536_000).contains(&self.horizon_secs) {
             return Err(ConfigError::Invalid(
                 "follow_up.horizon_secs must be between 60 and 31536000".into(),
+            ));
+        }
+        if !(300..=2_592_000).contains(&self.response_timeout_secs) {
+            return Err(ConfigError::Invalid(
+                "follow_up.response_timeout_secs must be between 300 and 2592000".into(),
             ));
         }
         if !(1..=1000).contains(&self.batch_size) {

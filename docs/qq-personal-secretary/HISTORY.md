@@ -33,6 +33,13 @@
 
 ## 最近事件
 
+- `2026-07-31 22:09（Asia/Shanghai）`：完成“长期无人回复”主动跟进闭环。新增来源化
+  `secretary_response_expectations`，从外部联系人提出的开放问题生成稳定 Candidate；默认四小时
+  未见同线程本人回复时进入统一 Notification Policy，只有 Remind 决策才形成 Owner Outbox。
+  本人后续回复、问题 answered/dismissed 或线程 resolved/closed 会推进来源版本、终止期待并抑制
+  未发送通知。真实隔离 MySQL 覆盖：开放问题→Candidate/Request→Decision→Owner Outbox 内容
+  重建→本人回复→resolved/suppressed；随机 schema 已清理。未连接或发送 QQ。
+
 - `2026-07-31 21:52（Asia/Shanghai）`：完成 Owner 记忆控制 Action 垂直切片。新增列出记忆、
   来源回读、不可变修正、删除派生记忆、设置/取消 TTL、会话长期记忆模式六类白名单 Action；
   全部进入风险门、Planner DTO、Action Graph、MySQL Store 与运行时装配。L2 修订使用 Effect ID

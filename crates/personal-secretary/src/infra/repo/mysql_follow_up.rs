@@ -178,6 +178,8 @@ impl FollowUpStoreT for MySqlFollowUpStore {
             notification_candidates_created: candidates_created,
             notification_evaluation_requests_created: requests_created,
             memories_expired: 0,
+            response_expectations_materialized: 0,
+            response_expectations_resolved: 0,
         };
         if materialized > 0
             || completed > 0
@@ -197,6 +199,201 @@ impl FollowUpStoreT for MySqlFollowUpStore {
             debug!("follow-up scheduler scan had no changes");
         }
         Ok(report)
+    }
+
+    async fn scan_response_expectations(
+        &self,
+        now_unix_secs: i64,
+        horizon_secs: i64,
+        response_timeout_secs: i64,
+        limit: u32,
+    ) -> Result<FollowUpScanReport, InboundEventStoreError> {
+        if !(60..=31_536_000).contains(&horizon_secs)
+            || !(300..=2_592_000).contains(&response_timeout_secs)
+            || !(1..=1000).contains(&limit)
+        {
+            return Err(InboundEventStoreError::InvalidData(
+                "response expectation scan bounds are invalid".into(),
+            ));
+        }
+        let horizon = now_unix_secs.saturating_add(horizon_secs);
+        let transaction = self.db.begin().await.map_err(store_error)?;
+
+        let resolved = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"UPDATE secretary_response_expectations
+                   SET expectation_status = 'resolved',
+                       source_version = source_version + 1,
+                       updated_at = CURRENT_TIMESTAMP(6)
+                   WHERE expectation_id IN (
+                     SELECT expectation_id FROM (
+                       SELECT expectation.expectation_id
+                       FROM secretary_response_expectations expectation
+                       JOIN secretary_thread_open_questions question
+                         ON question.question_id = expectation.source_question_id
+                       JOIN secretary_event_threads thread
+                         ON thread.thread_id = expectation.thread_id
+                       WHERE expectation.expectation_status = 'active'
+                         AND (
+                             question.status <> 'open'
+                             OR thread.status IN ('resolved', 'closed')
+                             OR EXISTS (
+                                 SELECT 1
+                                 FROM secretary_thread_question_sources question_source
+                                 JOIN secretary_source_events asked
+                                   ON asked.source_event_id = question_source.source_event_id
+                                 JOIN secretary_thread_events reply_member
+                                   ON reply_member.thread_id = expectation.thread_id
+                                 JOIN secretary_source_events reply
+                                   ON reply.source_event_id = reply_member.source_event_id
+                                 WHERE question_source.question_id = expectation.source_question_id
+                                   AND reply.message_role = 'assistant_output'
+                                   AND (reply.occurred_at_unix_secs > asked.occurred_at_unix_secs
+                                        OR (reply.occurred_at_unix_secs = asked.occurred_at_unix_secs
+                                            AND reply.source_event_id > asked.source_event_id))
+                             )
+                         )
+                       ORDER BY expectation.updated_at, expectation.expectation_id
+                       LIMIT ?
+                     ) bounded
+                   )"#,
+                [limit.into()],
+            ))
+            .await
+            .map_err(store_error)?
+            .rows_affected();
+
+        transaction
+            .execute_raw(Statement::from_string(
+                DatabaseBackend::MySql,
+                r#"UPDATE secretary_notification_outbox notification
+                   JOIN secretary_notification_candidates candidate
+                     ON candidate.notification_candidate_id = notification.notification_candidate_id
+                    AND candidate.source_kind = 'response_expectation'
+                   JOIN secretary_response_expectations expectation
+                     ON expectation.expectation_id = candidate.source_id
+                   SET notification.delivery_status = 'suppressed',
+                       notification.lease_token = NULL,
+                       notification.lease_expires_at = NULL,
+                       notification.last_error_code = 'response_already_resolved'
+                   WHERE notification.delivery_status IN ('pending', 'failed')
+                     AND expectation.expectation_status <> 'active'"#,
+            ))
+            .await
+            .map_err(store_error)?;
+
+        let materialized = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"INSERT IGNORE INTO secretary_response_expectations
+                       (expectation_id, account_id, source_question_id, thread_id,
+                        source_version, due_at_unix_secs, expectation_status)
+                   SELECT UUID(), thread.account_id, question.question_id, question.thread_id,
+                          1, MIN(source.occurred_at_unix_secs) + ?, 'active'
+                   FROM secretary_thread_open_questions question
+                   JOIN secretary_thread_question_sources question_source
+                     ON question_source.question_id = question.question_id
+                   JOIN secretary_source_events source
+                     ON source.source_event_id = question_source.source_event_id
+                   JOIN secretary_event_threads thread ON thread.thread_id = question.thread_id
+                   WHERE question.status = 'open'
+                     AND thread.status NOT IN ('resolved', 'closed')
+                     AND source.actor_kind = 'external'
+                     AND source.message_role = 'external_observation'
+                     AND source.occurred_at_unix_secs + ? <= ?
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM secretary_thread_events reply_member
+                         JOIN secretary_source_events reply
+                           ON reply.source_event_id = reply_member.source_event_id
+                         WHERE reply_member.thread_id = question.thread_id
+                           AND reply.message_role = 'assistant_output'
+                           AND (reply.occurred_at_unix_secs > source.occurred_at_unix_secs
+                                OR (reply.occurred_at_unix_secs = source.occurred_at_unix_secs
+                                    AND reply.source_event_id > source.source_event_id))
+                     )
+                   GROUP BY thread.account_id, question.question_id, question.thread_id
+                   ORDER BY MIN(source.occurred_at_unix_secs), question.question_id
+                   LIMIT ?"#,
+                [
+                    response_timeout_secs.into(),
+                    response_timeout_secs.into(),
+                    horizon.into(),
+                    limit.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?
+            .rows_affected();
+
+        let due = DueResponseExpectationRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT expectation.expectation_id, expectation.account_id,
+                      expectation.source_version, account.source_channel,
+                      account.platform_account_id, question.question_id, question.thread_id,
+                      question.raised_by_actor_id,
+                      conversation.conversation_kind,
+                      conversation.platform_conversation_id
+               FROM secretary_response_expectations expectation
+               JOIN secretary_accounts account ON account.id = expectation.account_id
+               JOIN secretary_thread_open_questions question
+                 ON question.question_id = expectation.source_question_id
+               JOIN secretary_thread_question_sources question_source
+                 ON question_source.source_event_id = (
+                    SELECT source_pick.source_event_id
+                    FROM secretary_thread_question_sources source_pick
+                    JOIN secretary_source_events event_pick
+                      ON event_pick.source_event_id = source_pick.source_event_id
+                    WHERE source_pick.question_id = expectation.source_question_id
+                    ORDER BY event_pick.occurred_at_unix_secs, source_pick.source_event_id
+                    LIMIT 1
+                 )
+                AND question_source.question_id = expectation.source_question_id
+               JOIN secretary_source_events source
+                 ON source.source_event_id = question_source.source_event_id
+               JOIN secretary_conversations conversation ON conversation.id = source.conversation_id
+               WHERE expectation.expectation_status = 'active'
+                 AND expectation.due_at_unix_secs <= ?
+               ORDER BY expectation.due_at_unix_secs, expectation.expectation_id
+               LIMIT ? FOR UPDATE SKIP LOCKED"#,
+            [now_unix_secs.into(), limit.into()],
+        ))
+        .all(&transaction)
+        .await
+        .map_err(store_error)?;
+        let mut candidates_created = 0_u64;
+        let mut requests_created = 0_u64;
+        for expectation in due {
+            let conversation = crate::ConversationRef::new(
+                parse_conversation_kind(&expectation.conversation_kind)?,
+                expectation.platform_conversation_id,
+            )
+            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+            let production = produce_from_locked_source(
+                &transaction,
+                &LockedNotificationSource::ResponseExpectation {
+                    account_id: expectation.account_id,
+                    expectation_id: expectation.expectation_id,
+                    source_version: expectation.source_version,
+                    source_channel: expectation.source_channel,
+                    platform_account_id: expectation.platform_account_id,
+                    conversation,
+                    actor_id: expectation.raised_by_actor_id,
+                },
+            )
+            .await?;
+            candidates_created += u64::from(production.candidate_created);
+            requests_created += u64::from(production.request_created);
+        }
+        transaction.commit().await.map_err(store_error)?;
+        Ok(FollowUpScanReport {
+            response_expectations_materialized: materialized,
+            response_expectations_resolved: resolved,
+            notification_candidates_created: candidates_created,
+            notification_evaluation_requests_created: requests_created,
+            ..FollowUpScanReport::default()
+        })
     }
 
     async fn reconcile_legacy_notifications(
@@ -439,7 +636,11 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                       candidate.source_kind AS policy_source_kind,
                       COALESCE(CAST(fact.fact_json AS CHAR), CAST(policy_fact.fact_json AS CHAR)) AS fact_json,
                       COALESCE(agenda.item_kind, policy_agenda.item_kind) AS agenda_kind,
-                      COALESCE(agenda.title, policy_agenda.title) AS agenda_title
+                      COALESCE(agenda.title, policy_agenda.title) AS agenda_title,
+                      policy_question.question_id AS response_question_id,
+                      policy_question.thread_id AS response_thread_id,
+                      policy_question.raised_by_actor_id AS response_actor_id,
+                      policy_question.question AS response_question
                FROM secretary_notification_outbox notification
                JOIN secretary_accounts account ON account.id = notification.account_id
                LEFT JOIN secretary_follow_up_items item
@@ -469,6 +670,11 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                  ON policy_agenda.item_id = candidate.source_id
                 AND policy_agenda.version = candidate.source_version
                 AND candidate.source_kind = 'agenda'
+               LEFT JOIN secretary_response_expectations policy_response
+                 ON policy_response.expectation_id = candidate.source_id
+                AND candidate.source_kind = 'response_expectation'
+               LEFT JOIN secretary_thread_open_questions policy_question
+                 ON policy_question.question_id = policy_response.source_question_id
                WHERE notification.delivery_status = 'pending'
                  AND notification.scheduled_at_unix_secs <= ?
                  AND account.source_channel = ? AND account.platform_account_id = ?
@@ -508,6 +714,12 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                              AND policy_agenda.item_id = candidate.source_id
                              AND policy_agenda.version = candidate.source_version
                              AND policy_agenda.item_status = 'scheduled')
+                         OR (candidate.source_kind = 'response_expectation'
+                             AND policy_response.expectation_id = candidate.source_id
+                             AND policy_response.account_id = candidate.account_id
+                             AND policy_response.source_version = candidate.source_version
+                             AND policy_response.expectation_status = 'active'
+                             AND policy_question.status = 'open')
                         )
                     )
                  )
@@ -581,6 +793,35 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                             "notification agenda title is missing".into(),
                         )
                     })?,
+                }
+            }
+            (None, None, Some("response_expectation")) => {
+                OwnerNotificationContent::ResponseExpectation {
+                    question_id: row.response_question_id.ok_or_else(|| {
+                        InboundEventStoreError::InvalidData(
+                            "response expectation question id is missing".into(),
+                        )
+                    })?,
+                    thread_id: row.response_thread_id.ok_or_else(|| {
+                        InboundEventStoreError::InvalidData(
+                            "response expectation thread id is missing".into(),
+                        )
+                    })?,
+                    raised_by_actor_id: row.response_actor_id.ok_or_else(|| {
+                        InboundEventStoreError::InvalidData(
+                            "response expectation actor id is missing".into(),
+                        )
+                    })?,
+                    question_excerpt: row
+                        .response_question
+                        .ok_or_else(|| {
+                            InboundEventStoreError::InvalidData(
+                                "response expectation question is missing".into(),
+                            )
+                        })?
+                        .chars()
+                        .take(300)
+                        .collect(),
                 }
             }
             _ => {
@@ -696,6 +937,22 @@ struct DueFollowUpItemRow {
     platform_account_id: String,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct DueResponseExpectationRow {
+    expectation_id: String,
+    account_id: u64,
+    source_version: u64,
+    source_channel: String,
+    platform_account_id: String,
+    #[allow(dead_code)]
+    question_id: String,
+    #[allow(dead_code)]
+    thread_id: String,
+    raised_by_actor_id: String,
+    conversation_kind: String,
+    platform_conversation_id: String,
+}
+
 #[derive(Debug)]
 enum LegacySourceClassification {
     Current(LockedNotificationSource),
@@ -793,6 +1050,17 @@ fn locked_source_key(source: &LockedNotificationSource) -> (u64, &'static str, S
             follow_up_id.clone(),
             *source_version,
         ),
+        LockedNotificationSource::ResponseExpectation {
+            account_id,
+            expectation_id,
+            source_version,
+            ..
+        } => (
+            *account_id,
+            "response_expectation",
+            expectation_id.clone(),
+            *source_version,
+        ),
     }
 }
 
@@ -831,6 +1099,10 @@ struct NotificationClaimRow {
     fact_json: Option<String>,
     agenda_kind: Option<String>,
     agenda_title: Option<String>,
+    response_question_id: Option<String>,
+    response_thread_id: Option<String>,
+    response_actor_id: Option<String>,
+    response_question: Option<String>,
 }
 
 fn parse_agenda_kind(value: &str) -> Result<AgendaItemKind, InboundEventStoreError> {
@@ -850,6 +1122,17 @@ fn parse_source(value: &str) -> Result<MessageSource, InboundEventStoreError> {
         "qq_open_platform" => Ok(MessageSource::QqOpenPlatform),
         _ => Err(InboundEventStoreError::InvalidData(format!(
             "unknown message source: {value}"
+        ))),
+    }
+}
+
+fn parse_conversation_kind(value: &str) -> Result<crate::ConversationKind, InboundEventStoreError> {
+    match value {
+        "private" => Ok(crate::ConversationKind::Private),
+        "group" => Ok(crate::ConversationKind::Group),
+        "owner_control" => Ok(crate::ConversationKind::OwnerControl),
+        _ => Err(InboundEventStoreError::InvalidData(format!(
+            "unknown conversation kind: {value}"
         ))),
     }
 }
