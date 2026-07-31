@@ -1881,13 +1881,18 @@ async fn source_is_current(
                ON fact.fact_id = item.source_memory_fact_id \
              WHERE item.follow_up_id = ? AND item.account_id = ? AND item.source_version = ? \
                AND item.status = 'scheduled' \
-               AND fact.fact_kind = 'commitment' AND fact.fact_status = 'confirmed' \
+               AND fact.fact_status = 'confirmed' \
                AND NOT EXISTS ( \
                    SELECT 1 FROM secretary_memory_facts AS successor \
                    WHERE successor.supersedes_fact_id = fact.fact_id \
                ) \
-               AND JSON_UNQUOTE(JSON_EXTRACT(fact.fact_json, '$.payload.data.status')) \
-                   IN ('pending', 'proposed') \
+               AND ( \
+                    (item.reason_code = 'commitment_due' AND fact.fact_kind = 'commitment' \
+                     AND JSON_UNQUOTE(JSON_EXTRACT(fact.fact_json, '$.payload.data.status')) \
+                         IN ('pending', 'proposed')) \
+                    OR (item.reason_code = 'project_blocked' AND fact.fact_kind = 'project' \
+                        AND JSON_LENGTH(JSON_EXTRACT(fact.fact_json, '$.payload.data.blockers')) > 0) \
+               ) \
              FOR UPDATE"
         }
         "response_expectation" => {

@@ -1019,6 +1019,32 @@ async fn structured_memory_is_source_backed_versioned_private_and_expirable() {
     );
     assert!(!active.iter().any(|fact| fact.fact_id == project.fact_id));
 
+    let blocker_follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        store.clone(),
+    );
+    let blocker_report = blocker_follow_up
+        .scan(2_000_000_000, 604_800, 14_400, 86_400, 100)
+        .await
+        .unwrap();
+    assert_eq!(blocker_report.project_blockers_materialized, 1);
+    assert_eq!(blocker_report.notification_candidates_created, 1);
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) AS value
+             FROM secretary_notification_candidates candidate
+             JOIN secretary_follow_up_items item ON item.follow_up_id = candidate.source_id
+             WHERE candidate.source_kind = 'follow_up'
+               AND item.reason_code = 'project_blocked'
+               AND JSON_UNQUOTE(JSON_EXTRACT(candidate.match_key_json, '$.event_kind.value')) = 'project_blocked'",
+            [],
+        )
+        .await,
+        1,
+        "an unresolved project blocker must enter the unified policy queue"
+    );
+
     let private_fact = MemoryFact {
         fact_id: MemoryFactId::generate(),
         account: managed.clone(),
@@ -1118,11 +1144,17 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
         build_mysql_follow_up_store(db.clone()),
         memory_store,
     );
-    let report = follow_up.scan(70_000, 86_400, 14_400, 100).await.unwrap();
+    let report = follow_up
+        .scan(70_000, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(report.commitments_materialized, 1);
     assert_eq!(report.notification_candidates_created, 1);
     assert_eq!(report.notification_evaluation_requests_created, 1);
-    let replay = follow_up.scan(70_000, 86_400, 14_400, 100).await.unwrap();
+    let replay = follow_up
+        .scan(70_000, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(replay.commitments_materialized, 0);
     assert_eq!(replay.notification_candidates_created, 0);
     assert_eq!(replay.notification_evaluation_requests_created, 0);
@@ -1196,7 +1228,10 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     };
     assert!(memory.delete_derived(&deletion).await.unwrap().changed);
     assert!(!memory.delete_derived(&deletion).await.unwrap().changed);
-    let report = follow_up.scan(70_101, 86_400, 14_400, 100).await.unwrap();
+    let report = follow_up
+        .scan(70_101, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(report.items_reconciled, 1);
     assert_eq!(
         scalar_i64(
@@ -1284,7 +1319,10 @@ async fn unanswered_external_question_becomes_policy_candidate_then_resolves_on_
         build_mysql_follow_up_store(db.clone()),
         build_mysql_memory_store(db.clone()),
     );
-    let report = follow_up.scan(15_401, 86_400, 14_400, 100).await.unwrap();
+    let report = follow_up
+        .scan(15_401, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(report.response_expectations_materialized, 1);
     assert_eq!(report.notification_candidates_created, 1);
     assert_eq!(report.notification_evaluation_requests_created, 1);
@@ -1408,7 +1446,10 @@ async fn unanswered_external_question_becomes_policy_candidate_then_resolves_on_
     ))
     .await
     .unwrap();
-    let resolved = follow_up.scan(16_001, 86_400, 14_400, 100).await.unwrap();
+    let resolved = follow_up
+        .scan(16_001, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(resolved.response_expectations_resolved, 1);
     assert_eq!(
         scalar_i64(
@@ -1540,7 +1581,10 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         build_mysql_follow_up_store(db.clone()),
         memory_store.clone(),
     );
-    follow_up.scan(80_100, 86_400, 14_400, 100).await.unwrap();
+    follow_up
+        .scan(80_100, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     // Task 7 后扫描只创建 Candidate/Request；此处显式构造两条历史 Outbox，
     // 保留该测试对旧投递状态机（含跨账号领取）的覆盖。
     let first_follow_up_id = scalar_string(
@@ -1691,7 +1735,10 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         supersedes_fact_id: None,
     };
     memory.remember(&delivered_fact).await.unwrap();
-    let scan = follow_up.scan(100_001, 86_400, 14_400, 100).await.unwrap();
+    let scan = follow_up
+        .scan(100_001, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     assert_eq!(scan.commitments_materialized, 1);
     assert_eq!(scan.notification_candidates_created, 1);
     assert_eq!(scan.notification_evaluation_requests_created, 1);
@@ -2012,7 +2059,10 @@ async fn legacy_reconciliation_rebuilds_only_current_follow_up_sources_and_block
         build_mysql_follow_up_store(db.clone()),
         memory_store,
     );
-    follow_up.scan(90_001, 86_400, 14_400, 100).await.unwrap();
+    follow_up
+        .scan(90_001, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
     let follow_up_id = scalar_string(
         &db,
         "SELECT follow_up_id AS value FROM secretary_follow_up_items WHERE source_memory_fact_id = ?",

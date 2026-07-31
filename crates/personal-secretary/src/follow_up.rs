@@ -23,6 +23,7 @@ pub struct FollowUpScanReport {
     pub memories_expired: u64,
     pub response_expectations_materialized: u64,
     pub response_expectations_resolved: u64,
+    pub project_blockers_materialized: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +72,10 @@ pub enum OwnerNotificationContent {
         thread_id: String,
         raised_by_actor_id: String,
         question_excerpt: String,
+    },
+    ProjectBlocker {
+        project_key: String,
+        blockers: Vec<String>,
     },
 }
 

@@ -16,6 +16,7 @@ trait FollowUpRunner: Send + Sync {
         now_unix_secs: i64,
         horizon_secs: i64,
         response_timeout_secs: i64,
+        blocker_escalation_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError>;
 }
@@ -27,6 +28,7 @@ impl FollowUpRunner for FollowUpUseCase {
         now_unix_secs: i64,
         horizon_secs: i64,
         response_timeout_secs: i64,
+        blocker_escalation_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError> {
         FollowUpUseCase::scan(
@@ -34,6 +36,7 @@ impl FollowUpRunner for FollowUpUseCase {
             now_unix_secs,
             horizon_secs,
             response_timeout_secs,
+            blocker_escalation_secs,
             limit,
         )
         .await
@@ -89,6 +92,7 @@ async fn run_worker<R: FollowUpRunner + 'static>(
                 now,
                 config.horizon_secs,
                 config.response_timeout_secs,
+                config.blocker_escalation_secs,
                 config.batch_size,
             )
             .await
@@ -104,6 +108,7 @@ async fn run_worker<R: FollowUpRunner + 'static>(
                     memories_expired = report.memories_expired,
                     response_expectations_materialized = report.response_expectations_materialized,
                     response_expectations_resolved = report.response_expectations_resolved,
+                    project_blockers_materialized = report.project_blockers_materialized,
                     "follow-up maintenance scan completed"
                 );
             }
@@ -144,6 +149,7 @@ mod tests {
             _now_unix_secs: i64,
             _horizon_secs: i64,
             _response_timeout_secs: i64,
+            _blocker_escalation_secs: i64,
             _limit: u32,
         ) -> Result<FollowUpScanReport, InboundEventStoreError> {
             self.0.fetch_add(1, Ordering::Relaxed);

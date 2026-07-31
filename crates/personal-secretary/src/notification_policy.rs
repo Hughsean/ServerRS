@@ -95,6 +95,7 @@ pub enum EventKind {
     AgendaDue,
     FollowUpDue,
     ResponseOverdue,
+    ProjectBlocked,
 }
 
 /// v1 只允许用于结构化策略的元数据，绝不包含正文或相似度特征。

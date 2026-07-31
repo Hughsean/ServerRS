@@ -180,6 +180,7 @@ impl FollowUpStoreT for MySqlFollowUpStore {
             memories_expired: 0,
             response_expectations_materialized: 0,
             response_expectations_resolved: 0,
+            project_blockers_materialized: 0,
         };
         if materialized > 0
             || completed > 0
@@ -390,6 +391,102 @@ impl FollowUpStoreT for MySqlFollowUpStore {
         Ok(FollowUpScanReport {
             response_expectations_materialized: materialized,
             response_expectations_resolved: resolved,
+            notification_candidates_created: candidates_created,
+            notification_evaluation_requests_created: requests_created,
+            ..FollowUpScanReport::default()
+        })
+    }
+
+    async fn scan_project_blockers(
+        &self,
+        now_unix_secs: i64,
+        horizon_secs: i64,
+        blocker_escalation_secs: i64,
+        limit: u32,
+    ) -> Result<FollowUpScanReport, InboundEventStoreError> {
+        if !(60..=31_536_000).contains(&horizon_secs)
+            || !(3_600..=31_536_000).contains(&blocker_escalation_secs)
+            || !(1..=1000).contains(&limit)
+        {
+            return Err(InboundEventStoreError::InvalidData(
+                "project blocker scan bounds are invalid".into(),
+            ));
+        }
+        let horizon = now_unix_secs.saturating_add(horizon_secs);
+        let transaction = self.db.begin().await.map_err(store_error)?;
+        let materialized = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"INSERT IGNORE INTO secretary_follow_up_items
+                       (follow_up_id, account_id, source_memory_fact_id, source_version,
+                        reason_code, due_at_unix_secs, status)
+                   SELECT UUID(), fact.account_id, fact.fact_id, 1, 'project_blocked',
+                          UNIX_TIMESTAMP(fact.updated_at) + ?, 'scheduled'
+                   FROM secretary_memory_facts fact
+                   WHERE fact.fact_kind = 'project'
+                     AND fact.fact_status = 'confirmed'
+                     AND JSON_LENGTH(JSON_EXTRACT(fact.fact_json, '$.payload.data.blockers')) > 0
+                     AND UNIX_TIMESTAMP(fact.updated_at) + ? <= ?
+                     AND NOT EXISTS (
+                         SELECT 1 FROM secretary_memory_facts successor
+                         WHERE successor.supersedes_fact_id = fact.fact_id
+                     )
+                   ORDER BY fact.updated_at, fact.fact_id
+                   LIMIT ?"#,
+                [
+                    blocker_escalation_secs.into(),
+                    blocker_escalation_secs.into(),
+                    horizon.into(),
+                    limit.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?
+            .rows_affected();
+        let rows = DueProjectBlockerRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT item.follow_up_id, item.account_id, item.source_version,
+                      account.source_channel, account.platform_account_id
+               FROM secretary_follow_up_items item
+               JOIN secretary_memory_facts fact ON fact.fact_id = item.source_memory_fact_id
+               JOIN secretary_accounts account ON account.id = item.account_id
+               WHERE item.status = 'scheduled'
+                 AND item.reason_code = 'project_blocked'
+                 AND item.due_at_unix_secs <= ?
+                 AND fact.fact_kind = 'project'
+                 AND fact.fact_status = 'confirmed'
+                 AND JSON_LENGTH(JSON_EXTRACT(fact.fact_json, '$.payload.data.blockers')) > 0
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_memory_facts successor
+                     WHERE successor.supersedes_fact_id = fact.fact_id
+                 )
+               ORDER BY item.due_at_unix_secs, item.follow_up_id
+               LIMIT ? FOR UPDATE SKIP LOCKED"#,
+            [now_unix_secs.into(), limit.into()],
+        ))
+        .all(&transaction)
+        .await
+        .map_err(store_error)?;
+        let mut candidates_created = 0_u64;
+        let mut requests_created = 0_u64;
+        for item in rows {
+            let production = produce_from_locked_source(
+                &transaction,
+                &LockedNotificationSource::ProjectBlocker {
+                    account_id: item.account_id,
+                    follow_up_id: item.follow_up_id,
+                    source_version: item.source_version,
+                    source_channel: item.source_channel,
+                    platform_account_id: item.platform_account_id,
+                },
+            )
+            .await?;
+            candidates_created += u64::from(production.candidate_created);
+            requests_created += u64::from(production.request_created);
+        }
+        transaction.commit().await.map_err(store_error)?;
+        Ok(FollowUpScanReport {
+            project_blockers_materialized: materialized,
             notification_candidates_created: candidates_created,
             notification_evaluation_requests_created: requests_created,
             ..FollowUpScanReport::default()
@@ -702,14 +799,20 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                              AND policy_item.follow_up_id = candidate.source_id
                              AND policy_item.source_version = candidate.source_version
                              AND policy_item.status = 'scheduled'
-                             AND policy_fact.fact_kind = 'commitment'
                              AND policy_fact.fact_status = 'confirmed'
                              AND NOT EXISTS (
                                  SELECT 1 FROM secretary_memory_facts AS successor
                                  WHERE successor.supersedes_fact_id = policy_fact.fact_id
                              )
-                             AND JSON_UNQUOTE(JSON_EXTRACT(policy_fact.fact_json, '$.payload.data.status'))
-                                 IN ('pending', 'proposed'))
+                             AND (
+                                (policy_item.reason_code = 'commitment_due'
+                                 AND policy_fact.fact_kind = 'commitment'
+                                 AND JSON_UNQUOTE(JSON_EXTRACT(policy_fact.fact_json, '$.payload.data.status'))
+                                     IN ('pending', 'proposed'))
+                                OR (policy_item.reason_code = 'project_blocked'
+                                    AND policy_fact.fact_kind = 'project'
+                                    AND JSON_LENGTH(JSON_EXTRACT(policy_fact.fact_json, '$.payload.data.blockers')) > 0)
+                             ))
                          OR (candidate.source_kind = 'agenda'
                              AND policy_agenda.item_id = candidate.source_id
                              AND policy_agenda.version = candidate.source_version
@@ -774,12 +877,22 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                         "notification source memory is invalid: {error}"
                     ))
                 })?;
-                let MemoryPayload::Commitment(commitment) = fact.payload else {
-                    return Err(InboundEventStoreError::InvalidData(
-                        "notification source is not a commitment".into(),
-                    ));
-                };
-                OwnerNotificationContent::FollowUp { commitment }
+                match fact.payload {
+                    MemoryPayload::Commitment(commitment) => {
+                        OwnerNotificationContent::FollowUp { commitment }
+                    }
+                    MemoryPayload::Project(project) if !project.blockers.is_empty() => {
+                        OwnerNotificationContent::ProjectBlocker {
+                            project_key: project.project_key,
+                            blockers: project.blockers.into_iter().take(10).collect(),
+                        }
+                    }
+                    _ => {
+                        return Err(InboundEventStoreError::InvalidData(
+                            "notification follow-up source type is invalid".into(),
+                        ));
+                    }
+                }
             }
             (None, Some(_), None) | (None, None, Some("agenda")) => {
                 OwnerNotificationContent::Agenda {
@@ -953,6 +1066,15 @@ struct DueResponseExpectationRow {
     platform_conversation_id: String,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct DueProjectBlockerRow {
+    follow_up_id: String,
+    account_id: u64,
+    source_version: u64,
+    source_channel: String,
+    platform_account_id: String,
+}
+
 #[derive(Debug)]
 enum LegacySourceClassification {
     Current(LockedNotificationSource),
@@ -1059,6 +1181,17 @@ fn locked_source_key(source: &LockedNotificationSource) -> (u64, &'static str, S
             *account_id,
             "response_expectation",
             expectation_id.clone(),
+            *source_version,
+        ),
+        LockedNotificationSource::ProjectBlocker {
+            account_id,
+            follow_up_id,
+            source_version,
+            ..
+        } => (
+            *account_id,
+            "follow_up",
+            follow_up_id.clone(),
             *source_version,
         ),
     }

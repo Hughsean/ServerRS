@@ -166,6 +166,7 @@ pub(super) fn apply_follow_up_env(config: &mut FollowUpConfig) -> Result<(), Con
             scan_interval_ms => "QQBOT_FOLLOW_UP_SCAN_INTERVAL_MS",
             horizon_secs => "QQBOT_FOLLOW_UP_HORIZON_SECS",
             response_timeout_secs => "QQBOT_FOLLOW_UP_RESPONSE_TIMEOUT_SECS",
+            blocker_escalation_secs => "QQBOT_FOLLOW_UP_BLOCKER_ESCALATION_SECS",
             batch_size => "QQBOT_FOLLOW_UP_BATCH_SIZE",
             retry_initial_ms => "QQBOT_FOLLOW_UP_RETRY_INITIAL_MS",
             retry_max_ms => "QQBOT_FOLLOW_UP_RETRY_MAX_MS",

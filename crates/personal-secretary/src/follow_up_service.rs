@@ -24,6 +24,14 @@ pub trait FollowUpStoreT: Send + Sync {
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError>;
 
+    async fn scan_project_blockers(
+        &self,
+        now_unix_secs: i64,
+        horizon_secs: i64,
+        blocker_escalation_secs: i64,
+        limit: u32,
+    ) -> Result<FollowUpScanReport, InboundEventStoreError>;
+
     async fn claim_due_notification(
         &self,
         account: &crate::SourceAccountRef,
@@ -118,10 +126,12 @@ impl FollowUpUseCase {
         now_unix_secs: i64,
         horizon_secs: i64,
         response_timeout_secs: i64,
+        blocker_escalation_secs: i64,
         limit: u32,
     ) -> Result<FollowUpScanReport, InboundEventStoreError> {
         if !(60..=31_536_000).contains(&horizon_secs)
             || !(300..=2_592_000).contains(&response_timeout_secs)
+            || !(3_600..=31_536_000).contains(&blocker_escalation_secs)
             || !(1..=1000).contains(&limit)
         {
             return Err(InboundEventStoreError::InvalidData(
@@ -146,6 +156,17 @@ impl FollowUpUseCase {
         report.notification_evaluation_requests_created = report
             .notification_evaluation_requests_created
             .saturating_add(response_report.notification_evaluation_requests_created);
+        let blocker_report = self
+            .follow_ups
+            .scan_project_blockers(now_unix_secs, horizon_secs, blocker_escalation_secs, limit)
+            .await?;
+        report.project_blockers_materialized = blocker_report.project_blockers_materialized;
+        report.notification_candidates_created = report
+            .notification_candidates_created
+            .saturating_add(blocker_report.notification_candidates_created);
+        report.notification_evaluation_requests_created = report
+            .notification_evaluation_requests_created
+            .saturating_add(blocker_report.notification_evaluation_requests_created);
         report.memories_expired = memories_expired;
         Ok(report)
     }

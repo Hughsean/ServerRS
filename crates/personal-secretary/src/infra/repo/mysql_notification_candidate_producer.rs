@@ -36,6 +36,13 @@ pub(crate) enum LockedNotificationSource {
         conversation: ConversationRef,
         actor_id: String,
     },
+    ProjectBlocker {
+        account_id: u64,
+        follow_up_id: String,
+        source_version: u64,
+        source_channel: String,
+        platform_account_id: String,
+    },
 }
 
 pub(crate) struct NotificationCandidateProduction {
@@ -114,6 +121,24 @@ impl LockedNotificationSource {
                 event_kind: EventKind::ResponseOverdue,
                 conversation: MatchField::Known(conversation.clone()),
                 actor_id: MatchField::Known(actor_id.clone()),
+            },
+            Self::ProjectBlocker {
+                account_id,
+                follow_up_id,
+                source_version,
+                source_channel,
+                platform_account_id,
+            } => LockedNotificationSourceParts {
+                account_id: *account_id,
+                source_kind: "follow_up",
+                source_id: follow_up_id,
+                source_version: *source_version,
+                source_channel,
+                platform_account_id,
+                category: NotificationCategory::FollowUp,
+                event_kind: EventKind::ProjectBlocked,
+                conversation: MatchField::Absent,
+                actor_id: MatchField::Absent,
             },
         }
     }

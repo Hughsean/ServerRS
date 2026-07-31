@@ -185,6 +185,19 @@ async fn run_outbox_loop(
                         "⏰ 待回复提醒\n有一条外部联系人的问题仍未见你的回复：{}",
                         question_excerpt.chars().take(300).collect::<String>()
                     ),
+                    OwnerNotificationContent::ProjectBlocker {
+                        project_key,
+                        blockers,
+                    } => format!(
+                        "⏰ 项目阻塞提醒\n项目：{}\n阻塞：{}",
+                        project_key.chars().take(120).collect::<String>(),
+                        blockers
+                            .iter()
+                            .take(5)
+                            .map(|value| value.chars().take(120).collect::<String>())
+                            .collect::<Vec<_>>()
+                            .join("；")
+                    ),
                 };
                 let target = QqTarget::C2c {
                     user_openid: config.owner_openid.clone(),

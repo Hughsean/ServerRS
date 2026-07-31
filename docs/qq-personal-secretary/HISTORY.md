@@ -33,6 +33,12 @@
 
 ## 最近事件
 
+- `2026-07-31 22:14（Asia/Shanghai）`：项目记忆中的非空 blockers 现会在默认持续 24 小时后
+  生成 `project_blocked` 跟进，进入统一 Notification Policy，而不是扫描时直接写 Outbox。项目
+  事实修订、删除或过期后沿既有来源版本 reconciliation 自动终止旧跟进。Owner 通知仅展示有界
+  项目键和最多五个有界阻塞摘要。随机隔离 MySQL 验证项目事实→FollowUp→类型化 Candidate；
+  严格 Clippy 通过，临时 schema 已清理，未连接或发送 QQ。
+
 - `2026-07-31 22:09（Asia/Shanghai）`：完成“长期无人回复”主动跟进闭环。新增来源化
   `secretary_response_expectations`，从外部联系人提出的开放问题生成稳定 Candidate；默认四小时
   未见同线程本人回复时进入统一 Notification Policy，只有 Remind 决策才形成 Owner Outbox。
