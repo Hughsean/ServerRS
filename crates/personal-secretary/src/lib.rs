@@ -96,10 +96,10 @@ pub use inbound::{
     SourceAccountRef, SourceMessageRef, VerifiedActor, VerifiedActorKind,
 };
 pub use memory::{
-    CommitmentMemory, CommitmentStatus, MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact,
-    MemoryFactError, MemoryFactId, MemoryFactStatus, MemoryFactView, MemoryPayload,
-    MemorySourceExcerpt, MemoryWriteReceipt, PersonMemory, ProjectMemory, validate_memory_delete,
-    validate_memory_fact,
+    CommitmentMemory, CommitmentStatus, ConversationMemoryModeInput, ConversationMemoryModeReceipt,
+    MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId,
+    MemoryFactStatus, MemoryFactView, MemoryPayload, MemorySourceExcerpt, MemoryWriteReceipt,
+    PersonMemory, ProjectMemory, validate_memory_delete, validate_memory_fact,
 };
 pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
 pub use notification_policy::{

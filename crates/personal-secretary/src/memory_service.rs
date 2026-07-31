@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::{
-    InboundEventStoreError, MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError,
-    MemoryFactId, MemoryFactView, MemoryWriteReceipt, SourceAccountRef, validate_memory_delete,
+    ConversationMemoryModeInput, ConversationMemoryModeReceipt, InboundEventStoreError,
+    MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId,
+    MemoryFactView, MemoryWriteReceipt, SourceAccountRef, validate_memory_delete,
     validate_memory_fact,
 };
 
@@ -38,6 +39,11 @@ pub trait MemoryStoreT: Send + Sync {
         &self,
         input: &MemoryDeleteInput,
     ) -> Result<MemoryDeleteReceipt, InboundEventStoreError>;
+
+    async fn set_conversation_mode(
+        &self,
+        input: &ConversationMemoryModeInput,
+    ) -> Result<ConversationMemoryModeReceipt, InboundEventStoreError>;
 }
 
 pub struct MemoryUseCase {
@@ -88,6 +94,13 @@ impl MemoryUseCase {
     ) -> Result<MemoryDeleteReceipt, MemoryUseCaseError> {
         validate_memory_delete(input)?;
         Ok(self.store.delete_derived(input).await?)
+    }
+
+    pub async fn set_conversation_mode(
+        &self,
+        input: &ConversationMemoryModeInput,
+    ) -> Result<ConversationMemoryModeReceipt, MemoryUseCaseError> {
+        Ok(self.store.set_conversation_mode(input).await?)
     }
 }
 

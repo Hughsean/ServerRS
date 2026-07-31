@@ -272,6 +272,58 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 ));
             }
         }
+        SecretaryAction::ListMemoryFacts { limit } => {
+            if !(1..=20).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory fact list limit must be in 1..=20".into(),
+                ));
+            }
+        }
+        SecretaryAction::ReadMemoryFactSources {
+            max_excerpt_chars, ..
+        } => {
+            if !(1..=1000).contains(max_excerpt_chars) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory source excerpt limit must be in 1..=1000".into(),
+                ));
+            }
+        }
+        SecretaryAction::CorrectMemoryFact {
+            confidence_bps,
+            source_event_ids,
+            valid_until_unix_secs,
+            ..
+        } => {
+            if *confidence_bps > 10_000
+                || source_event_ids.is_empty()
+                || source_event_ids.len() > 20
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory correction requires confidence <= 10000 and 1..=20 sources".into(),
+                ));
+            }
+            if valid_until_unix_secs.is_some_and(|value| value <= 0) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory valid_until_unix_secs must be positive".into(),
+                ));
+            }
+        }
+        SecretaryAction::DeleteMemoryFact { reason, .. } => {
+            bounded_text("memory delete reason", reason, 1, 1_000)?;
+        }
+        SecretaryAction::SetMemoryFactTtl {
+            valid_until_unix_secs,
+            ..
+        } => {
+            if valid_until_unix_secs.is_some_and(|value| value <= 0) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory valid_until_unix_secs must be positive".into(),
+                ));
+            }
+        }
+        SecretaryAction::SetConversationMemoryMode { conversation, .. } => {
+            bounded_text("conversation.id", &conversation.id, 1, 191)?;
+        }
     }
     Ok(())
 }

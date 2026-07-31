@@ -73,6 +73,7 @@ pub struct PlannerUseCase {
     retriever: Option<Arc<crate::RetrieverUseCase>>,
     notification_policy: Option<Arc<crate::NotificationPolicyUseCase>>,
     agenda: Option<Arc<crate::AgendaUseCase>>,
+    memory: Option<Arc<crate::MemoryUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -94,6 +95,7 @@ impl PlannerUseCase {
             retriever: None,
             notification_policy: None,
             agenda: None,
+            memory: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -127,6 +129,11 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_memory(mut self, memory: Arc<crate::MemoryUseCase>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -140,6 +147,7 @@ impl PlannerUseCase {
             retriever: None,
             notification_policy: None,
             agenda: None,
+            memory: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -231,6 +239,10 @@ impl PlannerUseCase {
         if let Some(agenda) = &self.agenda {
             effect_executor = effect_executor
                 .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());
+        }
+        if let Some(memory) = &self.memory {
+            effect_executor = effect_executor
+                .with_memory(Arc::clone(memory), claimed.command_source_event_id.clone());
         }
         let effect_executor = Arc::new(effect_executor);
 
@@ -392,6 +404,10 @@ impl PlannerUseCase {
         if let Some(agenda) = &self.agenda {
             effect_executor = effect_executor
                 .with_agenda(Arc::clone(agenda), claimed.command_source_event_id.clone());
+        }
+        if let Some(memory) = &self.memory {
+            effect_executor = effect_executor
+                .with_memory(Arc::clone(memory), claimed.command_source_event_id.clone());
         }
         let effect_executor = Arc::new(effect_executor);
         let context = Arc::new(ActionRunContext {

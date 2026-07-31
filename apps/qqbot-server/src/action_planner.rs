@@ -15,7 +15,8 @@ use serde::Deserialize;
 use tracing::debug;
 
 use personal_secretary::{
-    ActionPlannerT, Clock, PlannerError, PlannerInput, PlannerOutput, SecretaryAction,
+    ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, MemoryFactId,
+    MemoryPayload, PlannerError, PlannerInput, PlannerOutput, SecretaryAction,
     SecretaryActionProposal, SourceEventId, SystemClock, validate_planner_output,
 };
 
@@ -31,7 +32,9 @@ const ACTION_PLANNER_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的动
   {"kind":"proposal","tool":"search_recent_events","query":"...","limit":20,"rationale":"...","evidence":["event-id-1"]}
 允许的 tool：search_recent_events, read_source_event, search_event_threads, resolve_reference,
 list_upcoming_items, draft_reminder, ask_owner_clarification, create_schedule, create_task,
-create_reminder, reschedule_item, cancel_item, complete_item, snooze_item。写操作必须提供 IANA timezone、
+create_reminder, reschedule_item, cancel_item, complete_item, snooze_item, list_memory_facts,
+read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fact_ttl,
+set_conversation_memory_mode。记忆修改和会话记忆模式属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
@@ -85,6 +88,14 @@ impl LlmActionPlanner {
                     item_id,
                     expected_version,
                     timezone,
+                    memory_fact_id,
+                    memory_payload,
+                    confidence_bps,
+                    memory_source_event_ids,
+                    valid_until_unix_secs,
+                    conversation_kind,
+                    conversation_id,
+                    memory_mode,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -99,6 +110,14 @@ impl LlmActionPlanner {
                     item_id,
                     expected_version,
                     timezone,
+                    memory_fact_id,
+                    memory_payload,
+                    confidence_bps,
+                    memory_source_event_ids,
+                    valid_until_unix_secs,
+                    conversation_kind,
+                    conversation_id,
+                    memory_mode,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -192,6 +211,14 @@ struct RawProposalFields<'a> {
     item_id: Option<String>,
     expected_version: Option<u64>,
     timezone: Option<String>,
+    memory_fact_id: Option<String>,
+    memory_payload: Option<MemoryPayload>,
+    confidence_bps: Option<u16>,
+    memory_source_event_ids: Vec<String>,
+    valid_until_unix_secs: Option<i64>,
+    conversation_kind: Option<ConversationKind>,
+    conversation_id: Option<String>,
+    memory_mode: Option<ContentTrustLevel>,
 }
 
 fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerError> {
@@ -331,10 +358,70 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
                 .clone()
                 .ok_or_else(|| PlannerError::InvalidOutput("missing question".into()))?,
         }),
+        "list_memory_facts" => Ok(SecretaryAction::ListMemoryFacts {
+            limit: raw.limit.unwrap_or(10),
+        }),
+        "read_memory_fact_sources" => Ok(SecretaryAction::ReadMemoryFactSources {
+            fact_id: parse_memory_fact_id(raw.memory_fact_id.clone())?,
+            max_excerpt_chars: raw.limit.unwrap_or(300),
+        }),
+        "correct_memory_fact" => Ok(SecretaryAction::CorrectMemoryFact {
+            fact_id: parse_memory_fact_id(raw.memory_fact_id.clone())?,
+            replacement: raw
+                .memory_payload
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing memory_payload".into()))?,
+            confidence_bps: raw.confidence_bps.unwrap_or(10_000),
+            source_event_ids: parse_source_event_ids(&raw.memory_source_event_ids)?,
+            valid_until_unix_secs: raw.valid_until_unix_secs,
+        }),
+        "delete_memory_fact" => Ok(SecretaryAction::DeleteMemoryFact {
+            fact_id: parse_memory_fact_id(raw.memory_fact_id.clone())?,
+            reason: raw
+                .text
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing deletion reason".into()))?,
+        }),
+        "set_memory_fact_ttl" => Ok(SecretaryAction::SetMemoryFactTtl {
+            fact_id: parse_memory_fact_id(raw.memory_fact_id.clone())?,
+            valid_until_unix_secs: raw.valid_until_unix_secs,
+        }),
+        "set_conversation_memory_mode" => Ok(SecretaryAction::SetConversationMemoryMode {
+            conversation: ConversationRef::new(
+                raw.conversation_kind.ok_or_else(|| {
+                    PlannerError::InvalidOutput("missing conversation_kind".into())
+                })?,
+                raw.conversation_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing conversation_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+            mode: raw
+                .memory_mode
+                .ok_or_else(|| PlannerError::InvalidOutput("missing memory_mode".into()))?,
+        }),
         other => Err(PlannerError::DisallowedAction(format!(
             "unknown tool: {other}"
         ))),
     }
+}
+
+fn parse_memory_fact_id(value: Option<String>) -> Result<MemoryFactId, PlannerError> {
+    MemoryFactId::new(
+        value.ok_or_else(|| PlannerError::InvalidOutput("missing memory_fact_id".into()))?,
+    )
+    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))
+}
+
+fn parse_source_event_ids(values: &[String]) -> Result<Vec<SourceEventId>, PlannerError> {
+    values
+        .iter()
+        .cloned()
+        .map(|value| {
+            SourceEventId::new(value)
+                .map_err(|error| PlannerError::InvalidOutput(error.to_string()))
+        })
+        .collect()
 }
 
 /// LLM 输入 DTO（序列化给模型）。
@@ -393,6 +480,22 @@ struct RawProposalOutput {
     expected_version: Option<u64>,
     #[serde(default)]
     timezone: Option<String>,
+    #[serde(default)]
+    memory_fact_id: Option<String>,
+    #[serde(default)]
+    memory_payload: Option<MemoryPayload>,
+    #[serde(default)]
+    confidence_bps: Option<u16>,
+    #[serde(default)]
+    memory_source_event_ids: Vec<String>,
+    #[serde(default)]
+    valid_until_unix_secs: Option<i64>,
+    #[serde(default)]
+    conversation_kind: Option<ConversationKind>,
+    #[serde(default)]
+    conversation_id: Option<String>,
+    #[serde(default)]
+    memory_mode: Option<ContentTrustLevel>,
 }
 
 #[cfg(test)]

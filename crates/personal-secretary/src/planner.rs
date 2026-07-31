@@ -63,6 +63,12 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | CreateSimilarNotificationRule { .. }
             | DisableNotificationPolicy { .. }
             | SetAutomaticReplyDeniedForContact { .. }
+            | ListMemoryFacts { .. }
+            | ReadMemoryFactSources { .. }
+            | CorrectMemoryFact { .. }
+            | DeleteMemoryFact { .. }
+            | SetMemoryFactTtl { .. }
+            | SetConversationMemoryMode { .. }
     )
 }
 

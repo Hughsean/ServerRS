@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    NotificationCandidateRef, NotificationMatchKeyV1, NotificationOutcome, PolicyFamilyId,
-    QuietHoursRule, SourceEventId,
+    ContentTrustLevel, ConversationRef, MemoryFactId, MemoryPayload, NotificationCandidateRef,
+    NotificationMatchKeyV1, NotificationOutcome, PolicyFamilyId, QuietHoursRule, SourceEventId,
 };
 
 use super::state::SecretaryAgentUpdate;
@@ -50,6 +50,12 @@ pub enum SecretaryToolKind {
     CreateSimilarNotificationRule,
     DisableNotificationPolicy,
     SetAutomaticReplyDeniedForContact,
+    ListMemoryFacts,
+    ReadMemoryFactSources,
+    CorrectMemoryFact,
+    DeleteMemoryFact,
+    SetMemoryFactTtl,
+    SetConversationMemoryMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +77,9 @@ impl SecretaryToolKind {
             | Self::ResolveReference
             | Self::ListUpcomingItems
             | Self::ListNotificationPolicies
-            | Self::ExplainNotificationDecision => SecretaryToolPolicy {
+            | Self::ExplainNotificationDecision
+            | Self::ListMemoryFacts
+            | Self::ReadMemoryFactSources => SecretaryToolPolicy {
                 risk: L0ReadOnly,
                 requires_confirmation: false,
                 reversible: true,
@@ -100,6 +108,16 @@ impl SecretaryToolKind {
             | Self::CreateSimilarNotificationRule
             | Self::DisableNotificationPolicy
             | Self::SetAutomaticReplyDeniedForContact => SecretaryToolPolicy {
+                risk: L2Impactful,
+                requires_confirmation: true,
+                reversible: true,
+                timeout_ms: 15_000,
+                max_retries: 1,
+            },
+            Self::CorrectMemoryFact
+            | Self::DeleteMemoryFact
+            | Self::SetMemoryFactTtl
+            | Self::SetConversationMemoryMode => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -248,6 +266,32 @@ pub enum SecretaryAction {
         canonical_scope_key: String,
         match_key: NotificationMatchKeyV1,
     },
+    ListMemoryFacts {
+        limit: u16,
+    },
+    ReadMemoryFactSources {
+        fact_id: MemoryFactId,
+        max_excerpt_chars: u16,
+    },
+    CorrectMemoryFact {
+        fact_id: MemoryFactId,
+        replacement: MemoryPayload,
+        confidence_bps: u16,
+        source_event_ids: Vec<SourceEventId>,
+        valid_until_unix_secs: Option<i64>,
+    },
+    DeleteMemoryFact {
+        fact_id: MemoryFactId,
+        reason: String,
+    },
+    SetMemoryFactTtl {
+        fact_id: MemoryFactId,
+        valid_until_unix_secs: Option<i64>,
+    },
+    SetConversationMemoryMode {
+        conversation: ConversationRef,
+        mode: ContentTrustLevel,
+    },
 }
 
 impl SecretaryAction {
@@ -293,6 +337,12 @@ impl SecretaryAction {
             Self::SetAutomaticReplyDeniedForContact { .. } => {
                 SecretaryToolKind::SetAutomaticReplyDeniedForContact
             }
+            Self::ListMemoryFacts { .. } => SecretaryToolKind::ListMemoryFacts,
+            Self::ReadMemoryFactSources { .. } => SecretaryToolKind::ReadMemoryFactSources,
+            Self::CorrectMemoryFact { .. } => SecretaryToolKind::CorrectMemoryFact,
+            Self::DeleteMemoryFact { .. } => SecretaryToolKind::DeleteMemoryFact,
+            Self::SetMemoryFactTtl { .. } => SecretaryToolKind::SetMemoryFactTtl,
+            Self::SetConversationMemoryMode { .. } => SecretaryToolKind::SetConversationMemoryMode,
         }
     }
 }

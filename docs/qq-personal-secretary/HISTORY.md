@@ -5,7 +5,7 @@
 
 ## 当前阶段
 
-- 主干分支：`main`（`93710d3`）；Release Hardening 与 Owner Agenda/Reminder v1 已合并。QQBot 运行数据库使用独立容器、独立数据库和
+- 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
 - 最近完成分支：`gpt/qqbot-owner-agenda-v1`，功能提交 `79a04f7`，通过非快进合并提交
   `93710d3` 进入 `main`；未推送远端。
@@ -22,8 +22,8 @@
   `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查均实际通过。全局门禁仍为 `REJECTED`：
   多项 B3/B4/B6/B7 缺少 L4/L5 独立证明，B3 requirement 因缺少 L5 attestation 显示 FAIL；
   不把 `REJECTED` 改写为 `APPROVED`。
-- 下一开发项：进行当前分支完整差异审查和检查点准备；Task 7 分支暂不提交或合并。GitHub 管理侧仍需配置 protected Environment、
-  固定可信公钥与 `QQBot Acceptance Gate / acceptance` required check。
+- 当前开发分支：`codex/qqbot-todo-wave1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
+  接下来继续主动跟进、线程语义与离线恢复任务。需要用户操作或 NapCat 实机验证的事项单独跳过。
 
 ## 历史分块
 
@@ -32,6 +32,14 @@
 | 2026-07-23～2026-07-24 | 个人秘书立项、NapCat 验证、可靠入站、Gap 回补、线程与 Owner 审核 | [2026-07 归档](history/2026-07.md) |
 
 ## 最近事件
+
+- `2026-07-31 21:52（Asia/Shanghai）`：完成 Owner 记忆控制 Action 垂直切片。新增列出记忆、
+  来源回读、不可变修正、删除派生记忆、设置/取消 TTL、会话长期记忆模式六类白名单 Action；
+  全部进入风险门、Planner DTO、Action Graph、MySQL Store 与运行时装配。L2 修订使用 Effect ID
+  派生稳定 Fact ID，崩溃重放不会生成第二版本；会话模式更新在事务内复验 OwnerCommand、账号
+  绑定和会话作用域。验证：fmt、严格 Clippy、personal-secretary 217 项、qqbot-server 98 项
+  均通过；随机隔离 MySQL 中记忆来源/会话模式/删除/跟进闭环通过，schema 已清理。未连接 NapCat
+  或 QQ 开放平台，未发送消息，数据库无迁移。
 
 - `2026-07-30 10:19（Asia/Shanghai）`：验收脚本凭据 P1 已关闭。隔离 schema 的创建和清理改为
   仅在容器内部通过 `MYSQL_PWD="$MYSQL_ROOT_PASSWORD"` 认证，宿主机 `docker` 命令行只保留

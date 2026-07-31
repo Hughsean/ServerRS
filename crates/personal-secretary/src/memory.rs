@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{SourceAccountRef, SourceEventId, ThreadActorRef, ThreadDecisionId};
+use crate::{
+    ContentTrustLevel, ConversationRef, SourceAccountRef, SourceEventId, ThreadActorRef,
+    ThreadDecisionId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -155,6 +158,21 @@ pub struct MemoryDeleteInput {
 pub struct MemoryDeleteReceipt {
     pub fact_id: MemoryFactId,
     pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationMemoryModeInput {
+    pub account: SourceAccountRef,
+    pub conversation: ConversationRef,
+    pub command_source_event_id: SourceEventId,
+    pub mode: ContentTrustLevel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationMemoryModeReceipt {
+    pub changed: bool,
+    pub previous_mode: ContentTrustLevel,
+    pub current_mode: ContentTrustLevel,
 }
 
 pub fn validate_memory_delete(input: &MemoryDeleteInput) -> Result<(), MemoryFactError> {

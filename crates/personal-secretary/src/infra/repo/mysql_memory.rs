@@ -7,6 +7,7 @@ use sea_orm::{
 use tracing::{debug, info};
 
 use crate::{
+    ContentTrustLevel, ConversationMemoryModeInput, ConversationMemoryModeReceipt,
     InboundEventStoreError, MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactId,
     MemoryFactStatus, MemoryFactView, MemorySourceExcerpt, MemoryStoreT, MemoryWriteReceipt,
     SourceAccountRef, SourceEventId, validate_memory_fact,
@@ -425,6 +426,85 @@ impl MemoryStoreT for MySqlMemoryStore {
             changed: true,
         })
     }
+
+    async fn set_conversation_mode(
+        &self,
+        input: &ConversationMemoryModeInput,
+    ) -> Result<ConversationMemoryModeReceipt, InboundEventStoreError> {
+        let transaction = self.db.begin().await.map_err(store_error)?;
+        let context =
+            ConversationModeContextRow::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"SELECT conversation.id AS conversation_row_id,
+                          conversation.memory_mode, command.message_role
+                   FROM secretary_accounts managed
+                   JOIN secretary_conversations conversation
+                     ON conversation.account_id = managed.id
+                    AND conversation.conversation_kind = ?
+                    AND conversation.platform_conversation_id = ?
+                   JOIN secretary_source_events command
+                     ON command.source_event_id = ?
+                   JOIN secretary_owner_bindings binding
+                     ON binding.managed_account_id = managed.id
+                    AND binding.command_account_id = command.account_id
+                    AND binding.owner_actor_id = command.actor_platform_id
+                    AND binding.status = 'active'
+                   WHERE managed.source_channel = ?
+                     AND managed.platform_account_id = ?
+                   FOR UPDATE"#,
+                [
+                    input.conversation.kind.as_str().into(),
+                    input.conversation.id.clone().into(),
+                    input.command_source_event_id.as_str().into(),
+                    input.account.channel.as_str().into(),
+                    input.account.account_id.clone().into(),
+                ],
+            ))
+            .one(&transaction)
+            .await
+            .map_err(store_error)?
+            .ok_or_else(|| {
+                InboundEventStoreError::InvalidData(
+                    "conversation or authorized Owner command was not found".into(),
+                )
+            })?;
+        if context.message_role != "owner_command" {
+            return Err(InboundEventStoreError::InvalidData(
+                "conversation memory mode requires an OwnerCommand event".into(),
+            ));
+        }
+        let previous_mode = parse_content_trust_level(&context.memory_mode)?;
+        if previous_mode == input.mode {
+            transaction.commit().await.map_err(store_error)?;
+            return Ok(ConversationMemoryModeReceipt {
+                changed: false,
+                previous_mode,
+                current_mode: input.mode,
+            });
+        }
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "UPDATE secretary_conversations SET memory_mode = ? WHERE id = ?",
+                [
+                    input.mode.as_str().into(),
+                    context.conversation_row_id.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        transaction.commit().await.map_err(store_error)?;
+        info!(
+            conversation_kind = input.conversation.kind.as_str(),
+            memory_mode = input.mode.as_str(),
+            "conversation memory mode updated by authorized owner command"
+        );
+        Ok(ConversationMemoryModeReceipt {
+            changed: true,
+            previous_mode,
+            current_mode: input.mode,
+        })
+    }
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -485,6 +565,25 @@ struct MemoryDeleteContextRow {
 struct MemoryDeletionRow {
     command_source_event_id: String,
     reason: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ConversationModeContextRow {
+    conversation_row_id: u64,
+    memory_mode: String,
+    message_role: String,
+}
+
+fn parse_content_trust_level(value: &str) -> Result<ContentTrustLevel, InboundEventStoreError> {
+    match value {
+        "normal" => Ok(ContentTrustLevel::Normal),
+        "local_only" => Ok(ContentTrustLevel::LocalOnly),
+        "envelope_only" => Ok(ContentTrustLevel::EnvelopeOnly),
+        "never_long_term" => Ok(ContentTrustLevel::NeverLongTerm),
+        _ => Err(InboundEventStoreError::InvalidData(format!(
+            "stored conversation memory mode is invalid: {value}"
+        ))),
+    }
 }
 
 fn parse_fact_status(value: &str) -> Result<MemoryFactStatus, InboundEventStoreError> {

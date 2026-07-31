@@ -7,8 +7,9 @@ use personal_secretary::{
     AgendaApplyRequest, AgendaItemKind, AgendaMutation, AgendaUseCase, BackfillAnchor,
     BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase, BackfillLease,
     BackfillOutcome, BackfillScopeStatus, Clock, CommitmentMemory, CommitmentStatus,
-    ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ConversationKind,
-    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
+    ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ContentTrustLevel,
+    ConversationKind, ConversationMemoryModeInput, ConversationRef, DeterministicThreadPlanner,
+    DeterministicThreadPolicy, DirectoryEvidence,
     DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus, EventThreadId,
     HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
     IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
@@ -1162,6 +1163,31 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     ))
     .await
     .unwrap();
+    let mode_receipt = memory
+        .set_conversation_mode(&ConversationMemoryModeInput {
+            account: fact.account.clone(),
+            conversation: ConversationRef::new(ConversationKind::Group, "delivery-group").unwrap(),
+            command_source_event_id: command_id.clone(),
+            mode: ContentTrustLevel::NeverLongTerm,
+        })
+        .await
+        .unwrap();
+    assert!(mode_receipt.changed);
+    assert_eq!(mode_receipt.previous_mode, ContentTrustLevel::Normal);
+    assert_eq!(mode_receipt.current_mode, ContentTrustLevel::NeverLongTerm);
+    assert!(
+        !memory
+            .set_conversation_mode(&ConversationMemoryModeInput {
+                account: fact.account.clone(),
+                conversation: ConversationRef::new(ConversationKind::Group, "delivery-group")
+                    .unwrap(),
+                command_source_event_id: command_id.clone(),
+                mode: ContentTrustLevel::NeverLongTerm,
+            })
+            .await
+            .unwrap()
+            .changed
+    );
     let deletion = MemoryDeleteInput {
         fact_id: fact.fact_id.clone(),
         command_source_event_id: command_id,

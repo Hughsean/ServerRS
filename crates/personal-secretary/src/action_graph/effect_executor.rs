@@ -10,7 +10,8 @@ use agent_core::graph::{EffectEnvelope, EffectError, EffectErrorKind, EffectExec
 use async_trait::async_trait;
 
 use crate::{
-    AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, EventQuery,
+    AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, ConversationMemoryModeInput,
+    EventQuery, MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
     NotificationPolicyEffectRequest, NotificationPolicyUseCase, ReferenceContext, RetrieverUseCase,
     SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
     SourceEventId,
@@ -29,6 +30,7 @@ pub struct SecretaryActionEffectExecutor {
     retriever: Option<Arc<RetrieverUseCase>>,
     notification_policy: Option<Arc<NotificationPolicyUseCase>>,
     agenda: Option<Arc<AgendaUseCase>>,
+    memory: Option<Arc<MemoryUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
     now_unix_secs: i64,
@@ -50,6 +52,7 @@ impl SecretaryActionEffectExecutor {
             retriever,
             notification_policy: None,
             agenda: None,
+            memory: None,
             command_source_event_id: None,
             account,
             now_unix_secs,
@@ -74,6 +77,180 @@ impl SecretaryActionEffectExecutor {
         self.agenda = Some(agenda);
         self.command_source_event_id = Some(command_source_event_id);
         self
+    }
+
+    pub fn with_memory(
+        mut self,
+        memory: Arc<MemoryUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.memory = Some(memory);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    async fn execute_memory(
+        &self,
+        action: &SecretaryAction,
+        effect_id: &str,
+    ) -> Result<Option<String>, EffectError> {
+        let is_memory_action = matches!(
+            action,
+            SecretaryAction::ListMemoryFacts { .. }
+                | SecretaryAction::ReadMemoryFactSources { .. }
+                | SecretaryAction::CorrectMemoryFact { .. }
+                | SecretaryAction::DeleteMemoryFact { .. }
+                | SecretaryAction::SetMemoryFactTtl { .. }
+                | SecretaryAction::SetConversationMemoryMode { .. }
+        );
+        if !is_memory_action {
+            return Ok(None);
+        }
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| EffectError::new(EffectErrorKind::Permanent, "MemoryUseCase 未注入"))?;
+        let result = match action {
+            SecretaryAction::ListMemoryFacts { limit } => {
+                let facts = memory
+                    .active(&self.account, u32::from(*limit))
+                    .await
+                    .map_err(memory_effect_error)?;
+                format_memory_facts(&facts)
+            }
+            SecretaryAction::ReadMemoryFactSources {
+                fact_id,
+                max_excerpt_chars,
+            } => {
+                let view = memory
+                    .evidence(fact_id, u32::from(*max_excerpt_chars))
+                    .await
+                    .map_err(memory_effect_error)?;
+                match view {
+                    Some(view) if view.fact.account == self.account => {
+                        format_memory_evidence(&view)
+                    }
+                    _ => "未找到该账号下的记忆或来源已不可见".into(),
+                }
+            }
+            SecretaryAction::CorrectMemoryFact {
+                fact_id,
+                replacement,
+                confidence_bps,
+                source_event_ids,
+                valid_until_unix_secs,
+            } => {
+                if valid_until_unix_secs.is_some_and(|value| value <= self.now_unix_secs) {
+                    return Err(EffectError::new(
+                        EffectErrorKind::Permanent,
+                        "记忆有效期必须晚于当前时间",
+                    ));
+                }
+                let previous = memory
+                    .evidence(fact_id, 1)
+                    .await
+                    .map_err(memory_effect_error)?
+                    .ok_or_else(|| {
+                        EffectError::new(EffectErrorKind::Permanent, "待修正记忆不存在")
+                    })?;
+                ensure_active_memory_for_account(&previous.fact, &self.account)?;
+                let new_id = deterministic_memory_fact_id(effect_id)?;
+                memory
+                    .remember(&MemoryFact {
+                        fact_id: new_id.clone(),
+                        account: self.account.clone(),
+                        subject_key: previous.fact.subject_key,
+                        payload: replacement.clone(),
+                        status: MemoryFactStatus::Confirmed,
+                        confidence_bps: *confidence_bps,
+                        source_event_ids: source_event_ids.clone(),
+                        valid_until_unix_secs: *valid_until_unix_secs,
+                        supersedes_fact_id: Some(fact_id.clone()),
+                    })
+                    .await
+                    .map_err(memory_effect_error)?;
+                format!("记忆已修正，新版本 {}", new_id.as_str())
+            }
+            SecretaryAction::DeleteMemoryFact { fact_id, reason } => {
+                let command_source_event_id =
+                    self.command_source_event_id.clone().ok_or_else(|| {
+                        EffectError::new(
+                            EffectErrorKind::Permanent,
+                            "删除记忆需要原始 OwnerCommand 身份",
+                        )
+                    })?;
+                memory
+                    .delete_derived(&MemoryDeleteInput {
+                        fact_id: fact_id.clone(),
+                        command_source_event_id,
+                        reason: reason.clone(),
+                    })
+                    .await
+                    .map_err(memory_effect_error)?;
+                format!("记忆 {} 已删除；原始聊天记录未删除", fact_id.as_str())
+            }
+            SecretaryAction::SetMemoryFactTtl {
+                fact_id,
+                valid_until_unix_secs,
+            } => {
+                if valid_until_unix_secs.is_some_and(|value| value <= self.now_unix_secs) {
+                    return Err(EffectError::new(
+                        EffectErrorKind::Permanent,
+                        "记忆有效期必须晚于当前时间",
+                    ));
+                }
+                let previous = memory
+                    .evidence(fact_id, 1)
+                    .await
+                    .map_err(memory_effect_error)?
+                    .ok_or_else(|| {
+                        EffectError::new(EffectErrorKind::Permanent, "待设置有效期的记忆不存在")
+                    })?;
+                ensure_active_memory_for_account(&previous.fact, &self.account)?;
+                let new_id = deterministic_memory_fact_id(effect_id)?;
+                memory
+                    .remember(&MemoryFact {
+                        fact_id: new_id.clone(),
+                        account: previous.fact.account,
+                        subject_key: previous.fact.subject_key,
+                        payload: previous.fact.payload,
+                        status: MemoryFactStatus::Confirmed,
+                        confidence_bps: previous.fact.confidence_bps,
+                        source_event_ids: previous.fact.source_event_ids,
+                        valid_until_unix_secs: *valid_until_unix_secs,
+                        supersedes_fact_id: Some(fact_id.clone()),
+                    })
+                    .await
+                    .map_err(memory_effect_error)?;
+                match valid_until_unix_secs {
+                    Some(value) => {
+                        format!("记忆有效期已设置为 {value}，新版本 {}", new_id.as_str())
+                    }
+                    None => format!("记忆有效期已取消，新版本 {}", new_id.as_str()),
+                }
+            }
+            SecretaryAction::SetConversationMemoryMode { conversation, mode } => {
+                let command_source_event_id =
+                    self.command_source_event_id.clone().ok_or_else(|| {
+                        EffectError::new(
+                            EffectErrorKind::Permanent,
+                            "设置会话记忆模式需要原始 OwnerCommand 身份",
+                        )
+                    })?;
+                memory
+                    .set_conversation_mode(&ConversationMemoryModeInput {
+                        account: self.account.clone(),
+                        conversation: conversation.clone(),
+                        command_source_event_id,
+                        mode: *mode,
+                    })
+                    .await
+                    .map_err(memory_effect_error)?;
+                format!("会话长期记忆模式已设置为 {}", mode.as_str())
+            }
+            _ => unreachable!("memory action guard and match must stay exhaustive"),
+        };
+        Ok(Some(result))
     }
 
     async fn execute_agenda(
@@ -425,6 +602,24 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
             receipt.tool_kind = Some(tool_kind);
             return Ok(receipt);
         }
+        if let Some(result_ref) = self
+            .execute_memory(&envelope.effect.proposal.action, &envelope.id.to_string())
+            .await?
+        {
+            let mut receipt = self
+                .store
+                .apply_effect(
+                    &self.run_id,
+                    &envelope.effect,
+                    &envelope.id.to_string(),
+                    &result_ref,
+                    &self.lease_token,
+                )
+                .await
+                .map_err(ActionStoreError::to_effect_error)?;
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
+        }
         // 未命中既有 Receipt 才执行真实只读 Action；Store 提交时再次处理并发竞争。
         let result_ref = self
             .execute_action(&envelope.effect.proposal.action)
@@ -454,6 +649,94 @@ fn policy_effect_error(error: crate::NotificationPolicyUseCaseError) -> EffectEr
         _ => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
+}
+
+fn memory_effect_error(error: crate::MemoryUseCaseError) -> EffectError {
+    let kind = match error {
+        crate::MemoryUseCaseError::Store(crate::InboundEventStoreError::Database(_)) => {
+            EffectErrorKind::Transient
+        }
+        _ => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn deterministic_memory_fact_id(effect_id: &str) -> Result<MemoryFactId, EffectError> {
+    MemoryFactId::new(
+        uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_OID,
+            format!("memory-effect:{effect_id}").as_bytes(),
+        )
+        .to_string(),
+    )
+    .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))
+}
+
+fn ensure_active_memory_for_account(
+    fact: &MemoryFact,
+    account: &SourceAccountRef,
+) -> Result<(), EffectError> {
+    if &fact.account != account {
+        return Err(EffectError::new(
+            EffectErrorKind::Permanent,
+            "不能跨账号修改记忆",
+        ));
+    }
+    if !matches!(
+        fact.status,
+        MemoryFactStatus::Proposed | MemoryFactStatus::Confirmed
+    ) {
+        return Err(EffectError::new(
+            EffectErrorKind::Permanent,
+            "只能修改当前有效的记忆版本",
+        ));
+    }
+    Ok(())
+}
+
+fn format_memory_facts(facts: &[MemoryFact]) -> String {
+    if facts.is_empty() {
+        return "当前没有有效的长期记忆".into();
+    }
+    let mut output = format!("当前有 {} 条有效记忆：", facts.len());
+    for fact in facts.iter().take(10) {
+        let item = format!(
+            "\n{} | {} | {}",
+            fact.fact_id.as_str(),
+            fact.payload.kind(),
+            fact.subject_key
+        );
+        if output.chars().count() + item.chars().count() > 900 {
+            output.push_str("\n其余记忆已省略");
+            break;
+        }
+        output.push_str(&item);
+    }
+    output
+}
+
+fn format_memory_evidence(view: &crate::MemoryFactView) -> String {
+    let mut output = format!(
+        "记忆 {}（{} / {}）来源：",
+        view.fact.fact_id.as_str(),
+        view.fact.payload.kind(),
+        view.fact.subject_key
+    );
+    for source in view.sources.iter().take(5) {
+        let excerpt = source.excerpt.chars().take(100).collect::<String>();
+        let item = format!(
+            "\n{} | {} | {}",
+            source.source_event_id.as_str(),
+            source.actor_id,
+            excerpt
+        );
+        if output.chars().count() + item.chars().count() > 900 {
+            output.push_str("\n其余来源已省略");
+            break;
+        }
+        output.push_str(&item);
+    }
+    output
 }
 
 enum NotificationPolicyExecution {

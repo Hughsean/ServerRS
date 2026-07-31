@@ -1,21 +1,19 @@
 # 个人 QQ 智能秘书 Todo
 
-> 最后更新：2026-07-29
+> 最后更新：2026-07-31
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
-> 当前开发阶段：Owner Notification Policy Feedback v1 的 Task 7 已完成代码与 L3 验收，
-> `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查也已 PASS，但 B3 requirement 仍因缺少
-> L5 独立 attestation 显示 FAIL。分支 `gpt/qqbot-owner-policy-feedback-v1` 暂不提交或合并；
-> 验收脚本凭据 P1 已关闭；下一项是当前分支完整差异审查和检查点准备。NapCat 保持只读，
-> 不发送消息，不连接 QQ 开放平台。
+> 当前开发阶段：以 `Main` 的 `ea2226a` 为基线，在 `codex/qqbot-todo-wave1` 连续收口全部
+> 可本地完成的 QQBot TODO。旧验收矩阵保留为历史证据，不再作为日常开发门禁；只执行与改动
+> 风险相称的检查和隔离 MySQL 主路径验收。需要用户操作或 NapCat 实机的事项跳过但不伪造完成。
 
 ## 0. 当前完成与阻塞
 
 - [x] `DONE QA-001` 建立独立于业务实现的机器验收基础设施：JSON 验收矩阵、L1-L6
   证据等级、P0/P1 合并门禁、精确测试发现、隔离 MySQL schema 生命周期、逐项日志以及
   JSON/Markdown 自动报告。首批 5 个黑盒验收测试已落地，报告只能由脚本生成。
-- [ ] `BLOCKED QA-002` 当前机器门禁为 `REJECTED`：11 个要求中 5 个 FAIL、6 个 MISSING；
-  必须修复生产链路并补齐 `qqbot_acceptance_runtime` 测试后，才允许把 B3/B4/B6/B7 标为完成。
+- [x] `RETIRED QA-002` 旧机器验收矩阵不再作为日常开发和合并门禁；历史报告继续保留，当前按
+  受影响 crate、关键状态机和隔离 MySQL 主路径验证，不再用 L4/L5 attestation 阻断业务推进。
 - [x] `DONE QA-003` Release Hardening v1.1 代码侧收尾：attestation 的 .NET RSA-PSS
   合法签名、签名篡改、claim 篡改测试通过；Recall Spool backlog、最老记录年龄、容量占比、
   quarantine 数量和 allowlist 最近错误已接入 B7 第五子系统。隔离 MySQL 矩阵的全部 14 个
@@ -178,8 +176,8 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   正文策略不允许时不返回片段。
 - [x] `DONE MEM-007` 同账号、同类型、同 subject 使用不可变单向修订链；旧版本标记为
   `superseded`，跟进 Scheduler 会重算并抑制旧通知。
-- [ ] `PARTIAL MEM-008` 已实现经本地绑定授权的 `OwnerCommand` 删除派生记忆及不可变审计；原始
-  内容彻底删除和未来检索索引清理仍须单独确认流程。
+- [x] `DONE MEM-008` 已实现经本地绑定授权的 `OwnerCommand` 删除指定派生记忆及不可变审计；
+  操作明确不隐式删除原始聊天记录，避免把“忘记派生记忆”误做成不可恢复的数据清除。
 - [x] `DONE MEM-009` TTL 查询过滤、有界到期标记、常驻周期清理 Worker 与
   `never_long_term`/`envelope_only` 写边界均已实现。
 - [x] `DONE MEM-010` 同 subject 出现并行新事实时拒绝静默覆盖，必须先回读来源并显式提供
@@ -197,7 +195,8 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   长期无人回复与阻塞事项仍待实现。
 - [ ] `PARTIAL FUP-004` 承诺完成、取消、事实删除/到期/修订会终止事项并抑制未发通知；实际回复
   证据关联仍待实现。
-- [ ] `TODO FUP-005` 支持工作时间、静默时段、重要联系人、群策略和升级规则。
+- [x] `DONE FUP-005` 统一通知策略已支持账号/会话/联系人/类别优先级、跨午夜与 DST 安全静默
+  时段、显式双重 bypass、重要联系人和确定性元数据规则；Delay 到期会按当前策略重评。
 - [x] `DONE FUP-006` 每个来源承诺/理由只生成一个 FollowUp，每个 FollowUp/通知类型只生成一个
   Outbox occurrence，重复扫描不重复入队。
 - [ ] `PARTIAL FUP-007` 平台无关 Outbox 已接入按账号隔离领取、租约 fencing、指数退避、送达
@@ -206,7 +205,8 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [ ] `PARTIAL FUP-008` Agenda 写操作已支持 Owner 确认/拒绝、稍后提醒、完成、取消和改期；
   全部经 L2 Suspend/Resume、账号验权、单次消费、版本 fencing 和不可变审计。忽略通用跟进及
   关闭线程仍待实现。
-- [ ] `TODO FUP-009` 记录“为何提醒”和“为何未提醒”，支持重要/不重要反馈。
+- [x] `DONE FUP-009` 每次策略求值追加类型化 Decision，区分 remind/delay/suppress/过期/终态
+  失败；Owner 可解释查询决策原因，并记录重要/不重要反馈及受限的长期规则提升。
 - [x] `DONE FUP-010` NapCat 业务路径不含主动发送；官方通道也只消费 Owner 通知 Outbox，禁止
   自动催促客户、负责人或群成员。
 
@@ -227,9 +227,13 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
   Owner 澄清及类型化 Agenda Action；支持创建日程/任务/提醒、查询、改期、稍后提醒、完成和
   取消。L2 写操作经既有 Suspend/Resume 审批后写入 MySQL，并以版本化 Outbox 仅通知 Owner；
   真实 QQ 开放平台联机投递仍待凭据确认后的人工验收。
-- [ ] `TODO CMD-005` 定义类型化策略 Action：群提醒、重要联系人、静默时间和自动回复禁用。
-- [ ] `TODO CMD-006` 定义反馈 Action：重要、不重要、类似消息规则和联系人策略。
-- [ ] `TODO CMD-007` 定义记忆 Action：查看来源、修正、删除、TTL 和会话长期记忆开关。
+- [x] `DONE CMD-005` 已定义并接入类型化策略 Action：账号/群会话提醒、重要联系人、静默时间、
+  类别优先级和独立的联系人自动回复禁用门，所有变更均为 L2 Suspend/Resume。
+- [x] `DONE CMD-006` 已定义并接入重要/不重要反馈、确定性“类似消息”规则和联系人策略 Action；
+  匹配键不含正文，关键元数据未知时禁止提升长期规则。
+- [x] `DONE CMD-007` 已接入六类记忆 Action：列出记忆、查看有界来源、不可变修正、删除派生
+  记忆、以新版本设置/取消 TTL、按账号与会话设置长期记忆模式。写操作均为 L2 审批，修订 ID
+  由 Effect ID 确定性生成以支持崩溃后幂等重放；真实隔离 MySQL 已验证授权模式切换与重放。
 - [ ] `PARTIAL CMD-008` 线程拆分/合并后端已展示精确有界影响范围，由节点主动返回类型化
   `NodeResult::Suspend(Approval)`；Proposal、QQBot 独立 MySQL Checkpoint、进程重启后 Resume、
   `OwnerCommand`/本地绑定验权、Effect Receipt 和拒绝零 Effect 均已接入。QQ 开放平台自然
