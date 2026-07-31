@@ -59,6 +59,10 @@ pub enum SecretaryToolKind {
     DeleteMemoryFact,
     SetMemoryFactTtl,
     SetConversationMemoryMode,
+    ConfirmThreadDecision,
+    RevokeThreadDecision,
+    DismissThreadQuestion,
+    SetThreadLifecycle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +127,11 @@ impl SecretaryToolKind {
             Self::CorrectMemoryFact
             | Self::DeleteMemoryFact
             | Self::SetMemoryFactTtl
-            | Self::SetConversationMemoryMode => SecretaryToolPolicy {
+            | Self::SetConversationMemoryMode
+            | Self::ConfirmThreadDecision
+            | Self::RevokeThreadDecision
+            | Self::DismissThreadQuestion
+            | Self::SetThreadLifecycle => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -305,6 +313,23 @@ pub enum SecretaryAction {
         conversation: ConversationRef,
         mode: ContentTrustLevel,
     },
+    ConfirmThreadDecision {
+        decision_id: crate::ThreadDecisionId,
+    },
+    RevokeThreadDecision {
+        decision_id: crate::ThreadDecisionId,
+        reason: String,
+    },
+    DismissThreadQuestion {
+        question_id: crate::OpenQuestionId,
+        reason: String,
+    },
+    SetThreadLifecycle {
+        thread_id: crate::EventThreadId,
+        expected_status: crate::ThreadStatus,
+        target_status: crate::ThreadStatus,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -359,6 +384,10 @@ impl SecretaryAction {
             Self::DeleteMemoryFact { .. } => SecretaryToolKind::DeleteMemoryFact,
             Self::SetMemoryFactTtl { .. } => SecretaryToolKind::SetMemoryFactTtl,
             Self::SetConversationMemoryMode { .. } => SecretaryToolKind::SetConversationMemoryMode,
+            Self::ConfirmThreadDecision { .. } => SecretaryToolKind::ConfirmThreadDecision,
+            Self::RevokeThreadDecision { .. } => SecretaryToolKind::RevokeThreadDecision,
+            Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
+            Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
         }
     }
 }

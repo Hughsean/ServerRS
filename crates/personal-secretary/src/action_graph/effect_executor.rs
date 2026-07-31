@@ -14,7 +14,7 @@ use crate::{
     EventQuery, MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
     NotificationPolicyEffectRequest, NotificationPolicyUseCase, ReferenceContext, RetrieverUseCase,
     SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
-    SourceEventId,
+    SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -31,6 +31,7 @@ pub struct SecretaryActionEffectExecutor {
     notification_policy: Option<Arc<NotificationPolicyUseCase>>,
     agenda: Option<Arc<AgendaUseCase>>,
     memory: Option<Arc<MemoryUseCase>>,
+    thread_control: Option<Arc<ThreadControlUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
     now_unix_secs: i64,
@@ -53,6 +54,7 @@ impl SecretaryActionEffectExecutor {
             notification_policy: None,
             agenda: None,
             memory: None,
+            thread_control: None,
             command_source_event_id: None,
             account,
             now_unix_secs,
@@ -87,6 +89,51 @@ impl SecretaryActionEffectExecutor {
         self.memory = Some(memory);
         self.command_source_event_id = Some(command_source_event_id);
         self
+    }
+
+    pub fn with_thread_control(
+        mut self,
+        thread_control: Arc<ThreadControlUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.thread_control = Some(thread_control);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    async fn execute_thread_control(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<Option<SecretaryActionReceipt>, EffectError> {
+        if !is_thread_control_action(&proposal.action) {
+            return Ok(None);
+        }
+        let use_case = self.thread_control.as_ref().ok_or_else(|| {
+            EffectError::new(EffectErrorKind::Permanent, "ThreadControlUseCase 未注入")
+        })?;
+        let command_source_event_id = self.command_source_event_id.clone().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "线程控制需要原始 OwnerCommand 身份",
+            )
+        })?;
+        let proposal_json = serde_json::to_string(proposal)
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        let receipt = use_case
+            .apply_effect(&ThreadControlEffectRequest {
+                account: self.account.clone(),
+                command_source_event_id,
+                run_id: self.run_id.clone(),
+                lease_token: self.lease_token.clone(),
+                effect_id: effect_id.to_owned(),
+                proposal_id: proposal.proposal_id.clone(),
+                proposal_json,
+                action: proposal.action.clone(),
+            })
+            .await
+            .map_err(thread_control_effect_error)?;
+        Ok(Some(receipt))
     }
 
     async fn execute_memory(
@@ -584,7 +631,9 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         // 通用 store 仅按 (run_id, effect_id) 的快速读取绕过碰撞检查。
         let is_mutable_policy =
             is_mutable_notification_policy_action(&envelope.effect.proposal.action);
+        let is_thread_control = is_thread_control_action(&envelope.effect.proposal.action);
         if !is_mutable_policy
+            && !is_thread_control
             && let Some(mut receipt) = self
                 .store
                 .load_effect_receipt(&self.run_id, &envelope.id.to_string())
@@ -618,6 +667,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
                 return Ok(receipt);
             }
             NotificationPolicyExecution::NotHandled => {}
+        }
+        if let Some(mut receipt) = self
+            .execute_thread_control(&envelope.effect.proposal, &envelope.id.to_string())
+            .await?
+        {
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
         }
         if let Some(mut receipt) = self
             .execute_agenda(&envelope.effect.proposal, &envelope.id.to_string())
@@ -681,6 +737,16 @@ fn memory_effect_error(error: crate::MemoryUseCaseError) -> EffectError {
             EffectErrorKind::Transient
         }
         _ => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn thread_control_effect_error(error: ThreadControlStoreError) -> EffectError {
+    let kind = match error {
+        ThreadControlStoreError::Database => EffectErrorKind::UnknownCommit,
+        ThreadControlStoreError::LeaseLost
+        | ThreadControlStoreError::Unauthorized
+        | ThreadControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
 }
@@ -781,6 +847,16 @@ fn is_mutable_notification_policy_action(action: &SecretaryAction) -> bool {
             | SecretaryAction::CreateSimilarNotificationRule { .. }
             | SecretaryAction::DisableNotificationPolicy { .. }
             | SecretaryAction::SetAutomaticReplyDeniedForContact { .. }
+    )
+}
+
+fn is_thread_control_action(action: &SecretaryAction) -> bool {
+    matches!(
+        action,
+        SecretaryAction::ConfirmThreadDecision { .. }
+            | SecretaryAction::RevokeThreadDecision { .. }
+            | SecretaryAction::DismissThreadQuestion { .. }
+            | SecretaryAction::SetThreadLifecycle { .. }
     )
 }
 

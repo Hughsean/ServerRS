@@ -74,6 +74,7 @@ pub struct PlannerUseCase {
     notification_policy: Option<Arc<crate::NotificationPolicyUseCase>>,
     agenda: Option<Arc<crate::AgendaUseCase>>,
     memory: Option<Arc<crate::MemoryUseCase>>,
+    thread_control: Option<Arc<crate::ThreadControlUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -96,6 +97,7 @@ impl PlannerUseCase {
             notification_policy: None,
             agenda: None,
             memory: None,
+            thread_control: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -134,6 +136,11 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_thread_control(mut self, thread_control: Arc<crate::ThreadControlUseCase>) -> Self {
+        self.thread_control = Some(thread_control);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -148,6 +155,7 @@ impl PlannerUseCase {
             notification_policy: None,
             agenda: None,
             memory: None,
+            thread_control: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -243,6 +251,12 @@ impl PlannerUseCase {
         if let Some(memory) = &self.memory {
             effect_executor = effect_executor
                 .with_memory(Arc::clone(memory), claimed.command_source_event_id.clone());
+        }
+        if let Some(thread_control) = &self.thread_control {
+            effect_executor = effect_executor.with_thread_control(
+                Arc::clone(thread_control),
+                claimed.command_source_event_id.clone(),
+            );
         }
         let effect_executor = Arc::new(effect_executor);
 
@@ -408,6 +422,12 @@ impl PlannerUseCase {
         if let Some(memory) = &self.memory {
             effect_executor = effect_executor
                 .with_memory(Arc::clone(memory), claimed.command_source_event_id.clone());
+        }
+        if let Some(thread_control) = &self.thread_control {
+            effect_executor = effect_executor.with_thread_control(
+                Arc::clone(thread_control),
+                claimed.command_source_event_id.clone(),
+            );
         }
         let effect_executor = Arc::new(effect_executor);
         let context = Arc::new(ActionRunContext {

@@ -9,13 +9,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use personal_secretary::{
     ActionPlannerT, ActionRunId, ActionRunSeed, CheckpointStore, Clock, ContentTrustLevel,
-    ConversationKind, ConversationRef, EventKind, InMemoryCheckpointStore, InboundMessageEnvelope,
-    IngestMessageOutcome, MatchField, MessageSource, NotificationCategory, NotificationOutcome,
-    NotificationPolicyUseCase, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase,
-    RecentEventRef, RetrieverPolicy, RetrieverUseCase, SecretaryAction, SecretaryActionProposal,
-    SecretaryAgentState, SourceAccountRef, SourceMessageRef, StructuredImportance, SystemClock,
-    VerifiedActor, VerifiedActorKind, build_mysql_action_store, build_mysql_inbound_event_store,
-    build_mysql_notification_policy_store, build_mysql_retriever_store,
+    ConversationKind, ConversationRef, EventKind, EventThreadId, InMemoryCheckpointStore,
+    InboundMessageEnvelope, IngestMessageOutcome, MatchField, MessageSource, NotificationCategory,
+    NotificationOutcome, NotificationPolicyUseCase, OpenQuestionId, PlannerError, PlannerInput,
+    PlannerOutput, PlannerUseCase, RecentEventRef, RetrieverPolicy, RetrieverUseCase,
+    SecretaryAction, SecretaryActionProposal, SecretaryAgentState, SourceAccountRef,
+    SourceMessageRef, StructuredImportance, SystemClock, ThreadControlUseCase, ThreadDecisionId,
+    ThreadStatus, VerifiedActor, VerifiedActorKind, build_mysql_action_store,
+    build_mysql_inbound_event_store, build_mysql_notification_policy_store,
+    build_mysql_retriever_store, build_mysql_thread_control_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
@@ -884,6 +886,347 @@ async fn mysql_action_planner_restart_resume_approved_policy_effect_once() {
         .await,
         1,
         "rejected second resume must not create another effect receipt",
+    );
+}
+
+/// 固定生成一个需审批的线程控制动作。四种动作共用这条真实 Graph 路径，
+/// 避免为同一生命周期复制低价值测试。
+struct SuspendThreadControlPlanner {
+    action: SecretaryAction,
+    planner_version: String,
+}
+
+#[async_trait]
+impl ActionPlannerT for SuspendThreadControlPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                self.action.clone(),
+                "测试 Owner 线程控制审批",
+                Vec::new(),
+                Some(self.planner_version.clone()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+async fn execute_approved_thread_control(
+    db: &sea_orm::DatabaseConnection,
+    account: &SourceAccountRef,
+    command_source_event_id: &personal_secretary::SourceEventId,
+    planner_version: &str,
+    action: SecretaryAction,
+) {
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(command_source_event_id, planner_version);
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: account.clone(),
+                command_source_event_id: command_source_event_id.clone(),
+                command_text: "确认线程控制".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 1_800_000_000,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: Vec::new(),
+            },
+        )
+        .await
+        .expect("thread control action run must persist");
+    let initial = PlannerUseCase::with_clock(
+        action_store,
+        Arc::new(SuspendThreadControlPlanner {
+            action,
+            planner_version: planner_version.to_owned(),
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+        Arc::new(FixedClock { now: 1_800_000_100 }),
+    )
+    .with_checkpoint_db(db.clone());
+    let report = initial
+        .run_once(&format!("thread-control-{planner_version}"))
+        .await
+        .expect("thread control proposal must run")
+        .expect("thread control run must be claimed");
+    assert!(report.suspended, "thread control must require L2 approval");
+    let checkpoint_id = report.checkpoint_id.expect("checkpoint must be persisted");
+    let proposal_id = report.proposal_id.expect("proposal must be persisted");
+
+    let resumed = PlannerUseCase::with_clock(
+        build_mysql_action_store(db.clone()),
+        Arc::new(NoopPlanner) as Arc<dyn ActionPlannerT>,
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+        Arc::new(FixedClock { now: 1_800_000_200 }),
+    )
+    .with_checkpoint_db(db.clone())
+    .with_thread_control(Arc::new(ThreadControlUseCase::new(
+        build_mysql_thread_control_store(db.clone()),
+    )));
+    let completed = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            personal_secretary::SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: personal_secretary::SecretaryApprovalDecision::Approve,
+                command_source_event_id: command_source_event_id.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved thread control must execute");
+    assert!(completed.completed, "approved thread control must complete");
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                personal_secretary::SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: personal_secretary::SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command_source_event_id.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject a second approval"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn mysql_thread_controls_suspend_resume_form_one_atomic_lifecycle() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let managed_account =
+        SourceAccountRef::new(MessageSource::NapCat, format!("thread-control-{suffix}"))
+            .expect("valid managed account");
+    let command_account_id = format!("thread-command-{suffix}");
+    let inbound_store = build_mysql_inbound_event_store(db.clone());
+    let thread_event = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::NapCat,
+            &managed_account.account_id,
+            "thread-source",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::Group, "thread-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "participant").unwrap(),
+        1_800_000_000,
+        "这个方案按最终版本执行，还有一个问题待确认。",
+        Vec::new(),
+    )
+    .unwrap();
+    let thread_source_event_id = inbound_store
+        .insert_message_if_absent(&thread_event)
+        .await
+        .expect("thread source event must persist")
+        .source_event_id()
+        .clone();
+    let confirm_command_event_id = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "thread-confirm-command",
+            "确认线程结论",
+        ))
+        .await
+        .expect("owner command must persist")
+        .source_event_id()
+        .clone();
+    let dismiss_command_event_id = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "thread-dismiss-command",
+            "忽略该未决问题",
+        ))
+        .await
+        .expect("owner command must persist")
+        .source_event_id()
+        .clone();
+    let close_command_event_id = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "thread-close-command",
+            "关闭这个线程",
+        ))
+        .await
+        .expect("owner command must persist")
+        .source_event_id()
+        .clone();
+    let reopen_command_event_id = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "thread-reopen-command",
+            "重新打开这个线程",
+        ))
+        .await
+        .expect("owner command must persist")
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+         FROM secretary_accounts managed CROSS JOIN secretary_accounts command \
+         WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        vec![
+            uuid::Uuid::new_v4().to_string().into(),
+            managed_account.channel.as_str().into(),
+            managed_account.account_id.clone().into(),
+            command_account_id.into(),
+        ],
+    ))
+    .await
+    .expect("owner binding must persist");
+
+    let thread_id = EventThreadId::generate();
+    let decision_id = ThreadDecisionId::generate();
+    let question_id = OpenQuestionId::generate();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_event_threads \
+         (thread_id, account_id, status, root_event_id, latest_event_id, \
+          opened_at_unix_secs, latest_occurred_at_unix_secs) \
+         SELECT ?, account_id, 'open', source_event_id, source_event_id, \
+                occurred_at_unix_secs, occurred_at_unix_secs \
+         FROM secretary_source_events WHERE source_event_id = ?",
+        vec![
+            thread_id.as_str().into(),
+            thread_source_event_id.as_str().into(),
+        ],
+    ))
+    .await
+    .expect("thread fixture must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_events (source_event_id, thread_id) VALUES (?, ?)",
+        vec![
+            thread_source_event_id.as_str().into(),
+            thread_id.as_str().into(),
+        ],
+    ))
+    .await
+    .expect("thread membership must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_decisions \
+         (decision_id, thread_id, statement, status, confidence_bps) \
+         VALUES (?, ?, '按最终版本执行', 'proposed', 9000)",
+        vec![decision_id.as_str().into(), thread_id.as_str().into()],
+    ))
+    .await
+    .expect("decision fixture must persist");
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_open_questions \
+         (question_id, thread_id, raised_by_channel, raised_by_account, \
+          raised_by_actor_id, question, status, confidence_bps) \
+         VALUES (?, ?, 'napcat', ?, 'participant', '是否需要附件？', 'open', 9000)",
+        vec![
+            question_id.as_str().into(),
+            thread_id.as_str().into(),
+            managed_account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("question fixture must persist");
+
+    execute_approved_thread_control(
+        &db,
+        &managed_account,
+        &confirm_command_event_id,
+        "thread-confirm-v1",
+        SecretaryAction::ConfirmThreadDecision {
+            decision_id: decision_id.clone(),
+        },
+    )
+    .await;
+    execute_approved_thread_control(
+        &db,
+        &managed_account,
+        &dismiss_command_event_id,
+        "thread-dismiss-v1",
+        SecretaryAction::DismissThreadQuestion {
+            question_id: question_id.clone(),
+            reason: "Owner 明确忽略该问题".into(),
+        },
+    )
+    .await;
+    execute_approved_thread_control(
+        &db,
+        &managed_account,
+        &close_command_event_id,
+        "thread-close-v1",
+        SecretaryAction::SetThreadLifecycle {
+            thread_id: thread_id.clone(),
+            expected_status: ThreadStatus::Open,
+            target_status: ThreadStatus::Closed,
+            reason: "Owner 确认事项已结束".into(),
+        },
+    )
+    .await;
+    execute_approved_thread_control(
+        &db,
+        &managed_account,
+        &reopen_command_event_id,
+        "thread-reopen-v1",
+        SecretaryAction::SetThreadLifecycle {
+            thread_id: thread_id.clone(),
+            expected_status: ThreadStatus::Closed,
+            target_status: ThreadStatus::Reopened,
+            reason: "Owner 要求继续跟进".into(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_thread_owner_controls WHERE thread_id = ?",
+            vec![thread_id.as_str().into()],
+        )
+        .await,
+        4,
+        "each approved control must have one immutable audit record"
+    );
+    let lifecycle: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT status AS value FROM secretary_event_threads WHERE thread_id = ?",
+            vec![thread_id.as_str().into()],
+        ))
+        .await
+        .expect("thread lifecycle query must succeed")
+        .expect("thread must exist")
+        .try_get("", "value")
+        .expect("thread status must decode");
+    assert_eq!(lifecycle, "reopened");
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts receipt \
+             INNER JOIN secretary_thread_owner_controls control \
+               ON control.effect_id = receipt.effect_id \
+             WHERE control.thread_id = ?",
+            vec![thread_id.as_str().into()],
+        )
+        .await,
+        4,
+        "business updates and generic effect receipts must commit one-for-one"
     );
 }
 

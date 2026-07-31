@@ -33,6 +33,13 @@
 
 ## 最近事件
 
+- `2026-07-31 22:50（Asia/Shanghai）`：完成 Owner 线程语义与生命周期控制切片。新增确认/撤销
+  结论、忽略开放问题、关闭/重开线程四类 L2 Action；最终 MySQL 事务复验 Action 租约、
+  OwnerCommand、唯一有效绑定、账号和目标状态，并原子提交业务状态、不可变控制审计和通用
+  Effect Receipt。关闭要求不存在开放问题且使用期望状态 CAS；状态历史引用命令 SourceEvent。
+  一条随机隔离 MySQL 测试依次执行四条 OwnerCommand 的 Suspend→模拟重启→Resume，并验证
+  Checkpoint 只能消费一次、四份审计与回执一一对应；临时 schema 已清理。未连接或发送 QQ。
+
 - `2026-07-31 22:32（Asia/Shanghai）`：完成 Owner 状态、待办与线程因果上下文只读切片。
   新增 `GetSecretaryStatus`、`ListPendingOwnerWork`、`GetThreadContext` 三类 L0 Action，复用
   Retriever/Action Graph/Receipt/OwnerResponseDraft；所有 MySQL 查询强制账号过滤并限制数量和

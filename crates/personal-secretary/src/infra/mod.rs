@@ -51,6 +51,13 @@ pub fn build_mysql_thread_mutation_store(
     Arc::new(repo::MySqlThreadMutationStore::new(db))
 }
 
+/// 构造 Owner 线程语义/生命周期控制仓储；业务变更、审计与 Action Receipt 共用事务。
+pub fn build_mysql_thread_control_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::ThreadControlStoreT> {
+    Arc::new(repo::MySqlThreadControlStore::new(db))
+}
+
 /// 构造线程变更专用的持久化 Graph Checkpoint 仓储；与数字人 Checkpoint 完全隔离。
 pub fn build_mysql_thread_mutation_checkpoint_store(
     db: DatabaseConnection,

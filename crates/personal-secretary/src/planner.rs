@@ -72,6 +72,10 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | DeleteMemoryFact { .. }
             | SetMemoryFactTtl { .. }
             | SetConversationMemoryMode { .. }
+            | ConfirmThreadDecision { .. }
+            | RevokeThreadDecision { .. }
+            | DismissThreadQuestion { .. }
+            | SetThreadLifecycle { .. }
     )
 }
 

@@ -28,6 +28,7 @@ mod recall_service;
 mod retriever;
 mod retriever_service;
 mod store;
+mod thread_control_service;
 mod thread_link_service;
 mod thread_links;
 mod thread_mutation_service;
@@ -149,6 +150,9 @@ pub use store::{
     InboundEventStoreError, InboundEventStoreT, IngestMessageOutcome, IngestionContinuityStoreT,
     OwnerBinding, OwnerBindingStoreT, PersonalSecretaryStoreT, SourceEventId,
 };
+pub use thread_control_service::{
+    ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlStoreT, ThreadControlUseCase,
+};
 pub use thread_link_service::{
     ConservativeThreadLinkExtractor, ThreadLinkReviewReceipt, ThreadLinkReviewUseCase,
     ThreadLinkRun, ThreadLinkStoreT, ThreadLinkUseCase, ThreadLinkUseCaseError,
@@ -214,9 +218,10 @@ pub use infra::{
     build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
     build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
     build_mysql_notification_policy_store, build_mysql_owner_binding_store,
-    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_control_store,
+    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
+    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。

@@ -16,8 +16,9 @@ use tracing::debug;
 
 use personal_secretary::{
     ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
-    MemoryFactId, MemoryPayload, PlannerError, PlannerInput, PlannerOutput, SecretaryAction,
-    SecretaryActionProposal, SourceEventId, SystemClock, validate_planner_output,
+    MemoryFactId, MemoryPayload, OpenQuestionId, PlannerError, PlannerInput, PlannerOutput,
+    SecretaryAction, SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId,
+    ThreadStatus, validate_planner_output,
 };
 
 use crate::llm::{LlmClientError, OpenAiCompatibleClient, StructuredLlmClientT};
@@ -35,7 +36,8 @@ list_upcoming_items, draft_reminder, ask_owner_clarification, create_schedule, c
 create_reminder, reschedule_item, cancel_item, complete_item, snooze_item, list_memory_facts,
 read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fact_ttl,
 set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
-get_thread_context。记忆修改和会话记忆模式属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+get_thread_context, confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
+set_thread_lifecycle。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
@@ -98,6 +100,10 @@ impl LlmActionPlanner {
                     conversation_id,
                     memory_mode,
                     thread_id,
+                    thread_decision_id,
+                    thread_question_id,
+                    expected_thread_status,
+                    target_thread_status,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -121,6 +127,10 @@ impl LlmActionPlanner {
                     conversation_id,
                     memory_mode,
                     thread_id,
+                    thread_decision_id,
+                    thread_question_id,
+                    expected_thread_status,
+                    target_thread_status,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -223,6 +233,10 @@ struct RawProposalFields<'a> {
     conversation_id: Option<String>,
     memory_mode: Option<ContentTrustLevel>,
     thread_id: Option<String>,
+    thread_decision_id: Option<String>,
+    thread_question_id: Option<String>,
+    expected_thread_status: Option<ThreadStatus>,
+    target_thread_status: Option<ThreadStatus>,
 }
 
 fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerError> {
@@ -269,6 +283,46 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
                     .ok_or_else(|| PlannerError::InvalidOutput("missing thread_id".into()))?,
             )
             .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        }),
+        "confirm_thread_decision" => Ok(SecretaryAction::ConfirmThreadDecision {
+            decision_id: parse_thread_decision_id(raw.thread_decision_id.clone())?,
+        }),
+        "revoke_thread_decision" => Ok(SecretaryAction::RevokeThreadDecision {
+            decision_id: parse_thread_decision_id(raw.thread_decision_id.clone())?,
+            reason: raw
+                .text
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "dismiss_thread_question" => {
+            Ok(SecretaryAction::DismissThreadQuestion {
+                question_id: OpenQuestionId::new(raw.thread_question_id.clone().ok_or_else(
+                    || PlannerError::InvalidOutput("missing thread_question_id".into()),
+                )?)
+                .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+                reason: raw
+                    .text
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+            })
+        }
+        "set_thread_lifecycle" => Ok(SecretaryAction::SetThreadLifecycle {
+            thread_id: EventThreadId::new(
+                raw.thread_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing thread_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+            expected_status: raw.expected_thread_status.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_thread_status".into())
+            })?,
+            target_status: raw.target_thread_status.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing target_thread_status".into())
+            })?,
+            reason: raw
+                .text
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
         }),
         "draft_reminder" => Ok(SecretaryAction::DraftReminder {
             text: raw
@@ -429,6 +483,13 @@ fn parse_memory_fact_id(value: Option<String>) -> Result<MemoryFactId, PlannerEr
     .map_err(|error| PlannerError::InvalidOutput(error.to_string()))
 }
 
+fn parse_thread_decision_id(value: Option<String>) -> Result<ThreadDecisionId, PlannerError> {
+    ThreadDecisionId::new(
+        value.ok_or_else(|| PlannerError::InvalidOutput("missing thread_decision_id".into()))?,
+    )
+    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))
+}
+
 fn parse_source_event_ids(values: &[String]) -> Result<Vec<SourceEventId>, PlannerError> {
     values
         .iter()
@@ -514,6 +575,14 @@ struct RawProposalOutput {
     memory_mode: Option<ContentTrustLevel>,
     #[serde(default)]
     thread_id: Option<String>,
+    #[serde(default)]
+    thread_decision_id: Option<String>,
+    #[serde(default)]
+    thread_question_id: Option<String>,
+    #[serde(default)]
+    expected_thread_status: Option<ThreadStatus>,
+    #[serde(default)]
+    target_thread_status: Option<ThreadStatus>,
 }
 
 #[cfg(test)]

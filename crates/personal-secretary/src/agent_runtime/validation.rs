@@ -334,6 +334,30 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         SecretaryAction::SetConversationMemoryMode { conversation, .. } => {
             bounded_text("conversation.id", &conversation.id, 1, 191)?;
         }
+        SecretaryAction::ConfirmThreadDecision { .. } => {}
+        SecretaryAction::RevokeThreadDecision { reason, .. }
+        | SecretaryAction::DismissThreadQuestion { reason, .. } => {
+            bounded_text("thread control reason", reason, 1, 1_000)?;
+        }
+        SecretaryAction::SetThreadLifecycle {
+            expected_status,
+            target_status,
+            reason,
+            ..
+        } => {
+            bounded_text("thread lifecycle reason", reason, 1, 1_000)?;
+            if expected_status == target_status
+                || !matches!(
+                    target_status,
+                    crate::ThreadStatus::Closed | crate::ThreadStatus::Reopened
+                )
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "thread lifecycle target must be closed or reopened and differ from expected"
+                        .into(),
+                ));
+            }
+        }
     }
     Ok(())
 }
