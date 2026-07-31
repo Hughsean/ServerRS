@@ -450,6 +450,7 @@ impl ActionStoreT for MySqlActionStore {
         Ok(SecretaryActionReceipt {
             proposal_id: effect.proposal.proposal_id.clone(),
             result_ref: persistent_ref,
+            tool_kind: None,
         })
     }
 

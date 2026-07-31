@@ -59,7 +59,8 @@ pub use agent_runtime::{
     SecretaryActionReceipt, SecretaryActionResumeInput, SecretaryAgentPhase,
     SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
     SecretaryApprovalDecision, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
-    gate_secretary_action, validate_action_proposal, validate_response_draft,
+    build_action_response_draft, gate_secretary_action, validate_action_proposal,
+    validate_response_draft,
 };
 pub use artifact::{
     ArtifactAvailability, ArtifactEnvelope, ArtifactError, ArtifactId, ArtifactKind,

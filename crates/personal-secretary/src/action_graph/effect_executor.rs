@@ -192,6 +192,7 @@ impl SecretaryActionEffectExecutor {
         Ok(Some(SecretaryActionReceipt {
             proposal_id: proposal.proposal_id.clone(),
             result_ref: receipt.result_ref,
+            tool_kind: Some(proposal.action.kind()),
         }))
     }
     async fn execute_notification_policy(
@@ -377,17 +378,19 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         envelope: &EffectEnvelope<SecretaryActionEffect>,
         _context: &RunContext,
     ) -> Result<SecretaryActionReceipt, EffectError> {
+        let tool_kind = envelope.effect.proposal.action.kind();
         // 可变策略 Action 的 receipt 由策略仓储校验 run、proposal 与完整 Action，不能用
         // 通用 store 仅按 (run_id, effect_id) 的快速读取绕过碰撞检查。
         let is_mutable_policy =
             is_mutable_notification_policy_action(&envelope.effect.proposal.action);
         if !is_mutable_policy
-            && let Some(receipt) = self
+            && let Some(mut receipt) = self
                 .store
                 .load_effect_receipt(&self.run_id, &envelope.id.to_string())
                 .await
                 .map_err(ActionStoreError::to_effect_error)?
         {
+            receipt.tool_kind = Some(tool_kind);
             return Ok(receipt);
         }
         match self
@@ -395,7 +398,7 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
             .await?
         {
             NotificationPolicyExecution::ReadOnly(result_ref) => {
-                return self
+                let mut receipt = self
                     .store
                     .apply_effect(
                         &self.run_id,
@@ -405,22 +408,29 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
                         &self.lease_token,
                     )
                     .await
-                    .map_err(ActionStoreError::to_effect_error);
+                    .map_err(ActionStoreError::to_effect_error)?;
+                receipt.tool_kind = Some(tool_kind);
+                return Ok(receipt);
             }
-            NotificationPolicyExecution::Mutable(receipt) => return Ok(receipt),
+            NotificationPolicyExecution::Mutable(mut receipt) => {
+                receipt.tool_kind = Some(tool_kind);
+                return Ok(receipt);
+            }
             NotificationPolicyExecution::NotHandled => {}
         }
-        if let Some(receipt) = self
+        if let Some(mut receipt) = self
             .execute_agenda(&envelope.effect.proposal, &envelope.id.to_string())
             .await?
         {
+            receipt.tool_kind = Some(tool_kind);
             return Ok(receipt);
         }
         // 未命中既有 Receipt 才执行真实只读 Action；Store 提交时再次处理并发竞争。
         let result_ref = self
             .execute_action(&envelope.effect.proposal.action)
             .await?;
-        self.store
+        let mut receipt = self
+            .store
             .apply_effect(
                 &self.run_id,
                 &envelope.effect,
@@ -429,7 +439,9 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
                 &self.lease_token,
             )
             .await
-            .map_err(|e| e.to_effect_error())
+            .map_err(|e| e.to_effect_error())?;
+        receipt.tool_kind = Some(tool_kind);
+        Ok(receipt)
     }
 }
 

@@ -17,7 +17,9 @@ pub use action::{
 pub use approval::{
     SecretaryActionApprovalRequest, SecretaryActionResumeInput, SecretaryApprovalDecision,
 };
-pub use response::{OwnerResponseDraft, RecentEventRef, ResponseSegment};
+pub use response::{
+    OwnerResponseDraft, RecentEventRef, ResponseSegment, build_action_response_draft,
+};
 pub use state::{SecretaryAgentPhase, SecretaryAgentState, SecretaryAgentUpdate};
 pub use validation::{
     SecretaryAgentRuntimeError, gate_secretary_action, validate_action_proposal,

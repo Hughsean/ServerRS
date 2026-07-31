@@ -13,8 +13,8 @@ use agent_core::{AgentOutcome, AgentState, AgentUpdate};
 use async_trait::async_trait;
 
 use crate::{
-    ConversationKind, ConversationRef, EventQuery, OwnerResponseDraft, PlannerInput, PlannerOutput,
-    PlannerRetrievedExcerpt, ResponseSegment, SecretaryAction, SecretaryActionApprovalRequest,
+    ConversationKind, ConversationRef, EventQuery, PlannerInput, PlannerOutput,
+    PlannerRetrievedExcerpt, SecretaryAction, SecretaryActionApprovalRequest,
     SecretaryActionEffect, SecretaryActionProposal, SecretaryAgentPhase, SecretaryAgentState,
     SecretaryAgentUpdate, gate_secretary_action, validate_planner_output,
 };
@@ -246,14 +246,12 @@ impl AgentNode<SecretaryAgentState> for BuildResponseNode {
                 source_ids.push(id.clone());
             }
         }
-        let summary = if let Some(receipt) = business.last_receipt() {
-            format!("动作已执行：{}", receipt.result_ref)
-        } else {
-            "已处理".into()
-        };
-        let segments = vec![ResponseSegment::Summary { text: summary }];
-        let draft = OwnerResponseDraft::new(segments, source_ids, self.context.now_unix_secs)
-            .map_err(|e| NodeError::with_source(NodeErrorKind::Invariant, e))?;
+        let draft = crate::build_action_response_draft(
+            business.last_receipt(),
+            source_ids,
+            self.context.now_unix_secs,
+        )
+        .map_err(|e| NodeError::with_source(NodeErrorKind::Invariant, e))?;
         Ok(NodeResult::new(
             vec![
                 AgentUpdate::Business(SecretaryAgentUpdate::ResponseReady(draft.clone())),

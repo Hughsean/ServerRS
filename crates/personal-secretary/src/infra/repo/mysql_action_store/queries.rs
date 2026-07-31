@@ -137,6 +137,7 @@ where
         Ok(SecretaryActionReceipt {
             proposal_id: proposal.proposal_id,
             result_ref: row.result_ref,
+            tool_kind: None,
         })
     })
     .transpose()

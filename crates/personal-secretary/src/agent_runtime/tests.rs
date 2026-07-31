@@ -324,3 +324,210 @@ fn agent_state_serialization_remains_backward_compatible() {
     let state: SecretaryAgentState = serde_json::from_value(json).unwrap();
     assert!(state.response_draft().is_none());
 }
+
+// ===== 策略响应工件收口表驱动测试 =====
+
+fn policy_receipt(kind: SecretaryToolKind, result_ref: &str) -> SecretaryActionReceipt {
+    SecretaryActionReceipt {
+        proposal_id: "test-proposal".into(),
+        result_ref: result_ref.into(),
+        tool_kind: Some(kind),
+    }
+}
+
+fn list_artifact_json(scope: &str, status: &str, typed_reason: &str) -> String {
+    serde_json::to_string(&vec![crate::NotificationPolicyResponseArtifact {
+        scope: scope.into(),
+        policy_family_id: None,
+        policy_revision_id: None,
+        decision_id: None,
+        status: status.into(),
+        priority: "conversation".into(),
+        typed_reason: typed_reason.into(),
+        audit_reference: "policy_family_head".into(),
+    }])
+    .unwrap()
+}
+
+fn single_artifact_json(
+    scope: &str,
+    status: &str,
+    typed_reason: &str,
+    audit_reference: &str,
+) -> String {
+    serde_json::to_string(&crate::NotificationPolicyResponseArtifact {
+        scope: scope.into(),
+        policy_family_id: None,
+        policy_revision_id: None,
+        decision_id: None,
+        status: status.into(),
+        priority: "conversation".into(),
+        typed_reason: typed_reason.into(),
+        audit_reference: audit_reference.into(),
+    })
+    .unwrap()
+}
+
+fn draft_text(receipt: &SecretaryActionReceipt) -> String {
+    let draft = crate::build_action_response_draft(Some(receipt), vec![], 1_000).unwrap();
+    draft
+        .segments()
+        .iter()
+        .map(|s| s.text().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn build_action_response_draft_policy_table() {
+    // Case 1: List JSON → 中文规则列表
+    let result_ref = list_artifact_json("conversation:conv-1", "rule", "generation:3");
+    let receipt = policy_receipt(SecretaryToolKind::ListNotificationPolicies, &result_ref);
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("当前提醒规则"),
+        "List 应展示规则列表标题，实际：{text}"
+    );
+    assert!(
+        text.contains("会话范围"),
+        "List 应展示 scope 中文标签，实际：{text}"
+    );
+    assert!(text.contains("规则"), "List 应翻译 status，实际：{text}");
+    assert!(!text.contains('{'), "List 不应包含 JSON，实际：{text}");
+    assert!(
+        !text.contains("typed_reason"),
+        "List 不应泄漏内部 JSON 字段名，实际：{text}"
+    );
+
+    // Case 2: Explain schedule_time_ambiguous → 正确中文翻译
+    let result_ref = single_artifact_json(
+        "conversation:conv-1",
+        "suppress",
+        "schedule_time_ambiguous",
+        "audit-ref-1",
+    );
+    let receipt = policy_receipt(SecretaryToolKind::ExplainNotificationDecision, &result_ref);
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("时区歧义"),
+        "schedule_time_ambiguous 应正确翻译，实际：{text}"
+    );
+    assert!(
+        !text.contains("数据库失败") && !text.contains("系统异常"),
+        "schedule_time_ambiguous 不得翻译为系统故障，实际：{text}"
+    );
+    assert!(
+        !text.contains("schedule_time_ambiguous"),
+        "不应泄漏原始字段值，实际：{text}"
+    );
+
+    // Case 3: Mutation → 成功中文文案
+    let result_ref = single_artifact_json(
+        "conversation:conv-1",
+        "rule",
+        "policy_written",
+        "generation:1",
+    );
+    let receipt = policy_receipt(
+        SecretaryToolKind::SetAccountDefaultNotificationMode,
+        &result_ref,
+    );
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("提醒规则已更新"),
+        "Mutation 应返回确定文案，实际：{text}"
+    );
+    assert!(!text.contains('{'), "Mutation 不应泄漏 JSON，实际：{text}");
+
+    // Case 4: 损坏 JSON → 安全降级，不回显原始数据
+    let receipt = policy_receipt(
+        SecretaryToolKind::ListNotificationPolicies,
+        "{{{{broken json not parseable",
+    );
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("无法安全展示"),
+        "损坏 JSON 应降级，实际：{text}"
+    );
+    assert!(
+        !text.contains("{{{{"),
+        "损坏 JSON 的原始内容不得回显，实际：{text}"
+    );
+
+    // Case 5: 长列表 → 安全截断
+    let many: Vec<crate::NotificationPolicyResponseArtifact> = (0..50)
+        .map(|i| crate::NotificationPolicyResponseArtifact {
+            scope: format!("conversation:conv-{i}"),
+            policy_family_id: None,
+            policy_revision_id: None,
+            decision_id: None,
+            status: "rule".into(),
+            priority: "conversation".into(),
+            typed_reason: format!("generation:{}", i + 1),
+            audit_reference: "policy_family_head".into(),
+        })
+        .collect();
+    let result_ref = serde_json::to_string(&many).unwrap();
+    let receipt = policy_receipt(SecretaryToolKind::ListNotificationPolicies, &result_ref);
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("其余规则已省略"),
+        "长列表应截断，实际：{text}"
+    );
+    let draft = crate::build_action_response_draft(Some(&receipt), vec![], 1_000).unwrap();
+    let text: String = draft
+        .segments()
+        .iter()
+        .map(|s| s.text().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.chars().count() <= 1_000,
+        "截断后单段不应超过 1000 字符，实际 {} 字符",
+        text.chars().count()
+    );
+    let serialized = serde_json::to_vec(&draft).unwrap();
+    assert!(
+        serialized.len() <= 8192,
+        "序列化草稿不应超过 8 KiB，实际 {} bytes",
+        serialized.len()
+    );
+
+    // Case 6: 敏感哨兵不得泄漏到响应中（注入在无法解析的原始 JSON 中）
+    // 验证：即使 result_ref 原始字符串包含哨兵，解析失败后也走降级，不回显
+    let bad_json = r#"{"scope":"合法范围","SECRET_MARKER":"OPENID_MARKER","status":"rule","MESSAGE_BODY_MARKER":true}"#;
+    for kind in &[
+        SecretaryToolKind::ListNotificationPolicies,
+        SecretaryToolKind::ExplainNotificationDecision,
+        SecretaryToolKind::SetAccountDefaultNotificationMode,
+    ] {
+        let receipt = policy_receipt(*kind, bad_json);
+        let text = draft_text(&receipt);
+        for sentinel in ["SECRET_MARKER", "OPENID_MARKER", "MESSAGE_BODY_MARKER"] {
+            assert!(
+                !text.contains(sentinel),
+                "敏感哨兵 {sentinel} 不得出现在 {kind:?} 的降级响应中，实际：{text}"
+            );
+        }
+        assert!(
+            text.contains("无法安全展示"),
+            "{kind:?} 损坏 JSON 应走降级路径，实际：{text}"
+        );
+    }
+
+    // Case 7: 非策略 Action 保持兼容（原有 result_ref 行为）
+    let receipt = SecretaryActionReceipt {
+        proposal_id: "test-proposal".into(),
+        result_ref: "命中 3 条事件".into(),
+        tool_kind: Some(SecretaryToolKind::SearchRecentEvents),
+    };
+    let text = draft_text(&receipt);
+    assert!(
+        text.contains("命中 3 条事件"),
+        "非策略 Action 应保持原有 result_ref 语义，实际：{text}"
+    );
+    assert!(
+        text.contains("动作已执行"),
+        "非策略 Action 应使用传统前缀，实际：{text}"
+    );
+}

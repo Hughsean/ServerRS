@@ -147,7 +147,7 @@ impl AgentBusinessState for SecretaryAgentState {
                     SecretaryApprovalDecision::Reject => SecretaryAgentPhase::Respond,
                 };
             }
-            SecretaryAgentUpdate::ActionCompleted(receipt) => {
+            SecretaryAgentUpdate::ActionCompleted(mut receipt) => {
                 let pending = self.pending_proposal.as_ref().ok_or_else(|| {
                     AgentStateError::Business("动作回执缺少待执行 Proposal".into())
                 })?;
@@ -155,6 +155,22 @@ impl AgentBusinessState for SecretaryAgentState {
                     return Err(AgentStateError::Business(
                         "动作回执与待执行 Proposal 不匹配".into(),
                     ));
+                }
+                // 以 pending proposal 的 action.kind() 为规范值，强制 tool_kind 一致性：
+                // - 显式不一致 → 拒绝
+                // - 缺失（历史回执/超时等）→ 补齐
+                let canonical = pending.action.kind();
+                match &receipt.tool_kind {
+                    Some(kind) if *kind != canonical => {
+                        return Err(AgentStateError::Business(format!(
+                            "回执 tool_kind {:?} 与 Proposal {:?} 不一致",
+                            kind, canonical,
+                        )));
+                    }
+                    None => {
+                        receipt.tool_kind = Some(canonical);
+                    }
+                    _ => {} // 一致，无需修改
                 }
                 self.last_receipt = Some(receipt);
                 self.pending_proposal = None;

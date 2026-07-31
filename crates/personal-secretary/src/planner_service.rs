@@ -318,25 +318,14 @@ impl PlannerUseCase {
     }
 
     /// 从 AgentState 组装有界响应草稿。
-    /// P0 修复：用 Effect 真实执行结果（last_receipt）构建，而非取第一条近期事件摘要。
+    /// 优先使用 Graph 已设置的 response_draft（由 BuildResponseNode 产生），
+    /// 否则回退到共享响应构造函数（P0 修复：统一响应入口）。
     fn build_response_draft(&self, state: &SecretaryAgentState) -> Option<OwnerResponseDraft> {
-        // 优先使用 Graph 已设置的 response_draft（由 BuildResponse 逻辑产生）。
         if let Some(draft) = state.response_draft() {
             return Some(draft.clone());
         }
-        // 否则从 last_receipt（Effect 执行结果）构建摘要。
-        let segments = if let Some(receipt) = state.last_receipt() {
-            vec![crate::ResponseSegment::Summary {
-                text: format!("动作已执行：{}", receipt.result_ref),
-            }]
-        } else {
-            // NoAction 路径：无 Effect 执行，用 goal 作为摘要。
-            vec![crate::ResponseSegment::Summary {
-                text: "无需执行动作".into(),
-            }]
-        };
-        OwnerResponseDraft::new(
-            segments,
+        crate::build_action_response_draft(
+            state.last_receipt(),
             state.evidence_source_event_ids().to_vec(),
             self.clock.now_unix_secs(),
         )
@@ -634,6 +623,7 @@ mod tests {
             Ok(SecretaryActionReceipt {
                 proposal_id: effect.proposal.proposal_id.clone(),
                 result_ref: result_ref.into(),
+                tool_kind: None,
             })
         }
         async fn mark_completed(

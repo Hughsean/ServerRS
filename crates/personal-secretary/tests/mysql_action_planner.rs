@@ -824,6 +824,39 @@ async fn mysql_action_planner_restart_resume_approved_policy_effect_once() {
         "completed resume must persist one response",
     );
 
+    // 验证响应草稿中文语义：不泄漏原始 JSON 字段名
+    let response_json: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT CAST(response_json AS CHAR) AS response_json \
+             FROM secretary_action_responses WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        ))
+        .await
+        .expect("response query must succeed")
+        .map(|row| row.try_get::<String>("", "response_json").unwrap())
+        .expect("response row must exist");
+    let draft: personal_secretary::OwnerResponseDraft = serde_json::from_str(&response_json)
+        .expect("response_json must deserialize as OwnerResponseDraft");
+    let response_text: String = draft
+        .segments()
+        .iter()
+        .map(|s| s.text().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        response_text.contains("提醒规则已更新")
+            || response_text.contains("提醒规则已停用")
+            || response_text.contains("已记录"),
+        "策略响应必须包含确定性中文文案，实际：{response_text}",
+    );
+    for forbidden in ["{", "typed_reason", "policy_family_id"] {
+        assert!(
+            !response_text.contains(forbidden),
+            "策略响应不得包含原始 JSON 字段名 '{forbidden}'，实际：{response_text}",
+        );
+    }
+
     assert!(
         resumed
             .resume_run(

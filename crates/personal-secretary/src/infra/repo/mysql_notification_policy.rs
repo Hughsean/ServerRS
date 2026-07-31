@@ -298,6 +298,7 @@ impl NotificationPolicyStoreT for MySqlNotificationPolicyStore {
         Ok(SecretaryActionReceipt {
             proposal_id: request.proposal_id.clone(),
             result_ref,
+            tool_kind: Some(request.action.kind()),
         })
     }
 
@@ -1109,6 +1110,7 @@ async fn load_policy_effect_receipt(
         Ok(SecretaryActionReceipt {
             proposal_id: proposal.proposal_id,
             result_ref: row.result_ref,
+            tool_kind: Some(request.action.kind()),
         })
     })
     .transpose()

@@ -345,4 +345,7 @@ impl agent_core::graph::AgentEffect for SecretaryActionEffect {
 pub struct SecretaryActionReceipt {
     pub proposal_id: String,
     pub result_ref: String,
+    /// 产生此回执的 Action 类型；通知策略 Action 通过此字段区分响应工件解析方式。
+    #[serde(default)]
+    pub tool_kind: Option<SecretaryToolKind>,
 }
