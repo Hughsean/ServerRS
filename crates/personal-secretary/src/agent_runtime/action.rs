@@ -65,6 +65,7 @@ pub enum SecretaryToolKind {
     SetThreadLifecycle,
     DismissFollowUp,
     SnoozeFollowUp,
+    DismissFollowUps,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +136,8 @@ impl SecretaryToolKind {
             | Self::DismissThreadQuestion
             | Self::SetThreadLifecycle
             | Self::DismissFollowUp
-            | Self::SnoozeFollowUp => SecretaryToolPolicy {
+            | Self::SnoozeFollowUp
+            | Self::DismissFollowUps => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -158,6 +160,14 @@ impl SecretaryToolKind {
             },
         }
     }
+}
+
+/// 批量忽略动作的单个目标；`expected_source_version` 必须来自
+/// ListPendingOwnerWork 展示的 version N，落库时与行内 source_version CAS 比较。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FollowUpControlTarget {
+    pub follow_up_id: crate::FollowUpId,
+    pub expected_source_version: u64,
 }
 
 /// Agent 只能选择白名单中的类型化动作，不能构造任意 SQL、HTTP、Shell 或文件操作。
@@ -349,6 +359,13 @@ pub enum SecretaryAction {
         snooze_until_unix_secs: i64,
         reason: String,
     },
+    /// 批量忽略（v1 只做 dismiss，不包含批量 Snooze/完成/模糊搜索）。
+    /// targets 数量必须为 1..=20 且 follow_up_id 不重复；全有或全无，
+    /// 任一目标校验失败则整个事务回滚。
+    DismissFollowUps {
+        targets: Vec<FollowUpControlTarget>,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -409,6 +426,7 @@ impl SecretaryAction {
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
             Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
             Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,
+            Self::DismissFollowUps { .. } => SecretaryToolKind::DismissFollowUps,
         }
     }
 }

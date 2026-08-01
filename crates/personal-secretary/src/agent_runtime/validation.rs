@@ -392,6 +392,29 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             }
             bounded_text("follow up snooze reason", reason, 1, 1_000)?;
         }
+        SecretaryAction::DismissFollowUps { targets, reason } => {
+            if targets.is_empty() || targets.len() > 20 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "follow_up batch targets must contain 1..=20 items".into(),
+                ));
+            }
+            // 同一批次禁止重复 FollowUp ID，重复必须在进入数据库前拒绝。
+            let mut seen = HashSet::new();
+            for target in targets {
+                bounded_text("follow_up_id", target.follow_up_id.as_str(), 1, 36)?;
+                if target.expected_source_version == 0 {
+                    return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                        "follow_up expected_source_version must be positive".into(),
+                    ));
+                }
+                if !seen.insert(target.follow_up_id.as_str()) {
+                    return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                        "follow_up batch targets must not repeat follow_up_id".into(),
+                    ));
+                }
+            }
+            bounded_text("follow up reason", reason, 1, 1_000)?;
+        }
     }
     Ok(())
 }

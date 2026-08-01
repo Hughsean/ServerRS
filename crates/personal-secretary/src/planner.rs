@@ -78,6 +78,7 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | SetThreadLifecycle { .. }
             | DismissFollowUp { .. }
             | SnoozeFollowUp { .. }
+            | DismissFollowUps { .. }
     )
 }
 

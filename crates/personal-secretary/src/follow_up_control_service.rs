@@ -5,6 +5,7 @@
 //! 通用 Effect Receipt。数据库错误在 Effect 边界映射为 UnknownCommit；
 //! 授权、版本冲突、租约丢失和业务状态冲突不得伪装成数据库提交不明。
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -100,6 +101,28 @@ impl FollowUpControlUseCase {
                 ));
             }
             SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. } => {}
+            SecretaryAction::DismissFollowUps { targets, reason } => {
+                if targets.is_empty()
+                    || targets.len() > 20
+                    || reason.trim().is_empty()
+                    || reason.chars().count() > 1_000
+                {
+                    return Err(FollowUpControlStoreError::InvalidData(
+                        "follow-up batch targets or reason is invalid".into(),
+                    ));
+                }
+                // 同一批次禁止重复 FollowUp ID；重复必须在进入数据库前拒绝。
+                let mut seen = HashSet::new();
+                for target in targets {
+                    if target.expected_source_version == 0
+                        || !seen.insert(target.follow_up_id.as_str())
+                    {
+                        return Err(FollowUpControlStoreError::InvalidData(
+                            "follow-up batch targets or reason is invalid".into(),
+                        ));
+                    }
+                }
+            }
             _ => {
                 return Err(FollowUpControlStoreError::InvalidData(
                     "action is not a follow-up control".into(),

@@ -11,8 +11,8 @@ mod state;
 mod validation;
 
 pub use action::{
-    SecretaryAction, SecretaryActionEffect, SecretaryActionProposal, SecretaryActionReceipt,
-    SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
+    FollowUpControlTarget, SecretaryAction, SecretaryActionEffect, SecretaryActionProposal,
+    SecretaryActionReceipt, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
 };
 pub use approval::{
     SecretaryActionApprovalRequest, SecretaryActionResumeInput, SecretaryApprovalDecision,

@@ -13,11 +13,11 @@ use personal_secretary::{
     ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
     DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus,
     EvaluationCommitResult, EventThreadId, FollowUpControlEffectRequest, FollowUpControlStoreError,
-    FollowUpControlUseCase, FollowUpId, HistoryBackfillSourceT, HistoryCompleteness,
-    InMemoryCheckpointStore, InboundMessageEnvelope, IngestMessageOutcome, IngestionGapReason,
-    IngestionGapStatus, LegacyNotificationReconciliationConfig, MemoryDeleteInput, MemoryFact,
-    MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource,
-    NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
+    FollowUpControlTarget, FollowUpControlUseCase, FollowUpId, HistoryBackfillSourceT,
+    HistoryCompleteness, InMemoryCheckpointStore, InboundMessageEnvelope, IngestMessageOutcome,
+    IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
+    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase,
+    MessageSource, NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
     OwnerNotificationContent, PersonMemory, PlannerError, PlannerInput, PlannerOutput,
     PlannerUseCase, ProjectMemory, ScopeProgress, SecretaryAction, SecretaryActionProposal,
     SecretaryActionResumeInput, SecretaryAgentState, SecretaryApprovalDecision, SourceAccountRef,
@@ -4846,4 +4846,622 @@ async fn owner_approved_snooze_follow_up_full_flow_with_notification_regeneratio
             "{label} outbox must stay suppressed, never resurrected"
         );
     }
+}
+
+// ===== Owner 审批批量忽略 FollowUp（all-or-nothing + 幂等） =====
+
+/// 测试用 Planner：固定返回 DismissFollowUps Proposal，不调用 LLM。
+struct DismissFollowUpsPlanner {
+    targets: Vec<FollowUpControlTarget>,
+}
+
+#[async_trait]
+impl ActionPlannerT for DismissFollowUpsPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                SecretaryAction::DismissFollowUps {
+                    targets: self.targets.clone(),
+                    reason: "Owner 确认这些跟进事项不再需要".into(),
+                },
+                "测试：Owner 审批批量忽略 FollowUp",
+                Vec::new(),
+                Some("batch-dismiss-follow-ups-v1".into()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+/// 插入一条与 FollowUp 直接关联的 legacy pending Outbox，并断言恰好写入一行。
+async fn legacy_pending_outbox_for(
+    db: &sea_orm::DatabaseConnection,
+    managed_id: &str,
+    follow_up_id: &str,
+    scheduled_at_unix_secs: i64,
+    outbox_id: &str,
+) {
+    let inserted = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_notification_outbox \
+             (notification_id, account_id, follow_up_id, scheduled_at_unix_secs, notification_kind, \
+              payload_json, delivery_status) \
+             SELECT ?, id, ?, ?, 'owner_reminder', '{}', 'pending' \
+             FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+            vec![
+                outbox_id.to_owned().into(),
+                follow_up_id.to_owned().into(),
+                scheduled_at_unix_secs.into(),
+                MessageSource::NapCat.as_str().into(),
+                managed_id.to_owned().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        inserted.rows_affected(),
+        1,
+        "legacy outbox fixture must insert exactly one row"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn owner_approved_batch_dismiss_follow_ups_is_atomic_and_idempotent() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("batch-dismiss-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+    let now = SystemClock.now_unix_secs();
+    let base_due = now - 3600;
+
+    // ===== 成功路径：两条 FollowUp，一条 policy-owned、一条 legacy Outbox =====
+    // 1a. 来源化 FollowUp A（已到期），先建 OwnerCommand/Binding 再生成 policy outbox，
+    //     保证策略 Remind 的接收方复验有绑定可查。
+    let (_fact_a, follow_up_a) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-commitment-a",
+        "commitment:batch-a",
+        base_due,
+    )
+    .await;
+    let command_account_id = format!("batch-dismiss-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "batch-cmd-1",
+        "把这几条跟进都忽略",
+        base_due + 60,
+    )
+    .await;
+    let command_event = personal_secretary::SourceEventId::new(command_event_id).unwrap();
+    // 1b. A 到期后真实生成 Candidate/Request，统一策略求值生成 policy-owned Outbox
+    //     （follow_up_id 为 NULL，只能经 Candidate 回溯）。
+    let due_report = follow_up_scan_at(&db, base_due).await;
+    assert_eq!(due_report.notification_candidates_created, 1);
+    assert_eq!(due_report.notification_evaluation_requests_created, 1);
+    let policy = NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    );
+    assert_eq!(
+        policy
+            .evaluate_next("batch-dismiss-policy", 60, |snapshot| {
+                NotificationPolicyEvaluator
+                    .evaluate(&snapshot.evaluation_input(base_due + 1).unwrap())
+            })
+            .await
+            .unwrap(),
+        Some(EvaluationCommitResult::Applied)
+    );
+    let outbox_a_id = scalar_string(
+        &db,
+        "SELECT outbox.notification_id AS value \
+         FROM secretary_notification_outbox outbox \
+         JOIN secretary_notification_candidates candidate \
+           ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+         WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+        [follow_up_a.as_str()],
+    )
+    .await
+    .expect("policy-owned follow-up outbox must exist");
+    // 1c. 来源化 FollowUp B（未到期），插一条 legacy pending Outbox。
+    let (_fact_b, follow_up_b) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-commitment-b",
+        "commitment:batch-b",
+        base_due + 7200,
+    )
+    .await;
+    let legacy_outbox_b_id = Uuid::new_v4().to_string();
+    legacy_pending_outbox_for(
+        &db,
+        &managed_id,
+        &follow_up_b,
+        base_due + 7200,
+        &legacy_outbox_b_id,
+    )
+    .await;
+
+    // 2. action_run + 初次运行：Planner 生成 DismissFollowUps -> Suspend 等 Owner 审批。
+    let targets = vec![
+        FollowUpControlTarget {
+            follow_up_id: FollowUpId::new(follow_up_a.clone()).unwrap(),
+            expected_source_version: 1,
+        },
+        FollowUpControlTarget {
+            follow_up_id: FollowUpId::new(follow_up_b.clone()).unwrap(),
+            expected_source_version: 1,
+        },
+    ];
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_event, "batch-dismiss-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command_event.clone(),
+                command_text: "把这几条跟进都忽略".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: base_due + 60,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command_event.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let control = Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    ));
+    let initial = PlannerUseCase::new(
+        action_store,
+        Arc::new(DismissFollowUpsPlanner {
+            targets: targets.clone(),
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(Arc::clone(&control));
+    let run = initial
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("run must be claimed");
+    assert!(run.suspended, "L2 batch dismiss must await approval");
+    let checkpoint_id = run
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal_id = run.proposal_id.expect("suspended run must have proposal");
+
+    // 3. 模拟进程重建后 Resume Approve。
+    let resumed = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(DismissFollowUpsPlanner { targets }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(control);
+    let resumed_report = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: SecretaryApprovalDecision::Approve,
+                command_source_event_id: command_event.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved resume must execute batch dismiss effect");
+    assert!(
+        resumed_report.completed,
+        "approved resume must complete the run"
+    );
+
+    // 4. 断言成功语义：全部 dismissed、版本精确 +1、两类 Outbox suppressed 且租约清空、
+    //    每条目标一条审计且共享同一 effect_id、一条回执、一条响应。
+    for (id, label) in [(&follow_up_a, "A"), (&follow_up_b, "B")] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT status AS value FROM secretary_follow_up_items WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("dismissed"),
+            "follow-up {label} must be dismissed"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            2,
+            "follow-up {label} version must bump by exactly 1"
+        );
+    }
+    for (outbox_id, label) in [
+        (&outbox_a_id, "policy-owned"),
+        (&legacy_outbox_b_id, "legacy"),
+    ] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT delivery_status AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("suppressed"),
+            "{label} outbox must be suppressed"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT (lease_token IS NULL) AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_id.as_str()],
+            )
+            .await,
+            1,
+            "suppressed {label} outbox must clear its lease"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(DISTINCT effect_id) AS SIGNED) AS value \
+             FROM secretary_follow_up_owner_controls WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        1,
+        "batch audit rows must share one effect_id"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        2,
+        "one audit row per target"
+    );
+    for (id, label) in [(&follow_up_a, "A"), (&follow_up_b, "B")] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT control_kind AS value FROM secretary_follow_up_owner_controls \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("dismiss"),
+            "audit for {label} must be dismiss kind"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(previous_source_version AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            1,
+            "audit for {label} must record previous version 1"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(current_source_version AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            2,
+            "audit for {label} must record current version 2"
+        );
+    }
+    let receipt_effect_id = scalar_string(
+        &db,
+        "SELECT effect_id AS value FROM secretary_action_effect_receipts WHERE run_id = ?",
+        [run_id.as_str()],
+    )
+    .await
+    .expect("batch must persist one effect receipt");
+    let audit_effect_id = scalar_exactly_one_string(
+        &db,
+        "SELECT effect_id AS value FROM secretary_follow_up_owner_controls \
+         WHERE follow_up_id = ? AND control_kind = 'dismiss'",
+        [follow_up_a.as_str()],
+        "audit row for A must be unique",
+    )
+    .await;
+    assert_eq!(
+        receipt_effect_id, audit_effect_id,
+        "audit effect_id must match the receipt effect_id"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "batch must persist exactly one effect receipt"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "completed resume must persist one owner response"
+    );
+
+    // 5. 第二次 Resume 被 Checkpoint CAS 拒绝，计数不再增加。
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command_event.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject the second approved resume"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        2,
+        "second resume must not write another audit"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "second resume must not write another receipt"
+    );
+
+    // ===== 原子失败路径：第二个目标版本错误，整个批次必须全回滚 =====
+    // 6a. 两个新的来源化 FollowUp（未到期），C 带一条 legacy pending Outbox。
+    let (_fact_c, follow_up_c) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-commitment-c",
+        "commitment:batch-c",
+        base_due + 7200,
+    )
+    .await;
+    let (_fact_d, follow_up_d) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-commitment-d",
+        "commitment:batch-d",
+        base_due + 7200,
+    )
+    .await;
+    let legacy_outbox_c_id = Uuid::new_v4().to_string();
+    legacy_pending_outbox_for(
+        &db,
+        &managed_id,
+        &follow_up_c,
+        base_due + 7200,
+        &legacy_outbox_c_id,
+    )
+    .await;
+    // 6b. 新 OwnerCommand（复用既有 binding，不再插入新 binding，保持恰好一个 active）。
+    let command2_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(
+                    MessageSource::QqOpenPlatform,
+                    &command_account_id,
+                    "batch-cmd-2",
+                )
+                .unwrap(),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid").unwrap(),
+                base_due + 120,
+                "忽略另外两条跟进",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let run2_id = ActionRunId::for_owner_command(&command2_event_id, "batch-dismiss-v1");
+    build_mysql_action_store(db.clone())
+        .ensure_action_run(
+            &run2_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command2_event_id.clone(),
+                command_text: "忽略另外两条跟进".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: base_due + 120,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command2_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let failing = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(DismissFollowUpsPlanner {
+            targets: vec![
+                FollowUpControlTarget {
+                    follow_up_id: FollowUpId::new(follow_up_c.clone()).unwrap(),
+                    expected_source_version: 1,
+                },
+                FollowUpControlTarget {
+                    follow_up_id: FollowUpId::new(follow_up_d.clone()).unwrap(),
+                    expected_source_version: 99,
+                },
+            ],
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    )));
+    let run2 = failing
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("second run must be claimed");
+    assert!(run2.suspended, "L2 batch dismiss must await approval first");
+    let checkpoint2_id = run2
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal2_id = run2.proposal_id.expect("suspended run must have proposal");
+    assert!(
+        failing
+            .resume_run(
+                &run2_id,
+                &checkpoint2_id,
+                SecretaryActionResumeInput {
+                    proposal_id: proposal2_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command2_event_id.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "wrong expected_source_version must fail the whole batch"
+    );
+
+    // 6c. 全回滚断言：两条 FollowUp 都未变化、Outbox 未压制、无审计、无回执、无响应。
+    for (id, label) in [(&follow_up_c, "C"), (&follow_up_d, "D")] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT status AS value FROM secretary_follow_up_items WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("scheduled"),
+            "follow-up {label} must stay scheduled after atomic failure"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            1,
+            "follow-up {label} version must stay unchanged after atomic failure"
+        );
+    }
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox \
+             WHERE notification_id = ?",
+            [legacy_outbox_c_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("pending"),
+        "outbox must not be suppressed after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_c.as_str(), follow_up_d.as_str()],
+        )
+        .await,
+        0,
+        "no batch control audit after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run2_id.as_str()],
+        )
+        .await,
+        0,
+        "no effect receipt after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run2_id.as_str()],
+        )
+        .await,
+        0,
+        "no optimistic success response after atomic failure"
+    );
 }

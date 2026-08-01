@@ -6,7 +6,7 @@ use sea_orm::{
 
 use crate::{
     FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlStoreT,
-    SecretaryAction, SecretaryActionProposal, SecretaryActionReceipt,
+    FollowUpControlTarget, SecretaryAction, SecretaryActionProposal, SecretaryActionReceipt,
 };
 
 pub(crate) struct MySqlFollowUpControlStore {
@@ -39,12 +39,27 @@ impl FollowUpControlStoreT for MySqlFollowUpControlStore {
             return Ok(receipt);
         }
 
+        // 单条 Dismiss/Snooze 包装为长度 1 的批次，业务行为与结果文案保持不变；
+        // DismissFollowUps 走真正的批量 all-or-nothing 路径。
         let applied = match &request.action {
             SecretaryAction::DismissFollowUp { .. } => {
-                apply_dismiss(&transaction, request, account_id).await?
+                let control = apply_dismiss(&transaction, request, account_id).await?;
+                let result_ref = control.result_ref.clone();
+                AppliedControlBatch {
+                    controls: vec![control],
+                    result_ref,
+                }
             }
             SecretaryAction::SnoozeFollowUp { .. } => {
-                apply_snooze(&transaction, request, account_id).await?
+                let control = apply_snooze(&transaction, request, account_id).await?;
+                let result_ref = control.result_ref.clone();
+                AppliedControlBatch {
+                    controls: vec![control],
+                    result_ref,
+                }
+            }
+            SecretaryAction::DismissFollowUps { .. } => {
+                apply_batch_dismiss(&transaction, request, account_id).await?
             }
             _ => {
                 return Err(FollowUpControlStoreError::InvalidData(
@@ -52,7 +67,25 @@ impl FollowUpControlStoreT for MySqlFollowUpControlStore {
                 ));
             }
         };
-        insert_control_audit(&transaction, request, account_id, &applied).await?;
+        // 单条控制沿用既有 control_id 派生（历史行为不变）；批量控制必须按
+        // effect_id + follow_up_id 稳定派生（同一 Effect 每行唯一，重放不产生新 ID）。
+        let is_single = matches!(
+            request.action,
+            SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. }
+        );
+        for control in &applied.controls {
+            let control_id = if is_single {
+                stable_id("follow-up-control", &request.effect_id)
+            } else {
+                // 使用 NUL 分隔两个已分别校验的字段，避免简单冒号拼接在
+                // effect_id 自身含冒号时产生边界歧义。
+                stable_id(
+                    "follow-up-control-batch",
+                    &format!("{}\0{}", request.effect_id, control.follow_up_id),
+                )
+            };
+            insert_control_audit(&transaction, request, account_id, control, &control_id).await?;
+        }
         let inserted = transaction
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
@@ -95,6 +128,13 @@ struct AppliedControl {
     previous_due_at_unix_secs: Option<i64>,
     current_due_at_unix_secs: Option<i64>,
     reason: String,
+    result_ref: String,
+}
+
+/// 一次 Effect 的完整落库结果：单条 Dismiss/Snooze 包装为长度 1 的批次，
+/// 批量 Dismiss 为多个目标；整个批次只写一条通用 Effect Receipt。
+struct AppliedControlBatch {
+    controls: Vec<AppliedControl>,
     result_ref: String,
 }
 
@@ -176,6 +216,114 @@ async fn apply_dismiss<C: ConnectionTrait>(
             item.source_version,
             item.source_version + 1
         ),
+    })
+}
+
+/// 批量忽略：按 follow_up_id 字典序锁定（确定性锁顺序，避免重叠批次死锁），
+/// 先验证全部目标与关联 Outbox 再执行任何业务 UPDATE；任一失败整个事务回滚，
+/// 不允许部分成功（all-or-nothing）。
+async fn apply_batch_dismiss<C: ConnectionTrait>(
+    db: &C,
+    request: &FollowUpControlEffectRequest,
+    account_id: u64,
+) -> Result<AppliedControlBatch, FollowUpControlStoreError> {
+    let (targets, reason) = match &request.action {
+        SecretaryAction::DismissFollowUps { targets, reason } => (targets, reason.clone()),
+        _ => {
+            return Err(FollowUpControlStoreError::InvalidData(
+                "action is not a batch follow-up dismiss".into(),
+            ));
+        }
+    };
+    // 确定性锁顺序：不能按 LLM 给出的原始顺序直接锁库。
+    let mut ordered: Vec<&FollowUpControlTarget> = targets.iter().collect();
+    ordered.sort_by(|a, b| a.follow_up_id.as_str().cmp(b.follow_up_id.as_str()));
+
+    // 阶段 1：锁定全部目标并校验状态/版本；任一不存在/不匹配立即失败。
+    let mut locked = Vec::with_capacity(ordered.len());
+    for target in &ordered {
+        let item = FollowUpItemRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT status, due_at_unix_secs, source_version FROM secretary_follow_up_items \
+             WHERE follow_up_id = ? AND account_id = ? FOR UPDATE",
+            [target.follow_up_id.as_str().into(), account_id.into()],
+        ))
+        .one(db)
+        .await
+        .map_err(database_error)?
+        .ok_or_else(|| {
+            FollowUpControlStoreError::InvalidData("follow_up not found in account".into())
+        })?;
+        if item.status != "scheduled" || item.source_version != target.expected_source_version {
+            return Err(FollowUpControlStoreError::InvalidData(
+                "follow_up status or source_version changed since approval".into(),
+            ));
+        }
+        locked.push((target, item));
+    }
+    // 阶段 2：锁定全部关联 Outbox（legacy + policy-owned 回溯）并拒绝 claimed。
+    for target in &ordered {
+        lock_and_check_outbox(db, account_id, target.follow_up_id.as_str(), "dismiss").await?;
+    }
+    // 阶段 3：全部校验通过后才执行 CAS 更新（status -> dismissed，version 精确 +1）。
+    for (target, _) in &locked {
+        let updated = db
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "UPDATE secretary_follow_up_items \
+                 SET status = 'dismissed', source_version = source_version + 1, \
+                     updated_at = CURRENT_TIMESTAMP(6) \
+                 WHERE follow_up_id = ? AND account_id = ? AND status = 'scheduled' \
+                   AND source_version = ?",
+                [
+                    target.follow_up_id.as_str().into(),
+                    account_id.into(),
+                    target.expected_source_version.into(),
+                ],
+            ))
+            .await
+            .map_err(database_error)?;
+        if updated.rows_affected() != 1 {
+            return Err(FollowUpControlStoreError::InvalidData(
+                "follow-up compare-and-set failed".into(),
+            ));
+        }
+    }
+    // 阶段 4：压制全部目标的 pending/failed Outbox 并清除租约；delivered 保留。
+    for target in &ordered {
+        suppress_pending_outbox(db, account_id, target.follow_up_id.as_str()).await?;
+    }
+    // 阶段 5：组装每目标审计与有界结果文案（只含数量与 FollowUp ID）。
+    let mut controls = Vec::with_capacity(locked.len());
+    for (target, item) in &locked {
+        controls.push(AppliedControl {
+            follow_up_id: target.follow_up_id.as_str().to_owned(),
+            control_kind: "dismiss",
+            previous_status: "scheduled",
+            current_status: "dismissed",
+            previous_source_version: item.source_version,
+            current_source_version: item.source_version + 1,
+            previous_due_at_unix_secs: None,
+            current_due_at_unix_secs: None,
+            reason: reason.clone(),
+            result_ref: format!(
+                "跟进事项 {} 已忽略（版本 {} -> {}）",
+                target.follow_up_id.as_str(),
+                item.source_version,
+                item.source_version + 1
+            ),
+        });
+    }
+    // 20 个目标 × 37 字符仍在响应有界约束内；不包含账号 ID/OpenID/Token/聊天正文。
+    let ids = controls
+        .iter()
+        .map(|control| control.follow_up_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let result_ref = format!("已批量忽略 {} 条跟进事项：{ids}", controls.len());
+    Ok(AppliedControlBatch {
+        controls,
+        result_ref,
     })
 }
 
@@ -314,6 +462,7 @@ async fn lock_and_check_outbox<C: ConnectionTrait>(
            ON candidate.notification_candidate_id = outbox.notification_candidate_id \
          WHERE outbox.account_id = ? AND (outbox.follow_up_id = ? OR \
                (candidate.source_kind = 'follow_up' AND candidate.source_id = ?)) \
+         ORDER BY outbox.notification_id \
          FOR UPDATE",
         [account_id.into(), follow_up_id.into(), follow_up_id.into()],
     ))
@@ -360,6 +509,7 @@ async fn insert_control_audit<C: ConnectionTrait>(
     request: &FollowUpControlEffectRequest,
     account_id: u64,
     applied: &AppliedControl,
+    control_id: &str,
 ) -> Result<(), FollowUpControlStoreError> {
     let result = db
         .execute_raw(Statement::from_sql_and_values(
@@ -371,7 +521,7 @@ async fn insert_control_audit<C: ConnectionTrait>(
               current_due_at_unix_secs) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                stable_id("follow-up-control", &request.effect_id).into(),
+                control_id.into(),
                 request.effect_id.clone().into(),
                 request.run_id.as_str().into(),
                 request.proposal_id.clone().into(),

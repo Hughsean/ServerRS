@@ -22,7 +22,7 @@
   `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查均实际通过。全局门禁仍为 `REJECTED`：
   多项 B3/B4/B6/B7 缺少 L4/L5 独立证明，B3 requirement 因缺少 L5 attestation 显示 FAIL；
   不把 `REJECTED` 改写为 `APPROVED`。
-- 当前开发分支：`deepseek/qqbot-snooze-follow-up-v1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
+- 当前开发分支：`deepseek/qqbot-batch-dismiss-follow-up-v1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
   接下来继续主动跟进、线程语义与离线恢复任务。需要用户操作或 NapCat 实机验证的事项单独跳过。
 
 ## 历史分块
@@ -33,6 +33,13 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-01 17:24（Asia/Shanghai）`：完成 Owner 批量忽略 FollowUp 的 L2 控制闭环。单次
+  Action 最多携带 20 个明确 FollowUp ID 与来源版本；最终事务按确定顺序锁定全部目标及其
+  legacy/policy-owned Outbox，任一目标状态、版本或投递状态不安全即整批回滚。成功时统一推进
+  全部版本、压制 pending/failed 通知、为每个目标写不可变审计，并只写一条 Effect Receipt。
+  独立复核补强了批量审计 ID 的无歧义派生和 Outbox 行锁顺序；批量成功/失败全回滚、单条忽略
+  与单条推迟三条随机隔离 MySQL 场景均通过，临时 schema 全部清理。未连接或发送 QQ。
 
 - `2026-08-01 14:42（Asia/Shanghai）`：完成 Owner 推迟单个 FollowUp 的 L2 控制闭环。新到期
   时间在最终事务中以 MySQL 当前时钟复验，必须晚于原到期且不超过 365 天；事务以账号、状态和

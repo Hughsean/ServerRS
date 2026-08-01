@@ -930,7 +930,9 @@ fn is_thread_control_action(action: &SecretaryAction) -> bool {
 fn is_follow_up_control_action(action: &SecretaryAction) -> bool {
     matches!(
         action,
-        SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. }
+        SecretaryAction::DismissFollowUp { .. }
+            | SecretaryAction::SnoozeFollowUp { .. }
+            | SecretaryAction::DismissFollowUps { .. }
     )
 }
 

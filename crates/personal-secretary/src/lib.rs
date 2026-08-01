@@ -56,7 +56,7 @@ pub use agenda::{
 };
 pub use agenda_service::{AgendaApplyRequest, AgendaMutationReceipt, AgendaStoreT, AgendaUseCase};
 pub use agent_runtime::{
-    OwnerResponseDraft, RecentEventRef, ResponseSegment, SecretaryAction,
+    FollowUpControlTarget, OwnerResponseDraft, RecentEventRef, ResponseSegment, SecretaryAction,
     SecretaryActionApprovalRequest, SecretaryActionEffect, SecretaryActionProposal,
     SecretaryActionReceipt, SecretaryActionResumeInput, SecretaryAgentPhase,
     SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
