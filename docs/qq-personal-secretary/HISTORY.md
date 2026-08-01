@@ -34,6 +34,20 @@
 
 ## 最近事件
 
+- `2026-08-01 13:45（Asia/Shanghai）`：补齐 FollowUp 忽略对现行 Task 7 通知链的覆盖。旧实现
+  只按 Outbox 的 legacy `follow_up_id` 查找，但 policy-owned Outbox 通过 Candidate 引用来源且
+  `follow_up_id` 为空；现已在同一事务内锁定并压制两种来源形态。MySQL 测试改为真实
+  FollowUp→Candidate→Evaluation→Decision→policy-owned Outbox，再执行 Owner 审批忽略并通过；
+  临时 schema 已清理。
+
+- `2026-08-01 13:38（Asia/Shanghai）`：完成 Owner 忽略单个 FollowUp 的 L2 控制闭环。
+  Action 使用 `follow_up_id + expected_source_version` fencing；Resume 后的专用事务复验租约、
+  OwnerCommand、唯一有效绑定和账号归属，原子更新 dismissed/版本、压制 pending/failed Outbox、
+  写不可变审计与通用 Effect Receipt。claimed/unknown_commit 会保守拒绝，delivered 历史不改写。
+  独立评审将 ID 上限收紧到数据库 `CHAR(36)`，增加 Proposal/Action 一致性验证，并锁定 Outbox
+  行消除投递竞态；真实 MySQL 首轮修复 SQL 数字下划线、次轮修复 unsigned 解码后主路径通过，
+  随机 schema 已清理。未连接或发送 QQ。
+
 - `2026-08-01 13:16（Asia/Shanghai）`：待处理事项现携带真实可选来源版本：FollowUp 使用
   `source_version`、Agenda 使用 `version`、回复期待使用其来源版本，Outbox 明确为无版本，
   为后续忽略/推迟操作提供 fencing。Owner 响应仅在版本存在时展示。随机隔离 MySQL 覆盖

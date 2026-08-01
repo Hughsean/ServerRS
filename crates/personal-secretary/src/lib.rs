@@ -13,6 +13,7 @@ mod continuity;
 mod directory;
 mod directory_service;
 mod follow_up;
+mod follow_up_control_service;
 mod follow_up_service;
 mod health;
 mod health_service;
@@ -82,8 +83,12 @@ pub use directory_service::{
     DirectoryStoreT, DirectorySyncBudget, DirectorySyncError, DirectorySyncUseCase,
 };
 pub use follow_up::{
-    ClaimedOwnerNotification, FollowUpScanReport, FollowUpStatus, NotificationFailureKind,
-    NotificationId, NotificationLeaseToken, OwnerNotificationContent,
+    ClaimedOwnerNotification, FollowUpId, FollowUpScanReport, FollowUpStatus,
+    NotificationFailureKind, NotificationId, NotificationLeaseToken, OwnerNotificationContent,
+};
+pub use follow_up_control_service::{
+    FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlStoreT,
+    FollowUpControlUseCase,
 };
 pub use follow_up_service::{
     FollowUpStoreT, FollowUpUseCase, LegacyNotificationReconciliationConfig,
@@ -216,7 +221,8 @@ pub use backfill_service::{
 pub use infra::{
     build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_agenda_store,
     build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
-    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_follow_up_control_store, build_mysql_follow_up_store,
+    build_mysql_inbound_event_store, build_mysql_memory_store,
     build_mysql_notification_policy_store, build_mysql_owner_binding_store,
     build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_control_store,
     build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,

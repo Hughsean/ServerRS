@@ -11,7 +11,8 @@ use async_trait::async_trait;
 
 use crate::{
     AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, ConversationMemoryModeInput,
-    EventQuery, MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
+    EventQuery, FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlUseCase,
+    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
     NotificationPolicyEffectRequest, NotificationPolicyUseCase, ReferenceContext, RetrieverUseCase,
     SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
     SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
@@ -32,6 +33,7 @@ pub struct SecretaryActionEffectExecutor {
     agenda: Option<Arc<AgendaUseCase>>,
     memory: Option<Arc<MemoryUseCase>>,
     thread_control: Option<Arc<ThreadControlUseCase>>,
+    follow_up_control: Option<Arc<FollowUpControlUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
     now_unix_secs: i64,
@@ -55,6 +57,7 @@ impl SecretaryActionEffectExecutor {
             agenda: None,
             memory: None,
             thread_control: None,
+            follow_up_control: None,
             command_source_event_id: None,
             account,
             now_unix_secs,
@@ -99,6 +102,51 @@ impl SecretaryActionEffectExecutor {
         self.thread_control = Some(thread_control);
         self.command_source_event_id = Some(command_source_event_id);
         self
+    }
+
+    pub fn with_follow_up_control(
+        mut self,
+        follow_up_control: Arc<FollowUpControlUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.follow_up_control = Some(follow_up_control);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    async fn execute_follow_up_control(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<Option<SecretaryActionReceipt>, EffectError> {
+        if !is_follow_up_control_action(&proposal.action) {
+            return Ok(None);
+        }
+        let use_case = self.follow_up_control.as_ref().ok_or_else(|| {
+            EffectError::new(EffectErrorKind::Permanent, "FollowUpControlUseCase 未注入")
+        })?;
+        let command_source_event_id = self.command_source_event_id.clone().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "FollowUp 控制需要原始 OwnerCommand 身份",
+            )
+        })?;
+        let proposal_json = serde_json::to_string(proposal)
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        let receipt = use_case
+            .apply_effect(&FollowUpControlEffectRequest {
+                account: self.account.clone(),
+                command_source_event_id,
+                run_id: self.run_id.clone(),
+                lease_token: self.lease_token.clone(),
+                effect_id: effect_id.to_owned(),
+                proposal_id: proposal.proposal_id.clone(),
+                proposal_json,
+                action: proposal.action.clone(),
+            })
+            .await
+            .map_err(follow_up_control_effect_error)?;
+        Ok(Some(receipt))
     }
 
     async fn execute_thread_control(
@@ -632,8 +680,10 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         let is_mutable_policy =
             is_mutable_notification_policy_action(&envelope.effect.proposal.action);
         let is_thread_control = is_thread_control_action(&envelope.effect.proposal.action);
+        let is_follow_up_control = is_follow_up_control_action(&envelope.effect.proposal.action);
         if !is_mutable_policy
             && !is_thread_control
+            && !is_follow_up_control
             && let Some(mut receipt) = self
                 .store
                 .load_effect_receipt(&self.run_id, &envelope.id.to_string())
@@ -670,6 +720,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         }
         if let Some(mut receipt) = self
             .execute_thread_control(&envelope.effect.proposal, &envelope.id.to_string())
+            .await?
+        {
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
+        }
+        if let Some(mut receipt) = self
+            .execute_follow_up_control(&envelope.effect.proposal, &envelope.id.to_string())
             .await?
         {
             receipt.tool_kind = Some(tool_kind);
@@ -747,6 +804,16 @@ fn thread_control_effect_error(error: ThreadControlStoreError) -> EffectError {
         ThreadControlStoreError::LeaseLost
         | ThreadControlStoreError::Unauthorized
         | ThreadControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn follow_up_control_effect_error(error: FollowUpControlStoreError) -> EffectError {
+    let kind = match error {
+        FollowUpControlStoreError::Database => EffectErrorKind::UnknownCommit,
+        FollowUpControlStoreError::LeaseLost
+        | FollowUpControlStoreError::Unauthorized
+        | FollowUpControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
 }
@@ -858,6 +925,10 @@ fn is_thread_control_action(action: &SecretaryAction) -> bool {
             | SecretaryAction::DismissThreadQuestion { .. }
             | SecretaryAction::SetThreadLifecycle { .. }
     )
+}
+
+fn is_follow_up_control_action(action: &SecretaryAction) -> bool {
+    matches!(action, SecretaryAction::DismissFollowUp { .. })
 }
 
 /// 格式化事件检索结果为有界摘要（含来源、时间、Actor、摘录、命中数）。

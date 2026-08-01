@@ -3,28 +3,34 @@ use agent_core::graph::{
     GraphDefinition, GraphExecutionResult, GraphId, GraphPolicy, GraphRuntime, NodeId, RunBudget,
     TransitionRule,
 };
+use async_trait::async_trait;
 use personal_secretary::{
-    AgendaApplyRequest, AgendaItemKind, AgendaMutation, AgendaUseCase, BackfillAnchor,
-    BackfillBudget, BackfillCursor, BackfillEvidence, BackfillGapUseCase, BackfillLease,
-    BackfillOutcome, BackfillScopeStatus, Clock, CommitmentMemory, CommitmentStatus,
-    ConnectionEndReason, ConservativeThreadSemanticExtractor, ContentSegment, ContentTrustLevel,
-    ConversationKind, ConversationMemoryModeInput, ConversationRef, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, DirectoryEvidence, DirectorySnapshot, DirectorySnapshotId,
-    DirectorySourceApi, DirectoryStatus, EvaluationCommitResult, EventThreadId,
-    HistoryBackfillSourceT, HistoryCompleteness, InboundMessageEnvelope, IngestMessageOutcome,
-    IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
-    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase,
-    MessageSource, NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
-    OwnerNotificationContent, PersonMemory, ProjectMemory, ScopeProgress, SourceAccountRef,
+    ActionPlannerT, ActionRunId, ActionRunSeed, AgendaApplyRequest, AgendaItemKind, AgendaMutation,
+    AgendaUseCase, BackfillAnchor, BackfillBudget, BackfillCursor, BackfillEvidence,
+    BackfillGapUseCase, BackfillLease, BackfillOutcome, BackfillScopeStatus, Clock,
+    CommitmentMemory, CommitmentStatus, ConnectionEndReason, ConservativeThreadSemanticExtractor,
+    ContentSegment, ContentTrustLevel, ConversationKind, ConversationMemoryModeInput,
+    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
+    DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus,
+    EvaluationCommitResult, EventThreadId, FollowUpControlEffectRequest, FollowUpControlStoreError,
+    FollowUpControlUseCase, FollowUpId, HistoryBackfillSourceT, HistoryCompleteness,
+    InMemoryCheckpointStore, InboundMessageEnvelope, IngestMessageOutcome, IngestionGapReason,
+    IngestionGapStatus, LegacyNotificationReconciliationConfig, MemoryDeleteInput, MemoryFact,
+    MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource,
+    NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
+    OwnerNotificationContent, PersonMemory, PlannerError, PlannerInput, PlannerOutput,
+    PlannerUseCase, ProjectMemory, ScopeProgress, SecretaryAction, SecretaryActionProposal,
+    SecretaryActionResumeInput, SecretaryAgentState, SecretaryApprovalDecision, SourceAccountRef,
     SourceMessageRef, SystemClock, ThreadActorRef, ThreadLinkCandidateId, ThreadLinkReviewAction,
     ThreadLinkReviewUseCase, ThreadLinkUseCase, ThreadMutationApprovalNode, ThreadMutationDecision,
     ThreadMutationDecisionNode, ThreadMutationEffect, ThreadMutationEffectExecutor,
     ThreadMutationImpact, ThreadMutationKind, ThreadMutationProposalId, ThreadMutationResumeInput,
     ThreadMutationRevertInput, ThreadMutationRevertUseCase, ThreadMutationStoreT,
     ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
-    VerifiedActorKind, build_mysql_agenda_store, build_mysql_backfill_store,
-    build_mysql_directory_store, build_mysql_follow_up_store, build_mysql_inbound_event_store,
-    build_mysql_memory_store, build_mysql_notification_policy_store, build_mysql_retriever_store,
+    VerifiedActorKind, build_mysql_action_store, build_mysql_agenda_store,
+    build_mysql_backfill_store, build_mysql_directory_store, build_mysql_follow_up_control_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_notification_policy_store, build_mysql_retriever_store,
     build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
     build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
     build_mysql_thread_semantic_store,
@@ -3678,4 +3684,552 @@ async fn thread_id_for(
     )
     .await
     .expect("event must have a thread")
+}
+
+// ===== Owner 审批忽略单个 FollowUp（L2 控制闭环） =====
+
+/// 测试用 Planner：固定返回 DismissFollowUp Proposal，不调用 LLM。
+struct DismissFollowUpPlanner {
+    follow_up_id: FollowUpId,
+    expected_source_version: u64,
+}
+
+#[async_trait]
+impl ActionPlannerT for DismissFollowUpPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                SecretaryAction::DismissFollowUp {
+                    follow_up_id: self.follow_up_id.clone(),
+                    expected_source_version: self.expected_source_version,
+                    reason: "Owner 确认该跟进不再需要".into(),
+                },
+                "测试：Owner 审批忽略单个 FollowUp",
+                Vec::new(),
+                Some("dismiss-follow-up-v1".into()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+async fn follow_up_id_for_fact(db: &sea_orm::DatabaseConnection, fact_id: &str) -> String {
+    scalar_string(
+        db,
+        "SELECT item.follow_up_id AS value FROM secretary_follow_up_items item \
+         WHERE item.source_memory_fact_id = ?",
+        [fact_id],
+    )
+    .await
+    .expect("follow_up must exist for fact")
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn owner_approved_dismiss_follow_up_full_flow_with_version_fencing() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("dismiss-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. 来源化 Commitment FollowUp（source_version=1）
+    let commitment_event = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::NapCat, &managed_id, "commitment-1").unwrap(),
+                ConversationRef::new(ConversationKind::Group, "dismiss-group").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+                100_000,
+                "我会在明天发送报价单",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let memory_store = build_mysql_memory_store(db.clone());
+    let memory = MemoryUseCase::new(memory_store.clone());
+    let fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "commitment:dismiss-quote".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "发送报价单".into(),
+            due_at_unix_secs: Some(101_000),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![commitment_event],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&fact).await.unwrap();
+    let follow_up = personal_secretary::FollowUpUseCase::new(
+        build_mysql_follow_up_store(db.clone()),
+        memory_store,
+    );
+    let report = follow_up
+        .scan(100_000, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
+    assert_eq!(report.commitments_materialized, 1);
+    let follow_up_id = follow_up_id_for_fact(&db, fact.fact_id.as_str()).await;
+    // 2. OwnerCommand 与有效 OwnerBinding
+    let command_account_id = format!("dismiss-command-{suffix}");
+    let command_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::QqOpenPlatform, &command_account_id, "cmd-1")
+                    .unwrap(),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid").unwrap(),
+                100_100,
+                "忽略这条跟进事项",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+         FROM secretary_accounts managed JOIN secretary_accounts command \
+         WHERE managed.source_channel = 'napcat' AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        vec![
+            Uuid::new_v4().to_string().into(),
+            managed_id.clone().into(),
+            command_account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+
+    // 现行生产路径：FollowUp 到期后生成 Candidate/Request，由统一策略求值生成
+    // policy-owned Outbox；这类行的 follow_up_id 为 NULL，只能经 Candidate 回溯来源。
+    let due_report = follow_up
+        .scan(101_000, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
+    assert_eq!(due_report.notification_candidates_created, 1);
+    assert_eq!(due_report.notification_evaluation_requests_created, 1);
+    let policy = NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    );
+    assert_eq!(
+        policy
+            .evaluate_next("dismiss-follow-up-policy", 60, |snapshot| {
+                NotificationPolicyEvaluator.evaluate(&snapshot.evaluation_input(101_001).unwrap())
+            })
+            .await
+            .unwrap(),
+        Some(EvaluationCommitResult::Applied)
+    );
+    let outbox_id = scalar_string(
+        &db,
+        "SELECT outbox.notification_id AS value \
+         FROM secretary_notification_outbox outbox \
+         JOIN secretary_notification_candidates candidate \
+           ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+         WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+        [follow_up_id.as_str()],
+    )
+    .await
+    .expect("policy-owned follow-up outbox must exist");
+
+    // 3. action_run + 初次运行：Planner 生成 DismissFollowUp -> Suspend 等 Owner 审批
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_event_id, "dismiss-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command_event_id.clone(),
+                command_text: "忽略这条跟进事项".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 100_100,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let control = Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    ));
+    let initial = PlannerUseCase::new(
+        action_store,
+        Arc::new(DismissFollowUpPlanner {
+            follow_up_id: FollowUpId::new(follow_up_id.clone()).unwrap(),
+            expected_source_version: 1,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(Arc::clone(&control));
+    let run = initial
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("run must be claimed");
+    assert!(run.suspended, "L2 dismiss follow-up must await approval");
+    let checkpoint_id = run
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal_id = run.proposal_id.expect("suspended run must have proposal");
+
+    // 4. 模拟进程重建：全新 PlannerUseCase 与 CheckpointStore，Resume Approve
+    let resumed = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(DismissFollowUpPlanner {
+            follow_up_id: FollowUpId::new(follow_up_id.clone()).unwrap(),
+            expected_source_version: 1,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(control);
+    let resumed_report = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: SecretaryApprovalDecision::Approve,
+                command_source_event_id: command_event_id.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved resume must execute dismiss effect");
+    assert!(
+        resumed_report.completed,
+        "approved resume must complete the run"
+    );
+
+    // 5. 断言：dismissed + 版本精确 +1、Outbox suppressed、审计/回执/响应各一条
+    let follow_up_status = scalar_string(
+        &db,
+        "SELECT status AS value FROM secretary_follow_up_items WHERE follow_up_id = ?",
+        [follow_up_id.as_str()],
+    )
+    .await;
+    assert_eq!(follow_up_status.as_deref(), Some("dismissed"));
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+             WHERE follow_up_id = ?",
+            [follow_up_id.as_str()],
+        )
+        .await,
+        2,
+        "dismiss must bump source_version by exactly 1"
+    );
+    let outbox_status = scalar_string(
+        &db,
+        "SELECT delivery_status AS value FROM secretary_notification_outbox \
+         WHERE notification_id = ?",
+        [outbox_id.as_str()],
+    )
+    .await;
+    assert_eq!(outbox_status.as_deref(), Some("suppressed"));
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT (lease_token IS NULL) AS value FROM secretary_notification_outbox \
+             WHERE notification_id = ?",
+            [outbox_id.as_str()],
+        )
+        .await,
+        1,
+        "suppressed outbox must clear its lease"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id = ?",
+            [follow_up_id.as_str()],
+        )
+        .await,
+        1,
+        "dismiss must write exactly one immutable control audit"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "dismiss must persist exactly one effect receipt"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "completed resume must persist one owner response"
+    );
+
+    // 6. 第二次 Resume 必须被 Checkpoint CAS 拒绝，且版本/审计不再变化
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command_event_id.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject the second approved resume"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+             WHERE follow_up_id = ?",
+            [follow_up_id.as_str()],
+        )
+        .await,
+        2,
+        "second resume must not move the version again"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id = ?",
+            [follow_up_id.as_str()],
+        )
+        .await,
+        1,
+        "second resume must not write another audit"
+    );
+
+    // 7. 错误 expected_source_version：不产生业务修改、审计或回执
+    let second_event = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::NapCat, &managed_id, "commitment-2").unwrap(),
+                ConversationRef::new(ConversationKind::Group, "dismiss-group").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::External, "alice").unwrap(),
+                103_000,
+                "我会在周四前提交设计稿",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let second_fact = MemoryFact {
+        fact_id: MemoryFactId::generate(),
+        account: managed.clone(),
+        subject_key: "commitment:dismiss-design".into(),
+        payload: MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "owner".into(),
+            },
+            action: "提交设计稿".into(),
+            due_at_unix_secs: Some(104_000),
+            status: CommitmentStatus::Pending,
+            completion_source_event_id: None,
+        }),
+        status: MemoryFactStatus::Confirmed,
+        confidence_bps: 9_500,
+        source_event_ids: vec![second_event],
+        valid_until_unix_secs: None,
+        supersedes_fact_id: None,
+    };
+    memory.remember(&second_fact).await.unwrap();
+    let second_report = follow_up
+        .scan(103_000, 86_400, 14_400, 86_400, 100)
+        .await
+        .unwrap();
+    assert_eq!(second_report.commitments_materialized, 1);
+    let second_follow_up_id = follow_up_id_for_fact(&db, second_fact.fact_id.as_str()).await;
+    assert_ne!(second_follow_up_id, follow_up_id);
+    let second_outbox_id = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_notification_outbox \
+         (notification_id, account_id, follow_up_id, scheduled_at_unix_secs, notification_kind, \
+          payload_json, delivery_status) \
+         SELECT ?, id, ?, 105000, 'owner_reminder', '{}', 'pending' \
+         FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            second_outbox_id.clone().into(),
+            second_follow_up_id.clone().into(),
+            MessageSource::NapCat.as_str().into(),
+            managed_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let command2_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::QqOpenPlatform, &command_account_id, "cmd-2")
+                    .unwrap(),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid").unwrap(),
+                103_100,
+                "忽略另一条跟进",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let run2_id = ActionRunId::for_owner_command(&command2_event_id, "dismiss-v1");
+    build_mysql_action_store(db.clone())
+        .ensure_action_run(
+            &run2_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command2_event_id.clone(),
+                command_text: "忽略另一条跟进".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 103_100,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command2_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let claimed2 = build_mysql_action_store(db.clone())
+        .claim_pending_run("test-worker", 60, 103_200)
+        .await
+        .unwrap()
+        .expect("second run must be claimable");
+    let wrong = Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    ))
+    .apply_effect(&{
+        let proposal = SecretaryActionProposal::new(
+            SecretaryAction::DismissFollowUp {
+                follow_up_id: FollowUpId::new(second_follow_up_id.clone()).unwrap(),
+                expected_source_version: 99,
+                reason: "错误版本".into(),
+            },
+            "测试错误版本 fencing",
+            Vec::new(),
+            Some("dismiss-follow-up-wrong-version-v1".into()),
+        )
+        .unwrap();
+        FollowUpControlEffectRequest {
+            account: managed,
+            command_source_event_id: command2_event_id,
+            run_id: run2_id.clone(),
+            lease_token: claimed2.lease_token,
+            effect_id: format!("effect-wrong-version-{suffix}"),
+            proposal_id: proposal.proposal_id.clone(),
+            proposal_json: serde_json::to_string(&proposal).unwrap(),
+            action: proposal.action,
+        }
+    })
+    .await;
+    assert!(
+        matches!(wrong, Err(FollowUpControlStoreError::InvalidData(_))),
+        "wrong expected_source_version must fail as InvalidData, got {wrong:?}"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+             WHERE follow_up_id = ?",
+            [second_follow_up_id.as_str()],
+        )
+        .await,
+        1,
+        "wrong version must not modify the follow_up"
+    );
+    let second_outbox_status = scalar_string(
+        &db,
+        "SELECT delivery_status AS value FROM secretary_notification_outbox \
+         WHERE notification_id = ?",
+        [second_outbox_id.as_str()],
+    )
+    .await;
+    assert_eq!(
+        second_outbox_status.as_deref(),
+        Some("pending"),
+        "wrong version must not suppress the outbox"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id = ?",
+            [second_follow_up_id.as_str()],
+        )
+        .await,
+        0,
+        "wrong version must not write a control audit"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run2_id.as_str()],
+        )
+        .await,
+        0,
+        "wrong version must not write an effect receipt"
+    );
 }

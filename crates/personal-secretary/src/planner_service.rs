@@ -20,8 +20,9 @@ use tracing::{info, warn};
 
 use crate::{
     ActionLeaseToken, ActionRunContext, ActionRunId, ActionRunSeed, ActionStoreError, ActionStoreT,
-    ClaimedActionRun, Clock, OwnerResponseDraft, SecretaryActionEffectExecutor,
-    SecretaryAgentState, SuspendedRunClaim, SystemClock, backoff_ms, build_action_graph,
+    ClaimedActionRun, Clock, FollowUpControlUseCase, OwnerResponseDraft,
+    SecretaryActionEffectExecutor, SecretaryAgentState, SuspendedRunClaim, SystemClock, backoff_ms,
+    build_action_graph,
 };
 
 /// Planner 用例错误。
@@ -75,6 +76,7 @@ pub struct PlannerUseCase {
     agenda: Option<Arc<crate::AgendaUseCase>>,
     memory: Option<Arc<crate::MemoryUseCase>>,
     thread_control: Option<Arc<crate::ThreadControlUseCase>>,
+    follow_up_control: Option<Arc<FollowUpControlUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -98,6 +100,7 @@ impl PlannerUseCase {
             agenda: None,
             memory: None,
             thread_control: None,
+            follow_up_control: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -141,6 +144,14 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_follow_up_control(
+        mut self,
+        follow_up_control: Arc<FollowUpControlUseCase>,
+    ) -> Self {
+        self.follow_up_control = Some(follow_up_control);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -156,6 +167,7 @@ impl PlannerUseCase {
             agenda: None,
             memory: None,
             thread_control: None,
+            follow_up_control: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -255,6 +267,12 @@ impl PlannerUseCase {
         if let Some(thread_control) = &self.thread_control {
             effect_executor = effect_executor.with_thread_control(
                 Arc::clone(thread_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(follow_up_control) = &self.follow_up_control {
+            effect_executor = effect_executor.with_follow_up_control(
+                Arc::clone(follow_up_control),
                 claimed.command_source_event_id.clone(),
             );
         }
@@ -426,6 +444,12 @@ impl PlannerUseCase {
         if let Some(thread_control) = &self.thread_control {
             effect_executor = effect_executor.with_thread_control(
                 Arc::clone(thread_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(follow_up_control) = &self.follow_up_control {
+            effect_executor = effect_executor.with_follow_up_control(
+                Arc::clone(follow_up_control),
                 claimed.command_source_event_id.clone(),
             );
         }

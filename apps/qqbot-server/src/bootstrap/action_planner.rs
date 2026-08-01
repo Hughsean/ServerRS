@@ -6,10 +6,11 @@
 use std::sync::Arc;
 
 use personal_secretary::{
-    ActionPlannerT, AgendaUseCase, CheckpointStore, InMemoryCheckpointStore, MemoryUseCase,
-    NotificationPolicyUseCase, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase,
-    RetrieverPolicy, RetrieverUseCase, SecretaryAgentState, SystemClock, ThreadControlUseCase,
-    build_mysql_action_store, build_mysql_agenda_store, build_mysql_memory_store,
+    ActionPlannerT, AgendaUseCase, CheckpointStore, FollowUpControlUseCase,
+    InMemoryCheckpointStore, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
+    PlannerOutput, PlannerUseCase, RetrieverPolicy, RetrieverUseCase, SecretaryAgentState,
+    SystemClock, ThreadControlUseCase, build_mysql_action_store, build_mysql_agenda_store,
+    build_mysql_follow_up_control_store, build_mysql_memory_store,
     build_mysql_notification_policy_store, build_mysql_retriever_store,
     build_mysql_thread_control_store,
 };
@@ -79,6 +80,9 @@ pub(crate) async fn assemble_action_planner(
     let thread_control = Arc::new(ThreadControlUseCase::new(build_mysql_thread_control_store(
         db.clone(),
     )));
+    let follow_up_control = Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    ));
     let use_case = Arc::new(
         PlannerUseCase::new(
             action_store,
@@ -91,6 +95,7 @@ pub(crate) async fn assemble_action_planner(
         .with_agenda(agenda)
         .with_memory(memory)
         .with_thread_control(thread_control)
+        .with_follow_up_control(follow_up_control)
         .with_checkpoint_db(db),
     );
     let handle = spawn_action_planner_worker(Arc::clone(&use_case), config.action_planner.clone());

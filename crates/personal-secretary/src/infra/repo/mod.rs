@@ -6,6 +6,7 @@ mod mysql_backfill;
 mod mysql_continuity;
 mod mysql_directory;
 mod mysql_follow_up;
+mod mysql_follow_up_control;
 mod mysql_inbound;
 mod mysql_memory;
 mod mysql_notification_candidate_producer;
@@ -24,6 +25,7 @@ pub(crate) use mysql_agenda::MySqlAgendaStore;
 pub(crate) use mysql_artifact::MySqlArtifactStore;
 pub(crate) use mysql_directory::MySqlDirectoryStore;
 pub(crate) use mysql_follow_up::MySqlFollowUpStore;
+pub(crate) use mysql_follow_up_control::MySqlFollowUpControlStore;
 pub(crate) use mysql_inbound::MySqlInboundEventStore;
 pub(crate) use mysql_memory::MySqlMemoryStore;
 #[allow(dead_code)]

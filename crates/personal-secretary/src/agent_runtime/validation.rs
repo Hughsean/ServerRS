@@ -358,6 +358,20 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 ));
             }
         }
+        SecretaryAction::DismissFollowUp {
+            follow_up_id,
+            expected_source_version,
+            reason,
+        } => {
+            // serde 直通可能绕过构造校验，这里在提案边界再次约束 ID 有界。
+            bounded_text("follow_up_id", follow_up_id.as_str(), 1, 36)?;
+            if *expected_source_version == 0 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "follow_up expected_source_version must be positive".into(),
+                ));
+            }
+            bounded_text("follow up reason", reason, 1, 1_000)?;
+        }
     }
     Ok(())
 }

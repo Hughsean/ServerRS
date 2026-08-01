@@ -75,6 +75,13 @@ pub fn build_mysql_follow_up_store(db: DatabaseConnection) -> Arc<dyn crate::Fol
     Arc::new(repo::MySqlFollowUpStore::new(db))
 }
 
+/// 构造 Owner FollowUp 控制仓储；业务变更、不可变审计与 Action Receipt 共用事务。
+pub fn build_mysql_follow_up_control_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::FollowUpControlStoreT> {
+    Arc::new(repo::MySqlFollowUpControlStore::new(db))
+}
+
 /// 构造本地 Owner 身份绑定仓储；绑定由本地配置建立，不从聊天正文推断。
 pub fn build_mysql_owner_binding_store(
     db: DatabaseConnection,

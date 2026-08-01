@@ -63,6 +63,7 @@ pub enum SecretaryToolKind {
     RevokeThreadDecision,
     DismissThreadQuestion,
     SetThreadLifecycle,
+    DismissFollowUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +132,8 @@ impl SecretaryToolKind {
             | Self::ConfirmThreadDecision
             | Self::RevokeThreadDecision
             | Self::DismissThreadQuestion
-            | Self::SetThreadLifecycle => SecretaryToolPolicy {
+            | Self::SetThreadLifecycle
+            | Self::DismissFollowUp => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -330,6 +332,12 @@ pub enum SecretaryAction {
         target_status: crate::ThreadStatus,
         reason: String,
     },
+    DismissFollowUp {
+        follow_up_id: crate::FollowUpId,
+        /// 审批时刻的期望来源版本（>= 1），落库时与行内 source_version CAS 比较。
+        expected_source_version: u64,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -388,6 +396,7 @@ impl SecretaryAction {
             Self::RevokeThreadDecision { .. } => SecretaryToolKind::RevokeThreadDecision,
             Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
+            Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
         }
     }
 }
