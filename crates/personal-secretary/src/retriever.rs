@@ -153,6 +153,9 @@ pub struct PendingOwnerWorkItem {
     pub due_at_unix_secs: Option<i64>,
     pub status: String,
     pub summary: String,
+    /// 来源行版本，用于后续忽略/推迟等写操作的并发 fencing。
+    /// 无版本来源（如 outbox）为 None；缺失时不得用 0 表示。
+    pub source_version: Option<u64>,
 }
 
 /// 线程参与者的账号作用域统计。

@@ -916,10 +916,16 @@ fn format_pending_owner_work(items: &[crate::PendingOwnerWorkItem]) -> String {
     }
     let mut output = format!("当前有 {} 项待处理：", items.len());
     for item in items.iter().take(8) {
+        // 仅在存在来源版本时展示，无版本事项不伪造版本（如 outbox）。
+        let version_prefix = item
+            .source_version
+            .map(|version| format!("version {version} | "))
+            .unwrap_or_default();
         let line = format!(
-            "\n{}:{} | {} | 到期 {:?} | {}",
+            "\n{}:{} | {}{} | 到期 {:?} | {}",
             item.source_kind,
             item.source_id,
+            version_prefix,
             item.status,
             item.due_at_unix_secs,
             item.summary.chars().take(80).collect::<String>()

@@ -1174,6 +1174,128 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
     assert_eq!(status.scheduled_follow_up_count, 1);
     assert_eq!(status.pending_evaluation_count, 1);
 
+    // —— source_version 返回与跨账号隔离（version fencing 基础）——
+    // FollowUp 必须返回真实 source_version 列值（物化时写入 1），不允许用 0 占位。
+    let pending = retriever
+        .list_pending_owner_work(&fact.account, 10)
+        .await
+        .unwrap();
+    let follow_up_item = pending
+        .iter()
+        .find(|item| item.source_kind == "follow_up" && item.summary.contains("quote-delivery"))
+        .expect("follow_up 必须出现在待处理事项中");
+    assert_eq!(
+        follow_up_item.source_version,
+        Some(1),
+        "follow_up 必须返回真实的 source_version"
+    );
+    // Agenda 返回真实 version 列值：插入一条 version=3 的议程事项。
+    let agenda_id = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_agenda_items \
+         (item_id, account_id, item_kind, title, scheduled_at_unix_secs, timezone_name, \
+          item_status, version, created_command_event_id, current_command_event_id, \
+          create_idempotency_key) \
+         SELECT ?, account_id, 'task', '交付验证议程', 90000, 'UTC', 'scheduled', 3, \
+                source_event_id, source_event_id, ? \
+         FROM secretary_source_events WHERE source_event_id = ?",
+        [
+            agenda_id.clone().into(),
+            Uuid::new_v4().to_string().into(),
+            fact.source_event_ids[0].as_str().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    // Outbox 不伪造版本：插入一条 agenda-sourced 失败投递，其来源没有版本列，
+    // source_version 必须是 None 而不是 0 或假值。
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_notification_outbox \
+         (notification_id, account_id, follow_up_id, agenda_item_id, agenda_version, \
+          scheduled_at_unix_secs, notification_kind, payload_json, delivery_status) \
+         SELECT ?, account_id, NULL, ?, 3, 90000, 'owner_agenda_reminder', '{}', 'failed' \
+         FROM secretary_agenda_items WHERE item_id = ?",
+        [
+            Uuid::new_v4().to_string().into(),
+            agenda_id.clone().into(),
+            agenda_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let pending = retriever
+        .list_pending_owner_work(&fact.account, 10)
+        .await
+        .unwrap();
+    let agenda_item = pending
+        .iter()
+        .find(|item| item.source_kind == "agenda" && item.source_id == agenda_id)
+        .expect("agenda 必须出现在待处理事项中");
+    assert_eq!(
+        agenda_item.source_version,
+        Some(3),
+        "agenda 必须返回真实的 version 列值"
+    );
+    let outbox_item = pending
+        .iter()
+        .find(|item| item.source_kind == "outbox")
+        .expect("failed outbox 必须出现在待处理事项中");
+    assert_eq!(
+        outbox_item.source_version, None,
+        "outbox 不得伪造 source_version"
+    );
+    // 跨账号事项仍不可见：为另一账号插入同状态议程，不得出现在当前账号结果中。
+    let other_account_id = format!("follow-up-other-{run_id}");
+    let other_envelope = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::NapCat,
+            &other_account_id,
+            "other-account-source",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::Group, "delivery-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "bob").unwrap(),
+        90_000,
+        "另一账号的议程来源事件",
+        Vec::new(),
+    )
+    .unwrap();
+    let other_event_id = inbound
+        .insert_message_if_absent(&other_envelope)
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let other_agenda_id = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_agenda_items \
+         (item_id, account_id, item_kind, title, scheduled_at_unix_secs, timezone_name, \
+          item_status, version, created_command_event_id, current_command_event_id, \
+          create_idempotency_key) \
+         SELECT ?, id, 'task', '另一账号的议程', 90000, 'UTC', 'scheduled', 7, ?, ?, ? \
+         FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+        [
+            other_agenda_id.clone().into(),
+            other_event_id.as_str().into(),
+            other_event_id.as_str().into(),
+            Uuid::new_v4().to_string().into(),
+            other_account_id.into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let pending = retriever
+        .list_pending_owner_work(&fact.account, 10)
+        .await
+        .unwrap();
+    assert!(
+        !pending.iter().any(|item| item.source_id == other_agenda_id),
+        "跨账号议程必须对当前账号不可见"
+    );
+
     let command_account = format!("follow-up-control-{run_id}");
     let owner_command = InboundMessageEnvelope::new(
         SourceMessageRef::new(

@@ -368,30 +368,34 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let account_id = resolve_account_id(&self.db, account).await?;
         let rows = PendingOwnerWorkRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            r#"SELECT source_kind, source_id, due_at_unix_secs, work_status, summary
+            r#"SELECT source_kind, source_id, due_at_unix_secs, work_status, summary, source_version
                FROM (
                     SELECT 'response_expectation' AS source_kind,
                            expectation_id AS source_id,
                            due_at_unix_secs,
                            expectation_status AS work_status,
-                           '外部联系人的问题仍待本人回复' AS summary
+                           '外部联系人的问题仍待本人回复' AS summary,
+                           source_version
                     FROM secretary_response_expectations
                     WHERE account_id = ? AND expectation_status = 'active'
                     UNION ALL
                     SELECT 'follow_up', f.follow_up_id, f.due_at_unix_secs, f.status,
-                           SUBSTRING(CONCAT(f.reason_code, ':', m.subject_key), 1, 120)
+                           SUBSTRING(CONCAT(f.reason_code, ':', m.subject_key), 1, 120),
+                           f.source_version
                     FROM secretary_follow_up_items f
                     INNER JOIN secretary_memory_facts m
                         ON m.fact_id = f.source_memory_fact_id AND m.account_id = f.account_id
                     WHERE f.account_id = ? AND f.status = 'scheduled'
                     UNION ALL
                     SELECT 'agenda', item_id, scheduled_at_unix_secs, item_status,
-                           SUBSTRING(title, 1, 120)
+                           SUBSTRING(title, 1, 120),
+                           version AS source_version
                     FROM secretary_agenda_items
                     WHERE account_id = ? AND item_status = 'scheduled'
                     UNION ALL
                     SELECT 'outbox', notification_id, scheduled_at_unix_secs, delivery_status,
-                           CONCAT('Owner 通知投递状态: ', delivery_status)
+                           CONCAT('Owner 通知投递状态: ', delivery_status),
+                           NULL AS source_version
                     FROM secretary_notification_outbox
                     WHERE account_id = ? AND delivery_status IN ('failed', 'unknown_commit')
                ) work
@@ -416,6 +420,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                 due_at_unix_secs: row.due_at_unix_secs,
                 status: row.work_status,
                 summary: row.summary.chars().take(120).collect(),
+                source_version: row.source_version,
             })
             .collect())
     }
@@ -782,6 +787,9 @@ struct SecretaryStatusRow {
     failed_outbox_count: i64,
 }
 
+/// `source_version` 必须是 `u64`：四张来源表的版本列都是 `BIGINT UNSIGNED`，
+/// 用 `i64` 反序列化会因 sqlx 类型不匹配而报错。`u64` 天然非负，
+/// 类型不匹配/无法解码时经 `store_error` 返回明确错误，绝不静默取 0。
 #[derive(Debug, FromQueryResult)]
 struct PendingOwnerWorkRow {
     source_kind: String,
@@ -789,6 +797,7 @@ struct PendingOwnerWorkRow {
     due_at_unix_secs: Option<i64>,
     work_status: String,
     summary: String,
+    source_version: Option<u64>,
 }
 
 #[derive(Debug, FromQueryResult)]

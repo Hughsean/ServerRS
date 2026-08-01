@@ -30,8 +30,15 @@
 | 时间范围 | 主题 | 记录 |
 |---|---|---|
 | 2026-07-23～2026-07-24 | 个人秘书立项、NapCat 验证、可靠入站、Gap 回补、线程与 Owner 审核 | [2026-07 归档](history/2026-07.md) |
+| 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-01 13:16（Asia/Shanghai）`：待处理事项现携带真实可选来源版本：FollowUp 使用
+  `source_version`、Agenda 使用 `version`、回复期待使用其来源版本，Outbox 明确为无版本，
+  为后续忽略/推迟操作提供 fencing。Owner 响应仅在版本存在时展示。随机隔离 MySQL 覆盖
+  FollowUp、Agenda、Outbox 与跨账号隔离；首轮发现测试 SQL 错把 Rust 字面量 `90_000` 放入
+  MySQL，已修正为 `90000` 后通过，临时 schema 已清理。未连接或发送 QQ。
 
 - `2026-07-31 22:50（Asia/Shanghai）`：完成 Owner 线程语义与生命周期控制切片。新增确认/撤销
   结论、忽略开放问题、关闭/重开线程四类 L2 Action；最终 MySQL 事务复验 Action 租约、
