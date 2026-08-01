@@ -37,9 +37,11 @@ create_reminder, reschedule_item, cancel_item, complete_item, snooze_item, list_
 read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fact_ttl,
 set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
-set_thread_lifecycle, dismiss_follow_up。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+set_thread_lifecycle, dismiss_follow_up, snooze_follow_up。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
-expected_source_version（来自待处理事项展示的 version）和 reason；不要输出其他 tool。"#;
+expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
+snooze_follow_up 必须提供 follow_up_id、expected_source_version（同样来自 version N）、
+snooze_until_unix_secs（未来的 UTC Unix 秒，必须晚于当前 due）和 reason；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -108,6 +110,7 @@ impl LlmActionPlanner {
                     follow_up_id,
                     expected_source_version,
                     reason,
+                    snooze_until_unix_secs,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -138,6 +141,7 @@ impl LlmActionPlanner {
                     follow_up_id,
                     expected_source_version,
                     reason,
+                    snooze_until_unix_secs,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -247,6 +251,7 @@ struct RawProposalFields<'a> {
     follow_up_id: Option<String>,
     expected_source_version: Option<u64>,
     reason: Option<String>,
+    snooze_until_unix_secs: Option<i64>,
 }
 
 fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerError> {
@@ -343,6 +348,24 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
             .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
             expected_source_version: raw.expected_source_version.ok_or_else(|| {
                 PlannerError::InvalidOutput("missing expected_source_version".into())
+            })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "snooze_follow_up" => Ok(SecretaryAction::SnoozeFollowUp {
+            follow_up_id: FollowUpId::new(
+                raw.follow_up_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing follow_up_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+            expected_source_version: raw.expected_source_version.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_source_version".into())
+            })?,
+            snooze_until_unix_secs: raw.snooze_until_unix_secs.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing snooze_until_unix_secs".into())
             })?,
             reason: raw
                 .reason
@@ -614,6 +637,8 @@ struct RawProposalOutput {
     expected_source_version: Option<u64>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    snooze_until_unix_secs: Option<i64>,
 }
 
 #[cfg(test)]
@@ -794,6 +819,41 @@ mod tests {
                     assert_eq!(reason, "Owner 确认不再需要提醒");
                 }
                 _ => panic!("expected DismissFollowUp"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn snooze_follow_up_proposal_maps_explicit_fields() {
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"snooze_follow_up",
+            "follow_up_id":"66666666-7777-8888-9999-000000000000",
+            "expected_source_version":3,
+            "snooze_until_unix_secs":1780000000,
+            "reason":"明天下午再提醒",
+            "rationale":"推迟这条跟进",
+            "evidence":["event-1"]
+        }));
+        let output = planner.plan(&input()).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::SnoozeFollowUp {
+                    follow_up_id,
+                    expected_source_version,
+                    snooze_until_unix_secs,
+                    reason,
+                } => {
+                    assert_eq!(
+                        follow_up_id.as_str(),
+                        "66666666-7777-8888-9999-000000000000"
+                    );
+                    assert_eq!(expected_source_version, 3);
+                    assert_eq!(snooze_until_unix_secs, 1_780_000_000);
+                    assert_eq!(reason, "明天下午再提醒");
+                }
+                _ => panic!("expected SnoozeFollowUp"),
             },
             _ => panic!("expected Proposal"),
         }

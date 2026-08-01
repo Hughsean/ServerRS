@@ -928,7 +928,10 @@ fn is_thread_control_action(action: &SecretaryAction) -> bool {
 }
 
 fn is_follow_up_control_action(action: &SecretaryAction) -> bool {
-    matches!(action, SecretaryAction::DismissFollowUp { .. })
+    matches!(
+        action,
+        SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. }
+    )
 }
 
 /// 格式化事件检索结果为有界摘要（含来源、时间、Actor、摘录、命中数）。

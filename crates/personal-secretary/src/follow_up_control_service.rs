@@ -1,4 +1,4 @@
-//! Owner 对 FollowUp 的类型化控制边界（本批仅忽略/驳回）。
+//! Owner 对 FollowUp 的类型化控制边界（忽略或推迟单条跟进）。
 //!
 //! 写操作必须由已审批的 Action Effect 触发；仓储在一个事务内复验 Action 租约、
 //! OwnerCommand、账号绑定、FollowUp 来源版本，并写入业务变更、不可变审计和
@@ -86,6 +86,11 @@ impl FollowUpControlUseCase {
                 expected_source_version,
                 reason,
                 ..
+            }
+            | SecretaryAction::SnoozeFollowUp {
+                expected_source_version,
+                reason,
+                ..
             } if *expected_source_version == 0
                 || reason.trim().is_empty()
                 || reason.chars().count() > 1_000 =>
@@ -94,7 +99,7 @@ impl FollowUpControlUseCase {
                     "follow-up version or reason is invalid".into(),
                 ));
             }
-            SecretaryAction::DismissFollowUp { .. } => {}
+            SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. } => {}
             _ => {
                 return Err(FollowUpControlStoreError::InvalidData(
                     "action is not a follow-up control".into(),

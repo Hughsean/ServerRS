@@ -372,6 +372,26 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             }
             bounded_text("follow up reason", reason, 1, 1_000)?;
         }
+        SecretaryAction::SnoozeFollowUp {
+            follow_up_id,
+            expected_source_version,
+            snooze_until_unix_secs,
+            reason,
+        } => {
+            bounded_text("follow_up_id", follow_up_id.as_str(), 1, 36)?;
+            if *expected_source_version == 0 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "follow_up expected_source_version must be positive".into(),
+                ));
+            }
+            // 是否“未来”以执行时数据库 UTC 时间为准；这里只拒绝明显非法的时间戳。
+            if *snooze_until_unix_secs <= 0 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "follow_up snooze_until_unix_secs must be positive".into(),
+                ));
+            }
+            bounded_text("follow up snooze reason", reason, 1, 1_000)?;
+        }
     }
     Ok(())
 }

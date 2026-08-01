@@ -116,6 +116,10 @@ fn migration_order(path: &std::path::Path) -> u8 {
         name if name.contains("_owner_agenda.sql") => 20,
         name if name.contains("_owner_notification_policy_feedback_v1.sql") => 21,
         name if name.contains("_owner_notification_policy_evaluation_v1.sql") => 22,
+        // FollowUp 控制审计先建表，snooze 扩展列必须在其后执行；
+        // 两者都落在 99 会退化为 read_dir 的未定义顺序。
+        name if name.contains("_follow_up_owner_controls.sql") => 23,
+        name if name.contains("_follow_up_snooze.sql") => 24,
         _ => 99,
     }
 }

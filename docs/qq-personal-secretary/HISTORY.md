@@ -22,7 +22,7 @@
   `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查均实际通过。全局门禁仍为 `REJECTED`：
   多项 B3/B4/B6/B7 缺少 L4/L5 独立证明，B3 requirement 因缺少 L5 attestation 显示 FAIL；
   不把 `REJECTED` 改写为 `APPROVED`。
-- 当前开发分支：`codex/qqbot-todo-wave1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
+- 当前开发分支：`deepseek/qqbot-snooze-follow-up-v1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
   接下来继续主动跟进、线程语义与离线恢复任务。需要用户操作或 NapCat 实机验证的事项单独跳过。
 
 ## 历史分块
@@ -33,6 +33,14 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-01 14:42（Asia/Shanghai）`：完成 Owner 推迟单个 FollowUp 的 L2 控制闭环。新到期
+  时间在最终事务中以 MySQL 当前时钟复验，必须晚于原到期且不超过 365 天；事务以账号、状态和
+  来源版本 fencing 更新 due/版本，并同时锁定和压制 legacy 与 policy-owned 的 pending/failed
+  Outbox。claimed/unknown_commit 保守拒绝，delivered 历史不改写。到达新时间后扫描会为新版本
+  生成 Candidate/Request，经统一策略求值形成新的 Outbox occurrence，旧通知不会复活。独立复核
+  发现原测试在 OwnerBinding 建立前求值，修正 fixture 顺序后随机隔离 MySQL 完整闭环通过，临时
+  schema 已清理；严格 Clippy 与 19 项应用边界测试通过。未连接或发送 QQ。
 
 - `2026-08-01 13:45（Asia/Shanghai）`：补齐 FollowUp 忽略对现行 Task 7 通知链的覆盖。旧实现
   只按 Outbox 的 legacy `follow_up_id` 查找，但 policy-owned Outbox 通过 Candidate 引用来源且

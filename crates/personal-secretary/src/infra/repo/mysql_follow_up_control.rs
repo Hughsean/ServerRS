@@ -39,7 +39,19 @@ impl FollowUpControlStoreT for MySqlFollowUpControlStore {
             return Ok(receipt);
         }
 
-        let applied = apply_dismiss(&transaction, request, account_id).await?;
+        let applied = match &request.action {
+            SecretaryAction::DismissFollowUp { .. } => {
+                apply_dismiss(&transaction, request, account_id).await?
+            }
+            SecretaryAction::SnoozeFollowUp { .. } => {
+                apply_snooze(&transaction, request, account_id).await?
+            }
+            _ => {
+                return Err(FollowUpControlStoreError::InvalidData(
+                    "action is not a follow-up control".into(),
+                ));
+            }
+        };
         insert_control_audit(&transaction, request, account_id, &applied).await?;
         let inserted = transaction
             .execute_raw(Statement::from_sql_and_values(
@@ -72,10 +84,16 @@ impl FollowUpControlStoreT for MySqlFollowUpControlStore {
     }
 }
 
-struct AppliedDismiss {
+/// 两种 FollowUp 控制的统一落库结果；dismiss 与 snooze 共用审计与回执写入。
+struct AppliedControl {
     follow_up_id: String,
+    control_kind: &'static str,
+    previous_status: &'static str,
+    current_status: &'static str,
     previous_source_version: u64,
     current_source_version: u64,
+    previous_due_at_unix_secs: Option<i64>,
+    current_due_at_unix_secs: Option<i64>,
     reason: String,
     result_ref: String,
 }
@@ -85,7 +103,7 @@ async fn apply_dismiss<C: ConnectionTrait>(
     db: &C,
     request: &FollowUpControlEffectRequest,
     account_id: u64,
-) -> Result<AppliedDismiss, FollowUpControlStoreError> {
+) -> Result<AppliedControl, FollowUpControlStoreError> {
     let (follow_up_id, expected_source_version, reason) = match &request.action {
         SecretaryAction::DismissFollowUp {
             follow_up_id,
@@ -104,7 +122,7 @@ async fn apply_dismiss<C: ConnectionTrait>(
     };
     let item = FollowUpItemRow::find_by_statement(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
-        "SELECT status, source_version FROM secretary_follow_up_items \
+        "SELECT status, due_at_unix_secs, source_version FROM secretary_follow_up_items \
          WHERE follow_up_id = ? AND account_id = ? FOR UPDATE",
         [follow_up_id.into(), account_id.into()],
     ))
@@ -119,32 +137,7 @@ async fn apply_dismiss<C: ConnectionTrait>(
             "follow_up status or source_version changed since approval".into(),
         ));
     }
-    // claimed / unknown_commit 表示投递可能已在进行或提交状态不明，
-    // 此时绝不能声称已经安全阻止投递；拒绝本次忽略。
-    // 锁住该 FollowUp 的全部 Outbox 行和索引范围，防止投递 Worker 在检查后、
-    // suppress 更新前把 pending/failed 抢成 claimed。
-    let outbox_rows = OutboxStatusRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT outbox.delivery_status \
-         FROM secretary_notification_outbox outbox \
-         LEFT JOIN secretary_notification_candidates candidate \
-           ON candidate.notification_candidate_id = outbox.notification_candidate_id \
-         WHERE outbox.account_id = ? AND (outbox.follow_up_id = ? OR \
-               (candidate.source_kind = 'follow_up' AND candidate.source_id = ?)) \
-         FOR UPDATE",
-        [account_id.into(), follow_up_id.into(), follow_up_id.into()],
-    ))
-    .all(db)
-    .await
-    .map_err(database_error)?;
-    if outbox_rows
-        .iter()
-        .any(|row| matches!(row.delivery_status.as_str(), "claimed" | "unknown_commit"))
-    {
-        return Err(FollowUpControlStoreError::InvalidData(
-            "follow-up has claimed or unknown_commit outbox rows; cannot safely dismiss".into(),
-        ));
-    }
+    lock_and_check_outbox(db, account_id, follow_up_id, "dismiss").await?;
     let updated = db
         .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
@@ -166,8 +159,185 @@ async fn apply_dismiss<C: ConnectionTrait>(
             "follow-up compare-and-set failed".into(),
         ));
     }
-    // pending/failed 的 Owner Outbox 转为 suppressed 并清除租约；
-    // delivered 历史保留，不删除也不改写。
+    suppress_pending_outbox(db, account_id, follow_up_id).await?;
+    Ok(AppliedControl {
+        follow_up_id: follow_up_id.to_owned(),
+        control_kind: "dismiss",
+        previous_status: "scheduled",
+        current_status: "dismissed",
+        previous_source_version: item.source_version,
+        current_source_version: item.source_version + 1,
+        previous_due_at_unix_secs: None,
+        current_due_at_unix_secs: None,
+        reason,
+        result_ref: format!(
+            "跟进事项 {} 已忽略（版本 {} -> {}）",
+            follow_up_id,
+            item.source_version,
+            item.source_version + 1
+        ),
+    })
+}
+
+/// 锁定 FollowUp 并执行推迟：时间窗口、状态/版本 CAS、Outbox 状态拒绝与压制。
+async fn apply_snooze<C: ConnectionTrait>(
+    db: &C,
+    request: &FollowUpControlEffectRequest,
+    account_id: u64,
+) -> Result<AppliedControl, FollowUpControlStoreError> {
+    let (follow_up_id, expected_source_version, snooze_until_unix_secs, reason) =
+        match &request.action {
+            SecretaryAction::SnoozeFollowUp {
+                follow_up_id,
+                expected_source_version,
+                snooze_until_unix_secs,
+                reason,
+            } => (
+                follow_up_id.as_str(),
+                *expected_source_version,
+                *snooze_until_unix_secs,
+                reason.clone(),
+            ),
+            _ => {
+                return Err(FollowUpControlStoreError::InvalidData(
+                    "action is not a follow-up snooze".into(),
+                ));
+            }
+        };
+    let item = FollowUpItemRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT status, due_at_unix_secs, source_version FROM secretary_follow_up_items \
+         WHERE follow_up_id = ? AND account_id = ? FOR UPDATE",
+        [follow_up_id.into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(|| {
+        FollowUpControlStoreError::InvalidData("follow_up not found in account".into())
+    })?;
+    if item.status != "scheduled" || item.source_version != expected_source_version {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow_up status or source_version changed since approval".into(),
+        ));
+    }
+    // 时间校验以数据库当前 UTC 时间为准，不能只相信 Planner 或审批前时间；
+    // 365 天 = 31_536_000 秒。
+    let window = TimeWindowRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT (? > UNIX_TIMESTAMP()) AS is_future, \
+                (? <= UNIX_TIMESTAMP() + ?) AS within_365_days \
+         FROM DUAL",
+        [
+            snooze_until_unix_secs.into(),
+            snooze_until_unix_secs.into(),
+            31_536_000i64.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(database_error)?
+    .ok_or(FollowUpControlStoreError::Database)?;
+    if window.is_future == 0 {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow_up snooze_until must be later than the database current time".into(),
+        ));
+    }
+    if window.within_365_days == 0 {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow_up snooze_until must be within 365 days of the database current time".into(),
+        ));
+    }
+    if snooze_until_unix_secs <= item.due_at_unix_secs {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow_up snooze_until must be later than the current due time".into(),
+        ));
+    }
+    lock_and_check_outbox(db, account_id, follow_up_id, "snooze").await?;
+    let updated = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_follow_up_items \
+             SET due_at_unix_secs = ?, source_version = source_version + 1, \
+                 updated_at = CURRENT_TIMESTAMP(6) \
+             WHERE follow_up_id = ? AND account_id = ? AND status = 'scheduled' \
+               AND source_version = ?",
+            [
+                snooze_until_unix_secs.into(),
+                follow_up_id.into(),
+                account_id.into(),
+                expected_source_version.into(),
+            ],
+        ))
+        .await
+        .map_err(database_error)?;
+    if updated.rows_affected() != 1 {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow-up compare-and-set failed".into(),
+        ));
+    }
+    suppress_pending_outbox(db, account_id, follow_up_id).await?;
+    Ok(AppliedControl {
+        follow_up_id: follow_up_id.to_owned(),
+        control_kind: "snooze",
+        previous_status: "scheduled",
+        current_status: "scheduled",
+        previous_source_version: item.source_version,
+        current_source_version: item.source_version + 1,
+        previous_due_at_unix_secs: Some(item.due_at_unix_secs),
+        current_due_at_unix_secs: Some(snooze_until_unix_secs),
+        reason,
+        result_ref: format!(
+            "跟进事项 {} 已推迟到 {}（版本 {} -> {}）",
+            follow_up_id,
+            snooze_until_unix_secs,
+            item.source_version,
+            item.source_version + 1
+        ),
+    })
+}
+
+/// 锁定该 FollowUp 关联的全部 Outbox 行（legacy follow_up_id + policy-owned
+/// candidate 回溯），任一为 claimed/unknown_commit 即拒绝；`verb` 只用于错误文案。
+/// 行锁消除“检查后、压制前”的投递竞态。
+async fn lock_and_check_outbox<C: ConnectionTrait>(
+    db: &C,
+    account_id: u64,
+    follow_up_id: &str,
+    verb: &str,
+) -> Result<(), FollowUpControlStoreError> {
+    let outbox_rows = OutboxStatusRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT outbox.delivery_status \
+         FROM secretary_notification_outbox outbox \
+         LEFT JOIN secretary_notification_candidates candidate \
+           ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+         WHERE outbox.account_id = ? AND (outbox.follow_up_id = ? OR \
+               (candidate.source_kind = 'follow_up' AND candidate.source_id = ?)) \
+         FOR UPDATE",
+        [account_id.into(), follow_up_id.into(), follow_up_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(database_error)?;
+    if outbox_rows
+        .iter()
+        .any(|row| matches!(row.delivery_status.as_str(), "claimed" | "unknown_commit"))
+    {
+        return Err(FollowUpControlStoreError::InvalidData(format!(
+            "follow-up has claimed or unknown_commit outbox rows; cannot safely {verb}"
+        )));
+    }
+    Ok(())
+}
+
+/// 把相关 pending/failed 的 Owner Outbox 转为 suppressed 并清除租约；
+/// delivered 历史保留，不删除也不改写。
+async fn suppress_pending_outbox<C: ConnectionTrait>(
+    db: &C,
+    account_id: u64,
+    follow_up_id: &str,
+) -> Result<(), FollowUpControlStoreError> {
     db.execute_raw(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
         "UPDATE secretary_notification_outbox outbox \
@@ -182,25 +352,14 @@ async fn apply_dismiss<C: ConnectionTrait>(
     ))
     .await
     .map_err(database_error)?;
-    Ok(AppliedDismiss {
-        follow_up_id: follow_up_id.to_owned(),
-        previous_source_version: item.source_version,
-        current_source_version: item.source_version + 1,
-        reason,
-        result_ref: format!(
-            "跟进事项 {} 已忽略（版本 {} -> {}）",
-            follow_up_id,
-            item.source_version,
-            item.source_version + 1
-        ),
-    })
+    Ok(())
 }
 
 async fn insert_control_audit<C: ConnectionTrait>(
     db: &C,
     request: &FollowUpControlEffectRequest,
     account_id: u64,
-    applied: &AppliedDismiss,
+    applied: &AppliedControl,
 ) -> Result<(), FollowUpControlStoreError> {
     let result = db
         .execute_raw(Statement::from_sql_and_values(
@@ -208,8 +367,9 @@ async fn insert_control_audit<C: ConnectionTrait>(
             "INSERT INTO secretary_follow_up_owner_controls \
              (control_id, effect_id, run_id, proposal_id, account_id, follow_up_id, \
               previous_status, current_status, previous_source_version, current_source_version, \
-              command_source_event_id, reason) \
-             VALUES (?, ?, ?, ?, ?, ?, 'scheduled', 'dismissed', ?, ?, ?, ?)",
+              command_source_event_id, reason, control_kind, previous_due_at_unix_secs, \
+              current_due_at_unix_secs) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 stable_id("follow-up-control", &request.effect_id).into(),
                 request.effect_id.clone().into(),
@@ -217,10 +377,15 @@ async fn insert_control_audit<C: ConnectionTrait>(
                 request.proposal_id.clone().into(),
                 account_id.into(),
                 applied.follow_up_id.clone().into(),
+                applied.previous_status.into(),
+                applied.current_status.into(),
                 applied.previous_source_version.into(),
                 applied.current_source_version.into(),
                 request.command_source_event_id.as_str().into(),
                 applied.reason.clone().into(),
+                applied.control_kind.into(),
+                applied.previous_due_at_unix_secs.into(),
+                applied.current_due_at_unix_secs.into(),
             ],
         ))
         .await
@@ -388,10 +553,17 @@ struct ReceiptRow {
 #[derive(FromQueryResult)]
 struct FollowUpItemRow {
     status: String,
+    due_at_unix_secs: i64,
     source_version: u64,
 }
 
 #[derive(FromQueryResult)]
 struct OutboxStatusRow {
     delivery_status: String,
+}
+
+#[derive(FromQueryResult)]
+struct TimeWindowRow {
+    is_future: i64,
+    within_365_days: i64,
 }

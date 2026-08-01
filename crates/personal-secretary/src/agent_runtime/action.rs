@@ -64,6 +64,7 @@ pub enum SecretaryToolKind {
     DismissThreadQuestion,
     SetThreadLifecycle,
     DismissFollowUp,
+    SnoozeFollowUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +134,8 @@ impl SecretaryToolKind {
             | Self::RevokeThreadDecision
             | Self::DismissThreadQuestion
             | Self::SetThreadLifecycle
-            | Self::DismissFollowUp => SecretaryToolPolicy {
+            | Self::DismissFollowUp
+            | Self::SnoozeFollowUp => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -338,6 +340,15 @@ pub enum SecretaryAction {
         expected_source_version: u64,
         reason: String,
     },
+    SnoozeFollowUp {
+        follow_up_id: crate::FollowUpId,
+        /// 审批时刻的期望来源版本（>= 1），落库时与行内 source_version CAS 比较。
+        expected_source_version: u64,
+        /// 新的到期时间（UTC Unix 秒）；执行时以数据库当前 UTC 时间复验，
+        /// 必须晚于当前 due 且不超过数据库当前时间后 365 天。
+        snooze_until_unix_secs: i64,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -397,6 +408,7 @@ impl SecretaryAction {
             Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
             Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
+            Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,
         }
     }
 }
