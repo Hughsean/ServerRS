@@ -72,6 +72,21 @@ fn impactful_action_without_idempotency_key_is_rejected() {
 }
 
 #[test]
+fn owner_work_close_actions_require_confirmation_and_are_not_advertised_as_reversible() {
+    for kind in [
+        SecretaryToolKind::CompleteFollowUp,
+        SecretaryToolKind::CompleteFollowUps,
+        SecretaryToolKind::DismissResponseExpectation,
+        SecretaryToolKind::DismissResponseExpectations,
+    ] {
+        let policy = kind.policy();
+        assert_eq!(policy.risk, SecretaryRiskLevel::L2Impactful);
+        assert!(policy.requires_confirmation);
+        assert!(!policy.reversible);
+    }
+}
+
+#[test]
 fn working_state_rejects_unbounded_recent_window() {
     let events = (0..=MAX_RECENT_EVENTS)
         .map(|index| RecentEventRef {

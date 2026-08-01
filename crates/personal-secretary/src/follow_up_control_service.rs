@@ -92,6 +92,11 @@ impl FollowUpControlUseCase {
                 expected_source_version,
                 reason,
                 ..
+            }
+            | SecretaryAction::CompleteFollowUp {
+                expected_source_version,
+                reason,
+                ..
             } if *expected_source_version == 0
                 || reason.trim().is_empty()
                 || reason.chars().count() > 1_000 =>
@@ -100,11 +105,14 @@ impl FollowUpControlUseCase {
                     "follow-up version or reason is invalid".into(),
                 ));
             }
-            SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. } => {}
+            SecretaryAction::DismissFollowUp { .. }
+            | SecretaryAction::SnoozeFollowUp { .. }
+            | SecretaryAction::CompleteFollowUp { .. } => {}
             SecretaryAction::DismissFollowUps { targets, reason }
             | SecretaryAction::SnoozeFollowUps {
                 targets, reason, ..
-            } => {
+            }
+            | SecretaryAction::CompleteFollowUps { targets, reason } => {
                 validate_batch_targets(targets, reason)?;
                 if let SecretaryAction::SnoozeFollowUps {
                     snooze_until_unix_secs,

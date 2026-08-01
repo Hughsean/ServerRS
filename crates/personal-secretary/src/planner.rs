@@ -80,6 +80,10 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | SnoozeFollowUp { .. }
             | DismissFollowUps { .. }
             | SnoozeFollowUps { .. }
+            | CompleteFollowUp { .. }
+            | CompleteFollowUps { .. }
+            | DismissResponseExpectation { .. }
+            | DismissResponseExpectations { .. }
     )
 }
 

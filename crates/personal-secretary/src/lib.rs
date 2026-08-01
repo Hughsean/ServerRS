@@ -26,6 +26,7 @@ mod planner;
 mod planner_service;
 mod recall;
 mod recall_service;
+mod response_expectation_control_service;
 mod retriever;
 mod retriever_service;
 mod store;
@@ -56,10 +57,10 @@ pub use agenda::{
 };
 pub use agenda_service::{AgendaApplyRequest, AgendaMutationReceipt, AgendaStoreT, AgendaUseCase};
 pub use agent_runtime::{
-    FollowUpControlTarget, OwnerResponseDraft, RecentEventRef, ResponseSegment, SecretaryAction,
-    SecretaryActionApprovalRequest, SecretaryActionEffect, SecretaryActionProposal,
-    SecretaryActionReceipt, SecretaryActionResumeInput, SecretaryAgentPhase,
-    SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
+    FollowUpControlTarget, OwnerResponseDraft, RecentEventRef, ResponseExpectationControlTarget,
+    ResponseSegment, SecretaryAction, SecretaryActionApprovalRequest, SecretaryActionEffect,
+    SecretaryActionProposal, SecretaryActionReceipt, SecretaryActionResumeInput,
+    SecretaryAgentPhase, SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
     SecretaryApprovalDecision, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
     build_action_response_draft, gate_secretary_action, validate_action_proposal,
     validate_response_draft,
@@ -85,6 +86,7 @@ pub use directory_service::{
 pub use follow_up::{
     ClaimedOwnerNotification, FollowUpId, FollowUpScanReport, FollowUpStatus,
     NotificationFailureKind, NotificationId, NotificationLeaseToken, OwnerNotificationContent,
+    ResponseExpectationId,
 };
 pub use follow_up_control_service::{
     FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlStoreT,
@@ -141,6 +143,10 @@ pub use recall::{
     RecallEventId, RecallFailureKind, RecallKind, TombstoneRecord, TombstoneStatus,
 };
 pub use recall_service::{RecallStoreError, RecallStoreT, RecallUseCase};
+pub use response_expectation_control_service::{
+    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
+    ResponseExpectationControlStoreT, ResponseExpectationControlUseCase,
+};
 pub use retriever::{
     ContentTrustLevel, EventQuery, EventSearchResult, IdentityTrust, ParticipantIdentity,
     ParticipantRef, PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate,
@@ -224,10 +230,10 @@ pub use infra::{
     build_mysql_follow_up_control_store, build_mysql_follow_up_store,
     build_mysql_inbound_event_store, build_mysql_memory_store,
     build_mysql_notification_policy_store, build_mysql_owner_binding_store,
-    build_mysql_recall_store, build_mysql_retriever_store, build_mysql_thread_control_store,
-    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
-    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    build_mysql_recall_store, build_mysql_response_expectation_control_store,
+    build_mysql_retriever_store, build_mysql_thread_control_store, build_mysql_thread_link_store,
+    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。

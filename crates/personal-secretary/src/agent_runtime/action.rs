@@ -67,6 +67,10 @@ pub enum SecretaryToolKind {
     SnoozeFollowUp,
     DismissFollowUps,
     SnoozeFollowUps,
+    CompleteFollowUp,
+    CompleteFollowUps,
+    DismissResponseExpectation,
+    DismissResponseExpectations,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +150,17 @@ impl SecretaryToolKind {
                 timeout_ms: 15_000,
                 max_retries: 1,
             },
+            Self::CompleteFollowUp
+            | Self::CompleteFollowUps
+            | Self::DismissResponseExpectation
+            | Self::DismissResponseExpectations => SecretaryToolPolicy {
+                risk: L2Impactful,
+                requires_confirmation: true,
+                // v1 没有自动撤销入口；不能向 Owner 暗示完成或关闭可以自动恢复。
+                reversible: false,
+                timeout_ms: 15_000,
+                max_retries: 1,
+            },
             Self::SendOwnerMessage => SecretaryToolPolicy {
                 risk: L3ExternalSideEffect,
                 requires_confirmation: true,
@@ -169,6 +184,14 @@ impl SecretaryToolKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FollowUpControlTarget {
     pub follow_up_id: crate::FollowUpId,
+    pub expected_source_version: u64,
+}
+
+/// 批量关闭回复期待动作的单个目标；`expected_source_version` 必须来自
+/// ListPendingOwnerWork 展示的 version N，落库时与行内 source_version CAS 比较。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseExpectationControlTarget {
+    pub expectation_id: crate::ResponseExpectationId,
     pub expected_source_version: u64,
 }
 
@@ -376,6 +399,37 @@ pub enum SecretaryAction {
         snooze_until_unix_secs: i64,
         reason: String,
     },
+    /// 单条完成：Owner 明确确认承诺或跟进事项已经完成。
+    /// 落库后 scheduled -> completed，source_version 精确 +1，due 不变；
+    /// 关联通知被压制，Scheduler 不得重新创建该事项。
+    CompleteFollowUp {
+        follow_up_id: crate::FollowUpId,
+        /// 审批时刻的期望来源版本（>= 1），落库时与行内 source_version CAS 比较。
+        expected_source_version: u64,
+        reason: String,
+    },
+    /// 批量完成：targets 数量必须为 1..=20 且 follow_up_id 不重复；
+    /// 全有或全无，任一目标校验失败则整个事务回滚。
+    CompleteFollowUps {
+        targets: Vec<FollowUpControlTarget>,
+        reason: String,
+    },
+    /// 单条关闭回复期待：Owner 明确表示不再需要继续提醒回复，不是声称已经回复。
+    /// 落库后 active -> dismissed，source_version 精确 +1，due 不变；
+    /// 不修改原始聊天消息、EventThread、OpenQuestion 状态或已投递通知；
+    /// `resolved` 只保留给真实回复、问题关闭或线程终态等自动事实路径。
+    DismissResponseExpectation {
+        expectation_id: crate::ResponseExpectationId,
+        /// 审批时刻的期望来源版本（>= 1），落库时与行内 source_version CAS 比较。
+        expected_source_version: u64,
+        reason: String,
+    },
+    /// 批量关闭回复期待：targets 数量必须为 1..=20 且 expectation_id 不重复；
+    /// 全有或全无，任一目标校验失败则整个事务回滚。
+    DismissResponseExpectations {
+        targets: Vec<ResponseExpectationControlTarget>,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -438,6 +492,14 @@ impl SecretaryAction {
             Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,
             Self::DismissFollowUps { .. } => SecretaryToolKind::DismissFollowUps,
             Self::SnoozeFollowUps { .. } => SecretaryToolKind::SnoozeFollowUps,
+            Self::CompleteFollowUp { .. } => SecretaryToolKind::CompleteFollowUp,
+            Self::CompleteFollowUps { .. } => SecretaryToolKind::CompleteFollowUps,
+            Self::DismissResponseExpectation { .. } => {
+                SecretaryToolKind::DismissResponseExpectation
+            }
+            Self::DismissResponseExpectations { .. } => {
+                SecretaryToolKind::DismissResponseExpectations
+            }
         }
     }
 }

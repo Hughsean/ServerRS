@@ -77,6 +77,7 @@ pub struct PlannerUseCase {
     memory: Option<Arc<crate::MemoryUseCase>>,
     thread_control: Option<Arc<crate::ThreadControlUseCase>>,
     follow_up_control: Option<Arc<FollowUpControlUseCase>>,
+    response_expectation_control: Option<Arc<crate::ResponseExpectationControlUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -101,6 +102,7 @@ impl PlannerUseCase {
             memory: None,
             thread_control: None,
             follow_up_control: None,
+            response_expectation_control: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -152,6 +154,14 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_response_expectation_control(
+        mut self,
+        response_expectation_control: Arc<crate::ResponseExpectationControlUseCase>,
+    ) -> Self {
+        self.response_expectation_control = Some(response_expectation_control);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -168,6 +178,7 @@ impl PlannerUseCase {
             memory: None,
             thread_control: None,
             follow_up_control: None,
+            response_expectation_control: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -273,6 +284,12 @@ impl PlannerUseCase {
         if let Some(follow_up_control) = &self.follow_up_control {
             effect_executor = effect_executor.with_follow_up_control(
                 Arc::clone(follow_up_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(response_expectation_control) = &self.response_expectation_control {
+            effect_executor = effect_executor.with_response_expectation_control(
+                Arc::clone(response_expectation_control),
                 claimed.command_source_event_id.clone(),
             );
         }
@@ -450,6 +467,12 @@ impl PlannerUseCase {
         if let Some(follow_up_control) = &self.follow_up_control {
             effect_executor = effect_executor.with_follow_up_control(
                 Arc::clone(follow_up_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(response_expectation_control) = &self.response_expectation_control {
+            effect_executor = effect_executor.with_response_expectation_control(
+                Arc::clone(response_expectation_control),
                 claimed.command_source_event_id.clone(),
             );
         }

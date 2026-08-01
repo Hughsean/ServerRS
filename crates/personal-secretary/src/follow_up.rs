@@ -23,6 +23,26 @@ impl FollowUpId {
     }
 }
 
+/// 持久化回复期待的有界非空标识（`secretary_response_expectations.expectation_id`，CHAR(36)）。
+/// 在 Action 边界使用类型而不是裸字符串，避免与 proposal_id/run_id/effect_id 混用。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ResponseExpectationId(String);
+
+impl ResponseExpectationId {
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value.trim().is_empty() || value.len() > 36 {
+            return Err("expectation_id must contain 1..=36 bytes".into());
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FollowUpStatus {

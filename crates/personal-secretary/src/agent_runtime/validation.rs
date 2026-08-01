@@ -362,6 +362,11 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             follow_up_id,
             expected_source_version,
             reason,
+        }
+        | SecretaryAction::CompleteFollowUp {
+            follow_up_id,
+            expected_source_version,
+            reason,
         } => {
             // serde 直通可能绕过构造校验，这里在提案边界再次约束 ID 有界。
             bounded_text("follow_up_id", follow_up_id.as_str(), 1, 36)?;
@@ -395,7 +400,8 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         SecretaryAction::DismissFollowUps { targets, reason }
         | SecretaryAction::SnoozeFollowUps {
             targets, reason, ..
-        } => {
+        }
+        | SecretaryAction::CompleteFollowUps { targets, reason } => {
             if targets.is_empty() || targets.len() > 20 {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(
                     "follow_up batch targets must contain 1..=20 items".into(),
@@ -427,6 +433,42 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                     "follow_up snooze_until_unix_secs must be positive".into(),
                 ));
             }
+        }
+        SecretaryAction::DismissResponseExpectation {
+            expectation_id,
+            expected_source_version,
+            reason,
+        } => {
+            bounded_text("expectation_id", expectation_id.as_str(), 1, 36)?;
+            if *expected_source_version == 0 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "response expectation expected_source_version must be positive".into(),
+                ));
+            }
+            bounded_text("response expectation reason", reason, 1, 1_000)?;
+        }
+        SecretaryAction::DismissResponseExpectations { targets, reason } => {
+            if targets.is_empty() || targets.len() > 20 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "response expectation batch targets must contain 1..=20 items".into(),
+                ));
+            }
+            // 同一批次禁止重复 expectation ID，重复必须在进入数据库前拒绝。
+            let mut seen = HashSet::new();
+            for target in targets {
+                bounded_text("expectation_id", target.expectation_id.as_str(), 1, 36)?;
+                if target.expected_source_version == 0 {
+                    return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                        "response expectation expected_source_version must be positive".into(),
+                    ));
+                }
+                if !seen.insert(target.expectation_id.as_str()) {
+                    return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                        "response expectation batch targets must not repeat expectation_id".into(),
+                    ));
+                }
+            }
+            bounded_text("response expectation reason", reason, 1, 1_000)?;
         }
     }
     Ok(())

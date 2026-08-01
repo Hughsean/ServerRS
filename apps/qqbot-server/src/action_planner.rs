@@ -18,8 +18,9 @@ use tracing::debug;
 use personal_secretary::{
     ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
     FollowUpControlTarget, FollowUpId, MemoryFactId, MemoryPayload, OpenQuestionId, PlannerError,
-    PlannerInput, PlannerOutput, SecretaryAction, SecretaryActionProposal, SourceEventId,
-    SystemClock, ThreadDecisionId, ThreadStatus, validate_planner_output,
+    PlannerInput, PlannerOutput, ResponseExpectationControlTarget, ResponseExpectationId,
+    SecretaryAction, SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId,
+    ThreadStatus, validate_planner_output,
 };
 
 use crate::llm::{LlmClientError, OpenAiCompatibleClient, StructuredLlmClientT};
@@ -39,7 +40,8 @@ read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fa
 set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
-snooze_follow_ups。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+snooze_follow_ups, complete_follow_up, complete_follow_ups,
+dismiss_response_expectation, dismiss_response_expectations。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
 expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
 snooze_follow_up 必须提供 follow_up_id、expected_source_version（同样来自 version N）、
@@ -52,7 +54,17 @@ snooze_follow_ups 必须提供 follow_up_targets 数组（每项 {follow_up_id, 
 版本一律来自 ListPendingOwnerWork 展示的 version N，禁止从正文猜测版本）、
 snooze_until_unix_secs（未来的 UTC Unix 秒，必须晚于本批所有目标的当前 due）和
 reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID、版本或时间缺失时不要输出
-snooze_follow_ups，改为要求 Owner 澄清；不要输出其他 tool。"#;
+snooze_follow_ups，改为要求 Owner 澄清；
+complete_follow_up 必须提供 follow_up_id、expected_source_version（来自 version N）和 reason；
+complete_follow_ups 必须提供 follow_up_targets 数组（每项 {follow_up_id, expected_source_version}，
+版本一律来自 version N，禁止从正文猜测版本）和 reason，且 targets 数量为 1..=20、
+ID 不得重复；任一目标的 ID 或版本缺失时不要输出 complete_follow_ups，改为要求 Owner 澄清；
+dismiss_response_expectation 必须提供 expectation_id、expected_source_version（来自 version N）
+和 reason；dismiss_response_expectations 必须提供 expectation_targets 数组
+（每项 {expectation_id, expected_source_version}，版本一律来自 version N，禁止从正文猜测版本）
+和 reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID 或版本缺失时不要输出
+dismiss_response_expectations，改为要求 Owner 澄清；
+完成与关闭操作没有自动撤销机制，必须由 Owner 明确确认；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -123,6 +135,8 @@ impl LlmActionPlanner {
                     reason,
                     snooze_until_unix_secs,
                     follow_up_targets,
+                    expectation_id,
+                    expectation_targets,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -155,6 +169,8 @@ impl LlmActionPlanner {
                     reason,
                     snooze_until_unix_secs,
                     follow_up_targets,
+                    expectation_id,
+                    expectation_targets,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -266,6 +282,8 @@ struct RawProposalFields<'a> {
     reason: Option<String>,
     snooze_until_unix_secs: Option<i64>,
     follow_up_targets: Option<Vec<FollowUpTargetDto>>,
+    expectation_id: Option<String>,
+    expectation_targets: Option<Vec<ResponseExpectationTargetDto>>,
 }
 
 /// 批量忽略目标的嵌套 DTO；显式拒绝未知字段，防止模型夹带额外键。
@@ -273,6 +291,14 @@ struct RawProposalFields<'a> {
 #[serde(deny_unknown_fields)]
 struct FollowUpTargetDto {
     follow_up_id: String,
+    expected_source_version: u64,
+}
+
+/// 批量关闭回复期待目标的嵌套 DTO；显式拒绝未知字段，防止模型夹带额外键。
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseExpectationTargetDto {
+    expectation_id: String,
     expected_source_version: u64,
 }
 
@@ -406,6 +432,50 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
             snooze_until_unix_secs: raw.snooze_until_unix_secs.ok_or_else(|| {
                 PlannerError::InvalidOutput("missing snooze_until_unix_secs".into())
             })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "complete_follow_up" => Ok(SecretaryAction::CompleteFollowUp {
+            follow_up_id: FollowUpId::new(
+                raw.follow_up_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing follow_up_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+            expected_source_version: raw.expected_source_version.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_source_version".into())
+            })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "complete_follow_ups" => Ok(SecretaryAction::CompleteFollowUps {
+            targets: parse_follow_up_targets(raw.follow_up_targets.clone())?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "dismiss_response_expectation" => Ok(SecretaryAction::DismissResponseExpectation {
+            expectation_id: ResponseExpectationId::new(
+                raw.expectation_id
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing expectation_id".into()))?,
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+            expected_source_version: raw.expected_source_version.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_source_version".into())
+            })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "dismiss_response_expectations" => Ok(SecretaryAction::DismissResponseExpectations {
+            targets: parse_response_expectation_targets(raw.expectation_targets.clone())?,
             reason: raw
                 .reason
                 .clone()
@@ -594,6 +664,37 @@ fn parse_follow_up_targets(
     Ok(targets)
 }
 
+/// 批量关闭回复期待共用的目标转换与去重：1..=20、ResponseExpectationId 合法、
+/// 同一批次 ID 不得重复（重复必须在进入数据库前拒绝）。
+/// 版本必须来自 ListPendingOwnerWork 展示的 version N，缺失时由调用方要求澄清。
+fn parse_response_expectation_targets(
+    raw: Option<Vec<ResponseExpectationTargetDto>>,
+) -> Result<Vec<ResponseExpectationControlTarget>, PlannerError> {
+    let raw_targets =
+        raw.ok_or_else(|| PlannerError::InvalidOutput("missing expectation_targets".into()))?;
+    if raw_targets.is_empty() || raw_targets.len() > 20 {
+        return Err(PlannerError::InvalidOutput(
+            "expectation_targets must contain 1..=20 items".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut targets = Vec::with_capacity(raw_targets.len());
+    for target in raw_targets {
+        let expectation_id = ResponseExpectationId::new(target.expectation_id.clone())
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?;
+        if !seen.insert(expectation_id.as_str().to_owned()) {
+            return Err(PlannerError::InvalidOutput(
+                "expectation_targets must not repeat expectation_id".into(),
+            ));
+        }
+        targets.push(ResponseExpectationControlTarget {
+            expectation_id,
+            expected_source_version: target.expected_source_version,
+        });
+    }
+    Ok(targets)
+}
+
 fn parse_memory_fact_id(value: Option<String>) -> Result<MemoryFactId, PlannerError> {
     MemoryFactId::new(
         value.ok_or_else(|| PlannerError::InvalidOutput("missing memory_fact_id".into()))?,
@@ -711,6 +812,10 @@ struct RawProposalOutput {
     snooze_until_unix_secs: Option<i64>,
     #[serde(default)]
     follow_up_targets: Option<Vec<FollowUpTargetDto>>,
+    #[serde(default)]
+    expectation_id: Option<String>,
+    #[serde(default)]
+    expectation_targets: Option<Vec<ResponseExpectationTargetDto>>,
 }
 
 #[cfg(test)]
@@ -1039,6 +1144,146 @@ mod tests {
                     assert_eq!(reason, "统一推迟到明天处理");
                 }
                 _ => panic!("expected SnoozeFollowUps"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_follow_up_and_complete_follow_ups_map_explicit_fields() {
+        // 单条完成
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"complete_follow_up",
+            "follow_up_id":"11111111-2222-3333-4444-555555555555",
+            "expected_source_version":3,
+            "reason":"Owner 确认该事项已经完成",
+            "rationale":"完成这条跟进",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::CompleteFollowUp {
+                    follow_up_id,
+                    expected_source_version,
+                    reason,
+                } => {
+                    assert_eq!(
+                        follow_up_id.as_str(),
+                        "11111111-2222-3333-4444-555555555555"
+                    );
+                    assert_eq!(expected_source_version, 3);
+                    assert_eq!(reason, "Owner 确认该事项已经完成");
+                }
+                _ => panic!("expected CompleteFollowUp"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+        // 批量完成
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"complete_follow_ups",
+            "follow_up_targets":[
+                {
+                    "follow_up_id":"11111111-2222-3333-4444-555555555555",
+                    "expected_source_version":3
+                },
+                {
+                    "follow_up_id":"66666666-7777-8888-9999-000000000000",
+                    "expected_source_version":1
+                }
+            ],
+            "reason":"这些事项都已经完成",
+            "rationale":"批量完成两条跟进",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::CompleteFollowUps { targets, reason } => {
+                    assert_eq!(targets.len(), 2);
+                    assert_eq!(
+                        targets[0].follow_up_id.as_str(),
+                        "11111111-2222-3333-4444-555555555555"
+                    );
+                    assert_eq!(targets[0].expected_source_version, 3);
+                    assert_eq!(
+                        targets[1].follow_up_id.as_str(),
+                        "66666666-7777-8888-9999-000000000000"
+                    );
+                    assert_eq!(targets[1].expected_source_version, 1);
+                    assert_eq!(reason, "这些事项都已经完成");
+                }
+                _ => panic!("expected CompleteFollowUps"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dismiss_response_expectation_and_expectations_map_explicit_fields() {
+        // 单条关闭回复期待
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"dismiss_response_expectation",
+            "expectation_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "expected_source_version":1,
+            "reason":"这个问题不需要继续回复",
+            "rationale":"关闭这条回复期待",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::DismissResponseExpectation {
+                    expectation_id,
+                    expected_source_version,
+                    reason,
+                } => {
+                    assert_eq!(
+                        expectation_id.as_str(),
+                        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                    );
+                    assert_eq!(expected_source_version, 1);
+                    assert_eq!(reason, "这个问题不需要继续回复");
+                }
+                _ => panic!("expected DismissResponseExpectation"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+        // 批量关闭回复期待
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"dismiss_response_expectations",
+            "expectation_targets":[
+                {
+                    "expectation_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    "expected_source_version":1
+                },
+                {
+                    "expectation_id":"ffffffff-1111-2222-3333-444444444444",
+                    "expected_source_version":2
+                }
+            ],
+            "reason":"这些问题都不需要继续提醒",
+            "rationale":"批量关闭两条回复期待",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::DismissResponseExpectations { targets, reason } => {
+                    assert_eq!(targets.len(), 2);
+                    assert_eq!(
+                        targets[0].expectation_id.as_str(),
+                        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                    );
+                    assert_eq!(targets[0].expected_source_version, 1);
+                    assert_eq!(
+                        targets[1].expectation_id.as_str(),
+                        "ffffffff-1111-2222-3333-444444444444"
+                    );
+                    assert_eq!(targets[1].expected_source_version, 2);
+                    assert_eq!(reason, "这些问题都不需要继续提醒");
+                }
+                _ => panic!("expected DismissResponseExpectations"),
             },
             _ => panic!("expected Proposal"),
         }

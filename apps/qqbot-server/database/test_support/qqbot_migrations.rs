@@ -116,11 +116,16 @@ fn migration_order(path: &std::path::Path) -> u8 {
         name if name.contains("_owner_agenda.sql") => 20,
         name if name.contains("_owner_notification_policy_feedback_v1.sql") => 21,
         name if name.contains("_owner_notification_policy_evaluation_v1.sql") => 22,
+        // ResponseExpectation 表被 owner_work_close 的外键引用，必须先建；
+        // 不能再落 99（read_dir 顺序未定义）。
+        name if name.contains("_response_expectations.sql") => 23,
         // FollowUp 控制审计先建表，snooze 扩展列、batch 复合唯一键依次执行；
         // 都落在 99 会退化为 read_dir 的未定义顺序。
-        name if name.contains("_follow_up_owner_controls.sql") => 23,
-        name if name.contains("_follow_up_snooze.sql") => 24,
-        name if name.contains("_follow_up_batch_controls.sql") => 25,
+        name if name.contains("_follow_up_owner_controls.sql") => 24,
+        name if name.contains("_follow_up_snooze.sql") => 25,
+        name if name.contains("_follow_up_batch_controls.sql") => 26,
+        // 完成/关闭控制：FollowUp 审计约束扩展 + ResponseExpectation 审计表。
+        name if name.contains("_owner_work_close.sql") => 27,
         _ => 99,
     }
 }

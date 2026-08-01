@@ -82,6 +82,13 @@ pub fn build_mysql_follow_up_control_store(
     Arc::new(repo::MySqlFollowUpControlStore::new(db))
 }
 
+/// 构造 Owner ResponseExpectation 控制仓储；授权/Receipt 逻辑与 FollowUp 控制共享。
+pub fn build_mysql_response_expectation_control_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::ResponseExpectationControlStoreT> {
+    Arc::new(repo::MySqlResponseExpectationControlStore::new(db))
+}
+
 /// 构造本地 Owner 身份绑定仓储；绑定由本地配置建立，不从聊天正文推断。
 pub fn build_mysql_owner_binding_store(
     db: DatabaseConnection,
