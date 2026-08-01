@@ -933,6 +933,7 @@ fn is_follow_up_control_action(action: &SecretaryAction) -> bool {
         SecretaryAction::DismissFollowUp { .. }
             | SecretaryAction::SnoozeFollowUp { .. }
             | SecretaryAction::DismissFollowUps { .. }
+            | SecretaryAction::SnoozeFollowUps { .. }
     )
 }
 

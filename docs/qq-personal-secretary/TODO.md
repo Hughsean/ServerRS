@@ -3,7 +3,7 @@
 > 最后更新：2026-08-01
 > 维护规则：完成项必须同步写入 `HISTORY.md`，不得仅勾选；新增具体事件使用
 > `YYYY-MM-DD HH:mm（Asia/Shanghai）`，精确到分钟，不得用猜测时间回填旧事件。
-> 当前开发阶段：在 `deepseek/qqbot-batch-dismiss-follow-up-v1` 连续收口全部
+> 当前开发阶段：在 `deepseek/qqbot-batch-snooze-follow-up-v1` 连续收口全部
 > 可本地完成的 QQBot TODO。旧验收矩阵保留为历史证据，不再作为日常开发门禁；只执行与改动
 > 风险相称的检查和隔离 MySQL 主路径验收。需要用户操作或 NapCat 实机的事项跳过但不伪造完成。
 
@@ -211,8 +211,8 @@ WebSocket 接入不会同步卡死；每条派生状态可追溯到事件。
 - [ ] `PARTIAL FUP-008` Agenda 写操作已支持 Owner 确认/拒绝、稍后提醒、完成、取消和改期；
   全部经 L2 Suspend/Resume、账号验权、单次消费、版本 fencing 和不可变审计。Owner 现可按
   FollowUp ID 与来源版本忽略或推迟单条通用跟进：旧通知被压制，到达新时间后按新来源版本
-  重新进入统一策略求值；也可一次性按明确 ID/版本全有或全无地忽略最多 20 条跟进。批量推迟、
-  批量确认等其他批处理仍待实现。Owner 也可忽略线程开放问题并关闭/重开线程。
+  重新进入统一策略求值；也可一次性按明确 ID/版本全有或全无地忽略或统一推迟最多 20 条跟进。
+  提前确认/批量确认等其他批处理仍待实现。Owner 也可忽略线程开放问题并关闭/重开线程。
 - [x] `DONE FUP-009` 每次策略求值追加类型化 Decision，区分 remind/delay/suppress/过期/终态
   失败；Owner 可解释查询决策原因，并记录重要/不重要反馈及受限的长期规则提升。
 - [x] `DONE FUP-010` NapCat 业务路径不含主动发送；官方通道也只消费 Owner 通知 Outbox，禁止

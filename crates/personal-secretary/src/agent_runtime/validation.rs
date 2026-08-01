@@ -392,7 +392,10 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             }
             bounded_text("follow up snooze reason", reason, 1, 1_000)?;
         }
-        SecretaryAction::DismissFollowUps { targets, reason } => {
+        SecretaryAction::DismissFollowUps { targets, reason }
+        | SecretaryAction::SnoozeFollowUps {
+            targets, reason, ..
+        } => {
             if targets.is_empty() || targets.len() > 20 {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(
                     "follow_up batch targets must contain 1..=20 items".into(),
@@ -414,6 +417,16 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 }
             }
             bounded_text("follow up reason", reason, 1, 1_000)?;
+            if let SecretaryAction::SnoozeFollowUps {
+                snooze_until_unix_secs,
+                ..
+            } = action
+                && *snooze_until_unix_secs <= 0
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "follow_up snooze_until_unix_secs must be positive".into(),
+                ));
+            }
         }
     }
     Ok(())

@@ -66,6 +66,7 @@ pub enum SecretaryToolKind {
     DismissFollowUp,
     SnoozeFollowUp,
     DismissFollowUps,
+    SnoozeFollowUps,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +138,8 @@ impl SecretaryToolKind {
             | Self::SetThreadLifecycle
             | Self::DismissFollowUp
             | Self::SnoozeFollowUp
-            | Self::DismissFollowUps => SecretaryToolPolicy {
+            | Self::DismissFollowUps
+            | Self::SnoozeFollowUps => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 reversible: true,
@@ -359,11 +361,19 @@ pub enum SecretaryAction {
         snooze_until_unix_secs: i64,
         reason: String,
     },
-    /// 批量忽略（v1 只做 dismiss，不包含批量 Snooze/完成/模糊搜索）。
-    /// targets 数量必须为 1..=20 且 follow_up_id 不重复；全有或全无，
-    /// 任一目标校验失败则整个事务回滚。
+    /// 批量忽略。targets 数量必须为 1..=20 且 follow_up_id 不重复；
+    /// 全有或全无，任一目标校验失败则整个事务回滚。
     DismissFollowUps {
         targets: Vec<FollowUpControlTarget>,
+        reason: String,
+    },
+    /// 批量推迟：整批目标共用同一个新到期时间；若需要不同时间应拆成多个 Action。
+    /// targets 数量必须为 1..=20 且 follow_up_id 不重复；全有或全无，
+    /// 任一目标校验失败则整个事务回滚。执行时以数据库当前 UTC 时间复验新时间：
+    /// 必须晚于每个目标当前 due 且不超过数据库当前时间后 365 天。
+    SnoozeFollowUps {
+        targets: Vec<FollowUpControlTarget>,
+        snooze_until_unix_secs: i64,
         reason: String,
     },
 }
@@ -427,6 +437,7 @@ impl SecretaryAction {
             Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
             Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,
             Self::DismissFollowUps { .. } => SecretaryToolKind::DismissFollowUps,
+            Self::SnoozeFollowUps { .. } => SecretaryToolKind::SnoozeFollowUps,
         }
     }
 }

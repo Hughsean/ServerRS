@@ -38,7 +38,8 @@ create_reminder, reschedule_item, cancel_item, complete_item, snooze_item, list_
 read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fact_ttl,
 set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
-set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
+snooze_follow_ups。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
 expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
 snooze_follow_up 必须提供 follow_up_id、expected_source_version（同样来自 version N）、
@@ -46,7 +47,12 @@ snooze_until_unix_secs（未来的 UTC Unix 秒，必须晚于当前 due）和 r
 dismiss_follow_ups 必须提供 follow_up_targets 数组（每项 {follow_up_id, expected_source_version}，
 版本一律来自 ListPendingOwnerWork 展示的 version N，禁止从正文猜测版本）、
 reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID 或版本缺失时不要输出
-dismiss_follow_ups，改为要求 Owner 澄清；不要输出其他 tool。"#;
+dismiss_follow_ups，改为要求 Owner 澄清；
+snooze_follow_ups 必须提供 follow_up_targets 数组（每项 {follow_up_id, expected_source_version}，
+版本一律来自 ListPendingOwnerWork 展示的 version N，禁止从正文猜测版本）、
+snooze_until_unix_secs（未来的 UTC Unix 秒，必须晚于本批所有目标的当前 due）和
+reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID、版本或时间缺失时不要输出
+snooze_follow_ups，改为要求 Owner 澄清；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -388,39 +394,23 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
                 .clone()
                 .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
         }),
-        "dismiss_follow_ups" => {
-            let raw_targets = raw
-                .follow_up_targets
+        "dismiss_follow_ups" => Ok(SecretaryAction::DismissFollowUps {
+            targets: parse_follow_up_targets(raw.follow_up_targets.clone())?,
+            reason: raw
+                .reason
                 .clone()
-                .ok_or_else(|| PlannerError::InvalidOutput("missing follow_up_targets".into()))?;
-            if raw_targets.is_empty() || raw_targets.len() > 20 {
-                return Err(PlannerError::InvalidOutput(
-                    "follow_up_targets must contain 1..=20 items".into(),
-                ));
-            }
-            let mut seen = HashSet::new();
-            let mut targets = Vec::with_capacity(raw_targets.len());
-            for target in raw_targets {
-                let follow_up_id = FollowUpId::new(target.follow_up_id.clone())
-                    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?;
-                if !seen.insert(follow_up_id.as_str().to_owned()) {
-                    return Err(PlannerError::InvalidOutput(
-                        "follow_up_targets must not repeat follow_up_id".into(),
-                    ));
-                }
-                targets.push(FollowUpControlTarget {
-                    follow_up_id,
-                    expected_source_version: target.expected_source_version,
-                });
-            }
-            Ok(SecretaryAction::DismissFollowUps {
-                targets,
-                reason: raw
-                    .reason
-                    .clone()
-                    .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
-            })
-        }
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "snooze_follow_ups" => Ok(SecretaryAction::SnoozeFollowUps {
+            targets: parse_follow_up_targets(raw.follow_up_targets.clone())?,
+            snooze_until_unix_secs: raw.snooze_until_unix_secs.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing snooze_until_unix_secs".into())
+            })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
         "draft_reminder" => Ok(SecretaryAction::DraftReminder {
             text: raw
                 .text
@@ -571,6 +561,37 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
             "unknown tool: {other}"
         ))),
     }
+}
+
+/// 批量控制（忽略/推迟）共用的目标转换与去重：1..=20、FollowUpId 合法、
+/// 同一批次 ID 不得重复（重复必须在进入数据库前拒绝）。
+/// 版本必须来自 ListPendingOwnerWork 展示的 version N，缺失时由调用方要求澄清。
+fn parse_follow_up_targets(
+    raw: Option<Vec<FollowUpTargetDto>>,
+) -> Result<Vec<FollowUpControlTarget>, PlannerError> {
+    let raw_targets =
+        raw.ok_or_else(|| PlannerError::InvalidOutput("missing follow_up_targets".into()))?;
+    if raw_targets.is_empty() || raw_targets.len() > 20 {
+        return Err(PlannerError::InvalidOutput(
+            "follow_up_targets must contain 1..=20 items".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut targets = Vec::with_capacity(raw_targets.len());
+    for target in raw_targets {
+        let follow_up_id = FollowUpId::new(target.follow_up_id.clone())
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?;
+        if !seen.insert(follow_up_id.as_str().to_owned()) {
+            return Err(PlannerError::InvalidOutput(
+                "follow_up_targets must not repeat follow_up_id".into(),
+            ));
+        }
+        targets.push(FollowUpControlTarget {
+            follow_up_id,
+            expected_source_version: target.expected_source_version,
+        });
+    }
+    Ok(targets)
 }
 
 fn parse_memory_fact_id(value: Option<String>) -> Result<MemoryFactId, PlannerError> {
@@ -973,5 +994,53 @@ mod tests {
         }));
         let result = planner.plan(&input()).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn snooze_follow_ups_proposal_maps_explicit_fields() {
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"snooze_follow_ups",
+            "follow_up_targets":[
+                {
+                    "follow_up_id":"11111111-2222-3333-4444-555555555555",
+                    "expected_source_version":3
+                },
+                {
+                    "follow_up_id":"66666666-7777-8888-9999-000000000000",
+                    "expected_source_version":1
+                }
+            ],
+            "snooze_until_unix_secs":1780000000,
+            "reason":"统一推迟到明天处理",
+            "rationale":"批量推迟两条跟进",
+            "evidence":["event-1"]
+        }));
+        let output = planner.plan(&input()).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::SnoozeFollowUps {
+                    targets,
+                    snooze_until_unix_secs,
+                    reason,
+                } => {
+                    assert_eq!(targets.len(), 2);
+                    assert_eq!(
+                        targets[0].follow_up_id.as_str(),
+                        "11111111-2222-3333-4444-555555555555"
+                    );
+                    assert_eq!(targets[0].expected_source_version, 3);
+                    assert_eq!(
+                        targets[1].follow_up_id.as_str(),
+                        "66666666-7777-8888-9999-000000000000"
+                    );
+                    assert_eq!(targets[1].expected_source_version, 1);
+                    assert_eq!(snooze_until_unix_secs, 1_780_000_000);
+                    assert_eq!(reason, "统一推迟到明天处理");
+                }
+                _ => panic!("expected SnoozeFollowUps"),
+            },
+            _ => panic!("expected Proposal"),
+        }
     }
 }

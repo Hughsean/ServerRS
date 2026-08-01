@@ -101,26 +101,20 @@ impl FollowUpControlUseCase {
                 ));
             }
             SecretaryAction::DismissFollowUp { .. } | SecretaryAction::SnoozeFollowUp { .. } => {}
-            SecretaryAction::DismissFollowUps { targets, reason } => {
-                if targets.is_empty()
-                    || targets.len() > 20
-                    || reason.trim().is_empty()
-                    || reason.chars().count() > 1_000
+            SecretaryAction::DismissFollowUps { targets, reason }
+            | SecretaryAction::SnoozeFollowUps {
+                targets, reason, ..
+            } => {
+                validate_batch_targets(targets, reason)?;
+                if let SecretaryAction::SnoozeFollowUps {
+                    snooze_until_unix_secs,
+                    ..
+                } = &request.action
+                    && *snooze_until_unix_secs <= 0
                 {
                     return Err(FollowUpControlStoreError::InvalidData(
-                        "follow-up batch targets or reason is invalid".into(),
+                        "follow-up batch snooze_until must be positive".into(),
                     ));
-                }
-                // 同一批次禁止重复 FollowUp ID；重复必须在进入数据库前拒绝。
-                let mut seen = HashSet::new();
-                for target in targets {
-                    if target.expected_source_version == 0
-                        || !seen.insert(target.follow_up_id.as_str())
-                    {
-                        return Err(FollowUpControlStoreError::InvalidData(
-                            "follow-up batch targets or reason is invalid".into(),
-                        ));
-                    }
                 }
             }
             _ => {
@@ -131,4 +125,30 @@ impl FollowUpControlUseCase {
         }
         self.store.apply_effect(request).await
     }
+}
+
+/// 批量控制（忽略/推迟）共用的目标与 reason 校验：1..=20、ID 不重复、
+/// 版本为正、reason 去除首尾空白后 1..=1000 字符；重复必须在进入数据库前拒绝。
+fn validate_batch_targets(
+    targets: &[crate::FollowUpControlTarget],
+    reason: &str,
+) -> Result<(), FollowUpControlStoreError> {
+    if targets.is_empty()
+        || targets.len() > 20
+        || reason.trim().is_empty()
+        || reason.chars().count() > 1_000
+    {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "follow-up batch targets or reason is invalid".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    for target in targets {
+        if target.expected_source_version == 0 || !seen.insert(target.follow_up_id.as_str()) {
+            return Err(FollowUpControlStoreError::InvalidData(
+                "follow-up batch targets or reason is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
 }

@@ -5465,3 +5465,743 @@ async fn owner_approved_batch_dismiss_follow_ups_is_atomic_and_idempotent() {
         "no optimistic success response after atomic failure"
     );
 }
+
+// ===== Owner 审批批量推迟 FollowUp（all-or-nothing + 通知再生） =====
+
+/// 测试用 Planner：固定返回 SnoozeFollowUps Proposal，不调用 LLM。
+struct SnoozeFollowUpsPlanner {
+    targets: Vec<FollowUpControlTarget>,
+    snooze_until_unix_secs: i64,
+}
+
+#[async_trait]
+impl ActionPlannerT for SnoozeFollowUpsPlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                SecretaryAction::SnoozeFollowUps {
+                    targets: self.targets.clone(),
+                    snooze_until_unix_secs: self.snooze_until_unix_secs,
+                    reason: "Owner 希望统一晚些再提醒".into(),
+                },
+                "测试：Owner 审批批量推迟 FollowUp",
+                Vec::new(),
+                Some("batch-snooze-follow-ups-v1".into()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn owner_approved_batch_snooze_follow_ups_is_atomic_and_regenerates_notifications() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("batch-snooze-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+    // 时间以真实时钟为基准：A 已到期、B 未到期且早于共同新时间，snooze 目标在未来。
+    let now = SystemClock.now_unix_secs();
+    let base_due = now - 3600;
+    let snooze_until = now + 7200;
+
+    // ===== 成功路径：两条 FollowUp（不同 due），一条 policy-owned、一条 legacy Outbox =====
+    // 1a. 来源化 FollowUp A（已到期），先建 OwnerCommand/Binding 再生成 policy outbox，
+    //     保证策略 Remind 的接收方复验有绑定可查。
+    let (_fact_a, follow_up_a) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-snooze-commitment-a",
+        "commitment:batch-snooze-a",
+        base_due,
+    )
+    .await;
+    let command_account_id = format!("batch-snooze-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "batch-snooze-cmd-1",
+        "把这几条跟进都推迟",
+        base_due + 60,
+    )
+    .await;
+    let command_event = personal_secretary::SourceEventId::new(command_event_id).unwrap();
+    // 1b. A 到期后真实生成 Candidate/Request，统一策略求值生成 policy-owned Outbox
+    //     （follow_up_id 为 NULL，只能经 Candidate 回溯）。
+    let due_report = follow_up_scan_at(&db, base_due).await;
+    assert_eq!(due_report.notification_candidates_created, 1);
+    assert_eq!(due_report.notification_evaluation_requests_created, 1);
+    let policy = NotificationPolicyUseCase::new(
+        build_mysql_notification_policy_store(db.clone()),
+        Arc::new(SystemClock),
+    );
+    assert_eq!(
+        policy
+            .evaluate_next("batch-snooze-policy", 60, |snapshot| {
+                NotificationPolicyEvaluator
+                    .evaluate(&snapshot.evaluation_input(base_due + 1).unwrap())
+            })
+            .await
+            .unwrap(),
+        Some(EvaluationCommitResult::Applied)
+    );
+    let outbox_a_v1_id = scalar_string(
+        &db,
+        "SELECT outbox.notification_id AS value \
+         FROM secretary_notification_outbox outbox \
+         JOIN secretary_notification_candidates candidate \
+           ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+         WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ?",
+        [follow_up_a.as_str()],
+    )
+    .await
+    .expect("policy-owned follow-up outbox must exist");
+    // 1c. 来源化 FollowUp B（未到期），插一条 legacy pending Outbox。
+    let (_fact_b, follow_up_b) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-snooze-commitment-b",
+        "commitment:batch-snooze-b",
+        base_due + 7200,
+    )
+    .await;
+    let legacy_outbox_b_id = Uuid::new_v4().to_string();
+    legacy_pending_outbox_for(
+        &db,
+        &managed_id,
+        &follow_up_b,
+        base_due + 7200,
+        &legacy_outbox_b_id,
+    )
+    .await;
+
+    // 2. action_run + 初次运行：Planner 生成 SnoozeFollowUps -> Suspend 等 Owner 审批。
+    let targets = vec![
+        FollowUpControlTarget {
+            follow_up_id: FollowUpId::new(follow_up_a.clone()).unwrap(),
+            expected_source_version: 1,
+        },
+        FollowUpControlTarget {
+            follow_up_id: FollowUpId::new(follow_up_b.clone()).unwrap(),
+            expected_source_version: 1,
+        },
+    ];
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_event, "batch-snooze-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command_event.clone(),
+                command_text: "把这几条跟进都推迟".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: base_due + 60,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command_event.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let control = Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    ));
+    let initial = PlannerUseCase::new(
+        action_store,
+        Arc::new(SnoozeFollowUpsPlanner {
+            targets: targets.clone(),
+            snooze_until_unix_secs: snooze_until,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(Arc::clone(&control));
+    let run = initial
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("run must be claimed");
+    assert!(run.suspended, "L2 batch snooze must await approval");
+    let checkpoint_id = run
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal_id = run.proposal_id.expect("suspended run must have proposal");
+
+    // 3. 模拟进程重建后 Resume Approve。
+    let resumed = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(SnoozeFollowUpsPlanner {
+            targets,
+            snooze_until_unix_secs: snooze_until,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(control);
+    let resumed_report = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: SecretaryApprovalDecision::Approve,
+                command_source_event_id: command_event.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved resume must execute batch snooze effect");
+    assert!(
+        resumed_report.completed,
+        "approved resume must complete the run"
+    );
+
+    // 4. 断言成功语义：仍 scheduled、due 精确变为共同 snooze_until、版本精确 +1、
+    //    两类 Outbox suppressed 且租约清空、每目标一条 snooze 审计（前后 due/版本
+    //    正确）且共享同一 effect_id、一条回执、一条响应。
+    for (id, label) in [(&follow_up_a, "A"), (&follow_up_b, "B")] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT status AS value FROM secretary_follow_up_items WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("scheduled"),
+            "follow-up {label} must stay scheduled after batch snooze"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT due_at_unix_secs AS value FROM secretary_follow_up_items \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            snooze_until,
+            "follow-up {label} due must be set exactly to the common snooze time"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            2,
+            "follow-up {label} version must bump by exactly 1"
+        );
+    }
+    for (outbox_id, label) in [
+        (&outbox_a_v1_id, "policy-owned"),
+        (&legacy_outbox_b_id, "legacy"),
+    ] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT delivery_status AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("suppressed"),
+            "{label} outbox must be suppressed after batch snooze"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT (lease_token IS NULL) AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_id.as_str()],
+            )
+            .await,
+            1,
+            "suppressed {label} outbox must clear its lease"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(DISTINCT effect_id) AS SIGNED) AS value \
+             FROM secretary_follow_up_owner_controls WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        1,
+        "batch audit rows must share one effect_id"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        2,
+        "one audit row per target"
+    );
+    for (id, label, old_due) in [
+        (&follow_up_a, "A", base_due),
+        (&follow_up_b, "B", base_due + 7200),
+    ] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT control_kind AS value FROM secretary_follow_up_owner_controls \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("snooze"),
+            "audit for {label} must be snooze kind"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(previous_source_version AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            1,
+            "audit for {label} must record previous version 1"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(current_source_version AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            2,
+            "audit for {label} must record current version 2"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(previous_due_at_unix_secs AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            old_due,
+            "audit for {label} must record the pre-snooze due"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(current_due_at_unix_secs AS SIGNED) AS value \
+                 FROM secretary_follow_up_owner_controls WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            snooze_until,
+            "audit for {label} must record the new common due"
+        );
+    }
+    let receipt_effect_id = scalar_string(
+        &db,
+        "SELECT effect_id AS value FROM secretary_action_effect_receipts WHERE run_id = ?",
+        [run_id.as_str()],
+    )
+    .await
+    .expect("batch must persist one effect receipt");
+    let audit_effect_id = scalar_exactly_one_string(
+        &db,
+        "SELECT effect_id AS value FROM secretary_follow_up_owner_controls \
+         WHERE follow_up_id = ? AND control_kind = 'snooze'",
+        [follow_up_a.as_str()],
+        "audit row for A must be unique",
+    )
+    .await;
+    assert_eq!(
+        receipt_effect_id, audit_effect_id,
+        "audit effect_id must match the receipt effect_id"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "batch must persist exactly one effect receipt"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "completed resume must persist one owner response"
+    );
+
+    // 5. 第二次 Resume 被 Checkpoint CAS 拒绝，审计不再变化。
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command_event.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject the second approved resume"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_a.as_str(), follow_up_b.as_str()],
+        )
+        .await,
+        2,
+        "second resume must not write another audit"
+    );
+
+    // 6. 新 due 前扫描：不得产生新版本 Candidate/Outbox；旧 Outbox 保持 suppressed。
+    let before_report = follow_up_scan_at(&db, snooze_until - 60).await;
+    assert_eq!(before_report.notification_candidates_created, 0);
+    assert_eq!(before_report.notification_evaluation_requests_created, 0);
+    for (id, label) in [(&follow_up_a, "A"), (&follow_up_b, "B")] {
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_notification_candidates \
+                 WHERE source_kind = 'follow_up' AND source_id = ? AND source_version = 1",
+                [id.as_str()],
+            )
+            .await,
+            if label == "A" { 1 } else { 0 },
+            "scan before the new due must not create a new-version candidate for {label}"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(COUNT(*) AS SIGNED) AS value \
+                 FROM secretary_notification_outbox outbox \
+                 LEFT JOIN secretary_notification_candidates candidate \
+                   ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+                 WHERE outbox.follow_up_id = ? OR \
+                       (candidate.source_kind = 'follow_up' AND candidate.source_id = ?)",
+                [id.as_str(), id.as_str()],
+            )
+            .await,
+            1,
+            "scan before the new due must not create a new outbox occurrence for {label}"
+        );
+    }
+
+    // 7. 到达新 due 后扫描并统一求值：每个目标生成新版本 Candidate、新 Decision 与
+    //    新 policy-owned Outbox；旧 Outbox 保持 suppressed，不被复活。
+    let after_report = follow_up_scan_at(&db, snooze_until + 60).await;
+    assert_eq!(after_report.notification_candidates_created, 2);
+    assert_eq!(after_report.notification_evaluation_requests_created, 2);
+    for _ in 0..2 {
+        assert_eq!(
+            policy
+                .evaluate_next("batch-snooze-policy", 60, |snapshot| {
+                    NotificationPolicyEvaluator
+                        .evaluate(&snapshot.evaluation_input(snooze_until + 61).unwrap())
+                })
+                .await
+                .unwrap(),
+            Some(EvaluationCommitResult::Applied)
+        );
+    }
+    for (id, label) in [(&follow_up_a, "A"), (&follow_up_b, "B")] {
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_notification_candidates \
+                 WHERE source_kind = 'follow_up' AND source_id = ? AND source_version = 2",
+                [id.as_str()],
+            )
+            .await,
+            1,
+            "new due must create a source_version=2 candidate for {label}"
+        );
+        let outbox_v2_id = scalar_string(
+            &db,
+            "SELECT outbox.notification_id AS value \
+             FROM secretary_notification_outbox outbox \
+             JOIN secretary_notification_candidates candidate \
+               ON candidate.notification_candidate_id = outbox.notification_candidate_id \
+             WHERE candidate.source_kind = 'follow_up' AND candidate.source_id = ? \
+               AND candidate.source_version = 2",
+            [id.as_str()],
+        )
+        .await
+        .expect("new policy-owned outbox must exist");
+        assert_ne!(outbox_v2_id, outbox_a_v1_id);
+        assert_ne!(outbox_v2_id, legacy_outbox_b_id);
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT delivery_status AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_v2_id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("pending"),
+            "new outbox occurrence for {label} must be pending"
+        );
+    }
+    for (outbox_id, label) in [
+        (&outbox_a_v1_id, "policy-owned v1"),
+        (&legacy_outbox_b_id, "legacy"),
+    ] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT delivery_status AS value FROM secretary_notification_outbox \
+                 WHERE notification_id = ?",
+                [outbox_id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("suppressed"),
+            "{label} outbox must stay suppressed, never resurrected"
+        );
+    }
+
+    // ===== 原子失败路径：第二个目标当前 due 晚于共同新时间，整个批次必须全回滚 =====
+    // 8a. 两个新的来源化 FollowUp（均未到期），C 带一条 legacy pending Outbox；
+    //     D 的当前 due（snooze_until + 3600）晚于共同 snooze_until，触发时间校验失败。
+    let (_fact_c, follow_up_c) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-snooze-commitment-c",
+        "commitment:batch-snooze-c",
+        base_due + 7200,
+    )
+    .await;
+    let (_fact_d, follow_up_d) = commitment_follow_up_fixture(
+        &db,
+        &inbound,
+        &managed,
+        &managed_id,
+        "batch-snooze-commitment-d",
+        "commitment:batch-snooze-d",
+        snooze_until + 3600,
+    )
+    .await;
+    let legacy_outbox_c_id = Uuid::new_v4().to_string();
+    legacy_pending_outbox_for(
+        &db,
+        &managed_id,
+        &follow_up_c,
+        base_due + 7200,
+        &legacy_outbox_c_id,
+    )
+    .await;
+    // 8b. 新 OwnerCommand（复用既有 binding，不再插入新 binding，保持恰好一个 active）。
+    let command2_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(
+                    MessageSource::QqOpenPlatform,
+                    &command_account_id,
+                    "batch-snooze-cmd-2",
+                )
+                .unwrap(),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid").unwrap(),
+                base_due + 120,
+                "推迟另外两条跟进",
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .clone();
+    let run2_id = ActionRunId::for_owner_command(&command2_event_id, "batch-snooze-v1");
+    build_mysql_action_store(db.clone())
+        .ensure_action_run(
+            &run2_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command2_event_id.clone(),
+                command_text: "推迟另外两条跟进".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: base_due + 120,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command2_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let failing = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(SnoozeFollowUpsPlanner {
+            targets: vec![
+                FollowUpControlTarget {
+                    follow_up_id: FollowUpId::new(follow_up_c.clone()).unwrap(),
+                    expected_source_version: 1,
+                },
+                FollowUpControlTarget {
+                    follow_up_id: FollowUpId::new(follow_up_d.clone()).unwrap(),
+                    expected_source_version: 1,
+                },
+            ],
+            snooze_until_unix_secs: snooze_until,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_follow_up_control(Arc::new(FollowUpControlUseCase::new(
+        build_mysql_follow_up_control_store(db.clone()),
+    )));
+    let run2 = failing
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("second run must be claimed");
+    assert!(run2.suspended, "L2 batch snooze must await approval first");
+    let checkpoint2_id = run2
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal2_id = run2.proposal_id.expect("suspended run must have proposal");
+    assert!(
+        failing
+            .resume_run(
+                &run2_id,
+                &checkpoint2_id,
+                SecretaryActionResumeInput {
+                    proposal_id: proposal2_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command2_event_id.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "target due later than the common snooze time must fail the whole batch"
+    );
+
+    // 8c. 全回滚断言：两条 FollowUp 都未变化（仍 scheduled、due/版本原样）、
+    //     Outbox 未压制、无审计、无回执、无响应。
+    for (id, label) in [(&follow_up_c, "C"), (&follow_up_d, "D")] {
+        assert_eq!(
+            scalar_string(
+                &db,
+                "SELECT status AS value FROM secretary_follow_up_items WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await
+            .as_deref(),
+            Some("scheduled"),
+            "follow-up {label} must stay scheduled after atomic failure"
+        );
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT CAST(source_version AS SIGNED) AS value FROM secretary_follow_up_items \
+                 WHERE follow_up_id = ?",
+                [id.as_str()],
+            )
+            .await,
+            1,
+            "follow-up {label} version must stay unchanged after atomic failure"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT due_at_unix_secs AS value FROM secretary_follow_up_items \
+             WHERE follow_up_id = ?",
+            [follow_up_d.as_str()],
+        )
+        .await,
+        snooze_until + 3600,
+        "follow-up D due must stay unchanged after atomic failure"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT delivery_status AS value FROM secretary_notification_outbox \
+             WHERE notification_id = ?",
+            [legacy_outbox_c_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("pending"),
+        "outbox must not be suppressed after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_owner_controls \
+             WHERE follow_up_id IN (?, ?)",
+            [follow_up_c.as_str(), follow_up_d.as_str()],
+        )
+        .await,
+        0,
+        "no batch control audit after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run2_id.as_str()],
+        )
+        .await,
+        0,
+        "no effect receipt after atomic failure"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run2_id.as_str()],
+        )
+        .await,
+        0,
+        "no optimistic success response after atomic failure"
+    );
+}
