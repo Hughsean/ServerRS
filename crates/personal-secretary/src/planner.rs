@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use chrono::NaiveDateTime;
 
 use crate::{
-    ConversationRef, RecentEventRef, SecretaryAction, SecretaryActionProposal, SourceAccountRef,
-    SourceEventId,
+    ContentTrustLevel, ConversationRef, EventThreadId, MessageRole, RecentEventRef,
+    SecretaryAction, SecretaryActionProposal, SourceAccountRef, SourceEventId, ThreadActorRef,
 };
 
 // ===== 有界常量 =====
@@ -21,6 +21,10 @@ const MAX_COMMAND_TEXT_CHARS: usize = 4_000;
 const MAX_RECENT_EVENTS: usize = 8;
 const MAX_RETRIEVED_EXCERPTS: usize = 20;
 const MAX_EXCERPT_CHARS: usize = 1_000;
+/// 最近事件窗口最大条数。PlanNode 使用此常量查询 Retriever。
+pub(crate) const MAX_RECENT_EVENT_VIEWS: usize = 8;
+/// 单条事件 @ 目标最大数量。
+const MAX_MENTIONED_ACTORS: usize = 20;
 const MAX_TIMEZONE_NAME_BYTES: usize = 64;
 const MAX_TIME_EXPRESSION_CHARS: usize = 200;
 const MAX_REASON_CHARS: usize = 1_000;
@@ -127,12 +131,90 @@ pub struct PlannerRetrievedExcerpt {
     pub actor_id: String,
 }
 
+// ===== AgentEventView =====
+
+/// 协议无关、有界的事件证据视图。用于 Planner 最近窗口，包含发送者、@、Reply、Thread
+/// 和内容策略；不直接暴露 QQ 号、OpenID 或原始群号。
+#[derive(Debug, Clone)]
+pub struct AgentEventView {
+    pub source_event_id: SourceEventId,
+    pub conversation: ConversationRef,
+    /// 发送者身份（账号作用域内）。
+    pub actor: ThreadActorRef,
+    pub occurred_at_unix_secs: i64,
+    pub role: MessageRole,
+    pub content_trust_level: ContentTrustLevel,
+    /// 有界正文摘录；envelope_only / never_long_term 时为空。
+    pub excerpt: String,
+    pub mentioned_actors: Vec<ThreadActorRef>,
+    pub mention_all: bool,
+    pub reply_to_event_id: Option<SourceEventId>,
+    pub thread_id: Option<EventThreadId>,
+}
+
+/// AgentEventView 校验错误。
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AgentEventViewError {
+    #[error("event view {field} must not be empty")]
+    EmptyField { field: &'static str },
+    #[error("event view {field} exceeds max {max}")]
+    TooLarge { field: &'static str, max: usize },
+    #[error("actor account mismatch")]
+    ActorAccountMismatch,
+    #[error("mentioned actor account mismatch at index {index}")]
+    MentionedActorAccountMismatch { index: usize },
+}
+
+/// 校验单条 AgentEventView 的有界约束和账号一致性。
+pub fn validate_agent_event_view(
+    view: &AgentEventView,
+    account: &SourceAccountRef,
+) -> Result<(), AgentEventViewError> {
+    use AgentEventViewError::*;
+    if view.actor.account != *account {
+        return Err(ActorAccountMismatch);
+    }
+    if view.excerpt.chars().count() > MAX_EXCERPT_CHARS {
+        return Err(TooLarge {
+            field: "excerpt",
+            max: MAX_EXCERPT_CHARS,
+        });
+    }
+    if view.mentioned_actors.len() > MAX_MENTIONED_ACTORS {
+        return Err(TooLarge {
+            field: "mentioned_actors",
+            max: MAX_MENTIONED_ACTORS,
+        });
+    }
+    for (i, mentioned) in view.mentioned_actors.iter().enumerate() {
+        if mentioned.account != *account {
+            return Err(MentionedActorAccountMismatch { index: i });
+        }
+    }
+    if let Some(ref reply_id) = view.reply_to_event_id
+        && reply_id.as_str().trim().is_empty()
+    {
+        return Err(EmptyField {
+            field: "reply_to_event_id",
+        });
+    }
+    if let Some(ref thread_id) = view.thread_id
+        && thread_id.as_str().trim().is_empty()
+    {
+        return Err(EmptyField { field: "thread_id" });
+    }
+    Ok(())
+}
+
 /// Planner 输入。账号作用域严格限定，跨账号查询被拒绝。
 #[derive(Debug, Clone)]
 pub struct PlannerInput {
     pub account: SourceAccountRef,
     pub command: PlannerCommandEvent,
     pub recent_events: Vec<RecentEventRef>,
+    /// 协议无关的有界事件证据视图，替代 `recent_events` 发送给 LLM。
+    /// 包含发送者、@、Reply、Thread 和内容策略；PlanNode 通过 Retriever 从 DB 填充。
+    pub recent_event_views: Vec<AgentEventView>,
     /// UTC 偏移秒数（如 Asia/Shanghai 为 28800）。由已验证配置生成，不由调用方随意传入。
     pub timezone_offset_secs: i64,
     pub timezone: String,
@@ -200,6 +282,15 @@ pub fn validate_planner_input(input: &PlannerInput) -> Result<(), PlannerError> 
         return Err(PlannerError::InvalidInput(format!(
             "recent_events must not exceed {MAX_RECENT_EVENTS} items"
         )));
+    }
+    if input.recent_event_views.len() > MAX_RECENT_EVENT_VIEWS {
+        return Err(PlannerError::InvalidInput(format!(
+            "recent_event_views must not exceed {MAX_RECENT_EVENT_VIEWS} items"
+        )));
+    }
+    for view in &input.recent_event_views {
+        validate_agent_event_view(view, &input.account)
+            .map_err(|e| PlannerError::InvalidInput(format!("invalid agent event view: {e}")))?;
     }
     if !(MIN_OFFSET_SECS..=MAX_OFFSET_SECS).contains(&input.timezone_offset_secs) {
         return Err(PlannerError::InvalidInput(format!(
@@ -426,6 +517,7 @@ mod tests {
             account: account(),
             command: command_event(text),
             recent_events: Vec::new(),
+            recent_event_views: Vec::new(),
             timezone_offset_secs: 28_800,
             timezone: "Asia/Shanghai".into(),
             now_unix_secs: 1_000,

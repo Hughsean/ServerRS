@@ -83,6 +83,8 @@ pub struct PlannerUseCase {
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
+    /// 当前 LLM 端点是否已验证为本地回环。注入 ActionRunContext 供 PlanNode 和 Planner 使用。
+    is_local_loopback: bool,
     lease_secs: u64,
     max_steps: u32,
     deadline_ms: u64,
@@ -109,6 +111,7 @@ impl PlannerUseCase {
             memory_candidate_control: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
+            is_local_loopback: false,
             lease_secs,
             max_steps: 16,
             deadline_ms: 30_000,
@@ -182,6 +185,12 @@ impl PlannerUseCase {
         self
     }
 
+    /// CTX-002 修复：注入已验证的本地回环标志，控制 local_only 内容是否对 LLM 可见。
+    pub fn with_loopback(mut self, is_local_loopback: bool) -> Self {
+        self.is_local_loopback = is_local_loopback;
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -203,6 +212,7 @@ impl PlannerUseCase {
             memory_candidate_control: None,
             checkpoint_db: None,
             clock,
+            is_local_loopback: false,
             lease_secs,
             max_steps: 16,
             deadline_ms: 30_000,
@@ -273,6 +283,7 @@ impl PlannerUseCase {
             timezone: claimed.timezone.clone(),
             now_unix_secs: self.clock.now_unix_secs(),
             lease_token: lease_token.clone(),
+            is_local_loopback: self.is_local_loopback,
         });
 
         let mut effect_executor = SecretaryActionEffectExecutor::new(
@@ -527,6 +538,7 @@ impl PlannerUseCase {
             timezone: claimed.timezone.clone(),
             now_unix_secs: self.clock.now_unix_secs(),
             lease_token: claimed.lease_token.clone(),
+            is_local_loopback: self.is_local_loopback,
         });
         let graph = build_action_graph(
             Arc::clone(&self.planner),

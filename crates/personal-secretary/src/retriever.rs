@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 
+use crate::planner::AgentEventView;
 use crate::{
     ConversationRef, EventThreadId, InboundEventStoreError, MessageRole, RecentEventRef,
     SourceAccountRef, SourceEventId, ThreadStatus, VerifiedActor,
@@ -382,6 +383,15 @@ pub trait RetrieverStoreT: Send + Sync {
         &self,
         query: &EventQuery,
     ) -> Result<Vec<EventSearchResult>, InboundEventStoreError>;
+
+    /// 列出账号最近的 N 条事件证据视图，包含发送者、@、Reply、Thread 和内容策略。
+    /// 返回按时间正序排列；数据库先倒序取最近 N 条，再反转为正序。
+    /// 不应用内容策略过滤（由 `RetrieverUseCase` 层负责）。
+    async fn list_recent_event_views(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<AgentEventView>, InboundEventStoreError>;
 
     /// 读取单条事件详情。account 限定，envelope_only 返回空正文。
     async fn read_source_event(

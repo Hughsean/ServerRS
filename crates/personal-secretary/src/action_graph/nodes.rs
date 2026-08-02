@@ -12,6 +12,7 @@ use agent_core::graph::{
 use agent_core::{AgentOutcome, AgentState, AgentUpdate};
 use async_trait::async_trait;
 
+use crate::planner::MAX_RECENT_EVENT_VIEWS;
 use crate::{
     ConversationKind, ConversationRef, EventQuery, PlannerInput, PlannerOutput,
     PlannerRetrievedExcerpt, SecretaryAction, SecretaryActionApprovalRequest,
@@ -104,6 +105,19 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
         } else {
             Vec::new()
         };
+        // CTX-003：从事件仓储填充最近事件窗口（发送者、@、Reply、Thread、内容策略）。
+        let recent_event_views = if let Some(retriever) = &self.retriever {
+            retriever
+                .list_recent_event_views(
+                    &self.context.account,
+                    MAX_RECENT_EVENT_VIEWS as u16,
+                    self.context.is_local_loopback,
+                )
+                .await
+                .map_err(|e| NodeError::with_source(NodeErrorKind::Transient, e))?
+        } else {
+            Vec::new()
+        };
         let input = PlannerInput {
             account: self.context.account.clone(),
             command: crate::PlannerCommandEvent {
@@ -117,6 +131,7 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
                 normalized_text: self.context.command_text.clone(),
             },
             recent_events: business.recent_events().to_vec(),
+            recent_event_views,
             timezone_offset_secs: self.context.timezone_offset_secs,
             timezone: self.context.timezone.clone(),
             now_unix_secs: self.context.now_unix_secs,

@@ -7,8 +7,8 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`deepseek/qqbot-memory-candidate-approval-v1`，基线提交 `4e476af`，包含
-  `Main` 当前提交 `ea2226a`；工作树尚未提交、推送或合并。
+- 当前开发分支：`deepseek/qqbot-agent-event-view-v1`，基线提交 `94ef5d9`（已包含 MEM-011
+  结构化记忆候选审批闭环的提交），尚未提交、推送或合并。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -19,9 +19,9 @@
   **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
   L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
 - 当前边界：NapCat 保持只读；旧验收矩阵只保留历史用途，不再作为日常开发门禁。结构化记忆候选
-  已通过三轮 Codex 独立复核，全部 7 条隔离 MySQL 聚焦测试通过，P0-6 local_only 配置切换永久
-  不可达问题已修复（deferred 表持久化逐事件延期状态）。切片代码、迁移与测试已完成，文档已同步，
-  等待用户授权提交。
+  (MEM-011) 已提交（`94ef5d9`）。Agent 有界事件证据视图 v1 已完成：有界最近窗口与 retrieved
+  真实入模，模型仅看到请求内临时引用，local_only 只向已验证 loopback 模型开放；关键 MySQL
+  关系视图用例已在随机隔离 schema 通过。下一切片为 CTX-004 有界多轮 Replan。
 
 ## 历史分块
 
@@ -31,6 +31,32 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-02 13:57（Asia/Shanghai）`：Codex 完成 AgentEventView 最终短复验并批准切片。
+  source_event_id、thread_id、memory_source_event_ids 和 conversation 全部仅经 TempRefMap 恢复，
+  未登记引用 fail-closed；删除直接解析旁路。MySQL `mentioned_actor_ids` 已 CAST 为 CHAR。使用容器
+  当前凭据在随机隔离 schema 独立重跑 `recent_event_views_account_scoped_with_mentions_reply_and_thread`，
+  1/1 通过并在 finally 清理。格式、严格 Clippy 和既有单元测试由交付方通过，Codex 复核 diff check
+  通过；未连接 NapCat/QQ 开放平台，未发送消息，`.mcp.json` 未触碰。
+
+- `2026-08-02 13:41（Asia/Shanghai）`：AgentEventView 第一轮修复复核仍未批准。确认 loopback
+  从 AppConfig 经 PlannerUseCase/ActionRunContext/PlanNode 注入 Retriever 与 LlmActionPlanner，
+  local_only 远程正文泄露已关闭；Actor/Mention 标签复用、Reply 指向父 evt、命令事件引用、有效
+  Thread 视图和缺失正文投影降级也已落实。剩余 P0 是“兼容”分支仍直接接受非 evt_/thread_ 的
+  原始 ID，conversation raw 回退及 memory_source_event_ids 也绕过 TempRefMap。启动本地 MySQL
+  后在随机隔离 schema 重跑唯一测试，Thread fixture 已修复，但查询在 mentioned_actor_ids JSON
+  直接解码为 String 时失败；需 `CAST(... AS CHAR)`。schema 已在 finally 清理；未提交、推送、
+  合并，也未连接或发送 QQ。
+
+- `2026-08-02 12:07（Asia/Shanghai）`：Codex 独立复核 Agent 有界事件证据视图，结论未批准。
+  领域视图与 retrieved 入模方向成立，格式、两个 crate 严格 Clippy 和 diff check 通过；但发现两个
+  P0：local_only 正文被无条件标记可见，且临时引用只保存事件 evidence 映射，未知合法 UUID 被
+  直接接受、其他未知引用被静默丢弃，Action 的 source_event_id/thread_id 等字段也未回映。同一
+  Actor/会话/Thread 每条事件生成不同标签，Reply 生成无法解析且不指向父事件的独立标签。另有
+  两个 P1：查询使用原始 `secretary_thread_events` 而非有效投影视图，正文投影缺失会回退为 normal。
+  随机隔离 schema 中真实运行新增 MySQL 测试时，fixture 的 Thread ID 超过 `CHAR(36)`，测试在
+  Retriever 查询前失败；schema 已在 finally 清理。原文档使用未来时间 13:00 并宣称完成，现已按
+  12:07 的可验证复核时间纠正。当前未提交、推送或合并，未连接或发送 QQ。
 
 - `2026-08-02 11:06（Asia/Shanghai）`：Codex 完成 `MEM-011` 第三轮短复验。确认 deferred
   逐事件延期路径在远程过滤、本地优先领取、租约 fencing、主游标不倒退和提交清理之间闭合；

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::planner::AgentEventView;
 use crate::{
     Clock, ContentTrustLevel, EventQuery, EventSearchResult, EventThreadId, InboundEventStoreError,
     PendingOwnerWorkItem, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
@@ -58,6 +59,27 @@ impl RetrieverUseCase {
             policy,
             clock,
         }
+    }
+
+    /// 列出账号最近的事件证据视图，应用内容策略过滤。
+    /// `is_local_loopback` 决定 local_only 事件是否可见；非 loopback 时排除。
+    pub async fn list_recent_event_views(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+        is_local_loopback: bool,
+    ) -> Result<Vec<AgentEventView>, RetrieverUseCaseError> {
+        let views = self.store.list_recent_event_views(account, limit).await?;
+        Ok(views
+            .into_iter()
+            .filter(|v| {
+                crate::is_allowed_for_model(
+                    v.content_trust_level,
+                    is_local_loopback,
+                    self.policy.allow_local_only_to_loopback_llm,
+                )
+            })
+            .collect())
     }
 
     /// 检索事件并按内容策略过滤。
@@ -205,6 +227,13 @@ mod tests {
             _query: &EventQuery,
         ) -> Result<Vec<EventSearchResult>, InboundEventStoreError> {
             Ok(self.events.lock().unwrap().clone())
+        }
+        async fn list_recent_event_views(
+            &self,
+            _account: &SourceAccountRef,
+            _limit: u16,
+        ) -> Result<Vec<AgentEventView>, InboundEventStoreError> {
+            Ok(Vec::new())
         }
         async fn read_source_event(
             &self,

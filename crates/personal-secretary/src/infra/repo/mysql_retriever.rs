@@ -9,17 +9,21 @@ use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
 use tracing::debug;
 
 use super::mysql_inbound::store_error;
+use crate::planner::AgentEventView;
 use crate::{
-    ConversationKind, ConversationRef, EventQuery, EventSearchResult, IdentityTrust,
-    InboundEventStoreError, MessageRole, ParticipantIdentity, PendingOwnerWorkItem,
-    PlatformIdentityKind, ReferenceCandidate, ReferenceContext, RetrieverStoreT,
-    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, ThreadActorSummary,
-    ThreadClaimSummary, ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary,
-    ThreadSearchResult, UpcomingItem, VerifiedActor, VerifiedActorKind,
+    ContentTrustLevel, ConversationKind, ConversationRef, EventQuery, EventSearchResult,
+    EventThreadId, IdentityTrust, InboundEventStoreError, MessageRole, ParticipantIdentity,
+    PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
+    RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId,
+    ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
+    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, UpcomingItem, VerifiedActor,
+    VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
 const EXCERPT_MAX_CHARS: u32 = 500;
+/// AgentEventView 正文摘录最大字符数（Planner LLM 上下文用，比检索结果更宽）。
+const EVENT_VIEW_EXCERPT_MAX_CHARS: u32 = 1_000;
 
 pub(crate) struct MySqlRetrieverStore {
     db: DatabaseConnection,
@@ -544,6 +548,64 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             open_questions,
         }))
     }
+
+    /// 列出账号最近的 N 条事件证据视图，包含发送者、@、Reply、Thread 和内容策略。
+    /// 数据库先按 received_at 倒序取最近 N 条，Rust 侧再反转为时间正序。
+    async fn list_recent_event_views(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<AgentEventView>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let sql = format!(
+            r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind,
+                      e.message_role, e.occurred_at_unix_secs, e.received_at,
+                      te.thread_id, e.reply_to_event_id,
+                      c.platform_conversation_id, c.conversation_kind,
+                      CASE
+                        WHEN c.memory_mode = 'never_long_term'
+                          OR m.content_mode = 'never_long_term'
+                          OR m.content_mode IS NULL
+                          THEN 'never_long_term'
+                        WHEN c.memory_mode = 'envelope_only' OR m.content_mode = 'envelope_only'
+                          THEN 'envelope_only'
+                        WHEN c.memory_mode = 'local_only' OR m.content_mode = 'local_only'
+                          THEN 'local_only'
+                        ELSE COALESCE(c.memory_mode, 'normal')
+                      END AS memory_mode,
+                      SUBSTRING(m.normalized_text, 1, {excerpt_max}) AS excerpt,
+                      CAST(m.mentioned_actor_ids AS CHAR) AS mentioned_actor_ids, m.mention_all
+               FROM secretary_source_events e
+               INNER JOIN secretary_conversations c ON e.conversation_id = c.id
+               LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
+               LEFT JOIN secretary_effective_thread_events te
+                   ON te.source_event_id = e.source_event_id
+               WHERE e.account_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM secretary_message_tombstones t
+                   WHERE t.source_event_id = e.source_event_id
+                     AND t.account_id = e.account_id
+                     AND t.status = 'applied'
+               )
+               ORDER BY e.received_at DESC, e.source_event_id DESC
+               LIMIT ?"#,
+            excerpt_max = EVENT_VIEW_EXCERPT_MAX_CHARS,
+        );
+        let mut rows = RecentEventViewRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            &sql,
+            vec![account_id.into(), (limit as u64).into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        // 倒序查询，正序返回
+        rows.reverse();
+        let account_owned = account.clone();
+        rows.into_iter()
+            .map(|row| map_recent_event_view_row(row, &account_owned))
+            .collect()
+    }
 }
 
 /// 通过 SourceAccountRef 解析 secretary_accounts.id。
@@ -651,6 +713,88 @@ fn map_upcoming_row(row: UpcomingItemRow) -> Result<UpcomingItem, InboundEventSt
         excerpt: row.excerpt.unwrap_or_default(),
         source_event_id: SourceEventId::new(&row.source_event_id)?,
     })
+}
+
+/// 把 RecentEventViewRow 映射为 AgentEventView。
+fn map_recent_event_view_row(
+    row: RecentEventViewRow,
+    account: &SourceAccountRef,
+) -> Result<AgentEventView, InboundEventStoreError> {
+    let source_event_id = SourceEventId::new(&row.source_event_id)?;
+    let trust = parse_content_trust(&row.memory_mode)?;
+    // content_trust_level 为 envelope_only/never_long_term 时清空正文
+    let excerpt = filter_excerpt_by_trust(row.excerpt.unwrap_or_default(), trust);
+    let actor = ThreadActorRef {
+        account: account.clone(),
+        actor_id: row.actor_platform_id,
+    };
+    // 解析 mentioned_actor_ids JSON 数组
+    let mentioned_actors = parse_mentioned_actor_ids(&row.mentioned_actor_ids, account)?;
+    let conversation = ConversationRef {
+        kind: parse_conversation_kind(&row.conversation_kind)?,
+        id: row.platform_conversation_id,
+    };
+    let reply_to_event_id = row
+        .reply_to_event_id
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| SourceEventId::new(&id))
+        .transpose()?;
+    let thread_id = row
+        .thread_id
+        .filter(|id| !id.trim().is_empty())
+        .map(EventThreadId::new)
+        .transpose()
+        .map_err(domain_err)?;
+    let role = parse_message_role(&row.message_role)?;
+    Ok(AgentEventView {
+        source_event_id,
+        conversation,
+        actor,
+        occurred_at_unix_secs: row.occurred_at_unix_secs,
+        role,
+        content_trust_level: trust,
+        excerpt,
+        mentioned_actors,
+        mention_all: row.mention_all.unwrap_or(0) != 0,
+        reply_to_event_id,
+        thread_id,
+    })
+}
+
+/// 解析 content_mode / memory_mode 字符串为 ContentTrustLevel。
+fn parse_content_trust(value: &str) -> Result<ContentTrustLevel, InboundEventStoreError> {
+    match value {
+        "normal" => Ok(ContentTrustLevel::Normal),
+        "local_only" => Ok(ContentTrustLevel::LocalOnly),
+        "envelope_only" => Ok(ContentTrustLevel::EnvelopeOnly),
+        "never_long_term" => Ok(ContentTrustLevel::NeverLongTerm),
+        other => Err(InboundEventStoreError::InvalidData(format!(
+            "unknown content_trust_level: {other}"
+        ))),
+    }
+}
+
+/// 解析 mentioned_actor_ids JSON 字符串为 Vec<ThreadActorRef>。
+fn parse_mentioned_actor_ids(
+    raw: &Option<String>,
+    account: &SourceAccountRef,
+) -> Result<Vec<ThreadActorRef>, InboundEventStoreError> {
+    let Some(json_str) = raw else {
+        return Ok(Vec::new());
+    };
+    if json_str.trim().is_empty() || json_str == "null" {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = serde_json::from_str(json_str).map_err(|e| {
+        InboundEventStoreError::InvalidData(format!("invalid mentioned_actor_ids JSON: {e}"))
+    })?;
+    Ok(ids
+        .into_iter()
+        .map(|actor_id| ThreadActorRef {
+            account: account.clone(),
+            actor_id,
+        })
+        .collect())
 }
 
 /// 把领域身份错误映射为存储错误。
@@ -931,4 +1075,25 @@ struct UpcomingItemRow {
     due_at_unix_secs: i64,
     excerpt: Option<String>,
     source_event_id: String,
+}
+
+/// list_recent_event_views 的行模型。包含 mentioned_actor_ids JSON 和 mention_all。
+/// actor_kind/received_at 由 SQL 选出但仅用于 FromQueryResult 列匹配/排序。
+#[allow(dead_code)]
+#[derive(Debug, FromQueryResult)]
+struct RecentEventViewRow {
+    source_event_id: String,
+    actor_platform_id: String,
+    actor_kind: String,
+    message_role: String,
+    occurred_at_unix_secs: i64,
+    received_at: chrono::NaiveDateTime,
+    thread_id: Option<String>,
+    reply_to_event_id: Option<String>,
+    platform_conversation_id: String,
+    conversation_kind: String,
+    memory_mode: String,
+    excerpt: Option<String>,
+    mentioned_actor_ids: Option<String>,
+    mention_all: Option<i8>,
 }

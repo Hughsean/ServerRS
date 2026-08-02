@@ -278,4 +278,6 @@ pub struct ActionRunContext {
     pub timezone: String,
     pub now_unix_secs: i64,
     pub lease_token: ActionLeaseToken,
+    /// 当前 LLM 端点是否已验证为本地回环。由 `AppConfig::llm_endpoint_verified_loopback()` 注入。
+    pub is_local_loopback: bool,
 }

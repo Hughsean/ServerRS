@@ -10067,3 +10067,187 @@ async fn memory_candidate_approve_referenced_merges_new_sources() {
         "referenced approve must bump the candidate version by exactly 1"
     );
 }
+
+// ===== CTX-005 MySQL 集成测试：AgentEventView 最近事件窗口 =====
+
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn recent_event_views_account_scoped_with_mentions_reply_and_thread() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let retriever = build_mysql_retriever_store(db.clone());
+    let run_id = Uuid::new_v4().simple().to_string();
+    let account_a = format!("account-a-{run_id}");
+    let account_b = format!("account-b-{run_id}");
+
+    // 1. Account A: 插入父事件（无 @/Reply）
+    let parent = message(&account_a, "evt-a-1", Vec::new());
+    let parent_outcome = inbound.insert_message_if_absent(&parent).await.unwrap();
+    let parent_id = match parent_outcome {
+        IngestMessageOutcome::Accepted {
+            source_event_id, ..
+        } => source_event_id,
+        o => panic!("expected Accepted, got {o:?}"),
+    };
+
+    // 2. Account A: 插入带 @ 和 Reply 的事件
+    let reply = message(
+        &account_a,
+        "evt-a-2",
+        vec![
+            ContentSegment::Mention {
+                actor_id: "member-alice".into(),
+            },
+            ContentSegment::Mention {
+                actor_id: "member-bob".into(),
+            },
+            ContentSegment::Reply {
+                platform_message_id: "evt-a-1".into(),
+            },
+        ],
+    );
+    let reply_outcome = inbound.insert_message_if_absent(&reply).await.unwrap();
+    let reply_id = match reply_outcome {
+        IngestMessageOutcome::Accepted {
+            source_event_id,
+            reply_to_event_id,
+        } => {
+            // 验证 Reply 解析
+            assert_eq!(reply_to_event_id.as_ref(), Some(&parent_id));
+            source_event_id
+        }
+        o => panic!("expected Accepted, got {o:?}"),
+    };
+
+    // 3. Account A: 插入第三条事件（用作 Thread 成员）
+    let thread_event = message(&account_a, "evt-a-3", Vec::new());
+    let thread_outcome = inbound
+        .insert_message_if_absent(&thread_event)
+        .await
+        .unwrap();
+    let thread_event_id = match thread_outcome {
+        IngestMessageOutcome::Accepted {
+            source_event_id, ..
+        } => source_event_id,
+        o => panic!("expected Accepted, got {o:?}"),
+    };
+
+    // 4. 创建 Thread 并关联事件
+    // CHAR(36) 上限：取 run_id 的前 28 个字符 + "th-" 前缀 = 31 字符
+    let thread_id_str = format!("th-{}", &run_id[..28.min(run_id.len())]);
+    // 解析 account_a 的内部 ID
+    let account_internal_id = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT id FROM secretary_accounts WHERE platform_account_id = ?",
+            [account_a.as_str().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<u64>("", "id")
+        .unwrap();
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_event_threads \
+         (thread_id, account_id, status, root_event_id, latest_event_id, \
+          opened_at_unix_secs, latest_occurred_at_unix_secs) \
+         VALUES (?, ?, 'open', ?, ?, 900, 900)",
+        [
+            thread_id_str.as_str().into(),
+            account_internal_id.into(),
+            parent_id.as_str().into(),
+            parent_id.as_str().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_events (source_event_id, thread_id) VALUES (?, ?)",
+        [parent_id.as_str().into(), thread_id_str.as_str().into()],
+    ))
+    .await
+    .unwrap();
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_thread_events (source_event_id, thread_id) VALUES (?, ?)",
+        [
+            thread_event_id.as_str().into(),
+            thread_id_str.as_str().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+
+    // 5. Account B: 插入干扰事件
+    let other = message(&account_b, "evt-b-1", Vec::new());
+    let _ = inbound.insert_message_if_absent(&other).await.unwrap();
+
+    // 6. 查询 Account A 的最近事件视图
+    let account_a_ref = SourceAccountRef::new(MessageSource::NapCat, &account_a).unwrap();
+    let views = retriever
+        .list_recent_event_views(&account_a_ref, 8)
+        .await
+        .unwrap();
+
+    // 7. 验证
+    // 账号隔离：只返回 account_a 的事件
+    for v in &views {
+        assert_eq!(v.actor.account, account_a_ref);
+        assert_eq!(v.conversation.kind, ConversationKind::Group);
+    }
+
+    // 应有 3 条事件（按时间正序）
+    assert_eq!(views.len(), 3);
+
+    // evt-a-2（Reply 事件）应在第二位
+    let reply_view = &views[1];
+    assert_eq!(reply_view.source_event_id.as_str(), reply_id.as_str());
+    // 验证 @ 目标已解析
+    assert_eq!(reply_view.mentioned_actors.len(), 2);
+    assert_eq!(
+        reply_view.mentioned_actors[0].actor_id.as_str(),
+        "member-alice"
+    );
+    assert_eq!(
+        reply_view.mentioned_actors[1].actor_id.as_str(),
+        "member-bob"
+    );
+    // 验证 Reply 引用
+    assert!(reply_view.reply_to_event_id.is_some());
+
+    // evt-a-1（父事件 + Thread 成员）应在第一位
+    let parent_view = &views[0];
+    assert_eq!(parent_view.source_event_id.as_str(), parent_id.as_str());
+    // 验证 Thread ID
+    assert!(parent_view.thread_id.is_some());
+    assert_eq!(
+        parent_view.thread_id.as_ref().unwrap().as_str(),
+        thread_id_str
+    );
+
+    // 单条 @ 目标不超过上限
+    assert!(reply_view.mentioned_actors.len() <= 20);
+
+    // Account B 的引用查询应只返回 1 条
+    let account_b_ref = SourceAccountRef::new(MessageSource::NapCat, &account_b).unwrap();
+    let views_b = retriever
+        .list_recent_event_views(&account_b_ref, 8)
+        .await
+        .unwrap();
+    assert_eq!(views_b.len(), 1);
+
+    // limit 限制生效
+    let limited = retriever
+        .list_recent_event_views(&account_a_ref, 1)
+        .await
+        .unwrap();
+    assert_eq!(limited.len(), 1);
+}

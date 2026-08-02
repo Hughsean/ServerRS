@@ -13,12 +13,13 @@
 
 ## 0. 当前状态
 
-- 当前分支：`deepseek/qqbot-memory-candidate-approval-v1`。
-- 当前进行中：`MEM-011` 结构化记忆候选生产与 Owner 审批闭环。工作树仍有未提交实现，必须先
-  独立复核、运行受影响 crate 检查和必要的隔离 MySQL 主路径，再形成单独提交。
+- 当前分支：`deepseek/qqbot-agent-event-view-v1`（基于 `94ef5d9`）。
+- 当前已完成：`CTX-001/002/003/005` Agent 有界事件证据视图 + Planner 真实上下文入模 v1。
+  Codex 已确认临时引用 fail-closed、local_only loopback 隐私门、有效 Thread 投影、缺失正文降级，
+  并在随机隔离 MySQL schema 重跑关键用例通过；本切片进入单次提交。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 当前关键缺口：数据库已经保存发送者、@、Reply、会话与来源证据，但 Owner Planner 的真实
-  LLM 输入尚未完整消费这些关系及 `retrieved` 证据。
+- 当前关键缺口：下一切片为 `CTX-004` 有界多轮 Replan，使 Read/Search 的工具结果进入下一轮规划，
+  同时限制轮次与总输入预算，不保存完整 Thought。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期。
 
@@ -55,17 +56,29 @@
 
 ### 1.2 Agent 上下文垂直切片（下一切片，P0）
 
-- [ ] `CTX-001` 定义协议无关、有界的 `AgentEventView`，至少包含：
+- [x] `CTX-001` 定义协议无关、有界的 `AgentEventView`，至少包含：
   `source_event_id`、账号作用域参与者引用、会话引用、发生时间、消息角色、内容策略、有限正文摘录、
   Reply 父事件、@目标、Thread 引用及来源可信度。稳定 ID 用于授权与关联，昵称只作显示。
-- [ ] `CTX-002` 将 `PlanNode` 已取得的 `retrieved` 证据真实序列化到 Planner LLM 输入；同时传入
-  命令来源事件、会话与类型化关系。不得只准备领域字段却在 LLM DTO 中丢弃。
-- [ ] `CTX-003` 从事件仓储填充最多 3～8 条最近事件窗口；内容受
+- [x] `CTX-002` 将 `PlanNode` 已取得的 `retrieved` 证据真实序列化到 Planner LLM 输入；同时传入
+  命令来源事件、会话与类型化关系。所有模型可见实体使用请求内临时引用并在本地 fail-closed 回映。
+- [x] `CTX-003` 从事件仓储填充最多 3～8 条最近事件窗口；内容受
   `normal/local_only/envelope_only/never_long_term` 约束，列表、正文和总字节均有硬上限。
 - [ ] `CTX-004` 让检索动作结果可以进入下一轮有界规划，形成最小
   `Plan -> Read/Search -> Replan -> Respond` 闭环；限制最大轮次和总输入预算，不保存完整 Thought。
-- [ ] `CTX-005` 最小验证仅覆盖：发送者/@/Reply 可见、跨账号不串联、隐私正文不入模、
-  `retrieved` 确实进入请求、超长视图有界。
+- [x] `CTX-005` 最小验证覆盖：发送者/@/Reply 可见、跨账号不串联、隐私正文不入模、
+  `retrieved` 确实进入请求、超长视图有界；关键 MySQL 用例已在随机隔离 schema 真实通过。
+- [x] `CTX-P0-REFS` 临时引用必须 fail-closed：同一 Actor/会话/Thread 在整个请求内复用同一标签；
+  Reply 必须指向父事件已有的 `evt_N`；命令事件引用必须出现在输入中；evidence 及所有 Action ID
+  字段统一通过本地映射恢复。未知引用（包括格式合法的 UUID）返回 InvalidOutput，不再以兼容名义放行。
+- [x] `CTX-P0-LOCAL-ONLY` 将已验证的 LLM loopback 属性传入最近窗口策略；远程模型永远不能获得
+  local_only 正文，本地模型也只有策略显式允许时才能读取。AppConfig→UseCase→Node→Retriever
+  与 LlmActionPlanner 链路已复核通过。
+- [x] `CTX-P1-THREAD` 最近窗口使用 `secretary_effective_thread_events`，不得返回 merge/split 前的
+  失效 Thread ID。
+- [x] `CTX-P1-PROJECTION` `secretary_message_contents` 缺失时按受限信封处理，不能由 CASE 的 ELSE
+  回退成 normal。当前明确降级为 never_long_term，正文不会进入模型。
+- [x] `CTX-P1-JSON` MySQL JSON 列 `mentioned_actor_ids` 使用 `CAST(... AS CHAR)` 后再反序列化；
+  随机隔离 schema 中的关键 MySQL 用例已真实通过并完成清理。
 
 ### 1.3 参与者与因果关系（P0）
 

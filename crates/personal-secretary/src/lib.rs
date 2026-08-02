@@ -150,10 +150,11 @@ pub use notification_policy_service::{
     OwnerBindingSnapshot, PolicyRuleSnapshot, authorize_notification_policy_action,
 };
 pub use planner::{
-    ActionPlannerT, Clock, PlannerCommandEvent, PlannerError, PlannerInput, PlannerOutput,
-    PlannerRetrievedExcerpt, SystemClock, TimeParseError, is_allowed_action_in_batch,
-    naive_to_unix, parse_common_timezone_offset_secs, parse_datetime_with_timezone,
-    parse_iso_datetime, validate_planner_input, validate_planner_output,
+    ActionPlannerT, AgentEventView, AgentEventViewError, Clock, PlannerCommandEvent, PlannerError,
+    PlannerInput, PlannerOutput, PlannerRetrievedExcerpt, SystemClock, TimeParseError,
+    is_allowed_action_in_batch, naive_to_unix, parse_common_timezone_offset_secs,
+    parse_datetime_with_timezone, parse_iso_datetime, validate_agent_event_view,
+    validate_planner_input, validate_planner_output,
 };
 pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
 pub use recall::{

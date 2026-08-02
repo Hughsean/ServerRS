@@ -49,6 +49,7 @@ pub(crate) async fn assemble_action_planner(
         return Ok(None);
     }
     let action_store = build_mysql_action_store(db.clone());
+    let is_loopback = config.llm_endpoint_verified_loopback();
     let planner: Arc<dyn ActionPlannerT> = if config.llm.enabled {
         let client = Arc::new(
             OpenAiCompatibleClient::new(&config.llm)
@@ -56,6 +57,7 @@ pub(crate) async fn assemble_action_planner(
         );
         Arc::new(
             crate::action_planner::LlmActionPlanner::from_openai(client)
+                .map(|p| p.with_loopback(is_loopback))
                 .map_err(|error| RuntimeError::Llm(error.to_string()))?,
         )
     } else {
@@ -130,6 +132,7 @@ pub(crate) async fn assemble_action_planner(
         .with_response_expectation_control(response_expectation_control)
         .with_memory_candidate(memory_candidate)
         .with_memory_candidate_control(memory_candidate_control)
+        .with_loopback(is_loopback)
         .with_checkpoint_db(db),
     );
     let handle = spawn_action_planner_worker(Arc::clone(&use_case), config.action_planner.clone());
