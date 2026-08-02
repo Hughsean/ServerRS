@@ -151,10 +151,12 @@ pub use notification_policy_service::{
 };
 pub use planner::{
     ActionPlannerT, AgentEventView, AgentEventViewError, Clock, PlannerCommandEvent, PlannerError,
-    PlannerInput, PlannerOutput, PlannerRetrievedExcerpt, SystemClock, TimeParseError,
-    is_allowed_action_in_batch, naive_to_unix, parse_common_timezone_offset_secs,
-    parse_datetime_with_timezone, parse_iso_datetime, validate_agent_event_view,
-    validate_planner_input, validate_planner_output,
+    PlannerInput, PlannerOutput, PlannerRetrievedExcerpt, PlannerToolObservation,
+    QueryEffectResultV1, QueryEffectTypedEvent, SystemClock, TimeParseError,
+    is_allowed_action_in_batch, is_replan_observation_tool, naive_to_unix,
+    parse_common_timezone_offset_secs, parse_datetime_with_timezone, parse_iso_datetime,
+    validate_agent_event_view, validate_planner_input, validate_planner_output,
+    validate_tool_observation,
 };
 pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
 pub use recall::{

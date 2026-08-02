@@ -8,16 +8,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use personal_secretary::{
-    ActionPlannerT, ActionRunId, ActionRunSeed, CheckpointStore, Clock, ContentTrustLevel,
-    ConversationKind, ConversationRef, EventKind, EventThreadId, InMemoryCheckpointStore,
-    InboundMessageEnvelope, IngestMessageOutcome, MatchField, MessageSource, NotificationCategory,
-    NotificationOutcome, NotificationPolicyUseCase, OpenQuestionId, PlannerError, PlannerInput,
-    PlannerOutput, PlannerUseCase, RecentEventRef, RetrieverPolicy, RetrieverUseCase,
-    SecretaryAction, SecretaryActionProposal, SecretaryAgentState, SourceAccountRef,
-    SourceMessageRef, StructuredImportance, SystemClock, ThreadControlUseCase, ThreadDecisionId,
-    ThreadStatus, VerifiedActor, VerifiedActorKind, build_mysql_action_store,
-    build_mysql_inbound_event_store, build_mysql_notification_policy_store,
-    build_mysql_retriever_store, build_mysql_thread_control_store,
+    ActionPlannerT, ActionRunId, ActionRunSeed, CheckpointStore, Clock, ContentSegment,
+    ContentTrustLevel, ConversationKind, ConversationRef, EventKind, EventThreadId,
+    InMemoryCheckpointStore, InboundMessageEnvelope, IngestMessageOutcome, MatchField,
+    MessageSource, NotificationCategory, NotificationOutcome, NotificationPolicyUseCase,
+    OpenQuestionId, PlannerError, PlannerInput, PlannerOutput, PlannerUseCase, RecentEventRef,
+    RetrieverPolicy, RetrieverUseCase, SecretaryAction, SecretaryActionProposal,
+    SecretaryAgentState, SourceAccountRef, SourceMessageRef, StructuredImportance, SystemClock,
+    ThreadControlUseCase, ThreadDecisionId, ThreadStatus, VerifiedActor, VerifiedActorKind,
+    build_mysql_action_store, build_mysql_inbound_event_store,
+    build_mysql_notification_policy_store, build_mysql_retriever_store,
+    build_mysql_thread_control_store,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
@@ -1428,6 +1429,337 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
         DatabaseBackend::MySql,
         "DELETE FROM secretary_accounts WHERE platform_account_id = ?",
         vec![account_id.into()],
+    ))
+    .await
+    .ok();
+}
+
+// ===== CTX-004-VERIFY Replan MySQL 主路径 =====
+
+/// Replan 两轮 Planner：第一轮返回 SearchRecentEvents，第二轮返回 NoAction。
+/// 记录 Planner 调用次数供测试断言。
+struct ReplanPlanner {
+    calls: std::sync::Mutex<u8>,
+}
+
+impl ReplanPlanner {
+    fn new() -> Self {
+        Self {
+            calls: std::sync::Mutex::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ActionPlannerT for ReplanPlanner {
+    async fn plan(&self, input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        let mut calls = self.calls.lock().unwrap();
+        *calls += 1;
+        if *calls == 1 {
+            Ok(PlannerOutput::Proposal(
+                SecretaryActionProposal::new(
+                    SecretaryAction::SearchRecentEvents {
+                        query: "报价单".into(),
+                        limit: 20,
+                    },
+                    "搜索报价单相关事件",
+                    vec![input.command.source_event_id.clone()],
+                    None,
+                )
+                .map_err(|e| PlannerError::InvalidOutput(e.to_string()))?,
+            ))
+        } else {
+            Ok(PlannerOutput::NoAction {
+                reason: "已查到报价单相关信息，无需继续查询".into(),
+            })
+        }
+    }
+}
+
+/// CTX-004-VERIFY：使用真实 MySQL Action/Checkpoint Store 运行完整 Replan 闭环。
+///
+/// - 第一轮 Planner 返回 SearchRecentEvents → Effect 持久化一次
+/// - 第二轮 Planner 收到 Observation → 返回 NoAction
+/// - 最终只产生一条 Effect Receipt 和一份响应
+/// - 模拟重启（重建 ActionStore 连接）后 load_effect_receipt 返回缓存回执
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn mysql_replan_two_rounds_effect_and_response_singleton() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let managed_account_id = format!("replan-mgd-{suffix}");
+    let command_account_id = format!("replan-cmd-{suffix}");
+
+    let managed_account = SourceAccountRef::new(MessageSource::NapCat, &managed_account_id)
+        .expect("valid managed account");
+
+    // 插入可被 SearchRecentEvents 检索到的托管账号事件
+    let inbound_store = build_mysql_inbound_event_store(db.clone());
+    inbound_store
+        .begin_connection(&managed_account)
+        .await
+        .expect("managed account bootstrap must succeed");
+    let searchable = InboundMessageEnvelope::new(
+        SourceMessageRef::new(
+            MessageSource::NapCat,
+            &managed_account_id,
+            "replan-searchable-msg",
+        )
+        .unwrap(),
+        ConversationRef::new(ConversationKind::Group, "replan-group").unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, "sender-1").unwrap(),
+        1_800_000_000,
+        "关于报价单的讨论",
+        vec![ContentSegment::Text {
+            content: "关于报价单的讨论".into(),
+        }],
+    )
+    .unwrap();
+    inbound_store
+        .insert_message_if_absent(&searchable)
+        .await
+        .expect("searchable event must persist");
+
+    // 插入 Owner 命令事件
+    let cmd_outcome = inbound_store
+        .insert_message_if_absent(&owner_command(
+            &command_account_id,
+            "replan-cmd-msg",
+            "查报价单",
+        ))
+        .await
+        .expect("command event must persist");
+    let command_source_event_id = cmd_outcome.source_event_id().clone();
+
+    // 创建 Owner 绑定
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_owner_bindings \
+         (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+         SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+         FROM secretary_accounts managed CROSS JOIN secretary_accounts command \
+         WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+           AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+        vec![
+            uuid::Uuid::new_v4().to_string().into(),
+            managed_account.channel.as_str().into(),
+            managed_account_id.clone().into(),
+            command_account_id.clone().into(),
+        ],
+    ))
+    .await
+    .expect("owner binding must persist");
+
+    // 创建 action_run
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_source_event_id, "replan-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed_account.clone(),
+                command_source_event_id: command_source_event_id.clone(),
+                command_text: "查报价单".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 1_800_000_000,
+                timezone_offset_secs: 28_800,
+                timezone: "Asia/Shanghai".into(),
+                recent_events: vec![RecentEventRef {
+                    source_event_id: command_source_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .expect("action run must persist");
+
+    let retriever = Arc::new(RetrieverUseCase::new(
+        build_mysql_retriever_store(db.clone()),
+        RetrieverPolicy::default(),
+    ));
+    let planner = Arc::new(ReplanPlanner::new());
+
+    // 运行 Replan 闭环：Search → Observation → NoAction → Response
+    let use_case = PlannerUseCase::with_clock(
+        action_store.clone(),
+        Arc::clone(&planner) as Arc<dyn ActionPlannerT>,
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+        Arc::new(FixedClock { now: 1_800_000_100 }),
+    )
+    .with_checkpoint_db(db.clone())
+    .with_retriever(retriever);
+
+    let report = use_case
+        .run_once("replan-worker-1")
+        .await
+        .expect("replan run must succeed")
+        .expect("replan run must be claimed");
+    assert!(
+        report.completed,
+        "Replan run must complete without suspension"
+    );
+
+    // Planner 恰好调用 2 次
+    assert_eq!(
+        *planner.calls.lock().unwrap(),
+        2,
+        "Planner must be called exactly twice"
+    );
+
+    // 恰好 1 条 Effect Receipt
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "must persist exactly one effect receipt"
+    );
+
+    // 恰好 1 条响应
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_responses WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "must persist exactly one response"
+    );
+
+    // 响应文本包含安全中文摘要，不泄露 JSON 结构字段
+    let response_json: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT CAST(response_json AS CHAR) AS response_json \
+             FROM secretary_action_responses WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        ))
+        .await
+        .expect("response query must succeed")
+        .map(|row| row.try_get::<String>("", "response_json").unwrap())
+        .expect("response row must exist");
+    let draft: personal_secretary::OwnerResponseDraft =
+        serde_json::from_str(&response_json).expect("response_json must be valid");
+    let response_text: String = draft
+        .segments()
+        .iter()
+        .map(|s| s.text().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        response_text.contains("已查到报价单"),
+        "response must contain Planner reason, got: {response_text}"
+    );
+    for forbidden in ["query_effect", "version", "tool_kind", "typed_events"] {
+        assert!(
+            !response_text.contains(forbidden),
+            "response must not leak JSON field '{forbidden}', got: {response_text}"
+        );
+    }
+
+    // 验证 run 状态已标记为 completed
+    let run_status: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT status FROM secretary_action_runs WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        ))
+        .await
+        .expect("run status query must succeed")
+        .expect("run must exist")
+        .try_get("", "status")
+        .expect("status must decode");
+    assert_eq!(run_status, "completed");
+
+    // === 幂等性：模拟重启，重建 ActionStore 连接 ===
+    let effect_id: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT effect_id FROM secretary_action_effect_receipts \
+             WHERE run_id = ? LIMIT 1",
+            vec![run_id.as_str().into()],
+        ))
+        .await
+        .expect("effect_id query must succeed")
+        .expect("effect receipt must exist")
+        .try_get("", "effect_id")
+        .expect("effect_id must decode");
+
+    let restarted_action_store = build_mysql_action_store(db.clone());
+    let cached = restarted_action_store
+        .load_effect_receipt(&run_id, &effect_id)
+        .await
+        .expect("load_effect_receipt must succeed after restart")
+        .expect("cached receipt must exist after restart");
+    // tool_kind 由 EffectExecutor 在 store 返回后内存中设置，MySQL 不持久化该字段。
+    // 验证 receipt 的 result_ref 是合法的 QueryEffectResultV1 JSON。
+    let query_result: personal_secretary::QueryEffectResultV1 =
+        serde_json::from_str(&cached.result_ref)
+            .expect("cached receipt must contain valid QueryEffectResultV1 JSON");
+    assert_eq!(query_result.version, 1);
+    assert!(
+        query_result.summary.contains("命中") || query_result.summary.contains("未找到"),
+        "summary must describe search result, got: {}",
+        query_result.summary
+    );
+
+    // 确认 effect_receipts 表仍然只有 1 行（无重复）
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT CAST(COUNT(*) AS UNSIGNED) AS value \
+             FROM secretary_action_effect_receipts WHERE run_id = ?",
+            vec![run_id.as_str().into()],
+        )
+        .await,
+        1,
+        "effect receipt count must remain 1 after restart"
+    );
+
+    // === 清理 ===
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE FROM secretary_action_runs WHERE run_id = ?",
+        vec![run_id.as_str().into()],
+    ))
+    .await
+    .ok();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE FROM secretary_owner_bindings \
+         WHERE managed_account_id IN (SELECT id FROM secretary_accounts \
+                                      WHERE platform_account_id = ?)",
+        vec![managed_account_id.clone().into()],
+    ))
+    .await
+    .ok();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE FROM secretary_source_events \
+         WHERE account_id IN (SELECT id FROM secretary_accounts \
+                              WHERE platform_account_id IN (?, ?))",
+        vec![
+            managed_account_id.clone().into(),
+            command_account_id.clone().into(),
+        ],
+    ))
+    .await
+    .ok();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "DELETE FROM secretary_accounts WHERE platform_account_id IN (?, ?)",
+        vec![managed_account_id.into(), command_account_id.into()],
     ))
     .await
     .ok();

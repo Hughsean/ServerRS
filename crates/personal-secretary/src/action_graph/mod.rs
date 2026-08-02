@@ -2,11 +2,19 @@
 //!
 //! Graph 拓扑（约束 4：Effect 只能通过 EffectExecutor 执行一次）：
 //! ```text
-//! Plan -> Gate(内联) -> L0Execute -> BuildResponse -> End
+//! Plan -> Gate(内联) -> L0Execute -> ReplanDecision -> (continue: Plan) | (finish: BuildResponse) -> End
 //! Plan -> Gate -> Suspend(Approval) -> [resume] -> L0Execute -> BuildResponse -> End
 //! Plan -> Gate -> Suspend(ExternalInput) -> End
 //! Plan -> NoAction -> End
 //! ```
+//!
+//! Replan 循环：只读查询工具（SearchRecentEvents/ReadSourceEvent 等）执行后，
+//! EffectExecutor 将结构化 JSON 结果写入 result_ref；ReplanDecisionNode 将其解析为
+//! PlannerToolObservation 并追加到状态；ReplanRouter 判断预算是否耗尽，决定继续
+//! Plan（让 LLM 看到观察）或进入 BuildResponse。
+//!
+//! 最大 Replan 轮数由 `MAX_REPLAN_ROUNDS` 控制；非查询工具或不可解析 result_ref
+//! 直接进入 BuildResponse，不进入循环。
 //!
 //! 所有 Effect 只通过 `SecretaryActionEffectExecutor` 执行一次；EffectExecutor 内部
 //! 调用 `ActionStoreT::apply_effect`，Store 用 effect_id 做幂等键。
@@ -22,7 +30,10 @@ use agent_core::graph::{NodeId, TransitionRule};
 use crate::{SecretaryAgentState, SecretaryRiskLevel};
 
 pub use effect_executor::SecretaryActionEffectExecutor;
-pub use nodes::{ActionGraphError, BuildResponseNode, L0ExecuteNode, NoActionNode, PlanNode};
+pub use nodes::{
+    ActionGraphError, BuildResponseNode, L0ExecuteNode, NoActionNode, PlanNode, ReplanDecisionNode,
+    ReplanRouter,
+};
 pub use port::{
     ActionLeaseToken, ActionRunContext, ActionRunId, ActionRunSeed, ActionStoreError, ActionStoreT,
     ClaimedActionRun, SuspendedActionRun, SuspendedRunClaim,
@@ -33,8 +44,11 @@ pub type ActionGraphRuntime = agent_core::graph::GraphRuntime<SecretaryAgentStat
 
 /// 装配 Action Graph。
 ///
-/// 拓扑：`Plan -> (Gate 内联) -> L0Execute -> BuildResponse -> End`
+/// 拓扑：`Plan -> L0Execute -> ReplanDecision -> (Plan | BuildResponse) -> End`
 /// 以及 `Plan -> Suspend -> End`（挂起后由 Checkpoint 恢复）。
+///
+/// Replan 循环最多执行 MAX_REPLAN_ROUNDS 次查询工具；ReplanRouter 在
+/// 预算耗尽或非查询 Action 后路由到 BuildResponse。
 ///
 /// BuildResponse 逻辑由 Effect receipt 驱动，在应用层 run_once 中组装 OwnerResponseDraft。
 pub fn build_action_graph(
@@ -45,6 +59,7 @@ pub fn build_action_graph(
     effect_executor: Arc<SecretaryActionEffectExecutor>,
 ) -> Result<ActionGraphRuntime, ActionGraphError> {
     use agent_core::graph::{GraphDefinition, GraphId, GraphPolicy};
+    use std::collections::BTreeMap;
     use std::num::NonZeroU32;
 
     let mut graph = GraphDefinition::new(GraphId::try_from("secretary_action").unwrap());
@@ -59,10 +74,14 @@ pub fn build_action_graph(
         .add_node(Arc::new(L0ExecuteNode::new()?))
         .map_err(ActionGraphError::from_display)?;
     graph
+        .add_node(Arc::new(ReplanDecisionNode::new()?))
+        .map_err(ActionGraphError::from_display)?;
+    graph
         .add_node(Arc::new(BuildResponseNode::new(Arc::clone(&context))?))
         .map_err(ActionGraphError::from_display)?;
     let plan = NodeId::try_from("plan").unwrap();
     let l0 = NodeId::try_from("l0_execute").unwrap();
+    let replan = NodeId::try_from("replan_decision").unwrap();
     let build = NodeId::try_from("build_response").unwrap();
 
     graph.set_entry(plan.clone());
@@ -70,7 +89,26 @@ pub fn build_action_graph(
         .set_transition(plan.clone(), TransitionRule::Goto(l0.clone()))
         .unwrap();
     graph
-        .set_transition(l0.clone(), TransitionRule::Goto(build.clone()))
+        .set_transition(l0.clone(), TransitionRule::Goto(replan.clone()))
+        .unwrap();
+    // Replan 分支：continue → 回到 Plan 继续循环；finish → 进入 BuildResponse。
+    let mut replan_targets = BTreeMap::new();
+    replan_targets.insert(
+        agent_core::graph::RouteKey::try_from("continue").unwrap(),
+        plan.clone(),
+    );
+    replan_targets.insert(
+        agent_core::graph::RouteKey::try_from("finish").unwrap(),
+        build.clone(),
+    );
+    graph
+        .set_transition(
+            replan.clone(),
+            TransitionRule::Branch {
+                router: Arc::new(ReplanRouter),
+                targets: replan_targets,
+            },
+        )
         .unwrap();
     graph
         .set_transition(build.clone(), TransitionRule::End)

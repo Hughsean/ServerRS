@@ -7,6 +7,7 @@ use agent_core::{AgentBusinessState, AgentStateError, AgentUpdate};
 use serde::{Deserialize, Serialize};
 
 use crate::SourceEventId;
+use crate::planner::PlannerToolObservation;
 
 use super::action::{SecretaryActionEffect, SecretaryActionProposal, SecretaryActionReceipt};
 use super::approval::SecretaryApprovalDecision;
@@ -41,6 +42,8 @@ pub enum SecretaryAgentUpdate {
     ActionCompleted(SecretaryActionReceipt),
     /// UpdateState 节点构建好响应草稿后发送，将 phase 置为 Respond。
     ResponseReady(OwnerResponseDraft),
+    /// ReplanDecision 节点追加一条工具观察到状态。
+    ObservationAppended(PlannerToolObservation),
     PhaseChanged(SecretaryAgentPhase),
 }
 
@@ -56,6 +59,12 @@ pub struct SecretaryAgentState {
     last_receipt: Option<SecretaryActionReceipt>,
     #[serde(default)]
     response_draft: Option<OwnerResponseDraft>,
+    /// Replan 轮次（0-based）。首次 Plan 时为 0。
+    #[serde(default)]
+    replan_round: u8,
+    /// Replan 过程中收集的工具观察。供下一轮 Planner 输入。
+    #[serde(default)]
+    planning_observations: Vec<PlannerToolObservation>,
 }
 
 impl SecretaryAgentState {
@@ -74,6 +83,8 @@ impl SecretaryAgentState {
             pending_proposal: None,
             last_receipt: None,
             response_draft: None,
+            replan_round: 0,
+            planning_observations: Vec::new(),
         };
         validate_agent_state(&state)?;
         Ok(state)
@@ -109,6 +120,16 @@ impl SecretaryAgentState {
 
     pub fn response_draft(&self) -> Option<&OwnerResponseDraft> {
         self.response_draft.as_ref()
+    }
+
+    /// Replan 轮次（0-based）。首次 Plan 时为 0。
+    pub fn replan_round(&self) -> u8 {
+        self.replan_round
+    }
+
+    /// Replan 过程中收集的工具观察。
+    pub fn planning_observations(&self) -> &[PlannerToolObservation] {
+        &self.planning_observations
     }
 }
 
@@ -181,6 +202,21 @@ impl AgentBusinessState for SecretaryAgentState {
                     .map_err(|error| AgentStateError::Business(error.to_string()))?;
                 self.response_draft = Some(draft);
                 self.phase = SecretaryAgentPhase::Respond;
+            }
+            SecretaryAgentUpdate::ObservationAppended(obs) => {
+                crate::planner::validate_tool_observation(&obs)
+                    .map_err(|error| AgentStateError::Business(error.to_string()))?;
+                // 同 proposal 不重复追加
+                if self
+                    .planning_observations
+                    .iter()
+                    .any(|existing| existing.proposal_id == obs.proposal_id)
+                {
+                    return Ok(());
+                }
+                self.planning_observations.push(obs);
+                self.replan_round = self.replan_round.saturating_add(1);
+                self.phase = SecretaryAgentPhase::UpdateState;
             }
             SecretaryAgentUpdate::PhaseChanged(phase) => self.phase = phase,
         }

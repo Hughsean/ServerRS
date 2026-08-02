@@ -570,6 +570,44 @@ pub(super) fn validate_agent_state(
     for recent in state.recent_events() {
         bounded_text("recent event summary", &recent.summary, 1, 500)?;
     }
+    // 校验 Replan 状态新字段：轮数、观察数量与有界约束。
+    // 覆盖反序列化的旧/异常 Checkpoint 绕过正常追加路径的边界。
+    use crate::planner::{
+        MAX_REPLAN_ROUNDS, MAX_TOOL_OBSERVATION_TOTAL_CHARS, MAX_TOOL_OBSERVATIONS,
+        validate_tool_observation,
+    };
+    if state.replan_round() > MAX_REPLAN_ROUNDS {
+        return Err(SecretaryAgentRuntimeError::InvalidState(format!(
+            "replan_round {} exceeds MAX_REPLAN_ROUNDS {MAX_REPLAN_ROUNDS}",
+            state.replan_round()
+        )));
+    }
+    let observations = state.planning_observations();
+    if observations.len() > MAX_TOOL_OBSERVATIONS {
+        return Err(SecretaryAgentRuntimeError::InvalidState(format!(
+            "planning_observations count {} exceeds max {MAX_TOOL_OBSERVATIONS}",
+            observations.len()
+        )));
+    }
+    // proposal_id 去重 + 总字符数校验
+    let mut seen_proposal_ids = std::collections::HashSet::new();
+    let mut total_chars = 0usize;
+    for obs in observations {
+        validate_tool_observation(obs)
+            .map_err(|e| SecretaryAgentRuntimeError::InvalidState(e.to_string()))?;
+        if !seen_proposal_ids.insert(&obs.proposal_id) {
+            return Err(SecretaryAgentRuntimeError::InvalidState(format!(
+                "duplicate proposal_id in planning_observations: {}",
+                obs.proposal_id
+            )));
+        }
+        total_chars = total_chars.saturating_add(obs.summary.chars().count());
+    }
+    if total_chars > MAX_TOOL_OBSERVATION_TOTAL_CHARS {
+        return Err(SecretaryAgentRuntimeError::InvalidState(format!(
+            "planning_observations total chars {total_chars} exceeds max {MAX_TOOL_OBSERVATION_TOTAL_CHARS}"
+        )));
+    }
     Ok(())
 }
 

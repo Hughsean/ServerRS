@@ -7,8 +7,8 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`deepseek/qqbot-agent-event-view-v1`，基线提交 `94ef5d9`（已包含 MEM-011
-  结构化记忆候选审批闭环的提交），尚未提交、推送或合并。
+- 当前开发分支：`deepseek/qqbot-bounded-replan-v1`，基线提交 `c251942`；工作树包含未提交的
+  CTX-004 实现与评审文档修正，尚未推送或合并。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -21,7 +21,8 @@
 - 当前边界：NapCat 保持只读；旧验收矩阵只保留历史用途，不再作为日常开发门禁。结构化记忆候选
   (MEM-011) 已提交（`94ef5d9`）。Agent 有界事件证据视图 v1 已完成：有界最近窗口与 retrieved
   真实入模，模型仅看到请求内临时引用，local_only 只向已验证 loopback 模型开放；关键 MySQL
-  关系视图用例已在随机隔离 schema 通过。下一切片为 CTX-004 有界多轮 Replan。
+  关系视图用例已在随机隔离 schema 通过。CTX-004 的生产路径 P0/P1 已闭合，全 Graph 闭环集成测试、
+  隐私视图测试及随机隔离 MySQL 主路径测试均已完成；切片进入提交候选。
 
 ## 历史分块
 
@@ -31,6 +32,108 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-02 20:28（Asia/Shanghai）`：CTX-004-VERIFY 完成 MySQL 主路径集成测试并真实通过：
+  - **MySQL Replan 闭环测试**（`mysql_replan_two_rounds_effect_and_response_singleton`）：
+    在随机隔离 `qqbot_accept_*` schema 中使用 `ReplanPlanner`（Search→NoAction）+ 真实
+    MySQL ActionStore + MySQL CheckpointStore（`with_checkpoint_db`）通过 `PlannerUseCase::run_once`
+    运行完整 Replan 闭环路径（`ensure_action_run → claim_pending_run → execute_claimed →
+    build_action_graph → run_checkpointed → mark_completed`）。
+    Planner 调用 2 次、Effect Receipt 持久化 1 条、Response 持久化 1 份、
+    响应文本不含 JSON 字段（`query_effect`/`version`/`tool_kind`/`typed_events`）。
+    模拟重启（重建 `build_mysql_action_store`）后 `load_effect_receipt` 返回持久化回执，
+    effect_receipts 仍为 1 行。测试完成后清理（action_runs / owner_bindings / source_events / accounts）。
+  - 发现的次要事实：MySQL `apply_effect` 和 `load_effect_receipt` 均硬编码 `tool_kind: None`，
+    `tool_kind` 不作为持久化字段存储；生产 EffectExecutor 在新执行与缓存重放返回前都会从当前
+    Proposal 补回该字段，因此不影响 Replan 一致性校验，仅作为仓储返回值完整性的后续优化。
+  - `2026-08-02 20:33（Asia/Shanghai）` Codex 使用健康的 `serverrs-qqbot-mysql` 创建一次性随机
+    `qqbot_accept_*` schema 独立重跑该测试，结果 1/1 通过；finally 路径已删除临时 schema，
+    未触碰数字人数据库或真实 QQ。
+  - 独立验证：`cargo fmt --check` 通过；两个 crate 严格 Clippy 通过；
+    personal-secretary 236 条 lib 测试通过；qqbot-server 117 条 lib 测试通过。
+  - 未提交、推送或合并，`.mcp.json` 未触碰。
+
+- `2026-08-02 20:05（Asia/Shanghai）`：Codex 独立复核 CTX-004-VERIFY 的 Graph 闭环证据与隐私视图验证：
+  - **全 Graph 集成测试**（`replan_full_graph_two_rounds_search_then_no_action`）：
+    使用 RecordingPlanner + FakeEffectExecutor 运行生产等价的 4 个不同节点、7 次节点访问
+    （Plan→L0Execute→ReplanDecision→Plan→L0Execute→ReplanDecision→BuildResponse→End），
+    断言 Planner 恰好调用 2 次、Effect 执行 1 次、响应（Outcome + ResponseReady）各 1 份。
+  - **预算耗尽路径**（`replan_full_graph_budget_exhausted_finishes`）：
+    验证 MAX_REPLAN_ROUNDS=2 且每轮都返回 Proposal 时，ReplanRouter 正确终止循环；
+    BuildResponseNode 从 last_receipt 构造响应并设置 Outcome，图正常终止不报 MissingOutcome。
+  - **隐私视图测试**（qqbot-server action_planner）：
+    `observation_with_typed_events_maps_to_temp_refs_not_real_ids` 验证
+    typed_events 中的真实事件/Actor ID 不出现在序列化的 LLM 输入 JSON 中，
+    临时引用 evt_N/actor_N 正确出现。
+    `observation_without_typed_events_only_shows_count` 验证
+    typed_events 为空时只输出有界计数，绝不泄露原始 summary。
+  - 独立验证：personal-secretary 236 条测试（+2）全部通过；qqbot-server 117 条测试（+2）全部通过；
+    两个 crate 严格 Clippy（`-D warnings`）与 `cargo fmt --check` 均通过。
+  - MySQL 主路径：仓库中尚无 CTX-004 对应测试，不能仅以环境变量未设置解释为“跳过”；
+    Docker MySQL 当前健康，需先补一条最小随机隔离 MySQL 主路径再真实运行。
+  - 未提交、推送或合并，`.mcp.json` 未触碰。
+
+- `2026-08-02 19:46（Asia/Shanghai）`：Codex 独立复核 CTX-004 第四轮修复，三个 P0 与一个 P1 已闭合：
+  - P0-PRIVACY：GetThreadContext/ResolveReference 移出 Replan 白名单（9→7）；typed_events 为空
+    时绝不复用 raw summary，只输出有界计数；映射缺失 fail-closed（build_llm_views 返回 Result）；
+    validate_tool_observation 新增 typed_events 数量/去重/字段长度/集合一致性校验。
+  - P0-RESPONSE：BuildResponseNode 的 last_receipt 路径先解析 QueryEffectResultV1 提取 summary，
+    避免向 Owner 显示结构化 JSON。
+  - 白名单更新：ResolveReference 和 GetThreadContext 不再触发 Replan（摘要含不可安全投影的稳定 ID）。
+  - 独立验证：格式检查、两个相关 crate 严格 Clippy、29 条 action_graph 聚焦测试、25 条
+    action_planner 聚焦测试及 `git diff --check` 均通过。仍缺 CTX-004-VERIFY 闭环测试。
+    未提交、推送或合并，未连接或发送 QQ，`.mcp.json` 未触碰。
+
+- `2026-08-02 19:14（Asia/Shanghai）`：CTX-004 第三轮修复复核部分通过，原文档误写尚未到达的
+  21:30，现按实际复核分钟纠正。Search/Read 已增加 typed_events 并正确投影 evt_N/actor_N；
+  BuildResponse 的 Outcome 路径已直接生成 OwnerResponseDraft。剩余 P0：typed_events 为空时仍回退
+  raw summary + String::replace，GetThreadContext/ResolveReference 仍可能含真实稳定 ID；typed event
+  映射缺失时直接回退真实 event ID。两轮预算耗尽但无 Outcome 时仍可能向 Owner 显示 Query JSON。
+  typed_events 的数量/字段/集合一致性也未纳入状态校验，全 Graph/MySQL 证据仍缺。当前未提交、
+  推送或合并，未连接或发送 QQ，`.mcp.json` 未触碰。
+
+- `2026-08-02 18:54（Asia/Shanghai）`：CTX-004 第二轮修复复核仍未批准。代码虽预注册
+  observation.source_event_ids 并生成 source_event_refs，但随后以 `String::replace` 处理 summary，
+  没有类型化 Actor/Thread/Claim 引用字段；Search/Read 的 actor_id 和 GetThreadContext 的 thread_id、
+  actor_id、claimant/raised_by 仍原样入模。BuildResponse 修复也把 Outcome 文本绑定为 `_text` 后弃用，
+  仍从 last_receipt 构造草稿，因此最终 Planner 回答继续丢失且 JSON 回显风险仍在。白名单缩减和
+  version/tool_kind 校验方向正确，state 校验函数已补字段但真实 Checkpoint restore 入口尚未证明调用。
+  未新增全 Graph/MySQL 闭环证据；未提交、推送或合并，未连接或发送 QQ，`.mcp.json` 未触碰。
+
+- `2026-08-02 18:25（Asia/Shanghai）`：Codex 独立复核 CTX-004，结论未批准。确认 Graph 分支、
+  两轮预算、旧回执保守终止和基础编译方向成立，格式、两个 crate 严格 Clippy、29 项 action_graph
+  测试和 diff check 通过；但代码明确把包含 source_event_id、actor_id、thread_id 的 summary 原样
+  放入 Observation LLM 视图，`source_event_refs` 反而固定为空，违反上一切片的临时引用边界并使
+  Search→Read 无法引用新命中事件。第二轮 Planner 的 Outcome 没有生成 ResponseReady，完成时会
+  回退 last_receipt，丢失最终回答并可能向 Owner 回显 QueryEffectResultV1 JSON。另有白名单与实际
+  结构化结果不一致、Checkpoint 状态新字段未纳入整体校验、缺少真实 Graph/MySQL 闭环证据。当前
+  未提交、推送或合并，未连接或发送 QQ，`.mcp.json` 未触碰。
+
+- `2026-08-02 15:30（Asia/Shanghai）`：完成 CTX-004 有界多轮 Replan 闭环。
+  - 领域新增：`PlannerToolObservation`（`planner.rs`）— Replan 工具观察，含 proposal_id、
+    tool_kind、success、有界摘要和来源事件 ID；`QueryEffectResultV1`（`planner.rs`）—
+    查询型 Effect 的结构化 JSON 结果，版本化、`deny_unknown_fields`。
+  - 新增函数 `is_replan_observation_tool`：只有 13 种 L0ReadOnly 查询工具允许触发 Replan；
+    写操作、审批和已产生 Outcome 的路径不进入循环。
+  - 常量：`MAX_REPLAN_ROUNDS=2`、`MAX_TOOL_OBSERVATIONS=2`、`MAX_TOOL_OBSERVATION_CHARS=2_000`、
+    `MAX_TOOL_OBSERVATION_TOTAL_CHARS=4_000`。
+  - `SecretaryAgentState` 扩展：新增 `replan_round: u8`（`#[serde(default)]`，0-based）和
+    `planning_observations: Vec<PlannerToolObservation>`（`#[serde(default)]`），旧 Checkpoint 兼容。
+  - `SecretaryAgentUpdate` 新增 `ObservationAppended(PlannerToolObservation)`。
+  - `SecretaryActionEffectExecutor`：查询工具（SearchRecentEvents/ReadSourceEvent 等）的 result_ref
+    改为结构化 JSON（`QueryEffectResultV1`），非查询工具保持纯文本。
+  - Graph 拓扑变更：`PlanNode` → `L0ExecuteNode` → `ReplanDecisionNode` → `(Plan|BuildResponse)` → `End`；
+    `ReplanDecisionNode` 解析 receipt 中的 QueryEffectResultV1，追加观察到状态；
+    `ReplanRouter` 基于预算、tool_kind 和 Outcome 选择 continue/finish。
+  - `PlanNode` 在 round≥1 时从状态读取 observations，生成 `PlannerInput` 时填充。
+  - LLM Action Planner：`PlannerLlmInput` 新增 `tool_observations`（`ObservationLlmView`）、
+    `replan_round` 和 `remaining_query_budget`；观察摘要标记"[不可信工具数据]"；System Prompt 增加
+    不可信数据说明和预算耗尽规则。
+  - 测试：29 项 action_graph 测试通过（含 8 项新增 ReplanDecisionNode/ReplanRouter 测试），
+    234 项 personal-secretary lib 测试通过，25 项 qqbot-server action_planner 测试通过，
+    19 项 workspace_boundaries 测试通过。
+  - 格式、严格 Clippy 通过；未连接 NapCat/QQ 开放平台，未发送消息，`.mcp.json` 未触碰。
+  - 当前分支 `deepseek/qqbot-bounded-replan-v1`，基于 `c251942`；未提交、未推送、未合并。
 
 - `2026-08-02 13:57（Asia/Shanghai）`：Codex 完成 AgentEventView 最终短复验并批准切片。
   source_event_id、thread_id、memory_source_event_ids 和 conversation 全部仅经 TempRefMap 恢复，

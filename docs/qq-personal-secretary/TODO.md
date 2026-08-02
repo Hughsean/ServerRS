@@ -13,13 +13,15 @@
 
 ## 0. 当前状态
 
-- 当前分支：`deepseek/qqbot-agent-event-view-v1`（基于 `94ef5d9`）。
-- 当前已完成：`CTX-001/002/003/005` Agent 有界事件证据视图 + Planner 真实上下文入模 v1。
-  Codex 已确认临时引用 fail-closed、local_only loopback 隐私门、有效 Thread 投影、缺失正文降级，
-  并在随机隔离 MySQL schema 重跑关键用例通过；本切片进入单次提交。
+- 当前分支：`deepseek/qqbot-bounded-replan-v1`（基于 `c251942`）。
+- 当前切片：`CTX-004` 有界 Replan 闭环 v1 已完成。Search/Read 类型化事件投影、临时引用
+  fail-closed、Outcome 最终回答持久化、预算耗尽安全摘要、完整 Graph、隐私投影及随机隔离
+  MySQL 主路径证据均已落实；生产路径已无已知 P0/P1，进入单次提交。
+  - Codex 已确认 CTX-001/002/003/005 的临时引用 fail-closed、local_only loopback 隐私门、
+    有效 Thread 投影、缺失正文降级，并在随机隔离 MySQL schema 重跑关键用例通过。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 当前关键缺口：下一切片为 `CTX-004` 有界多轮 Replan，使 Read/Search 的工具结果进入下一轮规划，
-  同时限制轮次与总输入预算，不保存完整 Thought。
+- 下一开发切片：`ID-004/ID-005 + THR-011/THR-012/THR-013`，统一参与者稳定身份与可回读
+  因果关系视图；不重写不可变 SourceEvent 主干。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期。
 
@@ -63,8 +65,37 @@
   命令来源事件、会话与类型化关系。所有模型可见实体使用请求内临时引用并在本地 fail-closed 回映。
 - [x] `CTX-003` 从事件仓储填充最多 3～8 条最近事件窗口；内容受
   `normal/local_only/envelope_only/never_long_term` 约束，列表、正文和总字节均有硬上限。
-- [ ] `CTX-004` 让检索动作结果可以进入下一轮有界规划，形成最小
+- [x] `CTX-004` 让检索动作结果可以进入下一轮有界规划，形成最小
   `Plan -> Read/Search -> Replan -> Respond` 闭环；限制最大轮次和总输入预算，不保存完整 Thought。
+  - 实现：`ReplanDecisionNode` + `ReplanRouter`（`action_graph/nodes.rs`）；
+    `PlannerToolObservation` + `QueryEffectResultV1`（`planner.rs`）；EffectExecutor 结构化 JSON
+    result_ref；`SecretaryAgentState` 新增 `replan_round`/`planning_observations`；
+    `LlmActionPlanner` 新增 `tool_observations` 输入与系统提示更新；
+    Graph 拓扑 `Plan → L0Execute → ReplanDecision → (Plan|BuildResponse) → End`。
+  - 预算：`MAX_REPLAN_ROUNDS=2`，单条观察 2000 字符、合计 4000 字符；只允许 L0ReadOnly 查询工具
+    触发 Replan；非查询工具或不可解析 result_ref 保守进入 BuildResponse。
+  - **已闭合**：P0-1 类型化 Observation TempRefMap 投影、P0-2 最终回答持久化、typed_events
+    空分支 fail-closed、缺失映射拒绝、预算耗尽安全摘要及 typed_events 完整边界校验。
+  - **验证闭合**：完整 Graph、隐私投影及随机隔离 MySQL 主路径测试均已通过；真实持久化边界下
+    Planner 两次、Effect Receipt 一条、Response 一份，重建仓储后回执仍可读取且不重复。
+- [x] `CTX-004-P0-PRIVACY` Query Effect 必须保存类型化实体字段；LLM 投影阶段将事件/Actor/会话/
+  Thread 映射为 TempRefMap 临时引用。禁止对包含稳定 ID 的 summary 做原样透传或字符串替换。
+  第四轮修复：GetThreadContext/ResolveReference 已移出 Replan 白名单（7 工具）；typed_events 为空时
+  只输出有界计数摘要，绝不回退 raw summary；映射缺失时 `build_llm_views` 返回 Err（fail-closed）。
+  新增 `validate_tool_observation` 校验 typed_events 数量/去重/字段长度/集合一致性。
+- [x] `CTX-004-P0-RESPONSE` Replan 最终 NoAction/回答必须形成有界 `OwnerResponseDraft`；预算耗尽时
+  QueryEffectResultV1 也必须渲染为安全中文摘要，不能把 JSON 原文放入响应。Outcome 路径已正确；
+  BuildResponseNode 的 last_receipt 路径现在先尝试解析 QueryEffectResultV1 提取 summary，解析失败
+  才回退 `build_action_response_draft`。
+- [x] `CTX-004-P1-CONSISTENCY` 解析 QueryEffectResultV1 时校验 version、tool_kind 与 receipt 一致，
+  并让声明允许 Replan 的工具都真正产生该结构。白名单已收敛到 7 个实际产生 QERV1 的 L0ReadOnly
+  工具；`ReplanDecisionNode` 校验 version==1 与 tool_kind 匹配，不匹配时保守终止 Replan。
+- [x] `CTX-004-P1-STATE` `validate_agent_state` 必须校验 replan_round、观察数量、单条/总字符数和
+  proposal 去重，保证反序列化的旧/异常 Checkpoint 也受界限约束。`validate_agent_state` 已扩展 Replan
+  字段校验；`apply_update` 中 `ObservationAppended` 按 proposal_id 去重并用 saturating_add 推进轮次。
+- [x] `CTX-004-VERIFY`（Graph ✓；MySQL ✓ 已真实通过）增加一条真实 Graph 主路径（第一次 Search/Read、第二次收到 Observation、
+  最终 Respond）以及一条随机隔离 MySQL 主路径；断言 Planner 两次、Effect 一次、响应一份、无真实
+  稳定 ID 入模。不要再用只测 Node/Router 的碎片测试替代闭环证据。
 - [x] `CTX-005` 最小验证覆盖：发送者/@/Reply 可见、跨账号不串联、隐私正文不入模、
   `retrieved` 确实进入请求、超长视图有界；关键 MySQL 用例已在随机隔离 schema 真实通过。
 - [x] `CTX-P0-REFS` 临时引用必须 fail-closed：同一 Actor/会话/Thread 在整个请求内复用同一标签；

@@ -15,10 +15,11 @@ use crate::{
     MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
     MemoryCandidateControlUseCase, MemoryCandidateUseCase, MemoryDeleteInput, MemoryFact,
     MemoryFactId, MemoryFactStatus, MemoryUseCase, NotificationPolicyEffectRequest,
-    NotificationPolicyUseCase, ReferenceContext, ResponseExpectationControlEffectRequest,
-    ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
-    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
-    SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
+    NotificationPolicyUseCase, QueryEffectResultV1, QueryEffectTypedEvent, ReferenceContext,
+    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
+    ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
+    SecretaryActionReceipt, SecretaryToolKind, SourceAccountRef, SourceEventId,
+    ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -655,7 +656,8 @@ impl SecretaryActionEffectExecutor {
     }
 
     /// 根据 Action 类型执行真实查询，返回结果摘要作为 result_ref。
-    /// Effect 不再只写 executed:{effect_id}，而是调用 Retriever 生成真实结果。
+    /// 查询工具返回结构化 JSON（`QueryEffectResultV1`），供 ReplanDecision 解析。
+    /// 非查询工具保持纯文本 result_ref。
     async fn execute_action(&self, action: &SecretaryAction) -> Result<String, EffectError> {
         if let SecretaryAction::ListUpcomingItems { horizon_secs } = action {
             let agenda = self.agenda.as_ref().ok_or_else(|| {
@@ -665,7 +667,13 @@ impl SecretaryActionEffectExecutor {
                 .list_upcoming(&self.account, *horizon_secs)
                 .await
                 .map_err(|error| EffectError::new(EffectErrorKind::Transient, error.to_string()))?;
-            return Ok(format!("查到 {} 个即将到期事项", items.len()));
+            let summary = format!("查到 {} 个即将到期事项", items.len());
+            return query_effect_json(
+                SecretaryToolKind::ListUpcomingItems,
+                &summary,
+                &[],
+                Vec::new(),
+            );
         }
         let retriever = self.retriever.as_ref().ok_or_else(|| {
             EffectError::new(
@@ -689,7 +697,13 @@ impl SecretaryActionEffectExecutor {
                     .list(&self.account, *status, *kind, u32::from(*limit))
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(format_memory_candidates(&views))
+                let summary = format_memory_candidates(&views);
+                query_effect_json(
+                    SecretaryToolKind::ListMemoryCandidates,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::SearchRecentEvents { query, limit } => {
                 let event_query = EventQuery {
@@ -706,30 +720,72 @@ impl SecretaryActionEffectExecutor {
                     .search_events(&event_query, false)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(format_event_results(&results))
+                let event_ids: Vec<SourceEventId> =
+                    results.iter().map(|r| r.source_event_id.clone()).collect();
+                let summary = format_event_results(&results);
+                let typed_events: Vec<QueryEffectTypedEvent> = results
+                    .iter()
+                    .map(|r| QueryEffectTypedEvent {
+                        source_event_id: r.source_event_id.clone(),
+                        actor_id: r.actor.id.clone(),
+                        occurred_at_unix_secs: r.occurred_at_unix_secs,
+                        excerpt: r.excerpt.chars().take(120).collect(),
+                    })
+                    .collect();
+                query_effect_json(
+                    SecretaryToolKind::SearchRecentEvents,
+                    &summary,
+                    &event_ids,
+                    typed_events,
+                )
             }
             SecretaryAction::ReadSourceEvent { source_event_id } => {
                 let detail = retriever
                     .read_source_event(source_event_id, &self.account)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                match detail {
-                    Some(d) => Ok(format!(
-                        "事件 {} | {} | {} | 摘录: {}",
-                        d.source_event_id.as_str(),
-                        d.actor.id,
-                        d.occurred_at_unix_secs,
-                        d.normalized_text.chars().take(120).collect::<String>(),
-                    )),
-                    None => Ok(format!("未找到事件 {}", source_event_id.as_str())),
-                }
+                let (summary, event_ids, typed_events) = match detail {
+                    Some(ref d) => (
+                        format!(
+                            "事件 {} | {} | {} | 摘录: {}",
+                            d.source_event_id.as_str(),
+                            d.actor.id,
+                            d.occurred_at_unix_secs,
+                            d.normalized_text.chars().take(120).collect::<String>(),
+                        ),
+                        vec![d.source_event_id.clone()],
+                        vec![QueryEffectTypedEvent {
+                            source_event_id: d.source_event_id.clone(),
+                            actor_id: d.actor.id.clone(),
+                            occurred_at_unix_secs: d.occurred_at_unix_secs,
+                            excerpt: d.normalized_text.chars().take(120).collect(),
+                        }],
+                    ),
+                    None => (
+                        format!("未找到事件 {}", source_event_id.as_str()),
+                        vec![],
+                        vec![],
+                    ),
+                };
+                query_effect_json(
+                    SecretaryToolKind::ReadSourceEvent,
+                    &summary,
+                    &event_ids,
+                    typed_events,
+                )
             }
             SecretaryAction::SearchEventThreads { query, limit } => {
                 let results = retriever
                     .search_threads(&self.account, query, *limit)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(format!("搜索到 {} 个线程", results.len()))
+                let summary = format!("搜索到 {} 个线程", results.len());
+                query_effect_json(
+                    SecretaryToolKind::SearchEventThreads,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::ResolveReference { expression } => {
                 let context = ReferenceContext {
@@ -744,35 +800,59 @@ impl SecretaryActionEffectExecutor {
                     .resolve_reference(&self.account, expression, &context)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(if resolution.ambiguous {
+                let summary = if resolution.ambiguous {
                     format!("指代歧义：{}", resolution.evidence)
                 } else {
                     format!("指代已解析：{}", resolution.evidence)
-                })
+                };
+                query_effect_json(
+                    SecretaryToolKind::ResolveReference,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::GetSecretaryStatus => {
                 let status = retriever
                     .secretary_status(&self.account)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(format_secretary_status(&status))
+                let summary = format_secretary_status(&status);
+                query_effect_json(
+                    SecretaryToolKind::GetSecretaryStatus,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::ListPendingOwnerWork { limit } => {
                 let items = retriever
                     .list_pending_owner_work(&self.account, *limit)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(format_pending_owner_work(&items))
+                let summary = format_pending_owner_work(&items);
+                query_effect_json(
+                    SecretaryToolKind::ListPendingOwnerWork,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::GetThreadContext { thread_id } => {
                 let context = retriever
                     .thread_context(&self.account, thread_id)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                Ok(match context {
-                    Some(context) => format_thread_context(&context),
+                let summary = match context {
+                    Some(ref ctx) => format_thread_context(ctx),
                     None => format!("未找到当前账号下的线程 {}", thread_id.as_str()),
-                })
+                };
+                query_effect_json(
+                    SecretaryToolKind::GetThreadContext,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
             }
             SecretaryAction::ListUpcomingItems { .. } => Err(EffectError::new(
                 EffectErrorKind::Permanent,
@@ -1307,4 +1387,26 @@ fn append_bounded_line(output: &mut String, line: &str) {
     if output.chars().count() + line.chars().count() <= 900 {
         output.push_str(line);
     }
+}
+
+/// 将查询工具结果序列化为结构化 JSON（`QueryEffectResultV1`）。
+/// 供 ReplanDecisionNode 解析为 PlannerToolObservation。
+/// `typed_events` 用于 LLM 投影，不包含稳定 ID 之外的正文文本。
+fn query_effect_json(
+    tool_kind: SecretaryToolKind,
+    summary: &str,
+    source_event_ids: &[SourceEventId],
+    typed_events: Vec<QueryEffectTypedEvent>,
+) -> Result<String, EffectError> {
+    let bounded_summary: String = summary.chars().take(2_000).collect();
+    let result = QueryEffectResultV1 {
+        version: 1,
+        tool_kind,
+        summary: bounded_summary,
+        source_event_ids: source_event_ids.to_vec(),
+        event_count: source_event_ids.len(),
+        typed_events,
+    };
+    serde_json::to_string(&result)
+        .map_err(|e| EffectError::new(EffectErrorKind::Permanent, e.to_string()))
 }

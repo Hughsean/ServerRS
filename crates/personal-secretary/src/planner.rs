@@ -9,10 +9,12 @@
 
 use async_trait::async_trait;
 use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ContentTrustLevel, ConversationRef, EventThreadId, MessageRole, RecentEventRef,
-    SecretaryAction, SecretaryActionProposal, SourceAccountRef, SourceEventId, ThreadActorRef,
+    SecretaryAction, SecretaryActionProposal, SecretaryToolKind, SourceAccountRef, SourceEventId,
+    ThreadActorRef,
 };
 
 // ===== 有界常量 =====
@@ -33,6 +35,47 @@ const MAX_EVIDENCE: usize = 20;
 /// UTC 偏移允许范围：-14h..=14h（秒）。
 const MIN_OFFSET_SECS: i64 = -50_400;
 const MAX_OFFSET_SECS: i64 = 50_400;
+
+// ===== Replan 常量 =====
+
+/// 一次 Action Run 最多执行的可触发 Replan 查询工具次数。
+pub const MAX_REPLAN_ROUNDS: u8 = 2;
+/// 单次 Run 最多收集的 PlannerToolObservation 条数。
+pub const MAX_TOOL_OBSERVATIONS: usize = 2;
+/// 单条观察摘要最多字符数。
+pub const MAX_TOOL_OBSERVATION_CHARS: usize = 2_000;
+/// 所有观察合计最多字符数（含事件引用文本）。
+pub const MAX_TOOL_OBSERVATION_TOTAL_CHARS: usize = 4_000;
+/// 单条观察最多事件引用数。
+const MAX_OBSERVATION_EVENT_REFS: usize = 30;
+/// 单条观察最多 typed_events 条目数。
+const MAX_TYPED_EVENTS_PER_OBSERVATION: usize = 30;
+/// typed_event.excerpt 最大字符数。
+const MAX_TYPED_EVENT_EXCERPT_CHARS: usize = 200;
+/// typed_event.actor_id 最大字节数。
+const MAX_TYPED_EVENT_ACTOR_ID_BYTES: usize = 256;
+
+/// 判定工具种类是否允许触发 Replan（只读查询类）。
+///
+/// 只有当前 L0ReadOnly 查询工具可以触发 Replan；L1/L2/L3 写操作、
+/// Owner 审批后的 Effect 及已产生最终 Outcome 的路径不得进入循环。
+///
+/// 白名单仅包含 EffectExecutor 中确实产生结构化 `QueryEffectResultV1` JSON 的
+/// 查询工具。通知策略查询（ListNotificationPolicies/ExplainNotificationDecision）和
+/// 记忆查询（ListMemoryFacts/ReadMemoryFactSources）当前走独立执行路径，
+/// 不产生 QueryEffectResultV1，因此暂不列入。
+pub fn is_replan_observation_tool(kind: SecretaryToolKind) -> bool {
+    matches!(
+        kind,
+        SecretaryToolKind::SearchRecentEvents
+            | SecretaryToolKind::ReadSourceEvent
+            | SecretaryToolKind::SearchEventThreads
+            | SecretaryToolKind::ListUpcomingItems
+            | SecretaryToolKind::GetSecretaryStatus
+            | SecretaryToolKind::ListPendingOwnerWork
+            | SecretaryToolKind::ListMemoryCandidates
+    )
+}
 
 // ===== 本批允许的 Action 白名单（约束 5）=====
 
@@ -206,6 +249,153 @@ pub fn validate_agent_event_view(
     Ok(())
 }
 
+// ===== PlannerToolObservation =====
+
+/// Replan 过程中收集的工具观察。由 EffectExecutor 将查询结果转为类型化结构，
+/// 经 ReplanDecisionNode 解析后存储于 SecretaryAgentState，供下一轮 Planner 使用。
+///
+/// 所有引用型字段存储真实 ID（仅内部使用）；LLM 视图通过 TempRefMap 映射为临时引用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannerToolObservation {
+    /// 产生此观察的 proposal_id。用于去重。
+    pub proposal_id: String,
+    /// 工具种类。
+    pub tool_kind: SecretaryToolKind,
+    /// 工具是否成功执行。
+    pub success: bool,
+    /// 查询涉及的事件 ID（真实 ID，供 TempRefMap 扩展和来源引用）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_event_ids: Vec<SourceEventId>,
+    /// 人类可读摘要（含真实 ID，用于 OwnerResponseDraft）。不入 LLM。
+    pub summary: String,
+    /// 类型化事件条目（用于 LLM 投影）。LLM 适配层通过 TempRefMap 映射为临时引用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typed_events: Vec<QueryEffectTypedEvent>,
+    /// Observation 版本，用于 JSON 持久化兼容。
+    #[serde(default = "default_observation_version")]
+    pub version: u8,
+}
+
+fn default_observation_version() -> u8 {
+    1
+}
+
+/// 校验 PlannerToolObservation 的有界约束。
+pub fn validate_tool_observation(obs: &PlannerToolObservation) -> Result<(), PlannerError> {
+    if obs.proposal_id.trim().is_empty() {
+        return Err(PlannerError::InvalidInput(
+            "observation.proposal_id must not be empty".into(),
+        ));
+    }
+    if obs.summary.chars().count() > MAX_TOOL_OBSERVATION_CHARS {
+        return Err(PlannerError::InvalidInput(format!(
+            "observation summary exceeds max {MAX_TOOL_OBSERVATION_CHARS} chars"
+        )));
+    }
+    if obs.source_event_ids.len() > MAX_OBSERVATION_EVENT_REFS {
+        return Err(PlannerError::InvalidInput(format!(
+            "observation source_event_ids exceeds max {MAX_OBSERVATION_EVENT_REFS}"
+        )));
+    }
+    // P1：typed_events 数量、字段、去重与集合一致性校验。
+    if obs.typed_events.len() > MAX_TYPED_EVENTS_PER_OBSERVATION {
+        return Err(PlannerError::InvalidInput(format!(
+            "observation typed_events exceeds max {MAX_TYPED_EVENTS_PER_OBSERVATION}"
+        )));
+    }
+    let mut seen_event_ids = std::collections::HashSet::new();
+    for te in &obs.typed_events {
+        // actor_id 不得为空。
+        if te.actor_id.trim().is_empty() {
+            return Err(PlannerError::InvalidInput(
+                "typed_event.actor_id must not be empty".into(),
+            ));
+        }
+        if te.actor_id.len() > MAX_TYPED_EVENT_ACTOR_ID_BYTES {
+            return Err(PlannerError::InvalidInput(format!(
+                "typed_event.actor_id exceeds max {MAX_TYPED_EVENT_ACTOR_ID_BYTES} bytes"
+            )));
+        }
+        // excerpt 有界。
+        if te.excerpt.chars().count() > MAX_TYPED_EVENT_EXCERPT_CHARS {
+            return Err(PlannerError::InvalidInput(format!(
+                "typed_event.excerpt exceeds max {MAX_TYPED_EVENT_EXCERPT_CHARS} chars"
+            )));
+        }
+        // typed_events 内 source_event_id 去重。
+        if !seen_event_ids.insert(te.source_event_id.clone()) {
+            return Err(PlannerError::InvalidInput(format!(
+                "typed_events contains duplicate source_event_id: {}",
+                te.source_event_id.as_str()
+            )));
+        }
+        // typed_event.source_event_id 必须属于 observation.source_event_ids。
+        if !obs.source_event_ids.contains(&te.source_event_id) {
+            return Err(PlannerError::InvalidInput(format!(
+                "typed_event.source_event_id {} not in observation.source_event_ids",
+                te.source_event_id.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
+// ===== QueryEffectTypedEvent =====
+
+/// 类型化查询事件条目。供 LLM 适配层通过 TempRefMap 映射为临时引用。
+///
+/// 摘要文本不得包含稳定 ID；LLM 投影时由适配层从这些类型化字段构造
+/// `evt_N | actor_N | excerpt` 形式的临时引用视图。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryEffectTypedEvent {
+    pub source_event_id: SourceEventId,
+    /// 发送者 actor_id（账号作用域内）。
+    pub actor_id: String,
+    pub occurred_at_unix_secs: i64,
+    /// 有界正文摘录（不含任何稳定 ID 的纯文本）。
+    pub excerpt: String,
+}
+
+// ===== QueryEffectResultV1 =====
+
+/// 查询型 Effect 的结构化结果。EffectExecutor 将其 JSON 序列化后存入 result_ref，
+/// 供 ReplanDecisionNode 解析为 PlannerToolObservation。
+///
+/// `deny_unknown_fields` 防止不可信回执注入额外字段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryEffectResultV1 {
+    /// 固定为 1。旧字符串回执无法解析为本结构，Replan 保守终止。
+    pub version: u8,
+    pub tool_kind: SecretaryToolKind,
+    /// 人类可读摘要（含真实 ID，用于 OwnerResponseDraft）。不入 LLM。
+    pub summary: String,
+    /// 查询涉及的真实事件 ID。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_event_ids: Vec<SourceEventId>,
+    /// 命中条数（用于调试和截断标记）。
+    pub event_count: usize,
+    /// 类型化事件条目（用于 LLM 投影）。LLM 适配层通过 TempRefMap 映射为临时引用。
+    /// 不含稳定 ID 之外的正文——摘要文本必须从此字段构造，不得透传 `summary`。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typed_events: Vec<QueryEffectTypedEvent>,
+}
+
+impl QueryEffectResultV1 {
+    /// 将结构化查询结果转为 PlannerToolObservation。
+    pub fn to_observation(&self, proposal_id: String, success: bool) -> PlannerToolObservation {
+        PlannerToolObservation {
+            proposal_id,
+            tool_kind: self.tool_kind,
+            success,
+            source_event_ids: self.source_event_ids.clone(),
+            summary: self.summary.clone(),
+            version: 1,
+            typed_events: self.typed_events.clone(),
+        }
+    }
+}
+
 /// Planner 输入。账号作用域严格限定，跨账号查询被拒绝。
 #[derive(Debug, Clone)]
 pub struct PlannerInput {
@@ -220,6 +410,12 @@ pub struct PlannerInput {
     pub timezone: String,
     pub now_unix_secs: i64,
     pub retrieved: Vec<PlannerRetrievedExcerpt>,
+    /// Replan 过程中收集的工具观察。首次 Plan 为空。
+    pub observations: Vec<PlannerToolObservation>,
+    /// 当前 Replan 轮次（0-based，首次 Plan 时为 0）。
+    pub replan_round: u8,
+    /// 剩余可用的查询工具执行次数。首次 Plan 时为 MAX_REPLAN_ROUNDS。
+    pub remaining_query_budget: u8,
 }
 
 // ===== PlannerOutput =====
@@ -314,6 +510,28 @@ pub fn validate_planner_input(input: &PlannerInput) -> Result<(), PlannerError> 
         // excerpt 允许空（envelope_only），但 actor_id 必须非空。
         bounded_text("retrieved.excerpt", &excerpt.excerpt, 0, MAX_EXCERPT_CHARS)?;
         non_empty_bounded_text("retrieved.actor_id", &excerpt.actor_id, 1, 191)?;
+    }
+    if input.observations.len() > MAX_TOOL_OBSERVATIONS {
+        return Err(PlannerError::InvalidInput(format!(
+            "observations must not exceed {MAX_TOOL_OBSERVATIONS} items"
+        )));
+    }
+    // 单条校验 + 总字符数校验
+    let mut total_chars = 0usize;
+    for obs in &input.observations {
+        validate_tool_observation(obs)?;
+        total_chars = total_chars.saturating_add(obs.summary.chars().count());
+    }
+    if total_chars > MAX_TOOL_OBSERVATION_TOTAL_CHARS {
+        return Err(PlannerError::InvalidInput(format!(
+            "observation total chars {total_chars} exceeds max {MAX_TOOL_OBSERVATION_TOTAL_CHARS}"
+        )));
+    }
+    if input.replan_round > MAX_REPLAN_ROUNDS {
+        return Err(PlannerError::InvalidInput(format!(
+            "replan_round {round} exceeds max {MAX_REPLAN_ROUNDS}",
+            round = input.replan_round
+        )));
     }
     Ok(())
 }
@@ -522,6 +740,9 @@ mod tests {
             timezone: "Asia/Shanghai".into(),
             now_unix_secs: 1_000,
             retrieved: Vec::new(),
+            observations: Vec::new(),
+            replan_round: 0,
+            remaining_query_budget: MAX_REPLAN_ROUNDS,
         }
     }
 
