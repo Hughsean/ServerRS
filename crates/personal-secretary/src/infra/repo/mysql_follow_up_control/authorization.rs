@@ -9,8 +9,8 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, FromQueryRe
 
 use crate::{
     ActionLeaseToken, ActionRunId, FollowUpControlEffectRequest,
-    ResponseExpectationControlEffectRequest, SecretaryAction, SecretaryActionProposal,
-    SecretaryActionReceipt, SourceAccountRef, SourceEventId,
+    MemoryCandidateControlEffectRequest, ResponseExpectationControlEffectRequest, SecretaryAction,
+    SecretaryActionProposal, SecretaryActionReceipt, SourceAccountRef, SourceEventId,
 };
 
 /// 两类 Owner 控制 Effect 的共享只读视图；由各自请求类型构造，避免共享函数重复参数。
@@ -42,6 +42,21 @@ impl<'a> From<&'a FollowUpControlEffectRequest> for ControlEffectCtx<'a> {
 
 impl<'a> From<&'a ResponseExpectationControlEffectRequest> for ControlEffectCtx<'a> {
     fn from(request: &'a ResponseExpectationControlEffectRequest) -> Self {
+        Self {
+            account: &request.account,
+            command_source_event_id: &request.command_source_event_id,
+            run_id: &request.run_id,
+            lease_token: &request.lease_token,
+            effect_id: &request.effect_id,
+            proposal_id: &request.proposal_id,
+            proposal_json: &request.proposal_json,
+            action: &request.action,
+        }
+    }
+}
+
+impl<'a> From<&'a MemoryCandidateControlEffectRequest> for ControlEffectCtx<'a> {
+    fn from(request: &'a MemoryCandidateControlEffectRequest) -> Self {
         Self {
             account: &request.account,
             command_source_event_id: &request.command_source_event_id,
@@ -94,6 +109,19 @@ impl From<ControlAuthError> for crate::ResponseExpectationControlStoreError {
             }
             ControlAuthError::LeaseLost => crate::ResponseExpectationControlStoreError::LeaseLost,
             ControlAuthError::Database => crate::ResponseExpectationControlStoreError::Database,
+        }
+    }
+}
+
+impl From<ControlAuthError> for crate::MemoryCandidateControlStoreError {
+    fn from(error: ControlAuthError) -> Self {
+        match error {
+            ControlAuthError::Unauthorized => crate::MemoryCandidateControlStoreError::Unauthorized,
+            ControlAuthError::InvalidData(message) => {
+                crate::MemoryCandidateControlStoreError::InvalidData(message)
+            }
+            ControlAuthError::LeaseLost => crate::MemoryCandidateControlStoreError::LeaseLost,
+            ControlAuthError::Database => crate::MemoryCandidateControlStoreError::Database,
         }
     }
 }

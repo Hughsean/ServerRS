@@ -12,8 +12,8 @@ use super::qq_open_platform::QqOpenPlatformConfig;
 use super::whitelist::WhitelistConfig;
 use super::workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, FollowUpConfig, HealthConfig,
-    NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig,
-    ThreadSemanticsConfig,
+    MemoryCandidatesConfig, NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig,
+    ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 macro_rules! apply_env_field {
@@ -126,6 +126,26 @@ pub(super) fn apply_thread_semantics_env(
             retry_initial_ms => "QQBOT_THREAD_SEMANTICS_RETRY_INITIAL_MS",
             retry_max_ms => "QQBOT_THREAD_SEMANTICS_RETRY_MAX_MS",
         },
+    );
+    Ok(())
+}
+
+pub(super) fn apply_memory_candidates_env(
+    config: &mut MemoryCandidatesConfig,
+) -> Result<(), ConfigError> {
+    apply_env_fields!(config;
+        bool { enabled => "QQBOT_MEMORY_CANDIDATES_ENABLED" },
+        positive {
+            scan_interval_ms => "QQBOT_MEMORY_CANDIDATES_SCAN_INTERVAL_MS",
+            batch_size => "QQBOT_MEMORY_CANDIDATES_BATCH_SIZE",
+            lease_secs => "QQBOT_MEMORY_CANDIDATES_LEASE_SECS",
+            retry_initial_ms => "QQBOT_MEMORY_CANDIDATES_RETRY_INITIAL_MS",
+            retry_max_ms => "QQBOT_MEMORY_CANDIDATES_RETRY_MAX_MS",
+            max_events_per_batch => "QQBOT_MEMORY_CANDIDATES_MAX_EVENTS_PER_BATCH",
+            max_event_chars => "QQBOT_MEMORY_CANDIDATES_MAX_EVENT_CHARS",
+            max_total_input_chars => "QQBOT_MEMORY_CANDIDATES_MAX_TOTAL_INPUT_CHARS",
+        },
+        non_empty { extractor_version => "QQBOT_MEMORY_CANDIDATES_EXTRACTOR_VERSION" },
     );
     Ok(())
 }

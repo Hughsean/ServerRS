@@ -20,6 +20,7 @@ use crate::config::AppConfig;
 use crate::directory_sync::DirectorySyncHandle;
 use crate::follow_up_worker::FollowUpHandle;
 use crate::health_runtime::{HealthLogHandle, HealthReader};
+use crate::memory_candidates::MemoryCandidatesHandle;
 use crate::notification_policy_worker::NotificationPolicyHandle;
 use crate::qq_open_platform::{OfficialPlatformHandle, spawn_official_platform};
 use crate::recall::RecallWorkerHandle;
@@ -50,6 +51,7 @@ pub(crate) struct WorkerHandles {
     pub(crate) directory_sync: Option<DirectorySyncHandle>,
     pub(crate) artifact_ttl: Option<ArtifactTtlHandle>,
     pub(crate) recall: Option<RecallWorkerHandle>,
+    pub(crate) memory_candidates: Option<MemoryCandidatesHandle>,
     pub(crate) health_reader: Option<HealthReader>,
     pub(crate) health_log: Option<HealthLogHandle>,
 }
@@ -69,6 +71,7 @@ impl WorkerHandles {
             directory_sync: None,
             artifact_ttl: None,
             recall: None,
+            memory_candidates: None,
             health_reader: None,
             health_log: None,
         }
@@ -111,6 +114,9 @@ impl WorkerHandles {
             workers.push(handle.signal_and_detach());
         }
         if let Some(handle) = self.recall {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.memory_candidates {
             workers.push(handle.signal_and_detach());
         }
         if let Some(handle) = self.health_log {

@@ -63,6 +63,22 @@ scan_interval_ms = 1000
 retry_initial_ms = 500
 retry_max_ms = 10000
 
+[memory_candidates]
+# 结构化记忆候选提取：候选先落库为 proposed，Owner 通过 List/Approve/Reject
+# 审批后才成为 Confirmed MemoryFact。默认关闭（保守）；LLM 端点非回环时
+# local_only 正文不会进入提取模型。
+enabled = false
+scan_interval_ms = 30000
+batch_size = 10
+lease_secs = 60
+retry_initial_ms = 500
+retry_max_ms = 10000
+max_events_per_batch = 20
+max_event_chars = 2000
+# 整批输入总字符硬上限（1..=16000，环境变量不可突破成本边界）。
+max_total_input_chars = 16000
+extractor_version = "v1"
+
 [thread_projection]
 enabled = true
 batch_size = 100

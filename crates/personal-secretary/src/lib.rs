@@ -19,6 +19,8 @@ mod health;
 mod health_service;
 mod inbound;
 mod memory;
+mod memory_candidate;
+mod memory_candidate_service;
 mod memory_service;
 mod notification_policy;
 mod notification_policy_service;
@@ -108,6 +110,22 @@ pub use memory::{
     MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId,
     MemoryFactStatus, MemoryFactView, MemoryPayload, MemorySourceExcerpt, MemoryWriteReceipt,
     PersonMemory, ProjectMemory, validate_memory_delete, validate_memory_fact,
+    validate_memory_payload,
+};
+pub use memory_candidate::{
+    APPROVED_CANDIDATE_CONFIDENCE_BPS, INITIAL_CANDIDATE_VERSION, MAX_CANDIDATE_PAYLOAD_BYTES,
+    MAX_CANDIDATE_SOURCES, MemoryCandidate, MemoryCandidateBatch, MemoryCandidateCursor,
+    MemoryCandidateError, MemoryCandidateEvent, MemoryCandidateId, MemoryCandidateKind,
+    MemoryCandidateLeaseToken, MemoryCandidateSource, MemoryCandidateSourceExcerpt,
+    MemoryCandidateStatus, MemoryCandidateVersion, MemoryCandidateView, candidate_fingerprint,
+    candidate_to_confirmed_fact, is_eligible_for_candidate_extraction, validate_memory_candidate,
+};
+pub use memory_candidate_service::{
+    ConservativeMemoryCandidateExtractor, MAX_INVALIDATE_PER_SCAN,
+    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
+    MemoryCandidateControlStoreT, MemoryCandidateControlUseCase, MemoryCandidateExtractorError,
+    MemoryCandidateExtractorT, MemoryCandidateRun, MemoryCandidateStoreT, MemoryCandidateUseCase,
+    MemoryCandidateUseCaseError,
 };
 pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
 pub use notification_policy::{
@@ -228,7 +246,8 @@ pub use infra::{
     build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_agenda_store,
     build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
     build_mysql_follow_up_control_store, build_mysql_follow_up_store,
-    build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_inbound_event_store, build_mysql_memory_candidate_control_store,
+    build_mysql_memory_candidate_store, build_mysql_memory_store,
     build_mysql_notification_policy_store, build_mysql_owner_binding_store,
     build_mysql_recall_store, build_mysql_response_expectation_control_store,
     build_mysql_retriever_store, build_mysql_thread_control_store, build_mysql_thread_link_store,

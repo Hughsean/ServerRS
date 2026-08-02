@@ -334,6 +334,33 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         SecretaryAction::SetConversationMemoryMode { conversation, .. } => {
             bounded_text("conversation.id", &conversation.id, 1, 191)?;
         }
+        SecretaryAction::ListMemoryCandidates { limit, .. } => {
+            // status/kind 由枚举类型本身约束（serde 拒绝未知值），limit 必须有界。
+            if !(1..=100).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory candidate list limit must be in 1..=100".into(),
+                ));
+            }
+        }
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id,
+            expected_candidate_version,
+            reason,
+        }
+        | SecretaryAction::RejectMemoryCandidate {
+            candidate_id,
+            expected_candidate_version,
+            reason,
+        } => {
+            // serde 直通可能绕过构造校验，这里在提案边界再次约束 ID 有界。
+            bounded_text("candidate_id", candidate_id.as_str(), 1, 36)?;
+            if *expected_candidate_version == 0 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "memory candidate expected_candidate_version must be positive".into(),
+                ));
+            }
+            bounded_text("memory candidate reason", reason, 1, 1_000)?;
+        }
         SecretaryAction::ConfirmThreadDecision { .. } => {}
         SecretaryAction::RevokeThreadDecision { reason, .. }
         | SecretaryAction::DismissThreadQuestion { reason, .. } => {

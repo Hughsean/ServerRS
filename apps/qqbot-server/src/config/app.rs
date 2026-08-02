@@ -12,19 +12,20 @@ use super::action_planner::ActionPlannerConfig;
 use super::database::DatabaseConfig;
 use super::env::{
     apply_agenda_env, apply_artifact_env, apply_backfill_env, apply_follow_up_env,
-    apply_health_env, apply_llm_env, apply_notification_policy_env, apply_qq_open_platform_env,
-    apply_recall_wal_env, apply_thread_links_env, apply_thread_projection_env,
-    apply_thread_semantics_env, apply_whitelist_env, parse_bool, parse_positive,
+    apply_health_env, apply_llm_env, apply_memory_candidates_env, apply_notification_policy_env,
+    apply_qq_open_platform_env, apply_recall_wal_env, apply_thread_links_env,
+    apply_thread_projection_env, apply_thread_semantics_env, apply_whitelist_env, parse_bool,
+    parse_positive,
 };
 use super::llm::LlmConfig;
 use super::napcat::NapCatConfig;
 use super::qq_open_platform::QqOpenPlatformConfig;
-use super::validation::{validate_loopback_url, validate_url};
+use super::validation::{is_loopback_host, validate_loopback_url, validate_url};
 use super::whitelist::WhitelistConfig;
 use super::workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
-    HealthConfig, IngestionConfig, NotificationPolicyConfig, RecallWalConfig, ThreadLinksConfig,
-    ThreadProjectionConfig, ThreadSemanticsConfig,
+    HealthConfig, IngestionConfig, MemoryCandidatesConfig, NotificationPolicyConfig,
+    RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +65,8 @@ pub struct AppConfig {
     pub whitelist: WhitelistConfig,
     #[serde(default)]
     pub action_planner: ActionPlannerConfig,
+    #[serde(default)]
+    pub memory_candidates: MemoryCandidatesConfig,
 }
 
 impl AppConfig {
@@ -131,6 +134,7 @@ impl AppConfig {
         apply_backfill_env(&mut self.backfill)?;
         apply_thread_projection_env(&mut self.thread_projection)?;
         apply_thread_semantics_env(&mut self.thread_semantics)?;
+        apply_memory_candidates_env(&mut self.memory_candidates)?;
         apply_thread_links_env(&mut self.thread_links)?;
         apply_follow_up_env(&mut self.follow_up)?;
         apply_agenda_env(&mut self.agenda)?;
@@ -152,6 +156,17 @@ impl AppConfig {
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         apply_whitelist_env(&mut self.whitelist)?;
         Ok(())
+    }
+
+    /// 记忆提取所调用的 LLM 端点是否已验证为回环地址。
+    /// 决定 `local_only` 内容信任等级是否可进入记忆候选提取：NapCat 端点固定为
+    /// 回环，但 LLM 端点可配置为远程地址，`local_only` 正文绝不能发送给远程模型，
+    /// 因此信任判定的对象是 `llm.base_url` 而非 NapCat 端点。
+    pub fn llm_endpoint_verified_loopback(&self) -> bool {
+        url::Url::parse(&self.llm.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(is_loopback_host))
+            .unwrap_or(false)
     }
 
     fn resolve_relative_paths(&mut self, config_dir: &std::path::Path) {
@@ -226,6 +241,7 @@ impl AppConfig {
         self.qq_open_platform.validate()?;
         self.whitelist.validate(config_dir)?;
         self.action_planner.validate()?;
+        self.memory_candidates.validate()?;
         Ok(())
     }
 }

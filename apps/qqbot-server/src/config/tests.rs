@@ -865,3 +865,49 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
         "env override NAPCAT_HEARTBEAT_ENABLED=false must disable watchdog"
     );
 }
+
+#[test]
+fn memory_candidate_local_only_trust_requires_loopback_llm_endpoint() {
+    // 远程 LLM：local_only 正文绝不能进入记忆提取（P0-2 信任判定对象是 llm.base_url）
+    let remote = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "https://api.example.com/v1"
+model = "model"
+"#,
+    )
+    .unwrap();
+    assert!(
+        !remote.llm_endpoint_verified_loopback(),
+        "remote LLM endpoint must not allow local_only content"
+    );
+
+    // 回环 LLM：NapCat 端点即使同样是回环也不改变判定——对象是 LLM 而非 NapCat。
+    let loopback = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "http://127.0.0.1:11434/v1"
+model = "model"
+"#,
+    )
+    .unwrap();
+    assert!(loopback.llm_endpoint_verified_loopback());
+}

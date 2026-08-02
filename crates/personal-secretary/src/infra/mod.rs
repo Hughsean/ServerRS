@@ -89,6 +89,20 @@ pub fn build_mysql_response_expectation_control_store(
     Arc::new(repo::MySqlResponseExpectationControlStore::new(db))
 }
 
+/// 构造结构化记忆候选提取仓储（批次/游标/租约/失效/列表）。
+pub fn build_mysql_memory_candidate_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::MemoryCandidateStoreT> {
+    Arc::new(repo::MySqlMemoryCandidateStore::new(db))
+}
+
+/// 构造 Owner 记忆候选控制仓储；授权/Receipt 逻辑与 FollowUp 控制共享。
+pub fn build_mysql_memory_candidate_control_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::MemoryCandidateControlStoreT> {
+    Arc::new(repo::MySqlMemoryCandidateControlStore::new(db))
+}
+
 /// 构造本地 Owner 身份绑定仓储；绑定由本地配置建立，不从聊天正文推断。
 pub fn build_mysql_owner_binding_store(
     db: DatabaseConnection,

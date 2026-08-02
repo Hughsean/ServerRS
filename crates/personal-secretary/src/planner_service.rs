@@ -78,6 +78,8 @@ pub struct PlannerUseCase {
     thread_control: Option<Arc<crate::ThreadControlUseCase>>,
     follow_up_control: Option<Arc<FollowUpControlUseCase>>,
     response_expectation_control: Option<Arc<crate::ResponseExpectationControlUseCase>>,
+    memory_candidate: Option<Arc<crate::MemoryCandidateUseCase>>,
+    memory_candidate_control: Option<Arc<crate::MemoryCandidateControlUseCase>>,
     /// 用于 per-run 构造 BoundActionCheckpointStore。None 时回退 InMemoryCheckpointStore（仅测试）。
     checkpoint_db: Option<sea_orm::DatabaseConnection>,
     clock: Arc<dyn Clock>,
@@ -103,6 +105,8 @@ impl PlannerUseCase {
             thread_control: None,
             follow_up_control: None,
             response_expectation_control: None,
+            memory_candidate: None,
+            memory_candidate_control: None,
             checkpoint_db: None,
             clock: Arc::new(SystemClock),
             lease_secs,
@@ -162,6 +166,22 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_memory_candidate(
+        mut self,
+        memory_candidate: Arc<crate::MemoryCandidateUseCase>,
+    ) -> Self {
+        self.memory_candidate = Some(memory_candidate);
+        self
+    }
+
+    pub fn with_memory_candidate_control(
+        mut self,
+        memory_candidate_control: Arc<crate::MemoryCandidateControlUseCase>,
+    ) -> Self {
+        self.memory_candidate_control = Some(memory_candidate_control);
+        self
+    }
+
     pub fn with_clock(
         store: Arc<dyn ActionStoreT>,
         planner: Arc<dyn crate::ActionPlannerT>,
@@ -179,6 +199,8 @@ impl PlannerUseCase {
             thread_control: None,
             follow_up_control: None,
             response_expectation_control: None,
+            memory_candidate: None,
+            memory_candidate_control: None,
             checkpoint_db: None,
             clock,
             lease_secs,
@@ -290,6 +312,15 @@ impl PlannerUseCase {
         if let Some(response_expectation_control) = &self.response_expectation_control {
             effect_executor = effect_executor.with_response_expectation_control(
                 Arc::clone(response_expectation_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(memory_candidate) = &self.memory_candidate {
+            effect_executor = effect_executor.with_memory_candidate(Arc::clone(memory_candidate));
+        }
+        if let Some(memory_candidate_control) = &self.memory_candidate_control {
+            effect_executor = effect_executor.with_memory_candidate_control(
+                Arc::clone(memory_candidate_control),
                 claimed.command_source_event_id.clone(),
             );
         }
@@ -473,6 +504,15 @@ impl PlannerUseCase {
         if let Some(response_expectation_control) = &self.response_expectation_control {
             effect_executor = effect_executor.with_response_expectation_control(
                 Arc::clone(response_expectation_control),
+                claimed.command_source_event_id.clone(),
+            );
+        }
+        if let Some(memory_candidate) = &self.memory_candidate {
+            effect_executor = effect_executor.with_memory_candidate(Arc::clone(memory_candidate));
+        }
+        if let Some(memory_candidate_control) = &self.memory_candidate_control {
+            effect_executor = effect_executor.with_memory_candidate_control(
+                Arc::clone(memory_candidate_control),
                 claimed.command_source_event_id.clone(),
             );
         }

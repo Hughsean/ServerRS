@@ -10,8 +10,9 @@ use tracing::debug;
 
 use super::mysql_inbound::store_error;
 use crate::{
-    ConversationKind, ConversationRef, EventQuery, EventSearchResult, InboundEventStoreError,
-    MessageRole, PendingOwnerWorkItem, ReferenceCandidate, ReferenceContext, RetrieverStoreT,
+    ConversationKind, ConversationRef, EventQuery, EventSearchResult, IdentityTrust,
+    InboundEventStoreError, MessageRole, ParticipantIdentity, PendingOwnerWorkItem,
+    PlatformIdentityKind, ReferenceCandidate, ReferenceContext, RetrieverStoreT,
     SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, ThreadActorSummary,
     ThreadClaimSummary, ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary,
     ThreadSearchResult, UpcomingItem, VerifiedActor, VerifiedActorKind,
@@ -214,7 +215,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         // 简单实现：按 actor_platform_id 或 normalized_text 模糊匹配
         let rows = ReferenceCandidateRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            r#"SELECT e.source_event_id, e.actor_platform_id, te.thread_id,
+            r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind, te.thread_id,
                       SUBSTRING(m.normalized_text, 1, ?) AS excerpt
                FROM secretary_source_events e
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
@@ -239,26 +240,30 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         .all(&self.db)
         .await
         .map_err(store_error)?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(|r| {
                 let source_event_ids = r
                     .source_event_id
                     .split(',')
                     .filter_map(|id| SourceEventId::new(id.trim()).ok())
                     .collect();
-                ReferenceCandidate {
+                let participant = r
+                    .actor_platform_id
+                    .as_deref()
+                    .map(|id| participant_for(&r.actor_kind, id))
+                    .transpose()?;
+                Ok(ReferenceCandidate {
                     actor_id: r.actor_platform_id,
-                    participant: None,
+                    participant,
                     thread_id: r
                         .thread_id
                         .as_deref()
                         .and_then(|id| crate::EventThreadId::new(id).ok()),
                     source_event_ids,
                     evidence: format!("匹配表达式: {expression}"),
-                }
+                })
             })
-            .collect())
+            .collect::<Result<Vec<_>, InboundEventStoreError>>()
     }
 
     async fn list_upcoming(
@@ -580,7 +585,7 @@ fn map_search_row(row: EventSearchRow) -> Result<EventSearchResult, InboundEvent
         source_event_id,
         conversation,
         actor,
-        participant: None,
+        participant: Some(participant_for(&row.actor_kind, &row.actor_platform_id)?),
         message_role,
         occurred_at_unix_secs: row.occurred_at_unix_secs,
         excerpt,
@@ -612,7 +617,7 @@ fn map_detail_row(
         account,
         conversation,
         actor,
-        participant: None,
+        participant: Some(participant_for(&row.actor_kind, &row.actor_platform_id)?),
         message_role,
         occurred_at_unix_secs: row.occurred_at_unix_secs,
         normalized_text: text,
@@ -651,6 +656,29 @@ fn map_upcoming_row(row: UpcomingItemRow) -> Result<UpcomingItem, InboundEventSt
 /// 把领域身份错误映射为存储错误。
 fn domain_err<E: std::fmt::Display>(error: E) -> InboundEventStoreError {
     InboundEventStoreError::InvalidData(error.to_string())
+}
+
+/// 从 SourceEvent 的稳定发送者字段构造账号作用域的 ParticipantIdentity。
+/// stable_id 必须来自平台稳定 ID（actor_platform_id）；昵称、群名片和 alias
+/// 只能作为显示或指代线索，绝不能成为权限身份。Owner 的分类来自可信账号绑定
+/// （actor_kind 在入站时按绑定判定），因此 Owner 用 Verified；其余角色是
+/// 协议字段观察，用 Observed。无法确认稳定 ID 时调用方保留 None，不制造昵称身份。
+fn participant_for(
+    actor_kind: &str,
+    actor_platform_id: &str,
+) -> Result<ParticipantIdentity, InboundEventStoreError> {
+    let kind = parse_actor_kind(actor_kind)?;
+    let trust = if kind == VerifiedActorKind::Owner {
+        IdentityTrust::Verified
+    } else {
+        IdentityTrust::Observed
+    };
+    ParticipantIdentity::new(
+        PlatformIdentityKind::from_verified_actor_kind(kind),
+        actor_platform_id,
+        trust,
+    )
+    .map_err(domain_err)
 }
 
 /// 内容策略过滤：envelope_only/never_long_term 时清空正文（约束 7）。
@@ -891,6 +919,7 @@ struct ThreadSearchRow {
 struct ReferenceCandidateRow {
     source_event_id: String,
     actor_platform_id: Option<String>,
+    actor_kind: String,
     thread_id: Option<String>,
     excerpt: Option<String>,
 }

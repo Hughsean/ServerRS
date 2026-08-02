@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ContentTrustLevel, ConversationRef, MemoryFactId, MemoryPayload, NotificationCandidateRef,
+    ContentTrustLevel, ConversationRef, MemoryCandidateId, MemoryCandidateKind,
+    MemoryCandidateStatus, MemoryFactId, MemoryPayload, NotificationCandidateRef,
     NotificationMatchKeyV1, NotificationOutcome, PolicyFamilyId, QuietHoursRule, SourceEventId,
 };
 
@@ -71,6 +72,9 @@ pub enum SecretaryToolKind {
     CompleteFollowUps,
     DismissResponseExpectation,
     DismissResponseExpectations,
+    ListMemoryCandidates,
+    ApproveMemoryCandidate,
+    RejectMemoryCandidate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +101,8 @@ impl SecretaryToolKind {
             | Self::ListNotificationPolicies
             | Self::ExplainNotificationDecision
             | Self::ListMemoryFacts
-            | Self::ReadMemoryFactSources => SecretaryToolPolicy {
+            | Self::ReadMemoryFactSources
+            | Self::ListMemoryCandidates => SecretaryToolPolicy {
                 risk: L0ReadOnly,
                 requires_confirmation: false,
                 reversible: true,
@@ -153,10 +158,12 @@ impl SecretaryToolKind {
             Self::CompleteFollowUp
             | Self::CompleteFollowUps
             | Self::DismissResponseExpectation
-            | Self::DismissResponseExpectations => SecretaryToolPolicy {
+            | Self::DismissResponseExpectations
+            | Self::ApproveMemoryCandidate
+            | Self::RejectMemoryCandidate => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
-                // v1 没有自动撤销入口；不能向 Owner 暗示完成或关闭可以自动恢复。
+                // v1 没有自动撤销入口；不能向 Owner 暗示完成、关闭或审批可以自动恢复。
                 reversible: false,
                 timeout_ms: 15_000,
                 max_retries: 1,
@@ -430,6 +437,28 @@ pub enum SecretaryAction {
         targets: Vec<ResponseExpectationControlTarget>,
         reason: String,
     },
+    /// 列出当前账号的结构化记忆候选。status/kind 可选过滤；limit 1..=100。
+    /// 只读，不回显完整聊天正文。
+    ListMemoryCandidates {
+        status: Option<MemoryCandidateStatus>,
+        kind: Option<MemoryCandidateKind>,
+        limit: u16,
+    },
+    /// 批准一个记忆候选：候选 proposal -> approved（版本精确 +1），并原子写入
+    /// Confirmed MemoryFact 与精确来源。没有自动撤销入口。
+    /// expected_candidate_version 必须来自 ListMemoryCandidates 展示的版本 N。
+    ApproveMemoryCandidate {
+        candidate_id: MemoryCandidateId,
+        expected_candidate_version: u64,
+        reason: String,
+    },
+    /// 拒绝一个记忆候选：proposal -> rejected（版本精确 +1），只写审计与 Receipt，
+    /// 不创建 MemoryFact/FollowUp/Outbox。没有自动撤销入口。
+    RejectMemoryCandidate {
+        candidate_id: MemoryCandidateId,
+        expected_candidate_version: u64,
+        reason: String,
+    },
 }
 
 impl SecretaryAction {
@@ -500,6 +529,9 @@ impl SecretaryAction {
             Self::DismissResponseExpectations { .. } => {
                 SecretaryToolKind::DismissResponseExpectations
             }
+            Self::ListMemoryCandidates { .. } => SecretaryToolKind::ListMemoryCandidates,
+            Self::ApproveMemoryCandidate { .. } => SecretaryToolKind::ApproveMemoryCandidate,
+            Self::RejectMemoryCandidate { .. } => SecretaryToolKind::RejectMemoryCandidate,
         }
     }
 }

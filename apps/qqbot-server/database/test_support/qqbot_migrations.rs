@@ -126,6 +126,9 @@ fn migration_order(path: &std::path::Path) -> u8 {
         name if name.contains("_follow_up_batch_controls.sql") => 26,
         // 完成/关闭控制：FollowUp 审计约束扩展 + ResponseExpectation 审计表。
         name if name.contains("_owner_work_close.sql") => 27,
+        // 记忆候选：依赖 accounts/source_events/message_contents/action_runs/memory_facts
+        // 等既有表，排序在全部 FollowUp 控制迁移之后（28）。
+        name if name.contains("_memory_candidates.sql") => 28,
         _ => 99,
     }
 }

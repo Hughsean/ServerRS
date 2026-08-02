@@ -7,8 +7,8 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 最近完成分支：`gpt/qqbot-owner-agenda-v1`，功能提交 `79a04f7`，通过非快进合并提交
-  `93710d3` 进入 `main`；未推送远端。
+- 当前开发分支：`deepseek/qqbot-memory-candidate-approval-v1`，基线提交 `4e476af`，包含
+  `Main` 当前提交 `ea2226a`；工作树尚未提交、推送或合并。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -18,12 +18,10 @@
   以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
   **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
   L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
-- 当前边界：NapCat 保持只读；Task 7 的五项 L3 验收以及
-  `B3-RECALL-004-RESILIENCE` 的 L3 resilience 检查均实际通过。全局门禁仍为 `REJECTED`：
-  多项 B3/B4/B6/B7 缺少 L4/L5 独立证明，B3 requirement 因缺少 L5 attestation 显示 FAIL；
-  不把 `REJECTED` 改写为 `APPROVED`。
-- 当前开发分支：`deepseek/qqbot-owner-work-close-v1`。旧验收矩阵只保留历史用途，不再作为日常开发门禁；
-  接下来继续主动跟进、线程语义与离线恢复任务。需要用户操作或 NapCat 实机验证的事项单独跳过。
+- 当前边界：NapCat 保持只读；旧验收矩阵只保留历史用途，不再作为日常开发门禁。结构化记忆候选
+  已通过三轮 Codex 独立复核，全部 7 条隔离 MySQL 聚焦测试通过，P0-6 local_only 配置切换永久
+  不可达问题已修复（deferred 表持久化逐事件延期状态）。切片代码、迁移与测试已完成，文档已同步，
+  等待用户授权提交。
 
 ## 历史分块
 
@@ -33,6 +31,47 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-02 11:06（Asia/Shanghai）`：Codex 完成 `MEM-011` 第三轮短复验。确认 deferred
+  逐事件延期路径在远程过滤、本地优先领取、租约 fencing、主游标不倒退和提交清理之间闭合；
+  该迁移文件在基线 `4e476af` 中不存在，属于本切片首次落地，不是对已发布迁移的改写。使用独立
+  `target/codex-review` 运行两个相关 crate 严格 Clippy 通过；启动本地 QQBot MySQL 容器，在随机
+  `qqbot_accept_codex_*` schema 中真实重跑候选测试 7/7，通过后在 finally 删除 schema。批准当前
+  切片进入单次提交；数字人 CLI 的并行改动及未跟踪 `.mcp.json` 明确排除，不推送、不合并。
+
+- `2026-08-02 01:15（Asia/Shanghai）`：Codex 第三轮复核结构化记忆候选，确认第二轮 P0-1/P0-2/P1-3/
+  P1-4/P1-5 修复正确通过，但发现新 P0-6：`local_only(L1,t1)` → `normal(N1,t2)` → 远程领取 N1
+  推进游标到 t2 → 切本地后 L1 永久不可达。修复方案：新增 `secretary_memory_candidate_deferred`
+  持久化逐事件延期表；远程 `claim` 把批次内被过滤 local_only INSERT IGNORE 入延期表（范围在
+  游标之前或等位）；本地 `claim` 优先 `claim_deferred_batch` 消费最早会话首个连续前缀但
+  `next_cursor` 恒为当前主游标（不推进）；`commit` 删除已处理延期行。新增 Codex 指定回归测试
+  `memory_candidate_local_only_before_normal_survives_remote_then_local`，验证远程越过后本地仍
+  可领取。fmt ✓、clippy -D warnings ✓、单元 223+112 ✓、候选 MySQL 7/7 ✓、其余 22/30（8 基线
+  失败）。修正交付报告基线为 `4e476af`（非 `71a0898`）。TODO/HISTORY/月度历史已同步。当前
+  未提交、未推送、未合并，`.mcp.json` 未触碰。
+
+- `2026-08-02 00:04（Asia/Shanghai）`：Codex 第二轮复核结构化记忆候选。确认连续同会话前缀、
+  Actor—来源三层绑定、LLM 临时引用、缺失正文投影失效和精确版本 CHECK 均已落实；格式与两个
+  crate 严格 Clippy 通过，并在 `serverrs-qqbot-mysql` 随机隔离 schema 中真实重跑 6 条候选 MySQL
+  测试，全部通过，schema 已清理。新发现阻断边界：处理状态只有账号级全局游标，远程模型会过滤
+  local_only；当 local_only 事件早于后续 normal 事件时，处理 normal 会永久越过前者，之后切换
+  本地模型无法补提。另纠正交付报告基线：实际 HEAD 为 `4e476af`，不是 `71a0898`。当前未批准、
+  未提交、推送或合并，也未连接或发送 QQ。
+
+- `2026-08-01 23:12（Asia/Shanghai）`：重构根目录 `CLAUDE.md`，从 171 行历史事故与重复清单
+  调整为长期工程规则。明确当前指令/规格/TODO/长期规则/历史的优先级，禁止 Superpowers 和旧式
+  验收矩阵，固化数字人/QQBot 隔离、`Main` 大小写、`.mcp.json` 保护、精简风险验证及每次 QQBot
+  提交同步 TODO/HISTORY/月度历史。针对本轮复核遗漏，新增两个强制评审不变量：全局游标不得越过
+  交错 scope 事件；语义 Actor 必须与权威 SourceEvent 及 primary 来源形成不可绕过的绑定。
+  本次只修改规则与文档，未改业务代码，未提交、推送或合并。
+
+- `2026-08-01 23:08（Asia/Shanghai）`：Codex 独立复核结构化记忆候选修复报告。格式检查、两
+  crate 严格 Clippy、personal-secretary 223 个领域单测、qqbot-server 109 个单测均通过；使用
+  `serverrs-qqbot-mysql` 新建随机隔离 schema 重跑 4 条 memory candidate MySQL 场景，全部通过，
+  schema 已在 finally 清理。复核同时确认两个 P0：账号全局游标配合按会话选取会永久跳过交错
+  会话事件；候选来源 Actor/primary actor event 未被强制绑定到权威 SourceEvent，可能形成来源
+  不支持的 Confirmed Fact。另记录远程 LLM 稳定平台 ID 暴露、缺失正文投影未失效和 DDL CHECK
+  过宽三项 P1。当前切片保持未完成，未提交、推送、合并，也未连接或发送 QQ。
 
 - `2026-08-01 19:41（Asia/Shanghai）`：完成 Owner 待办关闭闭环。新增单条/批量完成 FollowUp
   与单条/批量关闭 ResponseExpectation 的 L2 Action；最终事务复验 Owner 授权、租约、账号、

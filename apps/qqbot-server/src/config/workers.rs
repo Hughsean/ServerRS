@@ -699,6 +699,98 @@ impl ArtifactConfig {
     }
 }
 
+/// 结构化记忆候选提取 Worker 配置。
+///
+/// 独立可取消可退避的持久游标扫描：从 `secretary_source_events` 提取
+/// person/project/commitment 候选，Owner 批准后才落为 MemoryFact。
+/// 默认关闭（保守），需要显式开启；`batch_size` 是单次扫描最多处理的批次数。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MemoryCandidatesConfig {
+    pub enabled: bool,
+    /// 扫描间隔（毫秒）。
+    pub scan_interval_ms: u64,
+    /// 单次扫描最多处理的批次数（每批事件数由 max_events_per_batch 限定）。
+    pub batch_size: u32,
+    /// 批次租约时长（秒）。
+    pub lease_secs: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+    /// 每批最多事件数（1..=100）。
+    pub max_events_per_batch: u32,
+    /// 单条事件最多字符数（1..=4000）。
+    pub max_event_chars: u32,
+    /// 整批输入总字符上限（1..=16000；本切片硬上限，环境变量不可突破，
+    /// 防止成本边界被配置意外放大）。
+    pub max_total_input_chars: u32,
+    /// 提取器版本标识，参与候选确定性指纹（非空且 ≤32 字节）。
+    pub extractor_version: String,
+}
+
+impl Default for MemoryCandidatesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scan_interval_ms: 30_000,
+            batch_size: 10,
+            lease_secs: 60,
+            retry_initial_ms: 500,
+            retry_max_ms: 10_000,
+            max_events_per_batch: 20,
+            max_event_chars: 2_000,
+            max_total_input_chars: 16_000,
+            extractor_version: "v1".into(),
+        }
+    }
+}
+
+impl MemoryCandidatesConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_ms < 1_000 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if !(1..=100).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.batch_size must be between 1 and 100".into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.lease_secs) {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.lease_secs must be between 1 and 3600".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0 || self.retry_max_ms < self.retry_initial_ms {
+            return Err(ConfigError::Invalid(
+                "memory_candidates retry delays must be positive and max >= initial".into(),
+            ));
+        }
+        if !(1..=100).contains(&self.max_events_per_batch) {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.max_events_per_batch must be between 1 and 100".into(),
+            ));
+        }
+        if !(1..=4_000).contains(&self.max_event_chars) {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.max_event_chars must be between 1 and 4000".into(),
+            ));
+        }
+        // 总输入硬上限 16000：即使环境变量覆盖也不得放大成本边界。
+        if !(1..=16_000).contains(&self.max_total_input_chars) {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.max_total_input_chars must be between 1 and 16000".into(),
+            ));
+        }
+        if self.extractor_version.trim().is_empty() || self.extractor_version.len() > 32 {
+            return Err(ConfigError::Invalid(
+                "memory_candidates.extractor_version must be non-empty and at most 32 bytes".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// B7 健康快照配置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]

@@ -5,37 +5,44 @@ use agent_core::graph::{
 };
 use async_trait::async_trait;
 use personal_secretary::{
-    ActionPlannerT, ActionRunId, ActionRunSeed, AgendaApplyRequest, AgendaItemKind, AgendaMutation,
-    AgendaUseCase, BackfillAnchor, BackfillBudget, BackfillCursor, BackfillEvidence,
-    BackfillGapUseCase, BackfillLease, BackfillOutcome, BackfillScopeStatus, Clock,
-    CommitmentMemory, CommitmentStatus, ConnectionEndReason, ConservativeThreadSemanticExtractor,
-    ContentSegment, ContentTrustLevel, ConversationKind, ConversationMemoryModeInput,
-    ConversationRef, DeterministicThreadPlanner, DeterministicThreadPolicy, DirectoryEvidence,
-    DirectorySnapshot, DirectorySnapshotId, DirectorySourceApi, DirectoryStatus,
-    EvaluationCommitResult, EventThreadId, FollowUpControlEffectRequest, FollowUpControlStoreError,
-    FollowUpControlTarget, FollowUpControlUseCase, FollowUpId, HistoryBackfillSourceT,
-    HistoryCompleteness, InMemoryCheckpointStore, InboundMessageEnvelope, IngestMessageOutcome,
-    IngestionGapReason, IngestionGapStatus, LegacyNotificationReconciliationConfig,
-    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryPayload, MemoryUseCase,
-    MessageSource, NotificationFailureKind, NotificationPolicyEvaluator, NotificationPolicyUseCase,
-    OwnerNotificationContent, PersonMemory, PlannerError, PlannerInput, PlannerOutput,
-    PlannerUseCase, ProjectMemory, ResponseExpectationControlTarget,
-    ResponseExpectationControlUseCase, ResponseExpectationId, ScopeProgress, SecretaryAction,
-    SecretaryActionProposal, SecretaryActionResumeInput, SecretaryAgentState,
-    SecretaryApprovalDecision, SourceAccountRef, SourceMessageRef, SystemClock, ThreadActorRef,
-    ThreadLinkCandidateId, ThreadLinkReviewAction, ThreadLinkReviewUseCase, ThreadLinkUseCase,
-    ThreadMutationApprovalNode, ThreadMutationDecision, ThreadMutationDecisionNode,
-    ThreadMutationEffect, ThreadMutationEffectExecutor, ThreadMutationImpact, ThreadMutationKind,
-    ThreadMutationProposalId, ThreadMutationResumeInput, ThreadMutationRevertInput,
-    ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
-    ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor, VerifiedActorKind,
-    build_mysql_action_store, build_mysql_agenda_store, build_mysql_backfill_store,
-    build_mysql_directory_store, build_mysql_follow_up_control_store, build_mysql_follow_up_store,
-    build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_notification_policy_store, build_mysql_response_expectation_control_store,
-    build_mysql_retriever_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
+    ActionLeaseToken, ActionPlannerT, ActionRunId, ActionRunSeed, AgendaApplyRequest,
+    AgendaItemKind, AgendaMutation, AgendaUseCase, BackfillAnchor, BackfillBudget, BackfillCursor,
+    BackfillEvidence, BackfillGapUseCase, BackfillLease, BackfillOutcome, BackfillScopeStatus,
+    Clock, CommitmentMemory, CommitmentStatus, ConnectionEndReason,
+    ConservativeThreadSemanticExtractor, ContentSegment, ContentTrustLevel, ConversationKind,
+    ConversationMemoryModeInput, ConversationRef, DeterministicThreadPlanner,
+    DeterministicThreadPolicy, DirectoryEvidence, DirectorySnapshot, DirectorySnapshotId,
+    DirectorySourceApi, DirectoryStatus, EvaluationCommitResult, EventThreadId,
+    FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlTarget,
+    FollowUpControlUseCase, FollowUpId, HistoryBackfillSourceT, HistoryCompleteness,
+    INITIAL_CANDIDATE_VERSION, InMemoryCheckpointStore, InboundMessageEnvelope,
+    IngestMessageOutcome, IngestionGapReason, IngestionGapStatus,
+    LegacyNotificationReconciliationConfig, MemoryCandidate, MemoryCandidateBatch,
+    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
+    MemoryCandidateControlUseCase, MemoryCandidateExtractorError, MemoryCandidateExtractorT,
+    MemoryCandidateId, MemoryCandidateKind, MemoryCandidateSource, MemoryCandidateStatus,
+    MemoryCandidateUseCase, MemoryCandidateVersion, MemoryDeleteInput, MemoryFact, MemoryFactId,
+    MemoryFactStatus, MemoryPayload, MemoryUseCase, MessageSource, NotificationFailureKind,
+    NotificationPolicyEvaluator, NotificationPolicyUseCase, OwnerNotificationContent, PersonMemory,
+    PlannerError, PlannerInput, PlannerOutput, PlannerUseCase, ProjectMemory,
+    ResponseExpectationControlTarget, ResponseExpectationControlUseCase, ResponseExpectationId,
+    ScopeProgress, SecretaryAction, SecretaryActionProposal, SecretaryActionResumeInput,
+    SecretaryAgentState, SecretaryApprovalDecision, SourceAccountRef, SourceEventId,
+    SourceMessageRef, SystemClock, ThreadActorRef, ThreadLinkCandidateId, ThreadLinkReviewAction,
+    ThreadLinkReviewUseCase, ThreadLinkUseCase, ThreadMutationApprovalNode, ThreadMutationDecision,
+    ThreadMutationDecisionNode, ThreadMutationEffect, ThreadMutationEffectExecutor,
+    ThreadMutationImpact, ThreadMutationKind, ThreadMutationProposalId, ThreadMutationResumeInput,
+    ThreadMutationRevertInput, ThreadMutationRevertUseCase, ThreadMutationStoreT,
+    ThreadMutationUseCase, ThreadProjectionUseCase, ThreadSemanticUseCase, VerifiedActor,
+    VerifiedActorKind, build_mysql_action_store, build_mysql_agenda_store,
+    build_mysql_backfill_store, build_mysql_directory_store, build_mysql_follow_up_control_store,
+    build_mysql_follow_up_store, build_mysql_inbound_event_store,
+    build_mysql_memory_candidate_control_store, build_mysql_memory_candidate_store,
+    build_mysql_memory_store, build_mysql_notification_policy_store,
+    build_mysql_response_expectation_control_store, build_mysql_retriever_store,
+    build_mysql_thread_link_store, build_mysql_thread_mutation_checkpoint_store,
+    build_mysql_thread_mutation_store, build_mysql_thread_projection_store,
+    build_mysql_thread_semantic_store, candidate_fingerprint,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 use std::num::NonZeroU32;
@@ -8025,5 +8032,2038 @@ async fn assert_dismissed_expectation(
         .as_deref(),
         Some("open"),
         "thread of {label} must not be closed by dismissal"
+    );
+}
+// ===== 结构化记忆候选生产与 Owner 审批闭环（MySQL 集成） =====
+
+/// 测试提取器：确定性产出三类候选（person/project/commitment），
+/// 承诺固定 due=200_000（在 follow_up horizon 内，验证 FollowUp 只生成一个）。
+/// 每次输入相同事件都产出相同候选，靠 fingerprint 幂等去重验证"重复扫描不重复"。
+struct FakeCandidateExtractor {
+    extractor_version: String,
+}
+
+#[async_trait]
+impl MemoryCandidateExtractorT for FakeCandidateExtractor {
+    async fn extract(
+        &self,
+        batch: &MemoryCandidateBatch,
+    ) -> Result<Vec<MemoryCandidate>, MemoryCandidateExtractorError> {
+        let mut candidates = Vec::new();
+        for event in batch.events.iter().filter(|event| !event.content_omitted) {
+            let text = event.normalized_text.trim();
+            let sources = vec![MemoryCandidateSource {
+                source_event_id: event.source_event_id.clone(),
+                actor: event.actor.clone(),
+                occurred_at_unix_secs: event.occurred_at_unix_secs,
+                content_trust_level: event.content_trust_level,
+            }];
+            if let Some(rest) = text.strip_prefix("人物：") {
+                let payload = MemoryPayload::Person(PersonMemory {
+                    person: event.actor.clone(),
+                    relationship: Some(rest.to_owned()),
+                    responsibilities: Vec::new(),
+                    communication_preferences: Vec::new(),
+                });
+                let subject = format!("person:{}", event.actor.actor_id);
+                candidates.push(build_fake_candidate(
+                    batch,
+                    subject,
+                    payload,
+                    &sources,
+                    &self.extractor_version,
+                ));
+            } else if let Some(rest) = text.strip_prefix("项目：") {
+                let (key, goal) = match rest.find(char::is_whitespace) {
+                    Some(index) => (&rest[..index], rest[index..].trim()),
+                    None => (rest, ""),
+                };
+                if !key.is_empty() {
+                    let payload = MemoryPayload::Project(ProjectMemory {
+                        project_key: key.to_owned(),
+                        goal: goal.to_owned(),
+                        member_actor_ids: Vec::new(),
+                        progress: None,
+                        decision_ids: Vec::new(),
+                        risks: Vec::new(),
+                        blockers: Vec::new(),
+                        artifact_refs: Vec::new(),
+                    });
+                    let subject = format!("project:{key}");
+                    candidates.push(build_fake_candidate(
+                        batch,
+                        subject,
+                        payload,
+                        &sources,
+                        &self.extractor_version,
+                    ));
+                }
+            } else if let Some(rest) = text.strip_prefix("承诺：") {
+                // 兼容"承诺：给 X action"与"承诺：X action"两种表述。
+                let rest = rest.strip_prefix("给").map(str::trim).unwrap_or(rest);
+                let (beneficiary_id, action) = match rest.find(char::is_whitespace) {
+                    Some(index) => (&rest[..index], rest[index..].trim()),
+                    None => (rest, ""),
+                };
+                if !action.is_empty()
+                    && let Some(beneficiary) = batch
+                        .events
+                        .iter()
+                        .find(|batch_event| batch_event.actor.actor_id == beneficiary_id)
+                {
+                    // 承诺双方事件都必须进入证据来源（身份-证据强绑定）。
+                    let mut commitment_sources = sources.clone();
+                    if beneficiary.source_event_id != event.source_event_id {
+                        commitment_sources.push(MemoryCandidateSource {
+                            source_event_id: beneficiary.source_event_id.clone(),
+                            actor: beneficiary.actor.clone(),
+                            occurred_at_unix_secs: beneficiary.occurred_at_unix_secs,
+                            content_trust_level: beneficiary.content_trust_level,
+                        });
+                    }
+                    let payload = MemoryPayload::Commitment(CommitmentMemory {
+                        promisor: event.actor.clone(),
+                        beneficiary: beneficiary.actor.clone(),
+                        action: action.to_owned(),
+                        due_at_unix_secs: Some(200_000),
+                        status: CommitmentStatus::Proposed,
+                        completion_source_event_id: None,
+                    });
+                    let subject = format!(
+                        "commitment:{}:{}:{}",
+                        event.actor.actor_id,
+                        beneficiary.actor.actor_id,
+                        action.chars().take(160).collect::<String>()
+                    );
+                    candidates.push(build_fake_candidate(
+                        batch,
+                        subject,
+                        payload,
+                        &commitment_sources,
+                        &self.extractor_version,
+                    ));
+                }
+            }
+        }
+        Ok(candidates)
+    }
+}
+
+/// 构造 proposed/version 1 候选；fingerprint 必须由领域函数派生，
+/// 否则 validate_memory_candidate 会在提交时拒绝（防止提取器伪造）。
+fn build_fake_candidate(
+    batch: &MemoryCandidateBatch,
+    subject_key: String,
+    payload: MemoryPayload,
+    sources: &[MemoryCandidateSource],
+    extractor_version: &str,
+) -> MemoryCandidate {
+    let fingerprint = candidate_fingerprint(
+        &batch.account,
+        &payload,
+        &subject_key,
+        sources,
+        extractor_version,
+    );
+    MemoryCandidate {
+        candidate_id: MemoryCandidateId::generate(),
+        account: batch.account.clone(),
+        subject_key,
+        payload,
+        status: MemoryCandidateStatus::Proposed,
+        version: MemoryCandidateVersion::new(INITIAL_CANDIDATE_VERSION)
+            .expect("initial candidate version is a valid constant"),
+        extractor_version: extractor_version.to_owned(),
+        deterministic_fingerprint: fingerprint,
+        sources: sources.to_vec(),
+    }
+}
+
+/// 插入一条 normal 内容信任的候选来源事件，返回 source_event_id。
+async fn insert_candidate_source_event(
+    inbound: &Arc<dyn personal_secretary::PersonalSecretaryStoreT>,
+    managed_id: &str,
+    message_id: &str,
+    conversation_name: &str,
+    actor_id: &str,
+    text: &str,
+    occurred_at_unix_secs: i64,
+) -> String {
+    inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::NapCat, managed_id, message_id).unwrap(),
+                ConversationRef::new(ConversationKind::Group, conversation_name).unwrap(),
+                VerifiedActor::new(VerifiedActorKind::External, actor_id).unwrap(),
+                occurred_at_unix_secs,
+                text,
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .source_event_id()
+        .as_str()
+        .to_owned()
+}
+
+/// Planner 固定输出 ApproveMemoryCandidate 提案。
+struct ApproveMemoryCandidatePlanner {
+    candidate_id: MemoryCandidateId,
+    expected_version: u64,
+}
+
+#[async_trait]
+impl ActionPlannerT for ApproveMemoryCandidatePlanner {
+    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        Ok(PlannerOutput::Proposal(
+            SecretaryActionProposal::new(
+                SecretaryAction::ApproveMemoryCandidate {
+                    candidate_id: self.candidate_id.clone(),
+                    expected_candidate_version: self.expected_version,
+                    reason: "Owner 确认该候选值得长期记忆".into(),
+                },
+                "测试：Owner 批准记忆候选",
+                Vec::new(),
+                Some("approve-memory-candidate-v1".into()),
+            )
+            .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+        ))
+    }
+}
+
+/// 统计指定事实物化出的 follow_up 行数（scoped 到目标事实，避免全库计数污染）。
+async fn follow_up_count_for_fact(db: &sea_orm::DatabaseConnection, fact_id: &str) -> i64 {
+    scalar_i64(
+        db,
+        "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_follow_up_items \
+         WHERE source_memory_fact_id = ?",
+        [fact_id],
+    )
+    .await
+}
+
+/// 创建 OwnerCommand 的 action_run 并领取，返回 (run_id, lease_token)。
+async fn claim_control_run(
+    action_store: &Arc<dyn personal_secretary::ActionStoreT>,
+    command_event_id: &SourceEventId,
+    account: &SourceAccountRef,
+) -> (ActionRunId, ActionLeaseToken) {
+    let run_id = ActionRunId::for_owner_command(command_event_id, "candidate-control-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: account.clone(),
+                command_source_event_id: command_event_id.clone(),
+                command_text: "审批记忆候选".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 100_100,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let claimed = action_store
+        .claim_pending_run("test-worker", 60, 100_100)
+        .await
+        .unwrap()
+        .expect("run must be claimable");
+    (claimed.run_id, claimed.lease_token)
+}
+
+/// 直接调用控制用例（单事务边界），返回存储错误以便精确断言负路径。
+async fn candidate_control_apply(
+    control: &MemoryCandidateControlUseCase,
+    account: &SourceAccountRef,
+    command_event_id: &str,
+    run_id: &ActionRunId,
+    lease_token: &ActionLeaseToken,
+    effect_tag: &str,
+    action: SecretaryAction,
+) -> Result<personal_secretary::SecretaryActionReceipt, MemoryCandidateControlStoreError> {
+    let proposal = SecretaryActionProposal::new(
+        action.clone(),
+        "测试：控制用例负路径",
+        Vec::new(),
+        Some(format!("idem-{effect_tag}")),
+    )
+    .map_err(|error| MemoryCandidateControlStoreError::InvalidData(error.to_string()))?;
+    let proposal_json = serde_json::to_string(&proposal)
+        .map_err(|error| MemoryCandidateControlStoreError::InvalidData(error.to_string()))?;
+    control
+        .apply_effect(&MemoryCandidateControlEffectRequest {
+            account: account.clone(),
+            command_source_event_id: SourceEventId::new(command_event_id).unwrap(),
+            run_id: run_id.clone(),
+            lease_token: lease_token.clone(),
+            effect_id: format!("mc-effect-{effect_tag}"),
+            proposal_id: proposal.proposal_id.clone(),
+            proposal_json,
+            action,
+        })
+        .await
+}
+
+/// 插入一条 proposed 候选与精确来源（绕过提取器，聚焦审批事务的负路径）。
+#[allow(clippy::too_many_arguments)]
+async fn insert_candidate_row(
+    db: &sea_orm::DatabaseConnection,
+    account: &SourceAccountRef,
+    candidate_id: &str,
+    kind: &str,
+    subject_key: &str,
+    payload: MemoryPayload,
+    source_event_id: &str,
+    source_actor: &str,
+) {
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_memory_candidates \
+         (candidate_id, account_id, candidate_kind, subject_key, payload_json, candidate_status, \
+          candidate_version, extractor_version, deterministic_fingerprint) \
+         SELECT ?, id, ?, ?, ?, 'proposed', 1, 'v1', ? \
+         FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            candidate_id.to_owned().into(),
+            kind.to_owned().into(),
+            subject_key.to_owned().into(),
+            payload_json.into(),
+            format!("fp-{candidate_id}").into(),
+            account.channel.as_str().into(),
+            account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_memory_candidate_sources \
+         (candidate_id, source_event_id, account_id, actor_platform_id, content_trust_level, \
+          occurred_at_unix_secs) \
+         SELECT ?, ?, id, ?, 'normal', 100000 \
+         FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            candidate_id.to_owned().into(),
+            source_event_id.to_owned().into(),
+            source_actor.to_owned().into(),
+            account.channel.as_str().into(),
+            account.account_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+}
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_owner_approval_loop_is_exact_once_through_suspend_resume() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("candidate-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. 三条 normal 来源事件（人物/项目/承诺各一）。批次按会话分界（claim 时
+    //    同一批次只取一个 conversation），因此三条事件放在同一会话内，承诺的
+    //    受益人 bob 才能在同一批内解析；跨会话拼接由提取器拒绝（见下方注释）。
+    insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "cand-e1",
+        "cand-group",
+        "alice",
+        "人物：alice 是我本科同学",
+        100_000,
+    )
+    .await;
+    insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "cand-e2",
+        "cand-group",
+        "bob",
+        "项目：alpha 完成数据库迁移",
+        100_001,
+    )
+    .await;
+    insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "cand-e3",
+        "cand-group",
+        "alice",
+        "承诺：给 bob 发送报价单",
+        100_002,
+    )
+    .await;
+
+    // 2. 提取：Fake 提取器产出三类候选并提交
+    let candidate_store = build_mysql_memory_candidate_store(db.clone());
+    let candidate_use_case = Arc::new(
+        MemoryCandidateUseCase::new(
+            candidate_store,
+            Arc::new(FakeCandidateExtractor {
+                extractor_version: "v1".into(),
+            }),
+            managed.clone(),
+            100,
+            2_000,
+            16_000,
+            60,
+            false,
+        )
+        .unwrap(),
+    );
+    // 同一会话的三条事件在同一批内消费；循环到游标耗尽。
+    let mut committed = 0u64;
+    let mut skipped = 0u64;
+    while let Some(run) = candidate_use_case.run_once().await.unwrap() {
+        committed += run.candidates_committed;
+        skipped += run.candidates_skipped;
+    }
+    assert_eq!(committed, 3, "all three events must be consumed");
+    assert_eq!(skipped, 0);
+
+    // 3. 重复扫描（游标回拨模拟崩溃后重启）不得重复建候选：fingerprint 幂等
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_memory_candidate_processing_state \
+         SET last_received_at = NULL, last_source_event_id = NULL \
+         WHERE account_id = (SELECT id FROM secretary_accounts \
+           WHERE source_channel = ? AND platform_account_id = ?)",
+        vec![
+            MessageSource::NapCat.as_str().into(),
+            managed_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let mut rescan_committed = 0u64;
+    while let Some(run) = candidate_use_case.run_once().await.unwrap() {
+        rescan_committed += run.candidates_committed;
+    }
+    assert_eq!(
+        rescan_committed, 0,
+        "fingerprint dedup must reject duplicates across all conversations"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidates \
+             WHERE account_id = (SELECT id FROM secretary_accounts \
+               WHERE source_channel = ? AND platform_account_id = ?)",
+            [MessageSource::NapCat.as_str(), managed_id.as_str()],
+        )
+        .await,
+        3,
+        "exactly three candidates after rescan"
+    );
+
+    // 4. Owner 列表查询：三类候选 proposed v1，来源精确
+    let views = candidate_use_case
+        .list(&managed, None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(views.len(), 3);
+    let commitment_view = views
+        .iter()
+        .find(|view| view.kind == MemoryCandidateKind::Commitment)
+        .expect("commitment candidate must exist");
+    assert_eq!(commitment_view.status, MemoryCandidateStatus::Proposed);
+    assert_eq!(commitment_view.version.as_u64(), 1);
+    // P0-2：承诺双方事件（promisor + beneficiary）都必须进入证据来源，
+    // 因此候选来源数 = 2，而不是旧实现的 1。
+    assert_eq!(commitment_view.source_excerpts.len(), 2);
+    assert!(!commitment_view.conflicts_with_active_fact);
+    let candidate_id = commitment_view.candidate_id.clone();
+    let subject_key = commitment_view.subject_key.clone();
+
+    // 5. OwnerCommand 与有效 OwnerBinding
+    let command_account_id = format!("candidate-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "cand-cmd-1",
+        "批准这个记忆候选",
+        100_100,
+    )
+    .await;
+    let command_source_event_id = SourceEventId::new(&command_event_id).unwrap();
+
+    // 6. 初次运行：ApproveMemoryCandidate -> Suspend 等 Owner 审批
+    let action_store = build_mysql_action_store(db.clone());
+    let run_id = ActionRunId::for_owner_command(&command_source_event_id, "approve-v1");
+    action_store
+        .ensure_action_run(
+            &run_id,
+            &ActionRunSeed {
+                account: managed.clone(),
+                command_source_event_id: command_source_event_id.clone(),
+                command_text: "批准这个记忆候选".into(),
+                conversation_id: "owner-conv".into(),
+                occurred_at_unix_secs: 100_100,
+                timezone_offset_secs: 0,
+                timezone: "UTC".into(),
+                recent_events: vec![personal_secretary::RecentEventRef {
+                    source_event_id: command_source_event_id.clone(),
+                    summary: "Owner 命令".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let control = Arc::new(MemoryCandidateControlUseCase::new(
+        build_mysql_memory_candidate_control_store(db.clone()),
+    ));
+    let initial = PlannerUseCase::new(
+        action_store,
+        Arc::new(ApproveMemoryCandidatePlanner {
+            candidate_id: candidate_id.clone(),
+            expected_version: 1,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_memory_candidate(Arc::clone(&candidate_use_case))
+    .with_memory_candidate_control(Arc::clone(&control));
+    let run = initial
+        .run_once("test-worker")
+        .await
+        .unwrap()
+        .expect("run must be claimed");
+    assert!(run.suspended, "L2 approve must await owner approval");
+    let checkpoint_id = run
+        .checkpoint_id
+        .expect("suspended run must have checkpoint");
+    let proposal_id = run.proposal_id.expect("suspended run must have proposal");
+
+    // 7. 模拟进程重建：全新 PlannerUseCase 与 CheckpointStore，Resume Approve
+    let resumed = PlannerUseCase::new(
+        build_mysql_action_store(db.clone()),
+        Arc::new(ApproveMemoryCandidatePlanner {
+            candidate_id: candidate_id.clone(),
+            expected_version: 1,
+        }),
+        Arc::new(InMemoryCheckpointStore::<SecretaryAgentState>::new()),
+        60,
+    )
+    .with_checkpoint_db(db.clone())
+    .with_memory_candidate(Arc::clone(&candidate_use_case))
+    .with_memory_candidate_control(control);
+    let resumed_report = resumed
+        .resume_run(
+            &run_id,
+            &checkpoint_id,
+            SecretaryActionResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: SecretaryApprovalDecision::Approve,
+                command_source_event_id: command_source_event_id.clone(),
+                approval_source_event_id: None,
+            },
+        )
+        .await
+        .expect("approved resume must execute approve effect");
+    assert!(
+        resumed_report.completed,
+        "approved resume must complete the run"
+    );
+
+    // 8. 精确一次：候选 approved 版本 +1、一条 Confirmed Fact（Commitment Pending）、
+    //    一条来源、一条审计、一条 Receipt、一条响应
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("approved"),
+        "candidate must be approved"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await,
+        2,
+        "approve must bump candidate version by exactly 1"
+    );
+    let fact_id = scalar_string(
+        &db,
+        "SELECT fact_id AS value FROM secretary_memory_facts \
+         WHERE account_id = (SELECT id FROM secretary_accounts \
+           WHERE source_channel = ? AND platform_account_id = ?) \
+           AND fact_kind = 'commitment' AND subject_key = ?",
+        [
+            MessageSource::NapCat.as_str(),
+            managed_id.as_str(),
+            subject_key.as_str(),
+        ],
+    )
+    .await
+    .expect("approved candidate must create exactly one fact");
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_fact_sources \
+             WHERE fact_id = ?",
+            [fact_id.as_str()],
+        )
+        .await,
+        2,
+        "approved fact must carry the exact candidate sources (promisor + beneficiary)"
+    );
+    let fact_json = scalar_string(
+        &db,
+        "SELECT CAST(fact_json AS CHAR) AS value FROM secretary_memory_facts WHERE fact_id = ?",
+        [fact_id.as_str()],
+    )
+    .await
+    .expect("stored fact json");
+    let fact: MemoryFact = serde_json::from_str(&fact_json).unwrap();
+    assert_eq!(fact.status, MemoryFactStatus::Confirmed);
+    let MemoryPayload::Commitment(commitment) = &fact.payload else {
+        panic!("approved fact must be a commitment");
+    };
+    assert_eq!(
+        commitment.status,
+        CommitmentStatus::Pending,
+        "approved commitment must be Pending for follow-up"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ? AND control_kind = 'approve'",
+            [candidate_id.as_str()],
+        )
+        .await,
+        1,
+        "approve must write exactly one immutable control audit"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "approve must persist exactly one effect receipt"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_responses \
+             WHERE run_id = ?",
+            [run_id.as_str()],
+        )
+        .await,
+        1,
+        "completed resume must persist one owner response"
+    );
+
+    // 9. Commitment -> FollowUp 只生成一个：confirmed + Pending + due 在 horizon 内。
+    //    断言 scoped 到本事实（全库扫描计数会被其他测试的数据污染）。
+    let due_report = follow_up_scan_at(&db, 150_000).await;
+    assert!(
+        due_report.commitments_materialized >= 1,
+        "approved commitment must be materialized into a follow-up"
+    );
+    assert_eq!(
+        follow_up_count_for_fact(&db, fact_id.as_str()).await,
+        1,
+        "approved commitment must materialize exactly one follow-up"
+    );
+    let _ = follow_up_scan_at(&db, 150_000).await;
+    assert_eq!(
+        follow_up_count_for_fact(&db, fact_id.as_str()).await,
+        1,
+        "second scan must not duplicate the follow-up for this fact"
+    );
+
+    // 10. 第二次 Resume 必须被 Checkpoint CAS 拒绝，候选/审计/回执不再变化
+    assert!(
+        resumed
+            .resume_run(
+                &run_id,
+                &checkpoint_id,
+                SecretaryActionResumeInput {
+                    proposal_id,
+                    decision: SecretaryApprovalDecision::Approve,
+                    command_source_event_id: command_source_event_id.clone(),
+                    approval_source_event_id: None,
+                },
+            )
+            .await
+            .is_err(),
+        "checkpoint CAS must reject the second approved resume"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await,
+        2,
+        "second resume must not move the candidate version again"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await,
+        1,
+        "second resume must not write another audit"
+    );
+}
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_approval_rejects_cross_account_version_and_stale_sources() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("mcsec-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 六条独立会话的来源事件，分别承载六种候选
+    let e1 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e1",
+        "sec-g1",
+        "alice",
+        "人物：alice 是我同学",
+        100_000,
+    )
+    .await;
+    let e2 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e2",
+        "sec-g2",
+        "bob",
+        "项目：beta 上线",
+        100_001,
+    )
+    .await;
+    let e3 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e3",
+        "sec-g3",
+        "alice",
+        "承诺：给 bob 撤回测试",
+        100_002,
+    )
+    .await;
+    let e4 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e4",
+        "sec-g4",
+        "alice",
+        "承诺：给 bob 长期记忆测试",
+        100_003,
+    )
+    .await;
+    let e5 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e5",
+        "sec-g5",
+        "alice",
+        "承诺：给 bob 冲突测试",
+        100_004,
+    )
+    .await;
+    let e6 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "sec-e6",
+        "sec-g6",
+        "bob",
+        "承诺：给 alice 拒绝测试",
+        100_005,
+    )
+    .await;
+
+    let c1 = format!("c1-{suffix}");
+    let c2 = format!("c2-{suffix}");
+    let c3 = format!("c3-{suffix}");
+    let c4 = format!("c4-{suffix}");
+    let c5 = format!("c5-{suffix}");
+    let c6 = format!("c6-{suffix}");
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c1,
+        "person",
+        "person:alice",
+        MemoryPayload::Person(PersonMemory {
+            person: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            relationship: Some("同学".into()),
+            responsibilities: Vec::new(),
+            communication_preferences: Vec::new(),
+        }),
+        &e1,
+        "alice",
+    )
+    .await;
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c2,
+        "project",
+        "project:beta",
+        MemoryPayload::Project(ProjectMemory {
+            project_key: "beta".into(),
+            goal: "上线".into(),
+            member_actor_ids: Vec::new(),
+            progress: None,
+            decision_ids: Vec::new(),
+            risks: Vec::new(),
+            blockers: Vec::new(),
+            artifact_refs: Vec::new(),
+        }),
+        &e2,
+        "bob",
+    )
+    .await;
+    let commitment_payload = |action: &str| {
+        MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "bob".into(),
+            },
+            action: action.into(),
+            due_at_unix_secs: None,
+            status: CommitmentStatus::Proposed,
+            completion_source_event_id: None,
+        })
+    };
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c3,
+        "commitment",
+        "commitment:alice:bob:撤回测试",
+        commitment_payload("撤回测试"),
+        &e3,
+        "alice",
+    )
+    .await;
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c4,
+        "commitment",
+        "commitment:alice:bob:长期记忆测试",
+        commitment_payload("长期记忆测试"),
+        &e4,
+        "alice",
+    )
+    .await;
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c5,
+        "commitment",
+        "commitment:alice:bob:冲突测试",
+        commitment_payload("冲突测试候选"),
+        &e5,
+        "alice",
+    )
+    .await;
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c6,
+        "commitment",
+        "commitment:bob:alice:拒绝测试",
+        MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "bob".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            action: "拒绝测试".into(),
+            due_at_unix_secs: None,
+            status: CommitmentStatus::Proposed,
+            completion_source_event_id: None,
+        }),
+        &e6,
+        "bob",
+    )
+    .await;
+
+    // OwnerCommand + 绑定 + 已领取的 run（用于直接调用控制用例）
+    let command_account_id = format!("mcsec-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "sec-cmd-1",
+        "审批记忆候选",
+        100_100,
+    )
+    .await;
+    let command_source_event_id = SourceEventId::new(&command_event_id).unwrap();
+    let action_store = build_mysql_action_store(db.clone());
+    let (run_id, lease_token) =
+        claim_control_run(&action_store, &command_source_event_id, &managed).await;
+    let control =
+        MemoryCandidateControlUseCase::new(build_mysql_memory_candidate_control_store(db.clone()));
+    let candidate_store = build_mysql_memory_candidate_store(db.clone());
+
+    // 1. 跨账号不可批准：其他账号的 run/命令/绑定 + 本账号候选 -> Unauthorized，零修改
+    let other_id = format!("mcsec-other-{suffix}");
+    let other_command_account_id = format!("mcsec-other-command-{suffix}");
+    let other = SourceAccountRef::new(MessageSource::NapCat, &other_id).unwrap();
+    // 先让"其他账号"存在一条消息（绑定 INSERT...SELECT 依赖 secretary_accounts 行）。
+    insert_candidate_source_event(
+        &inbound,
+        &other_id,
+        "sec-other-e1",
+        "sec-other-g1",
+        "carol",
+        "其他账号的一条消息",
+        100_200,
+    )
+    .await;
+    let other_command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &other_id,
+        &other_command_account_id,
+        "sec-cmd-other-1",
+        "审批他人候选",
+        100_200,
+    )
+    .await;
+    let other_command_source_event_id = SourceEventId::new(&other_command_event_id).unwrap();
+    let (other_run_id, other_lease_token) =
+        claim_control_run(&action_store, &other_command_source_event_id, &other).await;
+    let cross_error = candidate_control_apply(
+        &control,
+        &other,
+        &other_command_event_id,
+        &other_run_id,
+        &other_lease_token,
+        "cross",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c1.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "跨账号批准".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(cross_error, MemoryCandidateControlStoreError::Unauthorized),
+        "cross-account approve must be unauthorized, got {cross_error:?}"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [c1.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("proposed"),
+        "cross-account attempt must not touch the candidate"
+    );
+
+    // 2. 版本错误：expected=5 但实际 1 -> InvalidData，零修改
+    let version_error = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "version",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c2.clone()).unwrap(),
+            expected_candidate_version: 5,
+            reason: "版本过期".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            version_error,
+            MemoryCandidateControlStoreError::InvalidData(_)
+        ),
+        "stale version must be invalid data, got {version_error:?}"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [c2.as_str()],
+        )
+        .await,
+        1,
+        "stale version attempt must not move the version"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ?",
+            [c2.as_str()],
+        )
+        .await,
+        0,
+        "stale version attempt must not write an audit"
+    );
+
+    // 3. 来源撤回：tombstone applied -> 批准失败 + 候选 invalidated 版本 +1
+    let recall_event_id = Uuid::new_v4().to_string();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_recall_events \
+         (recall_event_id, account_id, recall_kind, channel, conversation_kind, \
+          platform_conversation_id, platform_message_id, correlation_key, \
+          operator_platform_id, occurred_at_unix_secs) \
+         SELECT ?, id, 'group', 'napcat', 'group', 'sec-g3', 'sec-e3', 'sec-e3', NULL, 105000 \
+         FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            recall_event_id.clone().into(),
+            MessageSource::NapCat.as_str().into(),
+            managed_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_message_tombstones \
+         (account_id, source_event_id, recall_event_id, channel, conversation_kind, \
+          platform_conversation_id, platform_message_id, correlation_key, status, \
+          invalidation_reason, invalidated_at_unix_secs) \
+         SELECT id, ?, ?, 'napcat', 'group', 'sec-g3', 'sec-e3', 'sec-e3', 'applied', \
+                '测试撤回', 105000 \
+         FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+        vec![
+            e3.clone().into(),
+            recall_event_id.clone().into(),
+            MessageSource::NapCat.as_str().into(),
+            managed_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let withdrawn_error = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "withdrawn",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c3.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "批准已撤回来源".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            withdrawn_error,
+            MemoryCandidateControlStoreError::InvalidData(_)
+        ),
+        "withdrawn source must fail approval, got {withdrawn_error:?}"
+    );
+    assert_eq!(
+        candidate_store
+            .invalidate_stale_proposed(&managed, 500)
+            .await
+            .unwrap(),
+        1,
+        "withdrawn candidate must be invalidated by stale-source scan"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [c3.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("invalidated"),
+        "withdrawn candidate must become invalidated"
+    );
+
+    // 4. 会话切换为 never_long_term -> 批准失败 + invalidated
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_conversations SET memory_mode = 'never_long_term' \
+         WHERE id = (SELECT conversation_id FROM secretary_source_events \
+           WHERE source_event_id = ?)",
+        [e4.clone().into()],
+    ))
+    .await
+    .unwrap();
+    let never_error = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "never",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c4.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "批准已禁长期记忆来源".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            never_error,
+            MemoryCandidateControlStoreError::InvalidData(_)
+        ),
+        "never_long_term source must fail approval, got {never_error:?}"
+    );
+    assert_eq!(
+        candidate_store
+            .invalidate_stale_proposed(&managed, 500)
+            .await
+            .unwrap(),
+        1,
+        "never_long_term candidate must be invalidated"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [c4.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("invalidated"),
+        "never_long_term candidate must become invalidated"
+    );
+
+    // 5. 不同内容 active fact -> Conflict，不覆盖既有事实
+    let memory = MemoryUseCase::new(build_mysql_memory_store(db.clone()));
+    memory
+        .remember(&MemoryFact {
+            fact_id: MemoryFactId::generate(),
+            account: managed.clone(),
+            subject_key: "commitment:alice:bob:冲突测试".into(),
+            payload: MemoryPayload::Commitment(CommitmentMemory {
+                promisor: ThreadActorRef {
+                    account: managed.clone(),
+                    actor_id: "alice".into(),
+                },
+                beneficiary: ThreadActorRef {
+                    account: managed.clone(),
+                    actor_id: "bob".into(),
+                },
+                action: "完全不同的既有承诺".into(),
+                due_at_unix_secs: None,
+                status: CommitmentStatus::Pending,
+                completion_source_event_id: None,
+            }),
+            status: MemoryFactStatus::Confirmed,
+            confidence_bps: 9_500,
+            source_event_ids: vec![SourceEventId::new(&e5).unwrap()],
+            valid_until_unix_secs: None,
+            supersedes_fact_id: None,
+        })
+        .await
+        .unwrap();
+    // 冲突是确定性业务结果：Receipt 必须包含旧 Fact ID 与 Candidate ID 的
+    // 冲突响应，候选保持 proposed 且版本不变（供 Owner 后续决定拒绝或保留）。
+    let conflict_receipt = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "conflict",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c5.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "批准冲突候选".into(),
+        },
+    )
+    .await
+    .expect("conflict must complete as a business outcome, not a run failure");
+    assert!(
+        conflict_receipt.result_ref.contains(&"冲突".to_owned())
+            && conflict_receipt.result_ref.contains(c5.as_str()),
+        "conflict receipt must name candidate {}, got {}",
+        c5,
+        conflict_receipt.result_ref
+    );
+    let conflict_fact_id = scalar_string(
+        &db,
+        "SELECT fact_id AS value FROM secretary_memory_facts \
+         WHERE account_id = (SELECT id FROM secretary_accounts \
+           WHERE source_channel = ? AND platform_account_id = ?) \
+           AND subject_key = 'commitment:alice:bob:冲突测试'",
+        [MessageSource::NapCat.as_str(), managed_id.as_str()],
+    )
+    .await
+    .expect("the conflicting fact must exist");
+    assert!(
+        conflict_receipt.result_ref.contains(&conflict_fact_id),
+        "conflict receipt must name the old fact {}, got {}",
+        conflict_fact_id,
+        conflict_receipt.result_ref
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_facts \
+             WHERE account_id = (SELECT id FROM secretary_accounts \
+               WHERE source_channel = ? AND platform_account_id = ?) \
+               AND subject_key = 'commitment:alice:bob:冲突测试'",
+            [MessageSource::NapCat.as_str(), managed_id.as_str()],
+        )
+        .await,
+        1,
+        "conflict must not create or overwrite a fact"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [c5.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("proposed"),
+        "conflict must leave the candidate proposed with version unchanged"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT control_kind AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ?",
+            [c5.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("approve_conflict"),
+        "conflict must write an approve_conflict audit row"
+    );
+
+    // 6. 拒绝：只写 rejected + 审计 + Receipt，不创建任何事实
+    let reject_receipt = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "reject",
+        SecretaryAction::RejectMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c6.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "Owner 判断该承诺不需要长期记忆".into(),
+        },
+    )
+    .await
+    .expect("reject must succeed");
+    assert!(!reject_receipt.result_ref.is_empty());
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [c6.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("rejected"),
+        "candidate must be rejected"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [c6.as_str()],
+        )
+        .await,
+        2,
+        "reject must bump candidate version by exactly 1"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ? AND control_kind = 'reject'",
+            [c6.as_str()],
+        )
+        .await,
+        1,
+        "reject must write exactly one immutable control audit"
+    );
+    // scoped 到 reject 的 effect：同一 run 可能已由冲突检测写过 Receipt
+    // （冲突是确定性业务结果），不能按 run_id 全量计数。
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_action_effect_receipts \
+             WHERE effect_id = 'mc-effect-reject'",
+            [],
+        )
+        .await,
+        1,
+        "reject must persist exactly one effect receipt"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_facts \
+             WHERE account_id = (SELECT id FROM secretary_accounts \
+               WHERE source_channel = ? AND platform_account_id = ?) \
+               AND subject_key = 'commitment:bob:alice:拒绝测试'",
+            [MessageSource::NapCat.as_str(), managed_id.as_str()],
+        )
+        .await,
+        0,
+        "reject must not create any memory fact"
+    );
+}
+
+/// P0-1：跨会话交错事件（A1 -> B1 -> A2，全局按 received_at 递增）到达时，
+/// 连续同会话前缀分批必须保证每条事件都被消费；回归：旧实现按 A1 的会话读取
+/// 该会话全部事件并把全局游标推进到 A2，B1 被永久跳过。
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_interleaved_conversations_never_skip_events() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("inter-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. 三条 normal 事件交错在会话 A / B / A 之间，received_at 全局递增。
+    let a1 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "inter-a1",
+        "inter-group-a",
+        "alice",
+        "人物：alice 是客户",
+        100_000,
+    )
+    .await;
+    let b1 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "inter-b1",
+        "inter-group-b",
+        "bob",
+        "项目：alpha 上线",
+        100_001,
+    )
+    .await;
+    let a2 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "inter-a2",
+        "inter-group-a",
+        "alice",
+        "承诺：给 alice 发报价单",
+        100_002,
+    )
+    .await;
+
+    // 2. 连续消费到游标耗尽；每个批次只含连续同会话前缀（各 1 条）。
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let use_case = MemoryCandidateUseCase::new(
+        build_mysql_memory_candidate_store(db.clone()),
+        Arc::new(RecordingCandidateExtractor { seen: seen.clone() }),
+        managed.clone(),
+        100,
+        2_000,
+        16_000,
+        60,
+        false,
+    )
+    .unwrap();
+    let mut runs = Vec::new();
+    while let Some(run) = use_case.run_once().await.unwrap() {
+        runs.push(run.events_read);
+    }
+    assert_eq!(
+        runs,
+        vec![1, 1, 1],
+        "each batch must contain exactly one continuous same-conversation prefix"
+    );
+    let seen_events = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen_events,
+        vec![a1, b1, a2],
+        "all interleaved events must reach the extractor in global order, none skipped"
+    );
+}
+
+/// P0-2：审批复验必须绑定候选来源与权威事件发送者；来源 actor 与事件实际
+/// actor 不一致时拒绝，候选/版本/审计/事实全部零修改。
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_approve_rejects_mismatched_source_actor() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("mism-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. 真实事件发送者是 alice；候选来源 actor 被篡改为 eve。
+    let e1 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "mism-e1",
+        "mism-group",
+        "alice",
+        "人物：alice 是客户",
+        100_000,
+    )
+    .await;
+    let command_account_id = format!("mism-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "mism-cmd-1",
+        "审批记忆候选",
+        100_100,
+    )
+    .await;
+    let command_source_event_id = SourceEventId::new(&command_event_id).unwrap();
+    let action_store = build_mysql_action_store(db.clone());
+    let (run_id, lease_token) =
+        claim_control_run(&action_store, &command_source_event_id, &managed).await;
+
+    let control =
+        MemoryCandidateControlUseCase::new(build_mysql_memory_candidate_control_store(db.clone()));
+    let candidate_id = format!("mism-{}", &suffix[..8]);
+    insert_candidate_row(
+        &db,
+        &managed,
+        &candidate_id,
+        "person",
+        "person:alice",
+        MemoryPayload::Person(PersonMemory {
+            person: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            relationship: None,
+            responsibilities: Vec::new(),
+            communication_preferences: Vec::new(),
+        }),
+        &e1,
+        "eve",
+    )
+    .await;
+
+    // 2. 批准必须因身份-证据不匹配而失败（InvalidData），零修改。
+    let error = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "mismatch",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(candidate_id.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "审批篡改来源的候选".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(error, MemoryCandidateControlStoreError::InvalidData(_)),
+        "mismatched source actor must be invalid data, got {error:?}"
+    );
+    assert_eq!(
+        scalar_string(
+            &db,
+            "SELECT candidate_status AS value FROM secretary_memory_candidates \
+             WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await
+        .as_deref(),
+        Some("proposed"),
+        "rejected approve must not move the candidate status"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await,
+        1,
+        "rejected approve must not bump the candidate version"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_candidate_controls \
+             WHERE candidate_id = ?",
+            [candidate_id.as_str()],
+        )
+        .await,
+        0,
+        "rejected approve must not write an audit"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_facts \
+             WHERE account_id = (SELECT id FROM secretary_accounts \
+               WHERE source_channel = ? AND platform_account_id = ?) \
+               AND subject_key = 'person:alice'",
+            [MessageSource::NapCat.as_str(), managed_id.as_str()],
+        )
+        .await,
+        0,
+        "rejected approve must not create any memory fact"
+    );
+}
+
+/// 记录每次进入提取器输入的事件 ID；用于断言 local_only 事件从未到达提取器。
+struct RecordingCandidateExtractor {
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl MemoryCandidateExtractorT for RecordingCandidateExtractor {
+    async fn extract(
+        &self,
+        batch: &MemoryCandidateBatch,
+    ) -> Result<Vec<MemoryCandidate>, MemoryCandidateExtractorError> {
+        let mut seen = self.seen.lock().unwrap();
+        for event in batch.events.iter().filter(|event| !event.content_omitted) {
+            seen.push(event.source_event_id.as_str().to_owned());
+        }
+        // 不产出候选：本测试只关心"哪些事件进入了提取器输入"，而非候选内容。
+        Ok(Vec::new())
+    }
+}
+
+/// 远程 LLM 端点（allow_local_only=false）时，local_only 正文绝不能进入
+/// 提取器输入；仅当端点验证为回环（allow_local_only=true）才可进入。
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_remote_llm_never_receives_local_only() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("trust-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. 一条 normal 群聊事件 + 一条随后切换为 local_only 的私聊事件
+    let e_normal = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "trust-e1",
+        "trust-normal-group",
+        "alice",
+        "人物：alice 是普通群成员",
+        100_000,
+    )
+    .await;
+    let e_local = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "trust-e2",
+        "trust-local-group",
+        "bob",
+        "人物：bob 是私聊对象",
+        100_001,
+    )
+    .await;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_conversations SET memory_mode = 'local_only' \
+         WHERE account_id = (SELECT id FROM secretary_accounts \
+           WHERE source_channel = ? AND platform_account_id = ?) \
+           AND platform_conversation_id = ?",
+        vec![
+            MessageSource::NapCat.as_str().into(),
+            managed_id.clone().into(),
+            "trust-local-group".into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_message_contents SET content_mode = 'local_only' \
+         WHERE source_event_id = ?",
+        vec![e_local.clone().into()],
+    ))
+    .await
+    .unwrap();
+
+    // 2. 远程 LLM：local_only 事件被 claim SQL 过滤，从未进入提取器输入
+    let remote_store = build_mysql_memory_candidate_store(db.clone());
+    let remote_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let remote = MemoryCandidateUseCase::new(
+        remote_store,
+        Arc::new(RecordingCandidateExtractor {
+            seen: remote_seen.clone(),
+        }),
+        managed.clone(),
+        100,
+        2_000,
+        16_000,
+        60,
+        false,
+    )
+    .unwrap();
+    let run = remote
+        .run_once()
+        .await
+        .unwrap()
+        .expect("the normal event must be claimed");
+    assert_eq!(run.events_read, 1, "batch must contain exactly one event");
+    {
+        // 块作用域释放 MutexGuard，确保后续 await 不持有锁。
+        let seen = remote_seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "extractor must receive exactly one event");
+        assert_eq!(
+            seen[0], e_normal,
+            "local_only event must never reach the extractor input with a remote LLM"
+        );
+    }
+    assert!(
+        remote.run_once().await.unwrap().is_none(),
+        "no further claimable events while local_only is excluded"
+    );
+
+    // 3. 回环端点：local_only 事件现在可以进入提取器输入
+    let local_store = build_mysql_memory_candidate_store(db.clone());
+    let local_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let local = MemoryCandidateUseCase::new(
+        local_store,
+        Arc::new(RecordingCandidateExtractor {
+            seen: local_seen.clone(),
+        }),
+        managed.clone(),
+        100,
+        2_000,
+        16_000,
+        60,
+        true,
+    )
+    .unwrap();
+    let run = local
+        .run_once()
+        .await
+        .unwrap()
+        .expect("the local_only event must be claimable with a loopback endpoint");
+    assert_eq!(run.events_read, 1, "batch must contain exactly one event");
+    {
+        // 块作用域释放 MutexGuard。
+        let seen = local_seen.lock().unwrap();
+        assert_eq!(
+            seen.as_slice(),
+            [e_local.as_str()],
+            "only the local_only event must reach the extractor input"
+        );
+    }
+}
+
+/// P0-6：local_only 事件在 normal 事件**之前**到达时，远程模式领取 normal 会把
+/// 账号游标推进到 local_only 之后；切换本地模型后必须仍能领取被过滤事件——
+/// 延期持久化防止游标永久越过（旧实现下 L1 不可达）。
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_local_only_before_normal_survives_remote_then_local() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("order-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    // 1. L1(local_only, 较早) + N1(normal, 较晚) 同会话。只把 L1 的正文模式降级
+    //    为 local_only（会话模式两个事件共享，不能动），N1 保持 normal。
+    let e_local = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "order-l1",
+        "order-group",
+        "alice",
+        "人物：alice 是私聊客户",
+        100_000,
+    )
+    .await;
+    let e_normal = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "order-n1",
+        "order-group",
+        "bob",
+        "项目：alpha 上线",
+        100_001,
+    )
+    .await;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_message_contents SET content_mode = 'local_only' \
+         WHERE source_event_id = ?",
+        vec![e_local.clone().into()],
+    ))
+    .await
+    .unwrap();
+
+    // 2. 远程模式：只领取 N1（游标越过 L1），L1 进入延期队列。
+    let remote_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let remote = MemoryCandidateUseCase::new(
+        build_mysql_memory_candidate_store(db.clone()),
+        Arc::new(RecordingCandidateExtractor {
+            seen: remote_seen.clone(),
+        }),
+        managed.clone(),
+        100,
+        2_000,
+        16_000,
+        60,
+        false,
+    )
+    .unwrap();
+    let run = remote
+        .run_once()
+        .await
+        .unwrap()
+        .expect("the normal event must be claimed");
+    assert_eq!(
+        run.events_read, 1,
+        "remote batch must contain only the normal event"
+    );
+    {
+        let seen = remote_seen.lock().unwrap();
+        assert_eq!(seen.as_slice(), [e_normal.as_str()]);
+    }
+    assert!(
+        remote.run_once().await.unwrap().is_none(),
+        "no further claimable events in remote mode"
+    );
+
+    // 3. 切换本地模型：被过滤的 L1 必须仍可领取（延期消费，主游标不推进）。
+    let local_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let local = MemoryCandidateUseCase::new(
+        build_mysql_memory_candidate_store(db.clone()),
+        Arc::new(RecordingCandidateExtractor {
+            seen: local_seen.clone(),
+        }),
+        managed.clone(),
+        100,
+        2_000,
+        16_000,
+        60,
+        true,
+    )
+    .unwrap();
+    let run = local
+        .run_once()
+        .await
+        .unwrap()
+        .expect("the deferred local_only event must still be claimed");
+    assert_eq!(
+        run.events_read, 1,
+        "deferred batch must contain exactly one event"
+    );
+    {
+        let seen = local_seen.lock().unwrap();
+        assert_eq!(
+            seen.as_slice(),
+            [e_local.as_str()],
+            "deferred event must not be lost after the remote cursor advance"
+        );
+    }
+    assert!(
+        local.run_once().await.unwrap().is_none(),
+        "no duplicate or leftover events after deferred drain"
+    );
+
+    // 4. 延期行已清理：切回远程也不产生重复处理。
+    assert!(
+        remote.run_once().await.unwrap().is_none(),
+        "remote mode must stay idle after deferred drain"
+    );
+}
+
+/// 批准与既有 active fact 内容一致的候选：引用既有事实并把新来源合并进
+/// 来源链（P1-7），fact_sources 与 fact_json 同步，不丢失新证据。
+#[tokio::test]
+#[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
+async fn memory_candidate_approve_referenced_merges_new_sources() {
+    let url = std::env::var("QQBOT_TEST_DATABASE_URL")
+        .expect("QQBOT_TEST_DATABASE_URL must be set for ignored MySQL test");
+    let db = Database::connect(url).await.unwrap();
+    apply_qqbot_migrations(&db).await;
+    let inbound = build_mysql_inbound_event_store(db.clone());
+    let suffix = Uuid::new_v4().simple().to_string();
+    let managed_id = format!("merge-managed-{suffix}");
+    let managed = SourceAccountRef::new(MessageSource::NapCat, &managed_id).unwrap();
+
+    let e1 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "merge-e1",
+        "merge-group",
+        "alice",
+        "承诺：给 bob 发送合并测试",
+        100_000,
+    )
+    .await;
+    let e2 = insert_candidate_source_event(
+        &inbound,
+        &managed_id,
+        "merge-e2",
+        "merge-group",
+        "bob",
+        "人物：bob 确认收到合并测试",
+        100_001,
+    )
+    .await;
+    let subject = "commitment:alice:bob:合并测试";
+    let payload = || {
+        MemoryPayload::Commitment(CommitmentMemory {
+            promisor: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "alice".into(),
+            },
+            beneficiary: ThreadActorRef {
+                account: managed.clone(),
+                actor_id: "bob".into(),
+            },
+            action: "合并测试".into(),
+            due_at_unix_secs: None,
+            status: CommitmentStatus::Proposed,
+            completion_source_event_id: None,
+        })
+    };
+
+    // OwnerCommand + 绑定 + 已领取的 run
+    let command_account_id = format!("merge-command-{suffix}");
+    let command_event_id = owner_command_with_binding(
+        &db,
+        &inbound,
+        &managed_id,
+        &command_account_id,
+        "merge-cmd-1",
+        "批准记忆候选",
+        100_100,
+    )
+    .await;
+    let command_source_event_id = SourceEventId::new(&command_event_id).unwrap();
+    let action_store = build_mysql_action_store(db.clone());
+    let (run_id, lease_token) =
+        claim_control_run(&action_store, &command_source_event_id, &managed).await;
+    let control =
+        MemoryCandidateControlUseCase::new(build_mysql_memory_candidate_control_store(db.clone()));
+
+    // 1. 首次批准：形成新事实，来源 = e1
+    let c1 = format!("mc1-{}", &suffix[..8]);
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c1,
+        "commitment",
+        subject,
+        payload(),
+        &e1,
+        "alice",
+    )
+    .await;
+    let created = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "merge-create",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c1.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "首次批准".into(),
+        },
+    )
+    .await
+    .expect("first approve must create the fact");
+    assert!(
+        created.result_ref.contains("已形成记忆"),
+        "{}",
+        created.result_ref
+    );
+    let fact_id = scalar_string(
+        &db,
+        "SELECT fact_id AS value FROM secretary_memory_facts \
+         WHERE account_id = (SELECT id FROM secretary_accounts \
+           WHERE source_channel = ? AND platform_account_id = ?) \
+           AND subject_key = ?",
+        [MessageSource::NapCat.as_str(), managed_id.as_str(), subject],
+    )
+    .await
+    .expect("created fact must exist");
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_fact_sources \
+             WHERE fact_id = ?",
+            [fact_id.as_str()],
+        )
+        .await,
+        1,
+        "created fact must carry the first source only"
+    );
+
+    // 2. 内容一致的第二个候选：引用既有事实并合并 e2 进来源链
+    let c2 = format!("mc2-{}", &suffix[..8]);
+    insert_candidate_row(
+        &db,
+        &managed,
+        &c2,
+        "commitment",
+        subject,
+        payload(),
+        &e2,
+        "bob",
+    )
+    .await;
+    let referenced = candidate_control_apply(
+        &control,
+        &managed,
+        &command_event_id,
+        &run_id,
+        &lease_token,
+        "merge-referenced",
+        SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: MemoryCandidateId::new(c2.clone()).unwrap(),
+            expected_candidate_version: 1,
+            reason: "内容一致，引用既有事实".into(),
+        },
+    )
+    .await
+    .expect("same-content approve must reference the existing fact");
+    assert!(
+        referenced.result_ref.contains(&fact_id),
+        "referenced receipt must name the existing fact, got {}",
+        referenced.result_ref
+    );
+
+    // 3. 事实仍是同一条，来源链 = e1 + e2（不丢失新证据）
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_facts \
+             WHERE account_id = (SELECT id FROM secretary_accounts \
+               WHERE source_channel = ? AND platform_account_id = ?) \
+               AND subject_key = ?",
+            [MessageSource::NapCat.as_str(), managed_id.as_str(), subject],
+        )
+        .await,
+        1,
+        "same-content approve must not create a second fact"
+    );
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(COUNT(*) AS SIGNED) AS value FROM secretary_memory_fact_sources \
+             WHERE fact_id = ?",
+            [fact_id.as_str()],
+        )
+        .await,
+        2,
+        "referenced approve must merge the new source into the fact source chain"
+    );
+    let fact_json = scalar_string(
+        &db,
+        "SELECT CAST(fact_json AS CHAR) AS value FROM secretary_memory_facts WHERE fact_id = ?",
+        [fact_id.as_str()],
+    )
+    .await
+    .expect("fact_json must be readable");
+    assert!(
+        fact_json.contains(&e1) && fact_json.contains(&e2),
+        "fact_json must list both sources, got {fact_json}"
+    );
+    // 候选版本各自精确 +1
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT CAST(candidate_version AS SIGNED) AS value \
+             FROM secretary_memory_candidates WHERE candidate_id = ?",
+            [c2.as_str()],
+        )
+        .await,
+        2,
+        "referenced approve must bump the candidate version by exactly 1"
     );
 }

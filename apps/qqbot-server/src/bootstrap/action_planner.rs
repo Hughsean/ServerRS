@@ -6,11 +6,13 @@
 use std::sync::Arc;
 
 use personal_secretary::{
-    ActionPlannerT, AgendaUseCase, CheckpointStore, FollowUpControlUseCase,
-    InMemoryCheckpointStore, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
+    ActionPlannerT, AgendaUseCase, CheckpointStore, ConservativeMemoryCandidateExtractor,
+    FollowUpControlUseCase, InMemoryCheckpointStore, MemoryCandidateControlUseCase,
+    MemoryCandidateUseCase, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
     PlannerOutput, PlannerUseCase, ResponseExpectationControlUseCase, RetrieverPolicy,
-    RetrieverUseCase, SecretaryAgentState, SystemClock, ThreadControlUseCase,
+    RetrieverUseCase, SecretaryAgentState, SourceAccountRef, SystemClock, ThreadControlUseCase,
     build_mysql_action_store, build_mysql_agenda_store, build_mysql_follow_up_control_store,
+    build_mysql_memory_candidate_control_store, build_mysql_memory_candidate_store,
     build_mysql_memory_store, build_mysql_notification_policy_store,
     build_mysql_response_expectation_control_store, build_mysql_retriever_store,
     build_mysql_thread_control_store,
@@ -40,6 +42,7 @@ pub(crate) async fn assemble_action_planner(
     handles: &mut WorkerHandles,
     db: DatabaseConnection,
     config: &AppConfig,
+    account: SourceAccountRef,
 ) -> Result<Option<Arc<PlannerUseCase>>, RuntimeError> {
     if !config.action_planner.enabled {
         tracing::info!("Action Planner 已禁用（action_planner.enabled=false）");
@@ -87,6 +90,30 @@ pub(crate) async fn assemble_action_planner(
     let response_expectation_control = Arc::new(ResponseExpectationControlUseCase::new(
         build_mysql_response_expectation_control_store(db.clone()),
     ));
+    // 记忆候选：提取 worker 在 thread_pipeline 按账号装配；此共享实例只服务
+    // ListMemoryCandidates 只读查询，用保守提取器占位（其账户仅用于构造签名）。
+    let memory_candidate = Arc::new(
+        MemoryCandidateUseCase::new(
+            build_mysql_memory_candidate_store(db.clone()),
+            Arc::new(
+                ConservativeMemoryCandidateExtractor::new(
+                    config.memory_candidates.max_event_chars as usize,
+                    config.memory_candidates.extractor_version.clone(),
+                )
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+            ),
+            account,
+            config.memory_candidates.max_events_per_batch,
+            config.memory_candidates.max_event_chars,
+            config.memory_candidates.max_total_input_chars,
+            config.memory_candidates.lease_secs,
+            config.llm_endpoint_verified_loopback(),
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?,
+    );
+    let memory_candidate_control = Arc::new(MemoryCandidateControlUseCase::new(
+        build_mysql_memory_candidate_control_store(db.clone()),
+    ));
     let use_case = Arc::new(
         PlannerUseCase::new(
             action_store,
@@ -101,6 +128,8 @@ pub(crate) async fn assemble_action_planner(
         .with_thread_control(thread_control)
         .with_follow_up_control(follow_up_control)
         .with_response_expectation_control(response_expectation_control)
+        .with_memory_candidate(memory_candidate)
+        .with_memory_candidate_control(memory_candidate_control)
         .with_checkpoint_db(db),
     );
     let handle = spawn_action_planner_worker(Arc::clone(&use_case), config.action_planner.clone());

@@ -12,12 +12,13 @@ use async_trait::async_trait;
 use crate::{
     AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, ConversationMemoryModeInput,
     EventQuery, FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlUseCase,
-    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
-    NotificationPolicyEffectRequest, NotificationPolicyUseCase, ReferenceContext,
-    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
-    ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
-    SecretaryActionReceipt, SourceAccountRef, SourceEventId, ThreadControlEffectRequest,
-    ThreadControlStoreError, ThreadControlUseCase,
+    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
+    MemoryCandidateControlUseCase, MemoryCandidateUseCase, MemoryDeleteInput, MemoryFact,
+    MemoryFactId, MemoryFactStatus, MemoryUseCase, NotificationPolicyEffectRequest,
+    NotificationPolicyUseCase, ReferenceContext, ResponseExpectationControlEffectRequest,
+    ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
+    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SourceAccountRef,
+    SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -37,6 +38,8 @@ pub struct SecretaryActionEffectExecutor {
     thread_control: Option<Arc<ThreadControlUseCase>>,
     follow_up_control: Option<Arc<FollowUpControlUseCase>>,
     response_expectation_control: Option<Arc<ResponseExpectationControlUseCase>>,
+    memory_candidate: Option<Arc<MemoryCandidateUseCase>>,
+    memory_candidate_control: Option<Arc<MemoryCandidateControlUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
     now_unix_secs: i64,
@@ -62,6 +65,8 @@ impl SecretaryActionEffectExecutor {
             thread_control: None,
             follow_up_control: None,
             response_expectation_control: None,
+            memory_candidate: None,
+            memory_candidate_control: None,
             command_source_event_id: None,
             account,
             now_unix_secs,
@@ -124,6 +129,21 @@ impl SecretaryActionEffectExecutor {
         command_source_event_id: SourceEventId,
     ) -> Self {
         self.response_expectation_control = Some(response_expectation_control);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    pub fn with_memory_candidate(mut self, memory_candidate: Arc<MemoryCandidateUseCase>) -> Self {
+        self.memory_candidate = Some(memory_candidate);
+        self
+    }
+
+    pub fn with_memory_candidate_control(
+        mut self,
+        memory_candidate_control: Arc<MemoryCandidateControlUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.memory_candidate_control = Some(memory_candidate_control);
         self.command_source_event_id = Some(command_source_event_id);
         self
     }
@@ -198,6 +218,44 @@ impl SecretaryActionEffectExecutor {
             })
             .await
             .map_err(response_expectation_control_effect_error)?;
+        Ok(Some(receipt))
+    }
+
+    async fn execute_memory_candidate_control(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<Option<SecretaryActionReceipt>, EffectError> {
+        if !is_memory_candidate_control_action(&proposal.action) {
+            return Ok(None);
+        }
+        let use_case = self.memory_candidate_control.as_ref().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "MemoryCandidateControlUseCase 未注入",
+            )
+        })?;
+        let command_source_event_id = self.command_source_event_id.clone().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "记忆候选控制需要原始 OwnerCommand 身份",
+            )
+        })?;
+        let proposal_json = serde_json::to_string(proposal)
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        let receipt = use_case
+            .apply_effect(&MemoryCandidateControlEffectRequest {
+                account: self.account.clone(),
+                command_source_event_id,
+                run_id: self.run_id.clone(),
+                lease_token: self.lease_token.clone(),
+                effect_id: effect_id.to_owned(),
+                proposal_id: proposal.proposal_id.clone(),
+                proposal_json,
+                action: proposal.action.clone(),
+            })
+            .await
+            .map_err(memory_candidate_control_effect_error)?;
         Ok(Some(receipt))
     }
 
@@ -616,6 +674,23 @@ impl SecretaryActionEffectExecutor {
             )
         })?;
         match action {
+            SecretaryAction::ListMemoryCandidates {
+                status,
+                kind,
+                limit,
+            } => {
+                let memory_candidate = self.memory_candidate.as_ref().ok_or_else(|| {
+                    EffectError::new(
+                        EffectErrorKind::Permanent,
+                        "MemoryCandidateUseCase 未注入，无法列出记忆候选",
+                    )
+                })?;
+                let views = memory_candidate
+                    .list(&self.account, *status, *kind, u32::from(*limit))
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                Ok(format_memory_candidates(&views))
+            }
             SecretaryAction::SearchRecentEvents { query, limit } => {
                 let event_query = EventQuery {
                     account: self.account.clone(),
@@ -733,9 +808,12 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
             is_mutable_notification_policy_action(&envelope.effect.proposal.action);
         let is_thread_control = is_thread_control_action(&envelope.effect.proposal.action);
         let is_owner_work_control = is_owner_work_control_action(&envelope.effect.proposal.action);
+        let is_memory_candidate_control =
+            is_memory_candidate_control_action(&envelope.effect.proposal.action);
         if !is_mutable_policy
             && !is_thread_control
             && !is_owner_work_control
+            && !is_memory_candidate_control
             && let Some(mut receipt) = self
                 .store
                 .load_effect_receipt(&self.run_id, &envelope.id.to_string())
@@ -789,6 +867,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
                 &envelope.effect.proposal,
                 &envelope.id.to_string(),
             )
+            .await?
+        {
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
+        }
+        if let Some(mut receipt) = self
+            .execute_memory_candidate_control(&envelope.effect.proposal, &envelope.id.to_string())
             .await?
         {
             receipt.tool_kind = Some(tool_kind);
@@ -892,6 +977,20 @@ fn response_expectation_control_effect_error(
     EffectError::new(kind, error.to_string())
 }
 
+/// 记忆候选控制错误映射：数据库失败可能已提交，必须按 UnknownCommit 回放复验；
+/// 授权/租约/数据均确定性失败，不重试不重放。内容冲突不是错误——它作为
+/// `ApproveConflict` 业务结果写入审计与 Receipt，Owner 会收到含旧 Fact ID 与
+/// Candidate ID 的冲突响应，而不是 Run 失败。
+fn memory_candidate_control_effect_error(error: MemoryCandidateControlStoreError) -> EffectError {
+    let kind = match error {
+        MemoryCandidateControlStoreError::Database => EffectErrorKind::UnknownCommit,
+        MemoryCandidateControlStoreError::Unauthorized
+        | MemoryCandidateControlStoreError::LeaseLost
+        | MemoryCandidateControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
 fn deterministic_memory_fact_id(effect_id: &str) -> Result<MemoryFactId, EffectError> {
     MemoryFactId::new(
         uuid::Uuid::new_v5(
@@ -970,6 +1069,43 @@ fn format_memory_evidence(view: &crate::MemoryFactView) -> String {
     output
 }
 
+/// 格式化记忆候选列表为有界中文摘要：ID/kind/status/version/subject/
+/// 精简 payload/来源条数/冲突标记；不回显完整聊天正文。
+fn format_memory_candidates(views: &[crate::MemoryCandidateView]) -> String {
+    if views.is_empty() {
+        return "当前没有可展示的记忆候选".into();
+    }
+    let mut output = format!("当前有 {} 条记忆候选：", views.len());
+    for view in views.iter().take(8) {
+        let conflict = if view.conflicts_with_active_fact {
+            "有冲突"
+        } else {
+            "无冲突"
+        };
+        let payload_excerpt = serde_json::to_string(&view.payload)
+            .unwrap_or_default()
+            .chars()
+            .take(80)
+            .collect::<String>();
+        let item = format!(
+            "\n{} | {} | {} | v{} | {} | payload {} | {conflict} | 来源 {}",
+            view.candidate_id.as_str(),
+            view.kind.as_str(),
+            view.status.as_str(),
+            view.version.as_u64(),
+            view.subject_key.chars().take(60).collect::<String>(),
+            payload_excerpt,
+            view.source_excerpts.len(),
+        );
+        if output.chars().count() + item.chars().count() > 900 {
+            output.push_str("\n其余候选已省略");
+            break;
+        }
+        output.push_str(&item);
+    }
+    output
+}
+
 enum NotificationPolicyExecution {
     NotHandled,
     ReadOnly(String),
@@ -1021,10 +1157,20 @@ fn is_response_expectation_control_action(action: &SecretaryAction) -> bool {
     )
 }
 
+fn is_memory_candidate_control_action(action: &SecretaryAction) -> bool {
+    matches!(
+        action,
+        SecretaryAction::ApproveMemoryCandidate { .. }
+            | SecretaryAction::RejectMemoryCandidate { .. }
+    )
+}
+
 /// 所有 Owner 工作控制动作；命中时跳过通用 store 的快速回执读取，
 /// 改由控制仓储做 run/proposal/完整 Action 碰撞校验。
 fn is_owner_work_control_action(action: &SecretaryAction) -> bool {
-    is_follow_up_control_action(action) || is_response_expectation_control_action(action)
+    is_follow_up_control_action(action)
+        || is_response_expectation_control_action(action)
+        || is_memory_candidate_control_action(action)
 }
 
 /// 格式化事件检索结果为有界摘要（含来源、时间、Actor、摘录、命中数）。

@@ -9,6 +9,8 @@ mod mysql_follow_up;
 mod mysql_follow_up_control;
 mod mysql_inbound;
 mod mysql_memory;
+mod mysql_memory_candidate;
+mod mysql_memory_candidate_control;
 mod mysql_notification_candidate_producer;
 mod mysql_notification_policy;
 mod mysql_owner_binding;
@@ -29,6 +31,8 @@ pub(crate) use mysql_follow_up::MySqlFollowUpStore;
 pub(crate) use mysql_follow_up_control::MySqlFollowUpControlStore;
 pub(crate) use mysql_inbound::MySqlInboundEventStore;
 pub(crate) use mysql_memory::MySqlMemoryStore;
+pub(crate) use mysql_memory_candidate::MySqlMemoryCandidateStore;
+pub(crate) use mysql_memory_candidate_control::MySqlMemoryCandidateControlStore;
 #[allow(dead_code)]
 pub(crate) use mysql_notification_policy::MySqlNotificationPolicyStore;
 pub(crate) use mysql_owner_binding::MySqlOwnerBindingStore;

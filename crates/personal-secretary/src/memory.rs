@@ -198,31 +198,40 @@ pub fn validate_memory_fact(fact: &MemoryFact) -> Result<(), MemoryFactError> {
             "memory confidence_bps must not exceed 10000".into(),
         ));
     }
-    if fact.source_event_ids.is_empty() || fact.source_event_ids.len() > 100 {
-        return Err(MemoryFactError::Invalid(
-            "memory fact must reference 1..=100 source events".into(),
-        ));
-    }
-    if fact
-        .source_event_ids
-        .iter()
-        .map(SourceEventId::as_str)
-        .collect::<HashSet<_>>()
-        .len()
-        != fact.source_event_ids.len()
-    {
-        return Err(MemoryFactError::Invalid(
-            "memory fact contains duplicate source events".into(),
-        ));
-    }
     if fact.supersedes_fact_id.as_ref() == Some(&fact.fact_id) {
         return Err(MemoryFactError::Invalid(
             "memory fact cannot supersede itself".into(),
         ));
     }
-    match &fact.payload {
+    validate_memory_payload(&fact.payload, &fact.account, &fact.source_event_ids)
+}
+
+/// 校验记忆 payload 本身与来源引用；供 MemoryFact 与记忆候选共用，
+/// 避免候选校验复制一套稍有不同的字段上限。
+pub fn validate_memory_payload(
+    payload: &MemoryPayload,
+    account: &SourceAccountRef,
+    source_event_ids: &[SourceEventId],
+) -> Result<(), MemoryFactError> {
+    if source_event_ids.is_empty() || source_event_ids.len() > 100 {
+        return Err(MemoryFactError::Invalid(
+            "memory fact must reference 1..=100 source events".into(),
+        ));
+    }
+    if source_event_ids
+        .iter()
+        .map(SourceEventId::as_str)
+        .collect::<HashSet<_>>()
+        .len()
+        != source_event_ids.len()
+    {
+        return Err(MemoryFactError::Invalid(
+            "memory fact contains duplicate source events".into(),
+        ));
+    }
+    match payload {
         MemoryPayload::Person(person) => {
-            ensure_actor_account(&fact.account, &person.person)?;
+            ensure_actor_account(account, &person.person)?;
             validate_optional_text("relationship", person.relationship.as_deref(), 1000)?;
             validate_text_list("responsibilities", &person.responsibilities, 50, 1000)?;
             validate_text_list(
@@ -242,8 +251,8 @@ pub fn validate_memory_fact(fact: &MemoryFact) -> Result<(), MemoryFactError> {
             validate_text_list("artifact_refs", &project.artifact_refs, 100, 1000)?;
         }
         MemoryPayload::Commitment(commitment) => {
-            ensure_actor_account(&fact.account, &commitment.promisor)?;
-            ensure_actor_account(&fact.account, &commitment.beneficiary)?;
+            ensure_actor_account(account, &commitment.promisor)?;
+            ensure_actor_account(account, &commitment.beneficiary)?;
             validate_text("commitment.action", &commitment.action, 4000)?;
             if commitment.status == CommitmentStatus::Fulfilled
                 && commitment.completion_source_event_id.is_none()
@@ -253,7 +262,7 @@ pub fn validate_memory_fact(fact: &MemoryFact) -> Result<(), MemoryFactError> {
                 ));
             }
             if let Some(completion) = &commitment.completion_source_event_id
-                && !fact.source_event_ids.contains(completion)
+                && !source_event_ids.contains(completion)
             {
                 return Err(MemoryFactError::Invalid(
                     "completion evidence must be included in source_event_ids".into(),

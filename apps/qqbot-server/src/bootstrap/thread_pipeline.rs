@@ -6,11 +6,12 @@
 use std::sync::Arc;
 
 use personal_secretary::{
-    BackfillGapUseCase, ConservativeThreadSemanticExtractor, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, DirectorySyncUseCase, SourceAccountRef, ThreadLinkUseCase,
+    BackfillGapUseCase, ConservativeMemoryCandidateExtractor, ConservativeThreadSemanticExtractor,
+    DeterministicThreadPlanner, DeterministicThreadPolicy, DirectorySyncUseCase,
+    MemoryCandidateExtractorT, MemoryCandidateUseCase, SourceAccountRef, ThreadLinkUseCase,
     ThreadProjectionUseCase, ThreadSemanticExtractorT, ThreadSemanticUseCase,
-    build_mysql_backfill_store, build_mysql_thread_link_store, build_mysql_thread_projection_store,
-    build_mysql_thread_semantic_store,
+    build_mysql_backfill_store, build_mysql_memory_candidate_store, build_mysql_thread_link_store,
+    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::NapCatApiClient;
 use sea_orm::DatabaseConnection;
@@ -18,7 +19,8 @@ use sea_orm::DatabaseConnection;
 use crate::backfill::spawn_backfill_worker;
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
-use crate::llm::{LlmThreadSemanticExtractor, OpenAiCompatibleClient};
+use crate::llm::{LlmMemoryCandidateExtractor, LlmThreadSemanticExtractor, OpenAiCompatibleClient};
+use crate::memory_candidates::spawn_memory_candidates_worker;
 use crate::runtime::RuntimeError;
 use crate::thread_links::spawn_thread_links_worker;
 use crate::thread_projection::spawn_thread_projection_worker;
@@ -112,6 +114,59 @@ pub(crate) async fn assemble_thread_workers(
         ));
     } else {
         tracing::info!("跨会话线程关联候选已禁用（thread_links.enabled=false）");
+    }
+
+    // 结构化记忆候选提取：独立持久游标 Worker（normal 总是进入；local_only 仅当
+    // 本地端点已验证回环；envelope_only/never_long_term 与已撤回事件不进入模型）。
+    if config.memory_candidates.enabled {
+        let extractor: Arc<dyn MemoryCandidateExtractorT> = if config.llm.enabled {
+            let client = Arc::new(
+                OpenAiCompatibleClient::new(&config.llm)
+                    .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+            );
+            tracing::info!(
+                model = config.llm.model,
+                endpoint_host = client.endpoint_host(),
+                extractor_version = config.memory_candidates.extractor_version,
+                "LLM 记忆候选提取已启用；模型输出仍须通过来源与领域策略校验"
+            );
+            Arc::new(
+                LlmMemoryCandidateExtractor::from_openai(
+                    client,
+                    config.memory_candidates.max_event_chars as usize,
+                    config.memory_candidates.extractor_version.clone(),
+                )
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+            )
+        } else {
+            tracing::info!("LLM 已禁用；记忆候选使用保守零模型提取器");
+            Arc::new(
+                ConservativeMemoryCandidateExtractor::new(
+                    config.memory_candidates.max_event_chars as usize,
+                    config.memory_candidates.extractor_version.clone(),
+                )
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+            )
+        };
+        let use_case = Arc::new(
+            MemoryCandidateUseCase::new(
+                build_mysql_memory_candidate_store(db.clone()),
+                extractor,
+                account.clone(),
+                config.memory_candidates.max_events_per_batch,
+                config.memory_candidates.max_event_chars,
+                config.memory_candidates.max_total_input_chars,
+                config.memory_candidates.lease_secs,
+                config.llm_endpoint_verified_loopback(),
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        handles.memory_candidates = Some(spawn_memory_candidates_worker(
+            use_case,
+            config.memory_candidates.clone(),
+        ));
+    } else {
+        tracing::info!("结构化记忆候选提取已禁用（memory_candidates.enabled=false）");
     }
 
     // 装配历史回补：只读 NapCat 客户端 + 回补状态仓储 + 协议无关用例 + 独立 Worker。

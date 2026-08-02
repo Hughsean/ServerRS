@@ -17,10 +17,11 @@ use tracing::debug;
 
 use personal_secretary::{
     ActionPlannerT, Clock, ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
-    FollowUpControlTarget, FollowUpId, MemoryFactId, MemoryPayload, OpenQuestionId, PlannerError,
-    PlannerInput, PlannerOutput, ResponseExpectationControlTarget, ResponseExpectationId,
-    SecretaryAction, SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId,
-    ThreadStatus, validate_planner_output,
+    FollowUpControlTarget, FollowUpId, MemoryCandidateId, MemoryCandidateKind,
+    MemoryCandidateStatus, MemoryFactId, MemoryPayload, OpenQuestionId, PlannerError, PlannerInput,
+    PlannerOutput, ResponseExpectationControlTarget, ResponseExpectationId, SecretaryAction,
+    SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId, ThreadStatus,
+    validate_planner_output,
 };
 
 use crate::llm::{LlmClientError, OpenAiCompatibleClient, StructuredLlmClientT};
@@ -41,7 +42,8 @@ set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
-dismiss_response_expectation, dismiss_response_expectations。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+dismiss_response_expectation, dismiss_response_expectations, list_memory_candidates,
+approve_memory_candidate, reject_memory_candidate。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
 expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
 snooze_follow_up 必须提供 follow_up_id、expected_source_version（同样来自 version N）、
@@ -64,7 +66,12 @@ dismiss_response_expectation 必须提供 expectation_id、expected_source_versi
 （每项 {expectation_id, expected_source_version}，版本一律来自 version N，禁止从正文猜测版本）
 和 reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID 或版本缺失时不要输出
 dismiss_response_expectations，改为要求 Owner 澄清；
-完成与关闭操作没有自动撤销机制，必须由 Owner 明确确认；不要输出其他 tool。"#;
+list_memory_candidates 列出待审批的结构化记忆候选（limit 1..=100，默认 10）；
+approve_memory_candidate 必须提供 candidate_id、expected_candidate_version
+（一律来自 ListMemoryCandidates 展示的 vN，禁止从正文猜测版本）和 reason；
+reject_memory_candidate 必须提供 candidate_id、expected_candidate_version
+（同样来自 vN，禁止从正文猜测版本）和 reason；批准与拒绝没有自动撤销机制，
+拒绝会使候选永久失效，必须由 Owner 明确确认；不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -137,6 +144,10 @@ impl LlmActionPlanner {
                     follow_up_targets,
                     expectation_id,
                     expectation_targets,
+                    candidate_id,
+                    expected_candidate_version,
+                    candidate_status,
+                    candidate_kind,
                 } = *raw;
                 let raw = RawProposalFields {
                     tool: &tool,
@@ -171,6 +182,10 @@ impl LlmActionPlanner {
                     follow_up_targets,
                     expectation_id,
                     expectation_targets,
+                    candidate_id,
+                    expected_candidate_version,
+                    candidate_status,
+                    candidate_kind,
                 };
                 let action = build_action(&raw)?;
                 let evidence: Vec<SourceEventId> = evidence
@@ -284,6 +299,10 @@ struct RawProposalFields<'a> {
     follow_up_targets: Option<Vec<FollowUpTargetDto>>,
     expectation_id: Option<String>,
     expectation_targets: Option<Vec<ResponseExpectationTargetDto>>,
+    candidate_id: Option<String>,
+    expected_candidate_version: Option<u64>,
+    candidate_status: Option<MemoryCandidateStatus>,
+    candidate_kind: Option<MemoryCandidateKind>,
 }
 
 /// 批量忽略目标的嵌套 DTO；显式拒绝未知字段，防止模型夹带额外键。
@@ -476,6 +495,31 @@ fn build_action(raw: &RawProposalFields<'_>) -> Result<SecretaryAction, PlannerE
         }),
         "dismiss_response_expectations" => Ok(SecretaryAction::DismissResponseExpectations {
             targets: parse_response_expectation_targets(raw.expectation_targets.clone())?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "list_memory_candidates" => Ok(SecretaryAction::ListMemoryCandidates {
+            status: raw.candidate_status,
+            kind: raw.candidate_kind,
+            limit: raw.limit.unwrap_or(10),
+        }),
+        "approve_memory_candidate" => Ok(SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: parse_memory_candidate_id(raw.candidate_id.clone())?,
+            expected_candidate_version: raw.expected_candidate_version.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_candidate_version".into())
+            })?,
+            reason: raw
+                .reason
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+        }),
+        "reject_memory_candidate" => Ok(SecretaryAction::RejectMemoryCandidate {
+            candidate_id: parse_memory_candidate_id(raw.candidate_id.clone())?,
+            expected_candidate_version: raw.expected_candidate_version.ok_or_else(|| {
+                PlannerError::InvalidOutput("missing expected_candidate_version".into())
+            })?,
             reason: raw
                 .reason
                 .clone()
@@ -695,6 +739,13 @@ fn parse_response_expectation_targets(
     Ok(targets)
 }
 
+fn parse_memory_candidate_id(value: Option<String>) -> Result<MemoryCandidateId, PlannerError> {
+    MemoryCandidateId::new(
+        value.ok_or_else(|| PlannerError::InvalidOutput("missing candidate_id".into()))?,
+    )
+    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))
+}
+
 fn parse_memory_fact_id(value: Option<String>) -> Result<MemoryFactId, PlannerError> {
     MemoryFactId::new(
         value.ok_or_else(|| PlannerError::InvalidOutput("missing memory_fact_id".into()))?,
@@ -816,6 +867,14 @@ struct RawProposalOutput {
     expectation_id: Option<String>,
     #[serde(default)]
     expectation_targets: Option<Vec<ResponseExpectationTargetDto>>,
+    #[serde(default)]
+    candidate_id: Option<String>,
+    #[serde(default)]
+    expected_candidate_version: Option<u64>,
+    #[serde(default)]
+    candidate_status: Option<MemoryCandidateStatus>,
+    #[serde(default)]
+    candidate_kind: Option<MemoryCandidateKind>,
 }
 
 #[cfg(test)]
@@ -1287,5 +1346,104 @@ mod tests {
             },
             _ => panic!("expected Proposal"),
         }
+    }
+
+    /// 真实 Planner JSON（Prompt 规定的输出形状）能生成全部三种记忆候选 Action；
+    /// 生成后的动作由 MySQL 集成测试完成执行（approve 走完整 resume_run 链路）。
+    #[tokio::test]
+    async fn llm_planner_json_generates_three_memory_candidate_actions() {
+        // 1. 列出（带 status/kind 过滤与 limit）
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"list_memory_candidates",
+            "limit":5,
+            "candidate_status":"proposed",
+            "candidate_kind":"commitment",
+            "rationale":"Owner 要查看待审批的承诺候选",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::ListMemoryCandidates {
+                    status,
+                    kind,
+                    limit,
+                } => {
+                    assert_eq!(status, Some(MemoryCandidateStatus::Proposed));
+                    assert_eq!(kind, Some(MemoryCandidateKind::Commitment));
+                    assert_eq!(limit, 5);
+                }
+                _ => panic!("expected ListMemoryCandidates"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+
+        // 2. 批准
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"approve_memory_candidate",
+            "candidate_id":"11111111-2222-3333-4444-555555555555",
+            "expected_candidate_version":2,
+            "reason":"Owner 确认该候选值得长期记忆",
+            "rationale":"批准这条记忆候选",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::ApproveMemoryCandidate {
+                    candidate_id,
+                    expected_candidate_version,
+                    reason,
+                } => {
+                    assert_eq!(
+                        candidate_id.as_str(),
+                        "11111111-2222-3333-4444-555555555555"
+                    );
+                    assert_eq!(expected_candidate_version, 2);
+                    assert_eq!(reason, "Owner 确认该候选值得长期记忆");
+                }
+                _ => panic!("expected ApproveMemoryCandidate"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+
+        // 3. 拒绝
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"reject_memory_candidate",
+            "candidate_id":"66666666-7777-8888-9999-000000000000",
+            "expected_candidate_version":1,
+            "reason":"Owner 判断不需要长期记忆",
+            "rationale":"拒绝这条记忆候选",
+            "evidence":["event-1"]
+        }));
+        match planner.plan(&input()).await.unwrap() {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::RejectMemoryCandidate {
+                    candidate_id,
+                    expected_candidate_version,
+                    reason,
+                } => {
+                    assert_eq!(
+                        candidate_id.as_str(),
+                        "66666666-7777-8888-9999-000000000000"
+                    );
+                    assert_eq!(expected_candidate_version, 1);
+                    assert_eq!(reason, "Owner 判断不需要长期记忆");
+                }
+                _ => panic!("expected RejectMemoryCandidate"),
+            },
+            _ => panic!("expected Proposal"),
+        }
+
+        // 4. 缺失 expected_candidate_version 时不得生成动作（版本禁止从正文猜测）
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"reject_memory_candidate",
+            "candidate_id":"66666666-7777-8888-9999-000000000000",
+            "rationale":"缺少版本",
+            "evidence":["event-1"]
+        }));
+        assert!(planner.plan(&input()).await.is_err());
     }
 }

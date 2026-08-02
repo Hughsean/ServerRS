@@ -139,6 +139,7 @@ async fn run_with_shutdown(
         &mut handles,
         infra.db.clone(),
         &config,
+        infra.account.clone(),
     )
     .await
     {
