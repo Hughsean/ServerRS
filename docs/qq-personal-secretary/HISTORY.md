@@ -7,10 +7,9 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`claude/qqbot-participant-causality-v1`，基线提交 `38dd23c`（有界 Replan 闭环）；
-  参与者稳定身份 + 事件因果关系 + 人物上下文 v1 已完成。23:49 复核的 2 个跨层 P0
-  （kind 在 Effect/TempRef 边界丢失、按名查询未验证当前值与 alias 自身建立来源）已于
-  2026-08-03 00:22 修复并通过闭环反例；2026-08-03 10:19 Codex 最终复核通过，切片批准提交。
+- 当前开发分支：`codex/qqbot-schema-baseline-v1`，基线提交 `7175d68`（参与者身份与因果关系
+  闭环）。2026-08-03 10:54 已完成 QQBot Schema Baseline v1：33 个压缩前迁移归档，空库入口
+  收敛为最终结构基线，后续仅执行新增量迁移；结构等价、幂等、旧链采用与 fail-closed 已验证。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -25,6 +24,8 @@
   真实入模，模型仅看到请求内临时引用，local_only 只向已验证 loopback 模型开放；关键 MySQL
   关系视图用例已在随机隔离 schema 通过。CTX-004 的生产路径 P0/P1 已闭合，全 Graph 闭环集成测试、
   隐私视图测试及随机隔离 MySQL 主路径测试均已完成；切片进入提交候选。
+  **数据库基线（本轮）**：QQBot 空库使用 78 表 + 2 View 的 Baseline v1；压缩前 33 个迁移保留在
+  QQBot 自有归档中但不再参与加载，数字人数据库与 `init.sql` 未改动。
   **本轮（未提交）**：参与者稳定身份与事件因果关系闭环 v1 已完成初版与既定主路径验证 ——
   `AccountScopedParticipantRef` 账号作用域身份、`secretary_participant_profiles` 档案表与
   `secretary_event_relations` 可重建 VIEW、`EventCausalContext`/`ParticipantContext` 两个 L0

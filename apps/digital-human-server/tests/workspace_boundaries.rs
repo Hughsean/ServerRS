@@ -482,61 +482,35 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
         "QQBot migrations leaked into Digital Human database: {leaked:?}"
     );
 
-    assert!(
-        workspace_root()
-            .join("apps/qqbot-server/database/migrations/20260723_personal_secretary_ingestion.sql")
-            .is_file(),
-        "QQBot migration must live under apps/qqbot-server/database"
-    );
-    assert!(
-        workspace_root()
-            .join(
-                "apps/qqbot-server/database/migrations/20260723_personal_secretary_continuity.sql"
-            )
-            .is_file(),
-        "QQBot continuity migration must live under apps/qqbot-server/database"
-    );
-    assert!(
-        workspace_root()
-            .join("apps/qqbot-server/database/migrations/20260723_personal_secretary_backfill.sql")
-            .is_file(),
-        "QQBot backfill migration must live under apps/qqbot-server/database"
-    );
-    assert!(
-        workspace_root()
-            .join("apps/qqbot-server/database/migrations/20260724_personal_secretary_threads.sql")
-            .is_file(),
-        "QQBot thread migration must live under apps/qqbot-server/database"
-    );
-    assert!(
-        workspace_root()
-            .join(
-                "apps/qqbot-server/database/migrations/20260724_personal_secretary_thread_semantics.sql"
-            )
-            .is_file(),
-        "QQBot thread semantics migration must live under apps/qqbot-server/database"
-    );
-    assert!(
-        workspace_root()
-            .join(
-                "apps/qqbot-server/database/migrations/20260724_personal_secretary_thread_links.sql"
-            )
-            .is_file(),
-        "QQBot thread links migration must live under apps/qqbot-server/database"
-    );
-    for migration in [
-        "20260724_personal_secretary_memory.sql",
-        "20260724_personal_secretary_memory_controls_followups.sql",
-        "20260724_personal_secretary_qq_open_platform.sql",
+    let qqbot_database = workspace_root().join("apps/qqbot-server/database");
+    let baseline = qqbot_database.join("baseline/20260803_qqbot_schema_v1.sql");
+    assert!(baseline.is_file(), "QQBot Schema Baseline v1 is missing");
+    let baseline_sql = fs::read_to_string(baseline).expect("QQBot baseline must be readable");
+    for required_object in [
+        "secretary_accounts",
+        "secretary_source_events",
+        "secretary_action_runs",
+        "secretary_participant_profiles",
     ] {
         assert!(
-            workspace_root()
-                .join("apps/qqbot-server/database/migrations")
-                .join(migration)
-                .is_file(),
-            "QQBot-owned migration is missing: {migration}"
+            baseline_sql.contains(required_object),
+            "QQBot baseline is missing required object: {required_object}"
         );
     }
+
+    let archived_migrations = fs::read_dir(qqbot_database.join("archive/pre_v1"))
+        .expect("QQBot pre-v1 migration archive must be readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
+        .count();
+    assert_eq!(
+        archived_migrations, 33,
+        "QQBot pre-v1 archive must retain all 33 historical migrations"
+    );
+    assert!(
+        qqbot_database.join("migrations/README.md").is_file(),
+        "QQBot post-baseline migrations directory must remain application-owned"
+    );
 }
 
 #[test]

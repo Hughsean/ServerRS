@@ -253,7 +253,7 @@ async fn notification_policy_migration_fences_family_head_to_own_revision() {
     );
 }
 
-/// 共用迁移加载器必须记录每个已提交迁移；第二次加载不得重复执行任何 DDL。
+/// 共用迁移加载器必须记录 Baseline；第二次加载不得重复执行任何 DDL。
 #[tokio::test]
 #[ignore = "requires isolated MySQL schema created by verify-qqbot-acceptance.ps1"]
 async fn notification_policy_migration_loader_records_and_repeats_idempotently() {
@@ -264,22 +264,22 @@ async fn notification_policy_migration_loader_records_and_repeats_idempotently()
     let recorded_before = scalar_u64(
         &db,
         "SELECT COUNT(*) AS value FROM qqbot_test_schema_migrations \
-         WHERE migration_name = '20260728_owner_notification_policy_feedback_v1.sql'",
+         WHERE migration_name = 'baseline:20260803_qqbot_schema_v1.sql'",
         Vec::new(),
     )
     .await;
-    assert_eq!(recorded_before, 1, "新迁移必须在首次成功后记录一次");
+    assert_eq!(recorded_before, 1, "全新 schema 必须记录 Baseline v1");
 
     qqbot_migrations::apply_qqbot_migrations(&db, &migrations_dir).await;
 
     let recorded_after = scalar_u64(
         &db,
         "SELECT COUNT(*) AS value FROM qqbot_test_schema_migrations \
-         WHERE migration_name = '20260728_owner_notification_policy_feedback_v1.sql'",
+         WHERE migration_name = 'baseline:20260803_qqbot_schema_v1.sql'",
         Vec::new(),
     )
     .await;
-    assert_eq!(recorded_after, 1, "重复加载不得重复记录或执行新迁移");
+    assert_eq!(recorded_after, 1, "重复加载不得重复记录或执行 Baseline");
 }
 
 async fn drain_handle(handle: qqbot_server::worker_lifecycle::WorkerHandle) {
@@ -479,17 +479,10 @@ async fn acceptance_stalled_recall_store_does_not_block_websocket_and_retries() 
 
     db.execute_raw(Statement::from_string(
         DatabaseBackend::MySql,
-        "DROP TABLE secretary_recall_inbox",
+        "RENAME TABLE secretary_recall_inbox TO secretary_recall_inbox_unavailable",
     ))
     .await
-    .expect("failure injection must remove inbox table");
-    db.execute_raw(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "DELETE FROM qqbot_test_schema_migrations WHERE migration_name = ?",
-        ["20260727_personal_secretary_recall_inbox.sql".into()],
-    ))
-    .await
-    .expect("failure injection must make the recall inbox migration runnable for recovery");
+    .expect("failure injection must make inbox table unavailable");
     let inbound_store = build_mysql_inbound_event_store(db.clone());
     let epoch = inbound_store
         .begin_connection(&acc)
@@ -558,11 +551,12 @@ async fn acceptance_stalled_recall_store_does_not_block_websocket_and_retries() 
         .expect("ingestion worker panic");
     assert_eq!(report.accepted, 1);
 
-    qqbot_migrations::apply_qqbot_migrations(
-        &db,
-        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("database/migrations"),
-    )
-    .await;
+    db.execute_raw(Statement::from_string(
+        DatabaseBackend::MySql,
+        "RENAME TABLE secretary_recall_inbox_unavailable TO secretary_recall_inbox",
+    ))
+    .await
+    .expect("restoring MySQL must make recall inbox available again");
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let count = scalar_u64(

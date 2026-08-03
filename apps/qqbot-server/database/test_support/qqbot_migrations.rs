@@ -1,54 +1,137 @@
-//! QQBot MySQL 测试共用迁移加载器。
+//! QQBot MySQL 测试共用 Schema 加载器。
 //!
-//! 测试 schema 的创建与销毁由外层脚本负责；本模块以迁移记录表保证重复加载不重复执行 DDL。
+//! 全新 schema 只执行 Baseline v1 与其后的增量迁移。压缩前已完整应用 33 个历史迁移的
+//! schema 会在验证迁移记录完整后登记为已采用 Baseline；部分迁移或无记录的既有业务表会
+//! fail-closed，避免在未知结构上误跑基线。
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
 const MIGRATION_RECORDS_TABLE: &str = "qqbot_test_schema_migrations";
+const BASELINE_FILE_NAME: &str = "20260803_qqbot_schema_v1.sql";
+const BASELINE_RECORD_NAME: &str = "baseline:20260803_qqbot_schema_v1.sql";
 static MIGRATION_LOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+const PRE_V1_MIGRATIONS: &[&str] = &[
+    "20260723_personal_secretary_ingestion.sql",
+    "20260723_personal_secretary_continuity.sql",
+    "20260723_personal_secretary_backfill.sql",
+    "20260724_personal_secretary_threads.sql",
+    "20260724_personal_secretary_thread_links.sql",
+    "20260724_personal_secretary_thread_semantics.sql",
+    "20260724_personal_secretary_thread_mutations.sql",
+    "20260724_personal_secretary_thread_revisions.sql",
+    "20260724_personal_secretary_memory.sql",
+    "20260724_personal_secretary_memory_controls_followups.sql",
+    "20260724_personal_secretary_qq_open_platform.sql",
+    "20260725_personal_secretary_action_planner.sql",
+    "20260726_personal_secretary_action_planner_hardening.sql",
+    "20260726_personal_secretary_directory.sql",
+    "20260727_personal_secretary_gap_freeze_hardening.sql",
+    "20260726_personal_secretary_event_type_recall.sql",
+    "20260726_personal_secretary_recall.sql",
+    "20260726_personal_secretary_artifacts.sql",
+    "20260727_personal_secretary_recall_inbox.sql",
+    "20260727_personal_secretary_artifact_derivations.sql",
+    "20260727_personal_secretary_owner_agenda.sql",
+    "20260728_owner_notification_policy_feedback_v1.sql",
+    "20260729_owner_notification_policy_evaluation_v1.sql",
+    "20260731_personal_secretary_response_expectations.sql",
+    "20260801_personal_secretary_follow_up_owner_controls.sql",
+    "20260801_personal_secretary_follow_up_snooze.sql",
+    "20260801_personal_secretary_follow_up_batch_controls.sql",
+    "20260801_personal_secretary_owner_work_close.sql",
+    "20260802_personal_secretary_memory_candidates.sql",
+    "20260802_personal_secretary_participant_context.sql",
+    "20260729_owner_notification_policy_task7_reconciliation.sql",
+    "20260731_personal_secretary_project_blocker_followups.sql",
+    "20260731_personal_secretary_thread_owner_controls.sql",
+];
+
 pub async fn apply_qqbot_migrations(db: &DatabaseConnection, migrations_dir: &std::path::Path) {
-    // 同一测试进程可并行启动多个连接；迁移记录检查、DDL 与记录写入必须作为一个临界区。
     let _guard = MIGRATION_LOAD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
     ensure_migration_records_table(db).await;
+
+    let database_dir = migrations_dir.parent().unwrap_or_else(|| {
+        panic!(
+            "migrations directory has no database parent: {}",
+            migrations_dir.display()
+        )
+    });
+    ensure_baseline(db, database_dir).await;
+
     let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(migrations_dir)
         .unwrap_or_else(|error| panic!("failed to read migrations directory: {error}"))
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
         .collect();
-    entries.sort_by_key(|path| migration_order(path));
+    entries.sort();
 
     for path in entries {
         let migration_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or_default();
+            .unwrap_or_else(|| panic!("migration name is not valid UTF-8: {}", path.display()));
         if migration_is_applied(db, migration_name).await {
             continue;
         }
-        let sql = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let stripped = sql
-            .lines()
-            .map(|line| line.split_once("--").map_or(line, |(prefix, _)| prefix))
-            .collect::<Vec<_>>()
-            .join("\n");
-        for statement in stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|statement| !statement.is_empty())
-        {
-            db.execute_raw(Statement::from_string(DatabaseBackend::MySql, statement))
-                .await
-                .unwrap_or_else(|error| panic!("migration {} failed: {error}", path.display()));
-        }
+        apply_sql_file(db, &path).await;
         record_migration(db, migration_name).await;
+    }
+}
+
+async fn ensure_baseline(db: &DatabaseConnection, database_dir: &std::path::Path) {
+    if migration_is_applied(db, BASELINE_RECORD_NAME).await {
+        return;
+    }
+
+    let applied_legacy = count_applied_legacy_migrations(db).await;
+    if applied_legacy == PRE_V1_MIGRATIONS.len() {
+        // 已完成旧链的数据库与 Baseline v1 结构等价，只登记采用关系，不重放任何 DDL。
+        record_migration(db, BASELINE_RECORD_NAME).await;
+        return;
+    }
+
+    let object_count = secretary_object_count(db).await;
+    assert_eq!(
+        object_count,
+        0,
+        "QQBot schema contains {object_count} secretary_* objects but only {applied_legacy}/{} pre-v1 migrations; refusing to apply baseline over a partial or unmanaged schema",
+        PRE_V1_MIGRATIONS.len()
+    );
+    assert_eq!(
+        applied_legacy,
+        0,
+        "empty QQBot schema unexpectedly contains {applied_legacy}/{} pre-v1 migration records",
+        PRE_V1_MIGRATIONS.len()
+    );
+
+    let baseline_path = database_dir.join("baseline").join(BASELINE_FILE_NAME);
+    apply_sql_file(db, &baseline_path).await;
+    record_migration(db, BASELINE_RECORD_NAME).await;
+}
+
+async fn apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) {
+    let sql = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    let stripped = sql
+        .lines()
+        .map(|line| line.split_once("--").map_or(line, |(prefix, _)| prefix))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for statement in stripped
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+    {
+        db.execute_raw(Statement::from_string(DatabaseBackend::MySql, statement))
+            .await
+            .unwrap_or_else(|error| panic!("migration {} failed: {error}", path.display()));
     }
 }
 
@@ -87,50 +170,28 @@ async fn migration_is_applied(db: &DatabaseConnection, migration_name: &str) -> 
     .is_some()
 }
 
-fn migration_order(path: &std::path::Path) -> u8 {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    match name {
-        name if name.contains("_ingestion.sql") => 0,
-        name if name.contains("_continuity.sql") => 1,
-        name if name.contains("_backfill.sql") => 2,
-        name if name.contains("_threads.sql") => 3,
-        name if name.contains("_thread_links.sql") => 4,
-        name if name.contains("_thread_semantics.sql") => 5,
-        name if name.contains("_thread_mutations.sql") => 6,
-        name if name.contains("_thread_revisions.sql") => 7,
-        name if name.contains("_memory.sql") => 8,
-        name if name.contains("_memory_controls_followups.sql") => 9,
-        name if name.contains("_qq_open_platform.sql") => 10,
-        name if name.contains("_action_planner.sql") => 11,
-        name if name.contains("_action_planner_hardening.sql") => 12,
-        name if name.contains("_directory.sql") => 13,
-        name if name.contains("_gap_freeze_hardening.sql") => 14,
-        name if name.contains("_event_type_recall.sql") => 15,
-        name if name.contains("_recall.sql") => 16,
-        name if name.contains("_artifacts.sql") => 17,
-        name if name.contains("_recall_inbox.sql") => 18,
-        name if name.contains("_artifact_derivations.sql") => 19,
-        name if name.contains("_owner_agenda.sql") => 20,
-        name if name.contains("_owner_notification_policy_feedback_v1.sql") => 21,
-        name if name.contains("_owner_notification_policy_evaluation_v1.sql") => 22,
-        // ResponseExpectation 表被 owner_work_close 的外键引用，必须先建；
-        // 不能再落 99（read_dir 顺序未定义）。
-        name if name.contains("_response_expectations.sql") => 23,
-        // FollowUp 控制审计先建表，snooze 扩展列、batch 复合唯一键依次执行；
-        // 都落在 99 会退化为 read_dir 的未定义顺序。
-        name if name.contains("_follow_up_owner_controls.sql") => 24,
-        name if name.contains("_follow_up_snooze.sql") => 25,
-        name if name.contains("_follow_up_batch_controls.sql") => 26,
-        // 完成/关闭控制：FollowUp 审计约束扩展 + ResponseExpectation 审计表。
-        name if name.contains("_owner_work_close.sql") => 27,
-        // 记忆候选：依赖 accounts/source_events/message_contents/action_runs/memory_facts
-        // 等既有表，排序在全部 FollowUp 控制迁移之后（28）。
-        name if name.contains("_memory_candidates.sql") => 28,
-        // 参与者档案与结构关系 VIEW：依赖 ingestion/threading/recall，排序在记忆候选之后（29）。
-        name if name.contains("_participant_context.sql") => 29,
-        _ => 99,
+async fn count_applied_legacy_migrations(db: &DatabaseConnection) -> usize {
+    let mut count = 0;
+    for migration_name in PRE_V1_MIGRATIONS {
+        if migration_is_applied(db, migration_name).await {
+            count += 1;
+        }
     }
+    count
+}
+
+async fn secretary_object_count(db: &DatabaseConnection) -> u64 {
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::MySql,
+            "SELECT COUNT(*) AS value FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = DATABASE() AND LEFT(TABLE_NAME, 10) = 'secretary_'",
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("failed to inspect QQBot schema objects: {error}"))
+        .expect("COUNT(*) must return one row");
+    let count = row
+        .try_get::<i64>("", "value")
+        .unwrap_or_else(|error| panic!("failed to decode QQBot schema object count: {error}"));
+    u64::try_from(count).expect("QQBot schema object count must be non-negative")
 }

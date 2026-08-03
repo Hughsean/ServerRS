@@ -2979,7 +2979,7 @@ async fn backfill_migrations_apply_in_order_and_are_idempotent() {
     // 重复执行迁移必须安全（CREATE TABLE IF NOT EXISTS / upsert）。
     apply_qqbot_migrations(&db).await;
 
-    // 26 张 secretary_* 表（入站 4 + 连续性 4 + 回补 5 + 线程投影 4 + 语义 9）必须存在。
+    // Baseline v1 的 78 张表与 2 个 View 必须存在；后续增量允许继续增加对象。
     let table_count = scalar_i64(
         &db,
         "SELECT COUNT(*) AS value FROM information_schema.tables \
@@ -2988,8 +2988,8 @@ async fn backfill_migrations_apply_in_order_and_are_idempotent() {
     )
     .await;
     assert!(
-        table_count >= 26,
-        "expected at least 26 secretary_* tables, got {table_count}"
+        table_count >= 80,
+        "expected at least 80 secretary_* objects, got {table_count}"
     );
 
     let backfill_run_table = scalar_i64(
