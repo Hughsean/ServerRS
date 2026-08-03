@@ -15,7 +15,8 @@ use crate::{
     ActionLeaseToken, ActionPlannerT, ActionRunContext, MessageSource, PlannerError, PlannerInput,
     PlannerOutput, QueryEffectResultV1, QueryEffectTypedEvent, RecentEventRef, SecretaryAction,
     SecretaryActionEffect, SecretaryActionProposal, SecretaryActionReceipt, SecretaryAgentUpdate,
-    SecretaryToolKind, SourceAccountRef, SourceEventId, is_replan_observation_tool,
+    SecretaryToolKind, SourceAccountRef, SourceEventId, WorkingContextUpdate,
+    is_replan_observation_tool,
 };
 
 #[test]
@@ -160,6 +161,11 @@ fn state_with_receipt(
         _ => crate::SecretaryAction::SearchRecentEvents {
             query: "test".into(),
             limit: 20,
+            since_unix_secs: None,
+            until_unix_secs: None,
+            conversation: None,
+            thread_id: None,
+            actor_id: None,
         },
     };
     let proposal = crate::SecretaryActionProposal::new(
@@ -203,6 +209,7 @@ async fn replan_decision_parses_query_effect_and_returns_observation() {
         source_event_ids: vec![SourceEventId::new("event-1").unwrap()],
         event_count: 3,
         typed_events: vec![],
+        ambiguous: false,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -211,7 +218,8 @@ async fn replan_decision_parses_query_effect_and_returns_observation() {
 
     let result = node.execute(&state, &context).await.unwrap();
     let updates = result.into_updates();
-    assert_eq!(updates.len(), 1);
+    // CMD-009 目标 A：观察进入工作上下文（ObservationAppended + WorkingContext 更新）。
+    assert_eq!(updates.len(), 2);
     match &updates[0] {
         AgentUpdate::Business(SecretaryAgentUpdate::ObservationAppended(obs)) => {
             assert_eq!(obs.tool_kind, SecretaryToolKind::SearchRecentEvents);
@@ -220,6 +228,14 @@ async fn replan_decision_parses_query_effect_and_returns_observation() {
             assert!(obs.summary.contains("命中 3 条"));
         }
         other => panic!("expected ObservationAppended, got {other:?}"),
+    }
+    match &updates[1] {
+        AgentUpdate::Business(SecretaryAgentUpdate::WorkingContext(
+            WorkingContextUpdate::ReplanEvidence { evidence_refs, .. },
+        )) => {
+            assert_eq!(evidence_refs.len(), 1);
+        }
+        other => panic!("expected WorkingContext ReplanEvidence, got {other:?}"),
     }
 }
 
@@ -243,6 +259,7 @@ async fn replan_decision_skips_when_outcome_set() {
         source_event_ids: vec![],
         event_count: 3,
         typed_events: vec![],
+        ambiguous: false,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -311,6 +328,7 @@ fn replan_router_continue_when_query_tool_and_has_observation() {
         source_event_ids: vec![],
         event_count: 3,
         typed_events: vec![],
+        ambiguous: false,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -332,6 +350,7 @@ fn replan_router_finish_when_budget_exhausted() {
         source_event_ids: vec![],
         event_count: 1,
         typed_events: vec![],
+        ambiguous: false,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -346,6 +365,68 @@ fn replan_router_finish_when_budget_exhausted() {
         crate::planner::MAX_REPLAN_ROUNDS
     );
     assert_eq!(route(&state), "finish");
+}
+
+#[test]
+fn replan_router_continues_after_conflict_context_is_recorded() {
+    let candidate_id = crate::MemoryCandidateId::generate();
+    let fact_id = crate::MemoryFactId::new("conflict-fact-1").unwrap();
+    let conflict_result = crate::MemoryCandidateConflictResultV1 {
+        version: 1,
+        candidate_id: candidate_id.clone(),
+        fact_id: fact_id.clone(),
+        reason_code: crate::MemoryConflictReasonCode::ActiveFactPayloadDiffers,
+        summary: "候选与现行事实冲突".into(),
+    };
+    let proposal = crate::SecretaryActionProposal::new(
+        crate::SecretaryAction::ApproveMemoryCandidate {
+            candidate_id: candidate_id.clone(),
+            expected_candidate_version: 1,
+            reason: "批准候选".into(),
+        },
+        "批准候选",
+        vec![SourceEventId::new("cmd-event").unwrap()],
+        Some("approve-conflict-test".into()),
+    )
+    .unwrap();
+    let mut business = SecretaryAgentState::new(
+        "test goal",
+        Vec::new(),
+        vec![SourceEventId::new("cmd-event").unwrap()],
+        Vec::new(),
+    )
+    .unwrap();
+    let proposal_id = proposal.proposal_id.clone();
+    business
+        .apply_update(SecretaryAgentUpdate::ProposalAccepted(proposal))
+        .unwrap();
+    business
+        .apply_update(SecretaryAgentUpdate::ActionCompleted(
+            SecretaryActionReceipt {
+                proposal_id,
+                result_ref: serde_json::to_string(&conflict_result).unwrap(),
+                tool_kind: Some(SecretaryToolKind::ApproveMemoryCandidate),
+            },
+        ))
+        .unwrap();
+    business
+        .apply_update(SecretaryAgentUpdate::WorkingContext(
+            WorkingContextUpdate::ConflictReRead(
+                crate::MemoryCandidateConflictContext::valid(
+                    candidate_id,
+                    fact_id,
+                    "project",
+                    crate::MemoryConflictReasonCode::ActiveFactPayloadDiffers,
+                    "候选与现行事实冲突",
+                    vec![SourceEventId::new("source-1").unwrap()],
+                    "现行项目事实",
+                )
+                .unwrap(),
+            ),
+        ))
+        .unwrap();
+
+    assert_eq!(route(&AgentState::new(business)), "continue");
 }
 
 // ===== is_replan_observation_tool 白名单测试 =====
@@ -449,6 +530,7 @@ impl EffectExecutor<SecretaryActionEffect> for FakeEffectExecutor {
                 occurred_at_unix_secs: 1_000,
                 excerpt: "关于报价单的讨论".into(),
             }],
+            ambiguous: false,
         };
         let result_ref = serde_json::to_string(&query_result).unwrap();
         Ok(SecretaryActionReceipt {
@@ -489,6 +571,11 @@ async fn replan_full_graph_two_rounds_search_then_no_action() {
             SecretaryAction::SearchRecentEvents {
                 query: "报价单".into(),
                 limit: 20,
+                since_unix_secs: None,
+                until_unix_secs: None,
+                conversation: None,
+                thread_id: None,
+                actor_id: None,
             },
             "Owner 要查报价单",
             vec![cmd_event_id.clone()],
@@ -679,6 +766,11 @@ async fn replan_full_graph_budget_exhausted_finishes() {
                 SecretaryAction::SearchRecentEvents {
                     query: "x".into(),
                     limit: 10,
+                    since_unix_secs: None,
+                    until_unix_secs: None,
+                    conversation: None,
+                    thread_id: None,
+                    actor_id: None,
                 },
                 "继续查",
                 evidence,

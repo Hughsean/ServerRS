@@ -14,12 +14,14 @@
 
 ## 0. 当前状态
 
-- 当前分支：`claude/qqbot-project-commitment-memory-v1`（HEAD `1779c71`）。
-- 当前切片：QQBot 旧测试与废弃验收基础设施清理；删除全部长期忽略且失真的聚合验收目标、
-  acceptance workflow/脚本/矩阵，以及依赖真实 QQ/NapCat 的旧人工测试；保留现行 Action
-  Planner、参与者因果、项目承诺 MySQL 聚焦测试和 NapCat 本地 mock 测试。
+- 当前分支：`claude/qqbot-cmd009-bounded-state-v1`。
+- 当前切片：`CMD-009` 跨阶段有界状态（`AgentWorkingContextV1` 版本化工作上下文）、长期事件
+  检索排序（SearchRecentEvents 可选时间窗/会话/线程/Actor 硬过滤 + 确定性排序 + LIKE 转义）与
+  冲突驱动回读（候选批准冲突结构化回执 → 恰好一次 L0 回读 → 冲突轮 allowlist）。实现、领域/LLM
+  MySQL 测试与文档同步已完成；Codex 已修复冲突路由、local_only 回读与工作上下文投影缺口，
+  独立复核通过，随本提交收口。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `CMD-009` 跨阶段有界状态、长期事件检索排序和冲突驱动回读。
+- 下一步：进入 `CMD-010` Owner 越权、提示注入和跨会话指代歧义的关键端到端防线。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -209,7 +211,27 @@
 - [x] `MEM-003/MEM-004-TEST`：3 个聚焦 MySQL 场景真实通过，覆盖项目跨账号与召回失效、
   完整 Owner 授权链与版本回滚、幂等重放、无期限不调度及批量 all-or-nothing。测试派生 schema
   名称已限制在 MySQL 64 字节内，可兼容正式验收脚本生成的较长基础名。
-- [ ] `CMD-009` 在 `AgentEventView` 上补齐跨阶段有界状态、长期事件检索排序和冲突驱动回读。
+- [x] `CMD-009` 跨阶段有界状态、长期事件检索排序和冲突驱动回读（详见 HISTORY 2026-08-03）：
+  - 目标 A：`AgentWorkingContextV1` 版本化有界工作上下文（证据/会话/线程/参与者/事实引用、
+    未解决指代、冲突上下文，逐项硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 +
+    `serde(default)` 兼容）；状态更新只经类型化 `SecretaryAgentUpdate`；Planner 只接收有界投影，
+    真实稳定 ID 不进入 LLM 输入（事件/会话/线程/参与者/事实分别映射为
+    `evt_N/conv_N/thread_N/actor_N/fact_N`，未登记引用 fail-closed）；状态更新在副本上完成并
+    校验后原子替换，非法或超限更新不会留下半更新状态。
+  - 目标 B：`SearchRecentEvents` 保持名称兼容，新增可选 `since/until/conversation/thread/actor`
+    硬过滤；未指定 since 时可检索 24 小时以前的长期事件（移除 24h 窗口限制）；
+    排序确定：硬过滤 → 文本相关性（前缀 > 包含）→ occurred_at DESC → source_event_id DESC；
+    LIKE `%`/`_`/转义符全部转义；始终账号隔离 + 撤回/内容策略过滤。
+  - 目标 C：候选批准冲突是确定性业务结果——结构化 `MemoryCandidateConflictResultV1` 回执、
+    候选保持 proposed 且版本不变、不覆盖/supersede/重放；`ReplanDecisionNode` 经
+    `MemoryUseCase::evidence` 执行一次 L0 回读（账号/Confirmed 事实状态/全来源有效复验，
+    远程模型拒绝 local_only 来源，任一不满足即 fail-closed），回读结果进入工作上下文并允许
+    恰好一次 Replan；冲突轮 PlanNode 结构性
+    allowlist（只允许 AskOwnerClarification / CorrectMemoryFact）；`load_with_sources` 排除
+    已撤回来源；响应渲染有界中文冲突说明，不含内部稳定 ID。
+  - 验证：领域 Graph 与 working_context 模块测试、LLM 映射测试（全部结构化引用真实 ID
+    不入模、未登记 fact_ref 拒绝）、2 个 CMD-009 隔离 MySQL 场景与 8 个 Action Planner
+    隔离 MySQL 场景真实通过；workspace boundaries 19/19；严格 Clippy 与格式检查通过。
 - [ ] `CMD-010` 完成 Owner 越权、提示注入和跨会话指代歧义的关键端到端防线；不建立庞大矩阵。
 
 ## 2. 可靠事件、空窗与恢复

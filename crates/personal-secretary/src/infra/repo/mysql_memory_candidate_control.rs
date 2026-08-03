@@ -75,11 +75,19 @@ impl ControlOutcome {
                 candidate_id.as_str(),
                 fact_id.as_str()
             ),
-            Self::ApproveConflict { fact_id, .. } => format!(
-                "记忆候选 {} 与既有记忆 {} 内容冲突，未做任何修改；请选择拒绝该候选或保留现状",
-                candidate_id.as_str(),
-                fact_id.as_str()
-            ),
+            // CMD-009 目标 C：冲突走结构化版本化回执（JSON），供 ReplanDecisionNode
+            // 解析后执行一次 L0 回读；摘要是有界中文说明，不含数据库 JSON。
+            Self::ApproveConflict { fact_id, .. } => {
+                serde_json::to_string(&crate::MemoryCandidateConflictResultV1 {
+                    version: 1,
+                    candidate_id: candidate_id.clone(),
+                    fact_id: fact_id.clone(),
+                    reason_code: crate::MemoryConflictReasonCode::ActiveFactPayloadDiffers,
+                    summary: "记忆候选与现行记忆内容冲突，未做任何修改；请选择拒绝该候选或保留现状"
+                        .into(),
+                })
+                .expect("MemoryCandidateConflictResultV1 serialization cannot fail")
+            }
             Self::Rejected { .. } => format!("记忆候选 {} 已拒绝", candidate_id.as_str()),
         }
     }

@@ -224,6 +224,8 @@ pub struct MemorySourceExcerpt {
     pub actor_id: String,
     pub occurred_at_unix_secs: i64,
     pub excerpt: String,
+    /// 来源正文的有效信任级别；远程模型必须据此拒绝 local_only 内容。
+    pub content_trust_level: ContentTrustLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

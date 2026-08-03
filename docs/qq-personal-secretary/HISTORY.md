@@ -7,11 +7,17 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`claude/qqbot-project-commitment-memory-v1`，HEAD `1779c71`。
-  2026-08-03 已完成 QQBot Schema Baseline v1 与项目/承诺记忆闭环，正在收口旧测试基础设施。
-- **本轮（MEM-003/MEM-004）**：项目记忆闭环 + 承诺生命周期闭环 v1 已完成；
-  2026-08-03 14:00（Asia/Shanghai）经 Codex 使用随机隔离 MySQL 独立复核，3/3 聚焦场景通过；
-  未连接真实 QQ/NapCat，已达到提交条件。
+- 当前开发分支：`claude/qqbot-cmd009-bounded-state-v1`。
+  2026-08-03 已完成 QQBot Schema Baseline v1、项目/承诺记忆闭环、旧测试基础设施清理与
+  CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）。
+- **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
+  上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
+  `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
+  排序确定（硬过滤 → 相关性前缀>包含 → 时间 → source_event_id，LIKE 全转义）；
+  记忆候选批准冲突改为结构化 `MemoryCandidateConflictResultV1` 回执 → 恰好一次 L0 回读 →
+  冲突轮 allowlist（AskOwnerClarification/CorrectMemoryFact），不覆盖/supersede/重放。
+  Codex 复核发现并修复冲突路由方向、local_only 冲突回读、结构化引用未完整投影、旧自由文本
+  反向泄露与半更新状态问题；聚焦 MySQL 复验通过，随本提交收口。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -46,6 +52,17 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-03 18:45（Asia/Shanghai）`：Codex 完成 CMD-009 独立复核。修复冲突上下文写入后
+  Router 反向结束导致第二轮 Planner 不可达、远程模型可能读取 local_only 事实来源、工作上下文
+  仅投影 fact_ref 而丢失 event/conversation/thread/actor refs、旧开放引用自由文本可能回放稳定 ID、
+  缺失账号与 Proposed 事实回读 fail-open、状态合并失败留下半更新，以及测试整数解码吞错。
+  `personal-secretary` 245/245、`qqbot-server` 121/121、workspace boundaries 19/19；随机隔离
+  MySQL 中 CMD-009 2/2、Action Planner 8/8 通过，schema 已清理；未连接真实 QQ/NapCat。
+
+- `2026-08-03 16:38（Asia/Shanghai）`：CMD-009 验证与文档同步完成，停在工作树等待 Codex
+  评审；未 commit/push/merge/stash。详见 [`history/2026-08.md`](history/2026-08.md)
+  同时间条目（实现、测试、验证与 Git 状态）。
 
 - `2026-08-03 14:41（Asia/Shanghai）`：开始并完成 QQBot 旧测试清理的文件级变更：删除
   10,287 行且 38 项全部默认忽略的 `mysql_ingestion.rs`、两套旧 acceptance 测试目标、真实

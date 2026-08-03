@@ -172,6 +172,22 @@ pub fn build_action_response_draft(
             Some(kind) if is_notification_policy_action(kind) => {
                 build_policy_response(kind, &receipt.result_ref)?
             }
+            // CMD-009 目标 C：结构化冲突回执渲染有界中文说明；回执中的内部
+            // 稳定 ID（fact_id/candidate_id）绝不出现在响应文本。解析失败
+            // （历史中文串格式）回退到原有摘要语义。
+            Some(SecretaryToolKind::ApproveMemoryCandidate) => {
+                match serde_json::from_str::<crate::MemoryCandidateConflictResultV1>(
+                    &receipt.result_ref,
+                ) {
+                    Ok(conflict) if conflict.version == 1 => vec![ResponseSegment::Summary {
+                        text: conflict_reason_cn(&conflict.reason_code, &conflict.summary),
+                    }],
+                    _ => {
+                        let text = format!("动作已执行：{}", receipt.result_ref);
+                        vec![ResponseSegment::Summary { text }]
+                    }
+                }
+            }
             _ => {
                 // 非策略 Action 或历史兼容（无 tool_kind）：保持原有语义
                 let text = format!("动作已执行：{}", receipt.result_ref);
@@ -304,6 +320,19 @@ fn build_mutation_segments(
         _ => "提醒规则已更新。",
     };
     vec![ResponseSegment::Summary { text: text.into() }]
+}
+
+/// 冲突原因码 → 有界中文说明。`summary` 本身已是有界文案，直接拼接使用；
+/// 不包含任何内部稳定 ID 或数据库 JSON。
+fn conflict_reason_cn(reason_code: &crate::MemoryConflictReasonCode, summary: &str) -> String {
+    use crate::MemoryConflictReasonCode::*;
+    let prefix = match reason_code {
+        ActiveFactPayloadDiffers => "记忆内容冲突",
+        ReReadSourcesInvalidated => "记忆来源已失效",
+        ReReadAccountMismatch => "记忆归属异常",
+        ReReadFailed => "记忆回读失败",
+    };
+    format!("{prefix}：{summary}")
 }
 
 /// 解析失败时的安全降级响应：不泄漏原始 `result_ref`。

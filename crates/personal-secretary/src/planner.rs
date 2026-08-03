@@ -12,9 +12,10 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ContentTrustLevel, ConversationRef, EventThreadId, MessageRole, PlatformIdentityKind,
-    RecentEventRef, SecretaryAction, SecretaryActionProposal, SecretaryToolKind, SourceAccountRef,
-    SourceEventId, ThreadActorRef, VerifiedActorKind,
+    ContentTrustLevel, ConversationRef, EventThreadId, MemoryCandidateId, MemoryFactId,
+    MessageRole, PlatformIdentityKind, RecentEventRef, SecretaryAction, SecretaryActionProposal,
+    SecretaryToolKind, SourceAccountRef, SourceEventId, ThreadActorRef, VerifiedActorKind,
+    WorkingContextProjection,
 };
 
 // ===== 有界常量 =====
@@ -283,6 +284,9 @@ pub struct PlannerToolObservation {
     /// Observation 版本，用于 JSON 持久化兼容。
     #[serde(default = "default_observation_version")]
     pub version: u8,
+    /// 观察结果是否指代歧义（来自 QueryEffectResultV1.ambiguous）。
+    #[serde(default)]
+    pub ambiguous: bool,
 }
 
 fn default_observation_version() -> u8 {
@@ -399,6 +403,9 @@ pub struct QueryEffectResultV1 {
     /// 不含稳定 ID 之外的正文——摘要文本必须从此字段构造，不得透传 `summary`。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typed_events: Vec<QueryEffectTypedEvent>,
+    /// 查询结果是否指代歧义（如 ResolveReference 多候选）。用于登记未解决指代。
+    #[serde(default)]
+    pub ambiguous: bool,
 }
 
 impl QueryEffectResultV1 {
@@ -412,8 +419,45 @@ impl QueryEffectResultV1 {
             summary: self.summary.clone(),
             version: 1,
             typed_events: self.typed_events.clone(),
+            ambiguous: self.ambiguous,
         }
     }
+}
+
+// ===== 记忆候选冲突回执（CMD-009 目标 C）=====
+
+/// 记忆候选批准冲突的类型化回执（写入 Effect Receipt 的 result_ref）。
+///
+/// 冲突是确定性业务结果而不是基础设施异常：不自动覆盖、不 supersede、不重放原批准；
+/// 携带现行 active fact 的内部引用、冲突 candidate 引用与有界原因码。
+/// Graph 的 ReplanDecision 节点解析本结构后通过 `MemoryUseCase::evidence`
+/// 执行一次 L0 回读（现行事实 + 有效来源），回读结果进入工作上下文并允许
+/// 恰好一次 Replan；整条路径只产生这一条原批准 Receipt，回读不重复写批准审计。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryCandidateConflictResultV1 {
+    /// 固定为 1。不可解析的旧回执按非冲突处理。
+    pub version: u8,
+    /// 冲突的候选引用（内部 ID）。
+    pub candidate_id: MemoryCandidateId,
+    /// 现行 active fact 的内部引用。
+    pub fact_id: MemoryFactId,
+    /// 有界原因码。
+    pub reason_code: crate::MemoryConflictReasonCode,
+    /// 有界中文冲突说明（预算耗尽 / 兜底响应文案；不含数据库 JSON 或稳定 ID）。
+    pub summary: String,
+}
+
+/// 冲突回读后的单次 Replan 轮次允许的动作（CMD-009 目标 C）。
+///
+/// 只能向 Owner 解释当前事实与冲突、请求澄清，或提议一个新的仍需 L2 审批的
+/// 修正动作（CorrectMemoryFact）；绝不能自动再次执行原 ApproveMemoryCandidate
+/// 或其他查询/写动作。结构上由 PlanNode 在冲突轮次强制本白名单。
+pub fn is_allowed_after_memory_conflict(action: &SecretaryAction) -> bool {
+    matches!(
+        action,
+        SecretaryAction::AskOwnerClarification { .. } | SecretaryAction::CorrectMemoryFact { .. }
+    )
 }
 
 /// Planner 输入。账号作用域严格限定，跨账号查询被拒绝。
@@ -432,6 +476,9 @@ pub struct PlannerInput {
     pub retrieved: Vec<PlannerRetrievedExcerpt>,
     /// Replan 过程中收集的工具观察。首次 Plan 为空。
     pub observations: Vec<PlannerToolObservation>,
+    /// 跨阶段有界工作上下文的投影（CMD-009 目标 A）。只含引用与有界文本；
+    /// LLM 适配层映射为临时引用后才进入模型输入。None = 旧状态无工作上下文。
+    pub working_context: Option<WorkingContextProjection>,
     /// 当前 Replan 轮次（0-based，首次 Plan 时为 0）。
     pub replan_round: u8,
     /// 剩余可用的查询工具执行次数。首次 Plan 时为 MAX_REPLAN_ROUNDS。
@@ -552,6 +599,11 @@ pub fn validate_planner_input(input: &PlannerInput) -> Result<(), PlannerError> 
             "replan_round {round} exceeds max {MAX_REPLAN_ROUNDS}",
             round = input.replan_round
         )));
+    }
+    // CMD-009 目标 A：工作上下文投影必须满足自身有界约束。
+    if let Some(projection) = &input.working_context {
+        crate::validate_working_context_projection(projection)
+            .map_err(|e| PlannerError::InvalidInput(format!("working_context: {e}")))?;
     }
     Ok(())
 }
@@ -761,6 +813,7 @@ mod tests {
             now_unix_secs: 1_000,
             retrieved: Vec::new(),
             observations: Vec::new(),
+            working_context: None,
             replan_round: 0,
             remaining_query_budget: MAX_REPLAN_ROUNDS,
         }
@@ -774,6 +827,11 @@ mod tests {
             &SecretaryAction::SearchRecentEvents {
                 query: "今天".into(),
                 limit: 20,
+                since_unix_secs: None,
+                until_unix_secs: None,
+                conversation: None,
+                thread_id: None,
+                actor_id: None,
             }
         ));
     }
@@ -934,6 +992,11 @@ mod tests {
             SecretaryAction::SearchRecentEvents {
                 query: "报价单".into(),
                 limit: 20,
+                since_unix_secs: None,
+                until_unix_secs: None,
+                conversation: None,
+                thread_id: None,
+                actor_id: None,
             },
             "用户要求检索最近事件",
             vec![SourceEventId::new("event-1").unwrap()],

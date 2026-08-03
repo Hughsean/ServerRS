@@ -300,7 +300,13 @@ impl MemoryStoreT for MySqlMemoryStore {
             DatabaseBackend::MySql,
             r#"SELECT event.source_event_id, conversation.conversation_kind,
                       conversation.platform_conversation_id, event.actor_platform_id,
-                      event.occurred_at_unix_secs, content.normalized_text
+                      event.occurred_at_unix_secs, content.normalized_text,
+                      CASE
+                        WHEN conversation.memory_mode = 'local_only'
+                          OR content.content_mode = 'local_only'
+                        THEN 'local_only'
+                        ELSE 'normal'
+                      END AS content_trust_level
                FROM secretary_memory_fact_sources source
                JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
                JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
@@ -308,6 +314,14 @@ impl MemoryStoreT for MySqlMemoryStore {
                WHERE source.fact_id = ?
                  AND conversation.memory_mode IN ('normal', 'local_only')
                  AND content.content_mode IN ('normal', 'local_only')
+                 -- CMD-009 目标 C：冲突回读的“来源有效”必须排除已撤回消息；
+                 -- 任一关键来源失效即 fail-closed，不把旧事实呈现为有效。
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_message_tombstones t
+                     WHERE t.source_event_id = event.source_event_id
+                       AND t.account_id = event.account_id
+                       AND t.status = 'applied'
+                 )
                ORDER BY event.occurred_at_unix_secs, event.source_event_id"#,
             [fact_id.as_str().into()],
         ))
@@ -327,6 +341,7 @@ impl MemoryStoreT for MySqlMemoryStore {
                     .chars()
                     .take(max_excerpt_chars as usize)
                     .collect(),
+                content_trust_level: parse_content_trust_level(&source.content_trust_level)?,
             })
         })
         .collect::<Result<Vec<_>, InboundEventStoreError>>()?;
@@ -552,6 +567,7 @@ struct MemoryExcerptRow {
     actor_platform_id: String,
     occurred_at_unix_secs: i64,
     normalized_text: String,
+    content_trust_level: String,
 }
 
 #[derive(Debug, FromQueryResult)]

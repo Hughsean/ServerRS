@@ -458,16 +458,33 @@ async fn mysql_action_planner_lease_expiry_allows_reclaim() {
 }
 
 /// 生成 SearchRecentEvents Proposal 的 Planner，用于测试 Effect 真正执行 Retriever。
-struct SearchActionPlanner;
+/// 第二轮返回 NoAction（真实 Planner 在拿到检索结果后会停止查询；Replan 循环
+/// 每一轮 Effect 都会以独立 effect_id 写入回执，退化 Planner 若每轮都返回查询
+/// 会重复执行同一查询并多写回执——这正是本 fixture 要避免的假象）。
+struct SearchActionPlanner {
+    calls: std::sync::Mutex<u8>,
+}
 
 #[async_trait]
 impl ActionPlannerT for SearchActionPlanner {
     async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        let mut calls = self.calls.lock().unwrap();
+        *calls += 1;
+        if *calls > 1 {
+            return Ok(PlannerOutput::NoAction {
+                reason: "已获取检索结果，无需继续查询".into(),
+            });
+        }
         Ok(PlannerOutput::Proposal(
             personal_secretary::SecretaryActionProposal::new(
                 personal_secretary::SecretaryAction::SearchRecentEvents {
                     query: "测试".into(),
                     limit: 20,
+                    since_unix_secs: None,
+                    until_unix_secs: None,
+                    conversation: None,
+                    thread_id: None,
+                    actor_id: None,
                 },
                 "测试检索",
                 Vec::new(),
@@ -531,7 +548,9 @@ async fn mysql_action_planner_retriever_effect_response_roundtrip() {
     let use_case = Arc::new(
         PlannerUseCase::with_clock(
             action_store.clone(),
-            Arc::new(SearchActionPlanner) as Arc<dyn ActionPlannerT>,
+            Arc::new(SearchActionPlanner {
+                calls: std::sync::Mutex::new(0),
+            }) as Arc<dyn ActionPlannerT>,
             placeholder_cp,
             60,
             Arc::new(FixedClock { now: 1_800_000_100 }),
@@ -1461,6 +1480,11 @@ impl ActionPlannerT for ReplanPlanner {
                     SecretaryAction::SearchRecentEvents {
                         query: "报价单".into(),
                         limit: 20,
+                        since_unix_secs: None,
+                        until_unix_secs: None,
+                        conversation: None,
+                        thread_id: None,
+                        actor_id: None,
                     },
                     "搜索报价单相关事件",
                     vec![input.command.source_event_id.clone()],

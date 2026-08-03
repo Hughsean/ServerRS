@@ -322,7 +322,8 @@ impl IdentityTrust {
 }
 
 /// 参与者引用（轻量，用于结果中引用而不内联完整身份）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 序列化能力用于工作上下文 Checkpoint 持久化（CMD-009 目标 A）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ParticipantRef {
     pub platform_kind: PlatformIdentityKind,
     pub stable_id: String,

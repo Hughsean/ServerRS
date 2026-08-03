@@ -45,6 +45,7 @@ pub struct SecretaryActionEffectExecutor {
     command_source_event_id: Option<SourceEventId>,
     account: SourceAccountRef,
     now_unix_secs: i64,
+    is_local_loopback: bool,
 }
 
 impl SecretaryActionEffectExecutor {
@@ -72,7 +73,14 @@ impl SecretaryActionEffectExecutor {
             command_source_event_id: None,
             account,
             now_unix_secs,
+            is_local_loopback: false,
         }
+    }
+
+    /// 注入经过运行时配置验证的本地模型标记；默认远程路径 fail-closed。
+    pub fn with_loopback(mut self, is_local_loopback: bool) -> Self {
+        self.is_local_loopback = is_local_loopback;
+        self
     }
 
     pub fn with_notification_policy(
@@ -775,19 +783,37 @@ impl SecretaryActionEffectExecutor {
                     Vec::new(),
                 )
             }
-            SecretaryAction::SearchRecentEvents { query, limit } => {
+            // CMD-009 目标 B：SearchRecentEvents 名称保留以兼容旧序列化，语义已扩展为
+            // 有界事件搜索。未指定 since 时允许检索 24 小时以前的长期事件（不暗中补
+            // 24h 下限）；显式 conversation/thread/actor 是硬过滤；until 不得无理由
+            // 越过可信当前时间（允许 60 秒时钟偏差）。
+            SecretaryAction::SearchRecentEvents {
+                query,
+                limit,
+                since_unix_secs,
+                until_unix_secs,
+                conversation,
+                thread_id,
+                actor_id,
+            } => {
+                if until_unix_secs.is_some_and(|until| until > self.now_unix_secs + 60) {
+                    return Err(EffectError::new(
+                        EffectErrorKind::Permanent,
+                        "search until_unix_secs must not exceed the trusted current time",
+                    ));
+                }
                 let event_query = EventQuery {
                     account: self.account.clone(),
-                    conversation: None,
-                    actor_id: None,
-                    thread_id: None,
-                    since_unix_secs: Some(self.now_unix_secs - 86_400),
-                    until_unix_secs: Some(self.now_unix_secs),
+                    conversation: conversation.clone(),
+                    actor_id: actor_id.clone(),
+                    thread_id: thread_id.clone(),
+                    since_unix_secs: *since_unix_secs,
+                    until_unix_secs: *until_unix_secs,
                     query_text: Some(query.clone()),
                     limit: *limit,
                 };
                 let results = retriever
-                    .search_events(&event_query, false)
+                    .search_events(&event_query, self.is_local_loopback)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
                 let event_ids: Vec<SourceEventId> =
@@ -881,11 +907,13 @@ impl SecretaryActionEffectExecutor {
                 } else {
                     format!("指代已解析：{}", resolution.evidence)
                 };
-                query_effect_json(
+                // 歧义标记进入回执，供 ReplanDecision 登记未解决指代（CMD-009 目标 A）。
+                query_effect_json_ambiguous(
                     SecretaryToolKind::ResolveReference,
                     &summary,
                     &[],
                     Vec::new(),
+                    resolution.ambiguous,
                 )
             }
             SecretaryAction::GetSecretaryStatus => {
@@ -1926,6 +1954,34 @@ fn query_effect_json(
     source_event_ids: &[SourceEventId],
     typed_events: Vec<QueryEffectTypedEvent>,
 ) -> Result<String, EffectError> {
+    build_query_effect_json(tool_kind, summary, source_event_ids, typed_events, false)
+}
+
+/// 带歧义标记的查询回执（如 ResolveReference 多候选）。歧义是确定性业务结果，
+/// 供 ReplanDecision 节点登记未解决指代。
+fn query_effect_json_ambiguous(
+    tool_kind: SecretaryToolKind,
+    summary: &str,
+    source_event_ids: &[SourceEventId],
+    typed_events: Vec<QueryEffectTypedEvent>,
+    ambiguous: bool,
+) -> Result<String, EffectError> {
+    build_query_effect_json(
+        tool_kind,
+        summary,
+        source_event_ids,
+        typed_events,
+        ambiguous,
+    )
+}
+
+fn build_query_effect_json(
+    tool_kind: SecretaryToolKind,
+    summary: &str,
+    source_event_ids: &[SourceEventId],
+    typed_events: Vec<QueryEffectTypedEvent>,
+    ambiguous: bool,
+) -> Result<String, EffectError> {
     let bounded_summary: String = summary.chars().take(2_000).collect();
     let result = QueryEffectResultV1 {
         version: 1,
@@ -1934,6 +1990,7 @@ fn query_effect_json(
         source_event_ids: source_event_ids.to_vec(),
         event_count: source_event_ids.len(),
         typed_events,
+        ambiguous,
     };
     serde_json::to_string(&result)
         .map_err(|e| EffectError::new(EffectErrorKind::Permanent, e.to_string()))

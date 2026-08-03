@@ -26,6 +26,11 @@ fn read_only_action_executes_without_suspension() {
         SecretaryAction::SearchRecentEvents {
             query: "老板今天找过我吗".into(),
             limit: 20,
+            since_unix_secs: None,
+            until_unix_secs: None,
+            conversation: None,
+            thread_id: None,
+            actor_id: None,
         },
         None,
     ))

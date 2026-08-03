@@ -9,6 +9,7 @@ mod approval;
 mod response;
 mod state;
 mod validation;
+mod working_context;
 
 pub use action::{
     FollowUpControlTarget, ResponseExpectationControlTarget, SecretaryAction,
@@ -25,6 +26,14 @@ pub use state::{SecretaryAgentPhase, SecretaryAgentState, SecretaryAgentUpdate};
 pub use validation::{
     SecretaryAgentRuntimeError, gate_secretary_action, validate_action_proposal,
     validate_response_draft,
+};
+pub use working_context::{
+    AgentWorkingContextV1, MAX_WORKING_BYTES, MAX_WORKING_EVIDENCE_REFS,
+    MAX_WORKING_OPEN_REFERENCES, MAX_WORKING_RESOLVED_CONVERSATIONS, MAX_WORKING_RESOLVED_FACTS,
+    MAX_WORKING_RESOLVED_PARTICIPANTS, MAX_WORKING_RESOLVED_THREADS, MAX_WORKING_TEXT_CHARS,
+    MemoryCandidateConflictContext, MemoryConflictReasonCode, OpenReference, OpenReferenceKind,
+    RetrievalTriggerKind, WorkingContextError, WorkingContextProjection, WorkingContextUpdate,
+    summarize_memory_payload, validate_working_context_projection,
 };
 
 #[cfg(test)]

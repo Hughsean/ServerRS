@@ -293,7 +293,8 @@ impl PlannerUseCase {
             self.retriever.clone(),
             claimed.account.clone(),
             self.clock.now_unix_secs(),
-        );
+        )
+        .with_loopback(self.is_local_loopback);
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),
@@ -352,6 +353,7 @@ impl PlannerUseCase {
             Arc::clone(&context),
             checkpoint_store,
             effect_executor,
+            self.memory.clone(),
         )
         .map_err(|e| PlannerUseCaseError::GraphRun(e.to_string()))?;
 
@@ -485,7 +487,8 @@ impl PlannerUseCase {
             self.retriever.clone(),
             claimed.account.clone(),
             self.clock.now_unix_secs(),
-        );
+        )
+        .with_loopback(self.is_local_loopback);
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),
@@ -546,6 +549,7 @@ impl PlannerUseCase {
             context,
             checkpoint_store.clone(),
             effect_executor,
+            self.memory.clone(),
         )
         .map_err(|e| PlannerUseCaseError::GraphRun(e.to_string()))?;
         let resumed_audit = serde_json::json!({

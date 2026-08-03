@@ -218,9 +218,28 @@ pub struct ResponseExpectationControlTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub enum SecretaryAction {
+    /// 有界事件搜索（CMD-009 目标 B）。名称保留 `SearchRecentEvents` 以兼容旧序列化，
+    /// 语义已扩展为有界事件搜索：未指定 `since_unix_secs` 时可检索 24 小时以前的
+    /// 长期事件，不暗中补 24 小时下限；排序确定（硬过滤 → 文本相关性 → 时间 →
+    /// source_event_id）。旧 JSON（只有 query/limit）通过 serde(default) 兼容。
     SearchRecentEvents {
         query: String,
         limit: u16,
+        /// 起始时间（Unix 秒，含）。None = 不限。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_unix_secs: Option<i64>,
+        /// 截止时间（Unix 秒，含）。None = 不限；指定时不得无理由越过可信当前时间。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_unix_secs: Option<i64>,
+        /// 会话硬过滤（账号作用域内；OwnerCommand 初始检索默认不限定会话）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationRef>,
+        /// 线程硬过滤。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<crate::EventThreadId>,
+        /// 发送者 Actor 稳定 ID 硬过滤。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor_id: Option<String>,
     },
     ReadSourceEvent {
         source_event_id: SourceEventId,

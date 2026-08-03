@@ -133,8 +133,35 @@ pub fn validate_action_proposal(
 
 fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntimeError> {
     match action {
-        SecretaryAction::SearchRecentEvents { query, limit }
-        | SecretaryAction::SearchEventThreads { query, limit } => {
+        SecretaryAction::SearchRecentEvents {
+            query,
+            limit,
+            since_unix_secs,
+            until_unix_secs,
+            conversation: _,
+            thread_id: _,
+            actor_id,
+        } => {
+            bounded_text("query", query, 1, 1_000)?;
+            if !(1..=100).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "search limit must be in 1..=100".into(),
+                ));
+            }
+            // 指定时间范围必须满足 since ≤ until（until 是否越过可信当前时间
+            // 由带时钟的 EffectExecutor 层校验）。
+            if let (Some(since), Some(until)) = (since_unix_secs, until_unix_secs)
+                && since > until
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "search since_unix_secs must not exceed until_unix_secs".into(),
+                ));
+            }
+            if let Some(actor) = actor_id {
+                bounded_text("actor_id", actor, 1, 191)?;
+            }
+        }
+        SecretaryAction::SearchEventThreads { query, limit } => {
             bounded_text("query", query, 1, 1_000)?;
             if !(1..=100).contains(limit) {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(
@@ -660,6 +687,15 @@ pub(super) fn validate_agent_state(
         return Err(SecretaryAgentRuntimeError::InvalidState(format!(
             "planning_observations total chars {total_chars} exceeds max {MAX_TOOL_OBSERVATION_TOTAL_CHARS}"
         )));
+    }
+    // CMD-009 目标 A：工作上下文（含 Checkpoint 反序列化的旧/异常数据）必须通过
+    // 有界校验；超限 fail-closed，杜绝绕过正常追加路径的越界状态。
+    if let Some(context) = state.working_context() {
+        super::working_context::AgentWorkingContextV1::validate(context).map_err(|error| {
+            SecretaryAgentRuntimeError::InvalidState(format!(
+                "working_context violates bounded limits: {error}"
+            ))
+        })?;
     }
     Ok(())
 }

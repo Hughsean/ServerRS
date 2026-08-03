@@ -303,11 +303,31 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             params.push(until.into());
         }
         if let Some(text) = &query.query_text {
-            sql.push_str(" AND m.normalized_text LIKE ?");
-            params.push(format!("%{text}%").into());
+            // CMD-009 目标 B：LIKE 通配符（% / _）与转义符全部转义，Owner 文本不能
+            // 改变匹配范围；排序按确定性四级：硬过滤（WHERE）→ 文本相关性等级 →
+            // occurred_at DESC → source_event_id DESC。
+            // 相关性：2 = normalized_text 以查询文本开头（前缀命中），1 = 包含命中。
+            let escaped = escape_like_pattern(text);
+            let prefix = format!("{escaped}%");
+            let contains = format!("%{escaped}%");
+            sql.push_str(" AND m.normalized_text LIKE ? ESCAPE '\\\\'");
+            params.push(contains.clone().into());
+            sql.push_str(
+                " ORDER BY \
+                 CASE \
+                   WHEN m.normalized_text LIKE ? ESCAPE '\\\\' THEN 2 \
+                   WHEN m.normalized_text LIKE ? ESCAPE '\\\\' THEN 1 \
+                   ELSE 0 \
+                 END DESC, \
+                 e.occurred_at_unix_secs DESC, e.source_event_id DESC LIMIT ?",
+            );
+            params.push(prefix.into());
+            params.push(contains.into());
+            params.push(query.limit.into());
+        } else {
+            sql.push_str(" ORDER BY e.occurred_at_unix_secs DESC, e.source_event_id DESC LIMIT ?");
+            params.push(query.limit.into());
         }
-        sql.push_str(" ORDER BY e.occurred_at_unix_secs DESC, e.source_event_id DESC LIMIT ?");
-        params.push(query.limit.into());
 
         let rows = EventSearchRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
@@ -1619,6 +1639,22 @@ pub(crate) async fn resolve_account_id(
             account.account_id
         ))
     })
+}
+
+/// 转义 LIKE 模式中的通配符（% / _）与转义符本身（CMD-009 目标 B）。
+/// Owner 提供的查询文本绝不能改变匹配范围：`%`、`_` 必须按字面匹配，
+/// 反斜杠必须先于通配符转义（否则 `\%` 会变成转义后的 `%` 字面量）。
+fn escape_like_pattern(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '%' => escaped.push_str("\\%"),
+            '_' => escaped.push_str("\\_"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 fn map_search_row(row: EventSearchRow) -> Result<EventSearchResult, InboundEventStoreError> {

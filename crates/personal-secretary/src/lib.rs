@@ -59,13 +59,18 @@ pub use agenda::{
 };
 pub use agenda_service::{AgendaApplyRequest, AgendaMutationReceipt, AgendaStoreT, AgendaUseCase};
 pub use agent_runtime::{
-    FollowUpControlTarget, OwnerResponseDraft, RecentEventRef, ResponseExpectationControlTarget,
-    ResponseSegment, SecretaryAction, SecretaryActionApprovalRequest, SecretaryActionEffect,
+    AgentWorkingContextV1, FollowUpControlTarget, MAX_WORKING_BYTES, MAX_WORKING_EVIDENCE_REFS,
+    MAX_WORKING_OPEN_REFERENCES, MAX_WORKING_RESOLVED_CONVERSATIONS, MAX_WORKING_RESOLVED_FACTS,
+    MAX_WORKING_RESOLVED_PARTICIPANTS, MAX_WORKING_RESOLVED_THREADS, MAX_WORKING_TEXT_CHARS,
+    MemoryCandidateConflictContext, MemoryConflictReasonCode, OpenReference, OpenReferenceKind,
+    OwnerResponseDraft, RecentEventRef, ResponseExpectationControlTarget, ResponseSegment,
+    RetrievalTriggerKind, SecretaryAction, SecretaryActionApprovalRequest, SecretaryActionEffect,
     SecretaryActionProposal, SecretaryActionReceipt, SecretaryActionResumeInput,
     SecretaryAgentPhase, SecretaryAgentRuntimeError, SecretaryAgentState, SecretaryAgentUpdate,
     SecretaryApprovalDecision, SecretaryRiskLevel, SecretaryToolKind, SecretaryToolPolicy,
-    build_action_response_draft, gate_secretary_action, validate_action_proposal,
-    validate_response_draft,
+    WorkingContextError, WorkingContextProjection, WorkingContextUpdate,
+    build_action_response_draft, gate_secretary_action, summarize_memory_payload,
+    validate_action_proposal, validate_response_draft, validate_working_context_projection,
 };
 pub use artifact::{
     ArtifactAvailability, ArtifactEnvelope, ArtifactError, ArtifactId, ArtifactKind,
@@ -150,13 +155,13 @@ pub use notification_policy_service::{
     OwnerBindingSnapshot, PolicyRuleSnapshot, authorize_notification_policy_action,
 };
 pub use planner::{
-    ActionPlannerT, AgentEventView, AgentEventViewError, Clock, PlannerCommandEvent, PlannerError,
-    PlannerInput, PlannerOutput, PlannerRetrievedExcerpt, PlannerToolObservation,
-    QueryEffectResultV1, QueryEffectTypedEvent, SystemClock, TimeParseError,
-    is_allowed_action_in_batch, is_replan_observation_tool, naive_to_unix,
-    parse_common_timezone_offset_secs, parse_datetime_with_timezone, parse_iso_datetime,
-    validate_agent_event_view, validate_planner_input, validate_planner_output,
-    validate_tool_observation,
+    ActionPlannerT, AgentEventView, AgentEventViewError, Clock, MemoryCandidateConflictResultV1,
+    PlannerCommandEvent, PlannerError, PlannerInput, PlannerOutput, PlannerRetrievedExcerpt,
+    PlannerToolObservation, QueryEffectResultV1, QueryEffectTypedEvent, SystemClock,
+    TimeParseError, is_allowed_action_in_batch, is_allowed_after_memory_conflict,
+    is_replan_observation_tool, naive_to_unix, parse_common_timezone_offset_secs,
+    parse_datetime_with_timezone, parse_iso_datetime, validate_agent_event_view,
+    validate_planner_input, validate_planner_output, validate_tool_observation,
 };
 pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
 pub use recall::{

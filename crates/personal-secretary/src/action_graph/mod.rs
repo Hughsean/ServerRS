@@ -57,6 +57,8 @@ pub fn build_action_graph(
     context: Arc<ActionRunContext>,
     checkpoint_store: Arc<dyn agent_core::graph::CheckpointStore<SecretaryAgentState>>,
     effect_executor: Arc<SecretaryActionEffectExecutor>,
+    // CMD-009 目标 C：冲突驱动回读依赖 MemoryUseCase 的 L0 证据读取。
+    memory: Option<Arc<crate::MemoryUseCase>>,
 ) -> Result<ActionGraphRuntime, ActionGraphError> {
     use agent_core::graph::{GraphDefinition, GraphId, GraphPolicy};
     use std::collections::BTreeMap;
@@ -73,8 +75,16 @@ pub fn build_action_graph(
     graph
         .add_node(Arc::new(L0ExecuteNode::new()?))
         .map_err(ActionGraphError::from_display)?;
+    let mut replan_node = ReplanDecisionNode::new()?;
+    if let Some(memory) = memory {
+        replan_node = replan_node.with_conflict_re_read(
+            memory,
+            context.account.clone(),
+            context.is_local_loopback,
+        );
+    }
     graph
-        .add_node(Arc::new(ReplanDecisionNode::new()?))
+        .add_node(Arc::new(replan_node))
         .map_err(ActionGraphError::from_display)?;
     graph
         .add_node(Arc::new(BuildResponseNode::new(Arc::clone(&context))?))

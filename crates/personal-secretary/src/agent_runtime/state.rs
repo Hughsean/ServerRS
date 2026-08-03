@@ -16,6 +16,9 @@ use super::validation::{
     SecretaryAgentRuntimeError, validate_action_proposal, validate_agent_state,
     validate_response_draft,
 };
+use super::working_context::{
+    AgentWorkingContextV1, WorkingContextError, WorkingContextProjection, WorkingContextUpdate,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +47,9 @@ pub enum SecretaryAgentUpdate {
     ResponseReady(OwnerResponseDraft),
     /// ReplanDecision 节点追加一条工具观察到状态。
     ObservationAppended(PlannerToolObservation),
+    /// 跨阶段工作上下文的类型化更新（CMD-009 目标 A）。节点不得绕过状态机
+    /// 偷偷修改状态，只能通过此更新进入。
+    WorkingContext(WorkingContextUpdate),
     PhaseChanged(SecretaryAgentPhase),
 }
 
@@ -65,6 +71,10 @@ pub struct SecretaryAgentState {
     /// Replan 过程中收集的工具观察。供下一轮 Planner 输入。
     #[serde(default)]
     planning_observations: Vec<PlannerToolObservation>,
+    /// 跨阶段有界工作上下文（CMD-009 目标 A）。只保存结构化引用与未决状态，
+    /// 不保存完整消息正文；旧 Checkpoint 缺少该字段时安全恢复为 None。
+    #[serde(default)]
+    working_context: Option<AgentWorkingContextV1>,
 }
 
 impl SecretaryAgentState {
@@ -85,6 +95,7 @@ impl SecretaryAgentState {
             response_draft: None,
             replan_round: 0,
             planning_observations: Vec::new(),
+            working_context: None,
         };
         validate_agent_state(&state)?;
         Ok(state)
@@ -130,6 +141,60 @@ impl SecretaryAgentState {
     /// Replan 过程中收集的工具观察。
     pub fn planning_observations(&self) -> &[PlannerToolObservation] {
         &self.planning_observations
+    }
+
+    /// 跨阶段有界工作上下文（旧 Checkpoint 为 None）。
+    pub fn working_context(&self) -> Option<&AgentWorkingContextV1> {
+        self.working_context.as_ref()
+    }
+
+    /// Planner 接收的有界工作上下文投影（内部真实 ID；LLM 适配层映射为临时引用）。
+    pub fn working_context_projection(&self) -> Option<WorkingContextProjection> {
+        self.working_context
+            .as_ref()
+            .map(AgentWorkingContextV1::projection)
+    }
+
+    /// 合并类型化工作上下文更新。合并后重新校验硬上限，超限 fail-closed。
+    fn apply_working_context_update(
+        &mut self,
+        update: WorkingContextUpdate,
+    ) -> Result<(), WorkingContextError> {
+        // 在副本上合并并校验，避免超限或非法更新返回错误后留下半更新状态。
+        let mut context = self.working_context.clone().unwrap_or_default();
+        match update {
+            WorkingContextUpdate::InitialRetrieval {
+                evidence_refs,
+                resolved_conversation_refs,
+                trigger,
+            } => {
+                context.merge_initial_retrieval(
+                    evidence_refs,
+                    resolved_conversation_refs,
+                    trigger,
+                )?;
+            }
+            WorkingContextUpdate::ReplanEvidence {
+                evidence_refs,
+                resolved_thread_refs,
+                resolved_participant_refs,
+                resolved_fact_refs,
+                open_references,
+            } => {
+                context.merge_replan_evidence(
+                    evidence_refs,
+                    resolved_thread_refs,
+                    resolved_participant_refs,
+                    resolved_fact_refs,
+                    open_references,
+                )?;
+            }
+            WorkingContextUpdate::ConflictReRead(conflict) => {
+                context.merge_conflict(conflict)?;
+            }
+        }
+        self.working_context = Some(context);
+        Ok(())
     }
 }
 
@@ -217,6 +282,12 @@ impl AgentBusinessState for SecretaryAgentState {
                 self.planning_observations.push(obs);
                 self.replan_round = self.replan_round.saturating_add(1);
                 self.phase = SecretaryAgentPhase::UpdateState;
+            }
+            // CMD-009 目标 A：工作上下文只通过类型化更新进入状态机；合并后重新
+            // 校验硬上限，超限 fail-closed（不做静默截断）。
+            SecretaryAgentUpdate::WorkingContext(update) => {
+                self.apply_working_context_update(update)
+                    .map_err(|error| AgentStateError::Business(error.to_string()))?;
             }
             SecretaryAgentUpdate::PhaseChanged(phase) => self.phase = phase,
         }
