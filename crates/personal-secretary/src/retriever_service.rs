@@ -8,11 +8,13 @@ use thiserror::Error;
 
 use crate::planner::AgentEventView;
 use crate::{
-    Clock, ContentTrustLevel, EventQuery, EventSearchResult, EventThreadId, InboundEventStoreError,
+    AccountScopedParticipantRef, Clock, ContentTrustLevel, ConversationRef, EventCausalContextView,
+    EventQuery, EventSearchResult, EventThreadId, InboundEventStoreError, ParticipantContextView,
     PendingOwnerWorkItem, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
-    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SystemClock, ThreadContextView,
-    ThreadSearchResult, UpcomingItem, filter_for_model, resolve_reference_from_candidates,
-    validate_event_query,
+    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, SystemClock,
+    ThreadContextView, ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
+    check_participant_permission_boundary, filter_for_model, resolve_reference_from_candidates,
+    validate_causal_context, validate_event_query, validate_participant_context,
 };
 
 /// Retriever 内容策略（约束 6/7）。默认 `allow_local_only_to_loopback_llm = false`（保守安全）。
@@ -169,6 +171,123 @@ impl RetrieverUseCase {
         Ok(self.store.thread_context(account, thread_id).await?)
     }
 
+    /// 构建单事件的账号作用域因果上下文（THR-011/THR-012）。
+    /// 结果必须先通过有界校验与严格角色语义校验；违例 fail-closed，
+    /// 绝不让低置信语义伪装成已确认角色进入调用方。
+    pub async fn event_causal_context(
+        &self,
+        account: &SourceAccountRef,
+        source_event_id: &SourceEventId,
+    ) -> Result<Option<EventCausalContextView>, RetrieverUseCaseError> {
+        let view = self
+            .store
+            .event_causal_context(account, source_event_id)
+            .await?;
+        if let Some(ref view) = view {
+            validate_causal_context(view).map_err(RetrieverUseCaseError::Domain)?;
+            let violations = check_causal_role_strictness(view);
+            if !violations.is_empty() {
+                return Err(RetrieverUseCaseError::Domain(RetrieverError::InvalidData(
+                    format!(
+                        "causal role strictness violations: {}",
+                        violations.join("; ")
+                    ),
+                )));
+            }
+        }
+        Ok(view)
+    }
+
+    /// 构建参与者的账号作用域上下文（ID-004/ID-005/MEM-002）。
+    /// 权限边界校验 fail-closed：昵称/群角色/推断身份产生的权限描述会被拒绝。
+    pub async fn participant_context(
+        &self,
+        account: &SourceAccountRef,
+        actor_id: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, RetrieverUseCaseError> {
+        if actor_id.trim().is_empty() {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "actor_id must not be empty".into(),
+            ));
+        }
+        let view = self
+            .store
+            .participant_context(account, actor_id, conversation, thread_id)
+            .await?;
+        if let Some(ref view) = view {
+            validate_participant_context(view).map_err(RetrieverUseCaseError::Domain)?;
+            let violations = check_participant_permission_boundary(view);
+            if !violations.is_empty() {
+                return Err(RetrieverUseCaseError::Domain(RetrieverError::InvalidData(
+                    format!(
+                        "participant permission boundary violations: {}",
+                        violations.join("; ")
+                    ),
+                )));
+            }
+        }
+        Ok(view)
+    }
+
+    /// 按完整账号作用域参与者引用（账号 + 身份种类 + 稳定 ID）读取上下文。
+    /// 调用方已解析出身份种类（如按名查询的唯一候选）时使用本方法，避免
+    /// 宽松按 ID 查询在跨命名空间场景下的歧义拒绝。校验与权限边界同
+    /// [`Self::participant_context`]。
+    pub async fn participant_context_by_ref(
+        &self,
+        participant: &AccountScopedParticipantRef,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, RetrieverUseCaseError> {
+        if participant.stable_id().trim().is_empty() {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "participant stable_id must not be empty".into(),
+            ));
+        }
+        let view = self
+            .store
+            .participant_context_by_ref(participant, conversation, thread_id)
+            .await?;
+        if let Some(ref view) = view {
+            validate_participant_context(view).map_err(RetrieverUseCaseError::Domain)?;
+            let violations = check_participant_permission_boundary(view);
+            if !violations.is_empty() {
+                return Err(RetrieverUseCaseError::Domain(RetrieverError::InvalidData(
+                    format!(
+                        "participant permission boundary violations: {}",
+                        violations.join("; ")
+                    ),
+                )));
+            }
+        }
+        Ok(view)
+    }
+
+    /// 按显示名/别名/群名片有界解析参与者候选（THR-013 复合查询第一阶段）。
+    /// 只做指代解析，绝不用于授权；名称必须是有效的非空有界输入。
+    pub async fn participants_by_display_name(
+        &self,
+        account: &SourceAccountRef,
+        name: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+        limit: u16,
+    ) -> Result<Vec<AccountScopedParticipantRef>, RetrieverUseCaseError> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 200 {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "name must be non-empty and bounded to 200 chars".into(),
+            ));
+        }
+        let limit = limit.clamp(1, 5);
+        Ok(self
+            .store
+            .participants_by_display_name(account, name, conversation, thread_id, limit)
+            .await?)
+    }
+
     /// 解析指代。Store 返回候选，用例层判定唯一/歧义/无结果。
     pub async fn resolve_reference(
         &self,
@@ -295,6 +414,40 @@ mod tests {
             _thread_id: &EventThreadId,
         ) -> Result<Option<ThreadContextView>, InboundEventStoreError> {
             Ok(None)
+        }
+        async fn event_causal_context(
+            &self,
+            _account: &SourceAccountRef,
+            _source_event_id: &SourceEventId,
+        ) -> Result<Option<EventCausalContextView>, InboundEventStoreError> {
+            Ok(None)
+        }
+        async fn participant_context(
+            &self,
+            _account: &SourceAccountRef,
+            _actor_id: &str,
+            _conversation: Option<&ConversationRef>,
+            _thread_id: Option<&EventThreadId>,
+        ) -> Result<Option<ParticipantContextView>, InboundEventStoreError> {
+            Ok(None)
+        }
+        async fn participant_context_by_ref(
+            &self,
+            _participant: &AccountScopedParticipantRef,
+            _conversation: Option<&ConversationRef>,
+            _thread_id: Option<&EventThreadId>,
+        ) -> Result<Option<ParticipantContextView>, InboundEventStoreError> {
+            Ok(None)
+        }
+        async fn participants_by_display_name(
+            &self,
+            _account: &SourceAccountRef,
+            _name: &str,
+            _conversation: Option<&ConversationRef>,
+            _thread_id: Option<&EventThreadId>,
+            _limit: u16,
+        ) -> Result<Vec<AccountScopedParticipantRef>, InboundEventStoreError> {
+            Ok(Vec::new())
         }
     }
 

@@ -1,9 +1,11 @@
 use personal_secretary::{
     ContentSegment, ConversationKind, ConversationRef, InboundMessageEnvelope, MediaKind,
-    MessageSource, RichContentKind, SourceMessageRef, VerifiedActor, VerifiedActorKind,
+    MessageSource, ObservedSenderProfile, RichContentKind, SourceMessageRef, VerifiedActor,
+    VerifiedActorKind,
 };
 use qqbot::napcat::{
     GroupMessageEvent, MessageSegment as NapCatMessageSegment, NapCatError, PrivateMessageEvent,
+    SenderInfo,
 };
 
 /// 把 NapCat 协议身份映射到个人秘书的统一消息边界。
@@ -29,6 +31,7 @@ impl NapCatInboundMapper {
             event.time,
             event.normalized_text,
             event.segments,
+            event.sender,
         )
     }
 
@@ -45,6 +48,7 @@ impl NapCatInboundMapper {
             event.time,
             event.normalized_text,
             event.segments,
+            event.sender,
         )
     }
 
@@ -59,6 +63,7 @@ impl NapCatInboundMapper {
         occurred_at_unix_secs: i64,
         normalized_text: String,
         segments: Vec<NapCatMessageSegment>,
+        sender: Option<SenderInfo>,
     ) -> Result<InboundMessageEnvelope, NapCatError> {
         let actor_id = if is_self {
             self.self_qq_id
@@ -81,7 +86,18 @@ impl NapCatInboundMapper {
             occurred_at_unix_secs,
             normalized_text,
             segments,
+            sender.map(sender_profile_from_sender_info),
         )
+    }
+}
+
+/// 协议发送者资料 → 观察档案。昵称缺失时保留空串（仅显示，不授权），
+/// 群角色保留协议原值，由领域层 `GroupRole::parse_protocol` 解析。
+fn sender_profile_from_sender_info(sender: SenderInfo) -> ObservedSenderProfile {
+    ObservedSenderProfile {
+        nickname: sender.nickname.chars().take(200).collect(),
+        group_card: sender.card.map(|card| card.chars().take(200).collect()),
+        group_role: sender.role.map(|role| role.chars().take(16).collect()),
     }
 }
 
@@ -100,6 +116,7 @@ pub(crate) fn map_core(
     occurred_at_unix_secs: i64,
     normalized_text: String,
     segments: Vec<NapCatMessageSegment>,
+    sender_profile: Option<ObservedSenderProfile>,
 ) -> Result<InboundMessageEnvelope, NapCatError> {
     InboundMessageEnvelope::new(
         SourceMessageRef::new(MessageSource::NapCat, self_qq_id.to_string(), message_id)
@@ -111,6 +128,8 @@ pub(crate) fn map_core(
         normalized_text,
         map_segments(segments),
     )
+    .map_err(map_identity_error)?
+    .with_sender_profile(sender_profile)
     .map_err(map_identity_error)
 }
 

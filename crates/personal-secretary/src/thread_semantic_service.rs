@@ -283,6 +283,7 @@ mod tests {
                 actor: ThreadActorRef {
                     account: account.clone(),
                     actor_id: format!("actor-{index}"),
+                    platform_identity_kind: None,
                 },
                 role: MessageRole::ExternalObservation,
                 occurred_at_unix_secs: index as i64,

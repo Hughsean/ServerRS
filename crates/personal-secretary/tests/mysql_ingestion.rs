@@ -929,6 +929,7 @@ async fn structured_memory_is_source_backed_versioned_private_and_expirable() {
         subject_key: "person:alice".into(),
         payload: MemoryPayload::Person(PersonMemory {
             person: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
@@ -1004,10 +1005,12 @@ async fn structured_memory_is_source_backed_versioned_private_and_expirable() {
         subject_key: "commitment:send-quote".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "owner".into(),
             },
@@ -1067,6 +1070,7 @@ async fn structured_memory_is_source_backed_versioned_private_and_expirable() {
         subject_key: "person:private".into(),
         payload: MemoryPayload::Person(PersonMemory {
             person: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed,
                 actor_id: "private-person".into(),
             },
@@ -1130,10 +1134,12 @@ async fn memory_evidence_owner_delete_and_follow_up_outbox_form_a_closed_loop() 
         subject_key: "commitment:quote-delivery".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed,
                 actor_id: "owner".into(),
             },
@@ -1685,10 +1691,12 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         subject_key: "commitment:foreign-outbox".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: foreign_account.clone(),
                 actor_id: "bob".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: foreign_account.clone(),
                 actor_id: "foreign-owner".into(),
             },
@@ -1710,10 +1718,12 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         subject_key: "commitment:outbox-unknown".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "owner".into(),
             },
@@ -1868,10 +1878,12 @@ async fn notification_outbox_fences_leases_and_stops_on_unknown_commit() {
         subject_key: "commitment:outbox-delivered".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "owner".into(),
             },
@@ -2185,10 +2197,12 @@ async fn legacy_reconciliation_rebuilds_only_current_follow_up_sources_and_block
         subject_key: "commitment:task7-reconcile".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: account.clone(),
                 actor_id: "owner".into(),
             },
@@ -3770,10 +3784,12 @@ async fn owner_approved_dismiss_follow_up_full_flow_with_version_fencing() {
         subject_key: "commitment:dismiss-quote".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "owner".into(),
             },
@@ -4080,10 +4096,12 @@ async fn owner_approved_dismiss_follow_up_full_flow_with_version_fencing() {
         subject_key: "commitment:dismiss-design".into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "owner".into(),
             },
@@ -4321,10 +4339,12 @@ async fn commitment_follow_up_fixture(
         subject_key: subject_key.into(),
         payload: MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "owner".into(),
             },
@@ -8829,6 +8849,7 @@ async fn memory_candidate_approval_rejects_cross_account_version_and_stale_sourc
         "person:alice",
         MemoryPayload::Person(PersonMemory {
             person: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
@@ -8863,10 +8884,12 @@ async fn memory_candidate_approval_rejects_cross_account_version_and_stale_sourc
     let commitment_payload = |action: &str| {
         MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "bob".into(),
             },
@@ -8917,10 +8940,12 @@ async fn memory_candidate_approval_rejects_cross_account_version_and_stale_sourc
         "commitment:bob:alice:拒绝测试",
         MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "bob".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
@@ -9201,10 +9226,12 @@ async fn memory_candidate_approval_rejects_cross_account_version_and_stale_sourc
             subject_key: "commitment:alice:bob:冲突测试".into(),
             payload: MemoryPayload::Commitment(CommitmentMemory {
                 promisor: ThreadActorRef {
+                    platform_identity_kind: None,
                     account: managed.clone(),
                     actor_id: "alice".into(),
                 },
                 beneficiary: ThreadActorRef {
+                    platform_identity_kind: None,
                     account: managed.clone(),
                     actor_id: "bob".into(),
                 },
@@ -9507,6 +9534,7 @@ async fn memory_candidate_approve_rejects_mismatched_source_actor() {
         "person:alice",
         MemoryPayload::Person(PersonMemory {
             person: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
@@ -9896,10 +9924,12 @@ async fn memory_candidate_approve_referenced_merges_new_sources() {
     let payload = || {
         MemoryPayload::Commitment(CommitmentMemory {
             promisor: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "alice".into(),
             },
             beneficiary: ThreadActorRef {
+                platform_identity_kind: None,
                 account: managed.clone(),
                 actor_id: "bob".into(),
             },

@@ -10,16 +10,17 @@ use agent_core::graph::{EffectEnvelope, EffectError, EffectErrorKind, EffectExec
 use async_trait::async_trait;
 
 use crate::{
-    AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase, ConversationMemoryModeInput,
-    EventQuery, FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlUseCase,
-    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
-    MemoryCandidateControlUseCase, MemoryCandidateUseCase, MemoryDeleteInput, MemoryFact,
-    MemoryFactId, MemoryFactStatus, MemoryUseCase, NotificationPolicyEffectRequest,
-    NotificationPolicyUseCase, QueryEffectResultV1, QueryEffectTypedEvent, ReferenceContext,
-    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
-    ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
-    SecretaryActionReceipt, SecretaryToolKind, SourceAccountRef, SourceEventId,
-    ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
+    AccountScopedParticipantRef, AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase,
+    ConversationMemoryModeInput, EventQuery, FollowUpControlEffectRequest,
+    FollowUpControlStoreError, FollowUpControlUseCase, MemoryCandidateControlEffectRequest,
+    MemoryCandidateControlStoreError, MemoryCandidateControlUseCase, MemoryCandidateUseCase,
+    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
+    NotificationPolicyEffectRequest, NotificationPolicyUseCase, QueryEffectResultV1,
+    QueryEffectTypedEvent, ReferenceContext, ResponseExpectationControlEffectRequest,
+    ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
+    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SecretaryToolKind,
+    SourceAccountRef, SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError,
+    ThreadControlUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -728,6 +729,9 @@ impl SecretaryActionEffectExecutor {
                     .map(|r| QueryEffectTypedEvent {
                         source_event_id: r.source_event_id.clone(),
                         actor_id: r.actor.id.clone(),
+                        actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
+                            r.actor.kind,
+                        ),
                         occurred_at_unix_secs: r.occurred_at_unix_secs,
                         excerpt: r.excerpt.chars().take(120).collect(),
                     })
@@ -757,6 +761,9 @@ impl SecretaryActionEffectExecutor {
                         vec![QueryEffectTypedEvent {
                             source_event_id: d.source_event_id.clone(),
                             actor_id: d.actor.id.clone(),
+                            actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
+                                d.actor.kind,
+                            ),
                             occurred_at_unix_secs: d.occurred_at_unix_secs,
                             excerpt: d.normalized_text.chars().take(120).collect(),
                         }],
@@ -849,6 +856,127 @@ impl SecretaryActionEffectExecutor {
                 };
                 query_effect_json(
                     SecretaryToolKind::GetThreadContext,
+                    &summary,
+                    &[],
+                    Vec::new(),
+                )
+            }
+            SecretaryAction::GetEventCausalContext { source_event_id } => {
+                let view = retriever
+                    .event_causal_context(&self.account, source_event_id)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                let Some(view) = view else {
+                    return query_effect_json(
+                        SecretaryToolKind::GetEventCausalContext,
+                        &format!("未找到当前账号下的事件 {}", source_event_id.as_str()),
+                        &[],
+                        Vec::new(),
+                    );
+                };
+                let (summary, event_ids, typed_events) = format_causal_context(&view);
+                query_effect_json(
+                    SecretaryToolKind::GetEventCausalContext,
+                    &summary,
+                    &event_ids,
+                    typed_events,
+                )
+            }
+            SecretaryAction::GetParticipantContext {
+                actor_kind,
+                actor_id,
+                conversation_ref,
+                thread_id,
+            } => {
+                // 完整三元组身份（账号 + 身份种类 + 稳定 ID）从 actor_ref 恢复；
+                // 上下文按三元组精确读取，不触发宽松查询的跨命名空间歧义拒绝。
+                let participant_ref = AccountScopedParticipantRef::new(
+                    self.account.clone(),
+                    *actor_kind,
+                    actor_id.clone(),
+                    crate::IdentityTrust::Observed,
+                )
+                .map_err(|e| EffectError::new(EffectErrorKind::Permanent, format!("{e}")))?;
+                let view = retriever
+                    .participant_context_by_ref(
+                        &participant_ref,
+                        conversation_ref.as_ref(),
+                        thread_id.as_ref(),
+                    )
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                let Some(view) = view else {
+                    return query_effect_json(
+                        SecretaryToolKind::GetParticipantContext,
+                        &format!("未找到当前账号内参与者 {actor_id} 的证据"),
+                        &[],
+                        Vec::new(),
+                    );
+                };
+                let (summary, event_ids, typed_events) = format_participant_context(&view);
+                query_effect_json(
+                    SecretaryToolKind::GetParticipantContext,
+                    &summary,
+                    &event_ids,
+                    typed_events,
+                )
+            }
+            SecretaryAction::GetParticipantContextByName {
+                name,
+                conversation_ref,
+                thread_id,
+            } => {
+                // 复合查询：先按显示名/别名/群名片有界解析（账号作用域），唯一候选再
+                // 读取完整上下文；零候选/多候选返回有界摘要，不投影稳定 ID。
+                let candidates = retriever
+                    .participants_by_display_name(
+                        &self.account,
+                        name,
+                        conversation_ref.as_ref(),
+                        thread_id.as_ref(),
+                        5,
+                    )
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                if candidates.is_empty() {
+                    return query_effect_json(
+                        SecretaryToolKind::GetParticipantContextByName,
+                        &format!("未找到显示名或别名匹配「{name}」的参与者"),
+                        &[],
+                        Vec::new(),
+                    );
+                }
+                if candidates.len() == 1 {
+                    // 候选是完整账号作用域参与者引用（含身份种类）：上下文按三元组
+                    // 精确读取，同 ID 不同身份命名空间并存时不会触发歧义拒绝。
+                    let actor_id = candidates[0].stable_id().to_owned();
+                    let view = retriever
+                        .participant_context_by_ref(
+                            &candidates[0],
+                            conversation_ref.as_ref(),
+                            thread_id.as_ref(),
+                        )
+                        .await
+                        .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                    let Some(view) = view else {
+                        return query_effect_json(
+                            SecretaryToolKind::GetParticipantContextByName,
+                            &format!("已解析到参与者 {actor_id}，但当前账号内无上下文证据"),
+                            &[],
+                            Vec::new(),
+                        );
+                    };
+                    let (summary, event_ids, typed_events) = format_participant_context(&view);
+                    return query_effect_json(
+                        SecretaryToolKind::GetParticipantContextByName,
+                        &summary,
+                        &event_ids,
+                        typed_events,
+                    );
+                }
+                let summary = format_participant_candidates(&candidates);
+                query_effect_json(
+                    SecretaryToolKind::GetParticipantContextByName,
                     &summary,
                     &[],
                     Vec::new(),
@@ -1378,6 +1506,241 @@ fn format_thread_context(context: &crate::ThreadContextView) -> String {
             question.raised_by_actor_id,
             question.question.chars().take(80).collect::<String>()
         );
+        append_bounded_line(&mut output, &line);
+    }
+    output
+}
+
+/// 格式化事件因果上下文（THR-011/THR-012）。summary 为安全中文（显示名优先），
+/// 稳定 ID 只通过 typed_events 交给投影层映射为临时引用，绝不直接发给 LLM。
+fn format_causal_context(
+    view: &crate::EventCausalContextView,
+) -> (String, Vec<SourceEventId>, Vec<QueryEffectTypedEvent>) {
+    let mut output = String::new();
+    let mut typed_events: Vec<QueryEffectTypedEvent> = Vec::new();
+    let mut push_typed = |actor_id: String,
+                          actor_kind: crate::PlatformIdentityKind,
+                          source_event_id: SourceEventId,
+                          excerpt: &str| {
+        if typed_events.len() < 20 {
+            typed_events.push(QueryEffectTypedEvent {
+                source_event_id,
+                actor_id,
+                actor_kind,
+                occurred_at_unix_secs: 0,
+                excerpt: excerpt.chars().take(120).collect(),
+            });
+        }
+    };
+
+    if let Some(ref sender) = view.sender {
+        let name = sender
+            .display_name
+            .clone()
+            .unwrap_or_else(|| "（无显示名）".into());
+        let line = format!(
+            "\n发送者: {}（{}）",
+            name.chars().take(40).collect::<String>(),
+            sender.platform_kind.as_str()
+        );
+        append_bounded_line(&mut output, &line);
+        push_typed(
+            sender.stable_id.clone(),
+            sender.platform_kind,
+            view.source_event_id.clone(),
+            "事件发送者",
+        );
+    }
+    if let Some(ref parent) = view.reply_parent {
+        let name = parent
+            .sender
+            .as_ref()
+            .and_then(|s| s.display_name.clone())
+            .unwrap_or_else(|| "（无显示名）".into());
+        let line = format!("\n回复对象: {}", name.chars().take(40).collect::<String>());
+        append_bounded_line(&mut output, &line);
+        if let Some(ref sender) = parent.sender {
+            push_typed(
+                sender.stable_id.clone(),
+                sender.platform_kind,
+                parent.source_event_id.clone(),
+                "被回复的父事件发送者",
+            );
+        }
+    }
+    if let Some(ref thread) = view.thread {
+        let line = format!(
+            "\n所属线程: {}（{:?}，{} 条事件）",
+            thread.thread_id.as_str(),
+            thread.status,
+            view.participants.len()
+        );
+        append_bounded_line(&mut output, &line);
+        if let Some(ref root) = thread.root_sender {
+            let name = root
+                .display_name
+                .clone()
+                .unwrap_or_else(|| "（无显示名）".into());
+            let root_line = format!(
+                "\n线程发起人: {}",
+                name.chars().take(40).collect::<String>()
+            );
+            append_bounded_line(&mut output, &root_line);
+            push_typed(
+                root.stable_id.clone(),
+                root.platform_kind,
+                thread.root_event_id.clone(),
+                "线程发起人（根事件发送者）",
+            );
+        }
+    }
+    for participant in &view.mentioned {
+        let line = format!(
+            "\n被@参与者: {}",
+            participant
+                .identity
+                .display_name
+                .clone()
+                .unwrap_or_else(|| participant.stable_id().chars().take(20).collect())
+                .chars()
+                .take(40)
+                .collect::<String>()
+        );
+        append_bounded_line(&mut output, &line);
+        push_typed(
+            participant.stable_id().to_owned(),
+            participant.identity.platform_kind,
+            view.source_event_id.clone(),
+            "被@到的参与者（提及不等于指派）",
+        );
+    }
+    for (label, list) in [
+        ("已确认要求者", &view.requesters),
+        ("已确认负责人", &view.assignees),
+        ("已确认承诺人", &view.promisors),
+        ("已确认受益方", &view.beneficiaries),
+    ] {
+        for participant in list {
+            let line = format!(
+                "\n{label}: {}",
+                participant
+                    .identity
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| participant.stable_id().chars().take(20).collect())
+                    .chars()
+                    .take(40)
+                    .collect::<String>()
+            );
+            append_bounded_line(&mut output, &line);
+            push_typed(
+                participant.stable_id().to_owned(),
+                participant.identity.platform_kind,
+                view.source_event_id.clone(),
+                label,
+            );
+        }
+    }
+    if view.ambiguous {
+        append_bounded_line(&mut output, "\n语义存在歧义，需要 Owner 澄清");
+    }
+    append_bounded_line(
+        &mut output,
+        &format!("\n来源事件 {} 条", view.source_refs.len()),
+    );
+
+    let event_ids = view.source_refs.clone();
+    (output, event_ids, typed_events)
+}
+
+/// 格式化参与者上下文（ID-004/ID-005/MEM-002）。summary 为安全中文；
+/// 属性来源事件在 typed_events 中投影，LLM 只看到临时引用。
+fn format_participant_context(
+    view: &crate::ParticipantContextView,
+) -> (String, Vec<SourceEventId>, Vec<QueryEffectTypedEvent>) {
+    let mut output = format!(
+        "参与者: {}（{}）| 群角色: {}",
+        view.display_name
+            .clone()
+            .unwrap_or_else(|| view.participant.stable_id().chars().take(20).collect())
+            .chars()
+            .take(40)
+            .collect::<String>(),
+        view.participant.identity.platform_kind.as_str(),
+        view.group_role.as_str()
+    );
+    if let Some(ref card) = view.group_card {
+        let line = format!("\n群名片: {}", card.chars().take(40).collect::<String>());
+        append_bounded_line(&mut output, &line);
+    }
+    if !view.aliases.is_empty() {
+        let line = format!(
+            "\n历史别名: {}",
+            view.aliases
+                .iter()
+                .take(3)
+                .map(|alias| alias.chars().take(30).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+        append_bounded_line(&mut output, &line);
+    }
+    for attribute in view.attributes.iter().take(5) {
+        let line = format!(
+            "\n{}: {}",
+            attribute.kind.as_str(),
+            attribute.value.chars().take(60).collect::<String>()
+        );
+        append_bounded_line(&mut output, &line);
+    }
+    if view.expired_or_invalidated {
+        append_bounded_line(&mut output, "\n该参与者的档案已失效或来源已被召回");
+    }
+
+    // typed_events：属性携带来源时投影；无来源的属性只出现在摘要（不对 LLM 投影）。
+    let mut event_ids: Vec<SourceEventId> = view.related_event_ids.clone();
+    let mut typed_events: Vec<QueryEffectTypedEvent> = Vec::new();
+    for attribute in view.attributes.iter() {
+        let Some(source) = attribute.source_event_ids.first() else {
+            continue;
+        };
+        if !event_ids.iter().any(|existing| existing == source) {
+            event_ids.push(source.clone());
+        }
+        event_ids.truncate(10);
+        if typed_events.len() < 10 {
+            typed_events.push(QueryEffectTypedEvent {
+                source_event_id: source.clone(),
+                actor_id: view.participant.stable_id().to_owned(),
+                actor_kind: view.participant.identity.platform_kind,
+                occurred_at_unix_secs: 0,
+                excerpt: format!(
+                    "{}: {}",
+                    attribute.kind.as_str(),
+                    attribute.value.chars().take(80).collect::<String>()
+                ),
+            });
+        }
+    }
+    (output, event_ids, typed_events)
+}
+
+/// 格式化多候选解析结果（有界安全中文；不投影稳定 ID，由 Owner 澄清）。
+fn format_participant_candidates(candidates: &[crate::AccountScopedParticipantRef]) -> String {
+    let mut output = format!(
+        "找到 {} 个候选参与者（显示名可能重复），请提供群名片等更多信息以澄清：",
+        candidates.len()
+    );
+    for (index, candidate) in candidates.iter().take(5).enumerate() {
+        let display = candidate
+            .identity
+            .display_name
+            .clone()
+            .unwrap_or_else(|| candidate.stable_id().chars().take(20).collect())
+            .chars()
+            .take(40)
+            .collect::<String>();
+        let line = format!("\n{}. {display}", index + 1);
         append_bounded_line(&mut output, &line);
     }
     output

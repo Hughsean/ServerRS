@@ -102,6 +102,7 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
                     excerpt: r.excerpt,
                     occurred_at_unix_secs: r.occurred_at_unix_secs,
                     actor_id: r.actor.id,
+                    actor_kind: r.actor.kind,
                 })
                 .collect()
         } else {

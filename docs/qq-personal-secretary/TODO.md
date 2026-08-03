@@ -1,6 +1,6 @@
 # 个人 QQ 智能秘书执行看板
 
-> 最后整理：2026-08-02（Asia/Shanghai）
+> 最后整理：2026-08-03（Asia/Shanghai）
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
@@ -13,17 +13,17 @@
 
 ## 0. 当前状态
 
-- 当前分支：`deepseek/qqbot-bounded-replan-v1`（基于 `c251942`）。
-- 当前切片：`CTX-004` 有界 Replan 闭环 v1 已完成。Search/Read 类型化事件投影、临时引用
-  fail-closed、Outcome 最终回答持久化、预算耗尽安全摘要、完整 Graph、隐私投影及随机隔离
-  MySQL 主路径证据均已落实；生产路径已无已知 P0/P1，进入单次提交。
-  - Codex 已确认 CTX-001/002/003/005 的临时引用 fail-closed、local_only loopback 隐私门、
-    有效 Thread 投影、缺失正文降级，并在随机隔离 MySQL schema 重跑关键用例通过。
+- 当前分支：`claude/qqbot-participant-causality-v1`（基于 `38dd23c`）。
+- 当前切片：`ID-004/ID-005 + THR-011/THR-012/THR-013 + MEM-002` 参与者稳定身份与事件因果
+  关系闭环 v1 已实现初版；2026-08-02 22:15 复核的 4 P0 + 4 P1 已在 22:56 修复；
+  23:11 第二次复核的 2 个 P0 + 1 个 P1（最新来源截断、按名查询跨群/失效来源、身份键缺 kind）
+  已在 23:40 完成局部修复；23:49 复核的 2 个跨层 P0（kind 在 Effect 边界丢失、按名匹配
+  未校验值/别名建立来源）已在 2026-08-03 00:22 完成修复与真实闭环验证（见 1.3 两项）；
+  2026-08-03 10:19 Codex 最终复核通过，本切片已批准并进入约定的单次提交。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一开发切片：`ID-004/ID-005 + THR-011/THR-012/THR-013`，统一参与者稳定身份与可回读
-  因果关系视图；不重写不可变 SourceEvent 主干。
+- 下一步：本切片提交后进入 `MEM-003/MEM-004` 项目记忆与承诺记忆闭环。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
-  所有第三方自动回复继续延期。
+  所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
 ## 1. 立即执行顺序
 
@@ -113,20 +113,76 @@
 
 ### 1.3 参与者与因果关系（P0）
 
-- [ ] `ID-004` 将参与者稳定身份显式建模为账号作用域引用，例如
+- [x] `ID-004-P0-ACTION-KIND` 参与者 kind 必须贯穿 Retriever → Effect → Context。已实现：
+  `ThreadActorRef` 增加 `platform_identity_kind`、`PlannerRetrievedExcerpt` 增加 `actor_kind`、
+  `QueryEffectTypedEvent` 增加 `actor_kind`（旧 result_ref 反序列化保守兜底 External）；
+  新增严格路径 `participant_context_by_ref(&AccountScopedParticipantRef, …)`（三元组精确读取，
+  无歧义），宽松 `participant_context` 保留 fail-closed 歧义拒绝；`TempRefMap.actors` 与
+  `actor_refs` 均映射完整 `AccountScopedParticipantRef`（key = `{kind}:{actor_id}`）；
+  Effect `GetParticipantContext` 携带 `actor_kind` 并按完整引用读取；by-name 唯一候选同样
+  走 `participant_context_by_ref`。9.3 第 11 段真实闭环：同 ID 双 kind → by-name("Alice-主")
+  唯一命中 Owner → 复合 run → Response 成功且携带 Owner 显示名（已通过）。
+- [x] `THR-013-P0-NAME-ESTABLISHMENT` 按名匹配必须验证当前显示名/群名片的
+  `established_by_event_id`，alias 必须验证 alias 对象自己的 `source_event_id`。by-name SQL
+  三个匹配分支各自增加独立单事件有效性门（派生表驱动，语义与 `single_event_valid` 一致：
+  事件缺失/撤回/never_long_term/无投影即失效），不依赖有界 `source_event_ids_json`。
+  9.3 第 12 段反例：Frank 建立事件被 10 条同值观察淘汰 → 删除建立事件 → 显示名分支不命中；
+  改名后旧显示名进入别名（来源指向已删除事件）→ 别名分支不命中；有效显示名仍可命中（已通过）。
+
+- [x] `ID-005-P0-LATEST-SOURCE` 有界来源淘汰最旧保留最新：档案与会话观察的来源列表满 10 条时
+  `remove(0)` 淘汰最旧、保留第 11 条建立事件；显示名/群名片/群角色按 `established_by_event_id`
+  单列独立校验（来源列表可能已把建立事件淘汰）。9.3 反例：10 条旧观察 → 第 11 条改值 →
+  删除第 11 条投影 → 显示名失效，且来源列表含新事件、不含最旧事件。
+- [x] `THR-013-P0-NAME-SCOPE` `participants_by_display_name` 真实使用 conversation/thread：
+  群名片只在解析出的目标会话内匹配（无会话参数时观察不 JOIN，绝不跨群）；Profile 与
+  Observation 匹配前必须通过 JSON_TABLE 来源有效性门（存在/无撤回/非 never_long_term/有投影/
+  列表非空）；alias 用 `JSON_TABLE('$.alias')` 只搜别名字段，不搜 source_event_id。
+  9.3 反例：Dave 群 A "A-名片" 不在群 B 查询命中、无会话不命中、删除建立事件投影后不命中。
+- [x] `ID-004-P1-KIND-KEY` 档案与会话观察新增 `platform_identity_kind` 列并纳入唯一键
+  （`(account_id, platform_identity_kind, current_head)` / `(account_id, conversation_id,
+  platform_identity_kind, actor_platform_id)`）；写入按身份种类隔离，读取按账号内稳定 ID
+  全量取出并在跨命名空间歧义时 fail-closed 拒绝（绝不静默合并）。9.3 反例：同账号同稳定 ID
+  以 external 与 owner 并存两行、观察两行，participant_context 返回明确错误，
+  by-name 按显示名解析出 Owner 身份。
+
+- [x] `ID-005-P0-HISTORY` 档案历史唯一键改为仅约束当前版本：新增 STORED 生成列
+  `current_head = IF(current=1, actor_platform_id, NULL)` + `UNIQUE(account_id, current_head)`，
+  历史行（NULL）互不冲突，任意有界历史版本可共存；第三次资料变化已由 9.3 反例验证。
+- [x] `ID-005-P0-SCOPE` 群名片/群角色改为会话作用域观察
+  `secretary_participant_conversation_observations`（`UNIQUE(account_id, conversation_id,
+  actor_platform_id)` + 来源 ≤10 CHECK）；`participant_context` 经 conversation/thread 解析
+  observation 会话，A 群 Owner / B 群 Member 互不污染已由 9.3 跨群断言验证。
+- [x] `ID-005-P0-PRIVACY` 档案写入经 `participant_observation_allowed`（单事件 content_mode +
+  applied tombstone + 会话 memory_mode 任一受限即跳过）；读取侧 `source_refs_valid`（JSON_TABLE
+  逐来源校验缺失/撤回/never_long_term/投影缺失）失效闭环，person/commitment LEFT JOIN
+  在 `source_event_id IS NULL` 时 fail-closed；9.3 覆盖删除 e3 投影后承诺/受益人清空。
+- [x] `THR-011-P1-EFFECTIVE` 线程参与者和线程承诺查询统一改为 JOIN
+  `secretary_effective_thread_events`；merge/split 有效线程测试（`_merge` 场景）真实通过。
+- [x] `THR-013-P0-CLOSED-LOOP` 提供单一复合 L0 查询 `GetParticipantContextByName { name,
+  conversation_ref?, thread_id? }`：按显示名/别名/群名片有界解析（LIKE 转义、LIMIT 1..=5），
+  唯一候选再读完整上下文，零/多候选返回有界中文摘要；NL 提示第 7 意图改指该工具，
+  两步查询在单次命令内可达，9.3 复合 run 真实通过。
+- [x] `THR-013-P1-REFS` `GetParticipantContext`/`GetParticipantContextByName` 的
+  `conversation_ref` 只要出现就必须在 `TempRefMap` 中成功解析，未注册返回
+  `InvalidOutput`（不再静默降级为 None）；9.2 扩展测试覆盖未注册引用。
+
+- [x] `ID-004` 将参与者稳定身份显式建模为账号作用域引用，例如
   `(account_id, platform_kind, platform_actor_id)`；消除仅依赖外层查询维持账号隔离的隐患。
-- [ ] `ID-005` 补充可选显示名、群名片、历史别名、群角色和可信来源；别名不得用于授权，也不得
+- [x] `ID-005` 补充可选显示名、群名片、历史别名、群角色和可信来源；别名不得用于授权，也不得
   仅凭同名把跨群或跨账号人物合并。
-- [ ] `THR-011` 建立可重建的事件关系视图：`sent_by`、`mentions`、`replies_to`、`member_of_thread`。
+- [x] `THR-011` 建立可重建的事件关系视图：`sent_by`、`mentions`、`replies_to`、`member_of_thread`。
   原始 JSON 继续保留，关系视图只作索引和查询投影。
-- [ ] `THR-012` 明确区分消息发送者、回复链根发送者、话题发起者、要求提出者、承诺人、负责人、
+- [x] `THR-012` 明确区分消息发送者、回复链根发送者、话题发起者、要求提出者、承诺人、负责人、
   决策提议者和最终确认者。无法由来源证明时返回“未确认”，不得把最早发言人当成确定发起人。
-- [ ] `THR-013` Owner 可询问“谁提出、在回复谁、还有谁参与”，响应必须有界并携带可回读的
-  `source_event_id`；不得向命令所在账号无权访问的会话泄露正文。
+- [x] `THR-013` Owner 可通过 `GetEventCausalContext`/`GetParticipantContext` 两个 L0 只读 Action
+  查询“谁提出、在回复谁、谁参与、谁负责、职责与沟通偏好”；响应为安全中文有界摘要并携带
+  可回读 `source_event_id`，LLM 只看到 `evt_N/actor_N` 临时引用，跨账号不泄露。
+- [x] `MEM-002` 已确认人物记忆补充职责/沟通偏好（`PersonMemory` 字段 + `into_attributes`
+  投影）；未批准候选绝不进入确认字段；envelope_only/never_long_term/已召回来源不支撑人物事实；
+  人物记忆保留 `source_event_ids` 且失效后不作为有效返回。
 
 ### 1.4 继续业务 TODO（P0）
 
-- [ ] `MEM-002` 补全人物记忆的别名、关系、职责、权限和沟通偏好，并接入 `ID-004/ID-005`。
 - [ ] `MEM-003` 完成项目记忆候选生产、Owner 审批、项目成员/进展/风险/阻塞查询及来源回读。
 - [ ] `MEM-004` 完成承诺记忆自动候选生产与确认入口；只有确认且有期限的承诺进入 Scheduler。
 - [ ] `CMD-009` 在 `AgentEventView` 上补齐跨阶段有界状态、长期事件检索排序和冲突驱动回读。

@@ -374,6 +374,7 @@ mod tests {
                 actor: crate::ThreadActorRef {
                     account,
                     actor_id: "owner".into(),
+                    platform_identity_kind: None,
                 },
                 role: crate::MessageRole::OwnerObservation,
                 authorized_account: SourceAccountRef::new(MessageSource::NapCat, "account")

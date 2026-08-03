@@ -262,7 +262,7 @@ impl ParticipantIdentity {
 }
 
 /// 平台身份种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlatformIdentityKind {
     /// Owner 本人（通过配置绑定或平台签名验证）。
     Owner,
@@ -335,6 +335,323 @@ impl ParticipantRef {
             stable_id,
         })
     }
+}
+
+// ===== 账号作用域参与者（ID-004 / ID-005 / MEM-002）=====
+//
+// 身份 = SourceAccountRef + PlatformIdentityKind + 平台稳定主体 ID。
+// 同一平台 ID 在不同被管理账号下是不同参与者；昵称、群名片、备注和别名
+// 只用于显示与指代候选解析，绝不构成授权。群角色只描述群内权限，
+// 不提升为系统 Owner。
+
+/// 参与者上下文中的硬上限（约束 7：有界数量、有界字符、有界来源）。
+pub const MAX_PARTICIPANT_ALIASES: usize = 10;
+pub const MAX_PARTICIPANT_ATTRIBUTES: usize = 10;
+pub const MAX_PARTICIPANT_SOURCE_REFS: usize = 10;
+pub const MAX_RELATED_EVENT_REFS: usize = 10;
+pub const MAX_ATTRIBUTE_VALUE_CHARS: usize = 200;
+pub const MAX_CAUSAL_PARTICIPANTS: usize = 20;
+/// 结构关系（1 发送 + ≤20 提及 + 1 回复 + 1 线程成员 + 1 线程根）+
+/// 语义角色（≤5 要求者 + ≤4 承诺对 × 2 = 8 承诺/受益）的上限。
+pub const MAX_CAUSAL_RELATIONS: usize = 40;
+pub const MAX_CAUSAL_MENTIONED: usize = 20;
+/// 事件 + 回复父 + 线程根 + ≤5 要求来源 + ≤8 承诺来源。
+pub const MAX_CAUSAL_SOURCE_REFS: usize = 20;
+pub const MAX_RELATION_SOURCES: usize = 3;
+
+/// 账号作用域参与者引用。复用现有 `ParticipantIdentity`（平台种类 + 稳定主体 ID），
+/// 不建立第二套平行身份体系；显式携带账号，使跨账号的相同平台 ID 成为不同参与者。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountScopedParticipantRef {
+    pub account: SourceAccountRef,
+    pub identity: ParticipantIdentity,
+}
+
+impl AccountScopedParticipantRef {
+    pub fn new(
+        account: SourceAccountRef,
+        platform_kind: PlatformIdentityKind,
+        stable_id: impl Into<String>,
+        trust: IdentityTrust,
+    ) -> Result<Self, RetrieverError> {
+        Ok(Self {
+            account,
+            identity: ParticipantIdentity::new(platform_kind, stable_id, trust)?,
+        })
+    }
+
+    pub fn stable_id(&self) -> &str {
+        &self.identity.stable_id
+    }
+}
+
+/// 群角色。只描述参与者在该群内的协议角色，绝不用于判定系统 Owner 或任何授权。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupRole {
+    /// 群主（协议字段，仅群内角色）。
+    Owner,
+    /// 群管理员（协议字段，仅群内角色）。
+    Admin,
+    /// 普通群成员。
+    Member,
+    /// 无法确认（私聊、字段缺失或未知值）。
+    Unknown,
+}
+
+impl GroupRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+            Self::Member => "member",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// 解析协议字段（如 OneBot `role`）。缺失或未知值一律为 `Unknown`，绝不猜测。
+    pub fn parse_protocol(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("owner") => Self::Owner,
+            Some("admin") => Self::Admin,
+            Some("member") => Self::Member,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// 参与者属性种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParticipantAttributeKind {
+    /// 当前显示名（观察或目录）。
+    DisplayName,
+    /// 群名片。
+    GroupCard,
+    /// 备注名。
+    Remark,
+    /// 历史别名（显示名变化前的旧值，有界）。
+    HistoricalAlias,
+    /// 与 Owner 的关系（已确认人物记忆）。
+    Relationship,
+    /// 职责（已确认人物记忆）。
+    Responsibility,
+    /// 权限描述（仅描述；不得覆盖 OwnerBinding / 系统超管 / Action Gate）。
+    Permission,
+    /// 沟通偏好（已确认人物记忆）。
+    CommunicationPreference,
+}
+
+impl ParticipantAttributeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DisplayName => "display_name",
+            Self::GroupCard => "group_card",
+            Self::Remark => "remark",
+            Self::HistoricalAlias => "historical_alias",
+            Self::Relationship => "relationship",
+            Self::Responsibility => "responsibility",
+            Self::Permission => "permission",
+            Self::CommunicationPreference => "communication_preference",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "display_name" => Some(Self::DisplayName),
+            "group_card" => Some(Self::GroupCard),
+            "remark" => Some(Self::Remark),
+            "historical_alias" => Some(Self::HistoricalAlias),
+            "relationship" => Some(Self::Relationship),
+            "responsibility" => Some(Self::Responsibility),
+            "permission" => Some(Self::Permission),
+            "communication_preference" => Some(Self::CommunicationPreference),
+            _ => None,
+        }
+    }
+}
+
+/// 单条参与者属性。每条属性独立携带可信等级、来源事件或目录快照引用和失效状态；
+/// 召回/删除/失效的来源不得支撑新的人物事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantAttribute {
+    pub kind: ParticipantAttributeKind,
+    /// 属性值（有界，`MAX_ATTRIBUTE_VALUE_CHARS`）。
+    pub value: String,
+    pub trust: IdentityTrust,
+    /// 已确认标记。只有 Owner 确认、目录快照或已确认人物记忆可置 true；
+    /// 低置信语义绝不伪装成已确认。
+    pub confirmed: bool,
+    /// 支撑来源事件（有界，`MAX_RELATION_SOURCES`）。
+    pub source_event_ids: Vec<SourceEventId>,
+    /// 目录快照引用（若有）。
+    pub directory_snapshot_id: Option<String>,
+    pub invalidated: bool,
+    pub invalidation_reason: Option<String>,
+}
+
+/// 参与者的账号作用域上下文（THR-013 / MEM-002）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantContextView {
+    pub participant: AccountScopedParticipantRef,
+    /// 当前显示名（账号级昵称，有界）。
+    pub display_name: Option<String>,
+    /// 群名片或备注（会话作用域观察，有界）。只有按 `conversation`/`thread_id`
+    /// 约束查询时才有值；未提供会话时返回 None，绝不跨会话猜测。
+    pub group_card: Option<String>,
+    /// 历史别名（有界数量，`MAX_PARTICIPANT_ALIASES`）。
+    pub aliases: Vec<String>,
+    /// 群角色（会话作用域观察）。未提供会话时一律 Unknown。
+    pub group_role: GroupRole,
+    /// 关系/职责/权限描述/沟通偏好等类型化属性（有界数量）。
+    pub attributes: Vec<ParticipantAttribute>,
+    pub conversation: Option<ConversationRef>,
+    pub thread_id: Option<EventThreadId>,
+    /// 最近相关事件（有界，`MAX_RELATED_EVENT_REFS`），只导航，事实由来源回读。
+    pub related_event_ids: Vec<SourceEventId>,
+    /// 同名候选无法唯一解析时为 true，要求 Owner 澄清。
+    pub unresolved_ambiguity: bool,
+    /// 全部支撑来源已失效/过期/被删除时为 true；此时不得把旧事实当有效返回。
+    pub expired_or_invalidated: bool,
+}
+
+// ===== 事件因果关系（THR-011 / THR-012）=====
+
+/// 事件因果关系的类型化种类。严格语义：
+/// - 发送者 ≠ 要求者；回复根发送者 ≠ 当前发送者；
+/// - 线程根发送者 = 线程发起人（不是 Owner 判定）；
+/// - @ 到的人不自动成为负责人；
+/// - 负责人/承诺人/受益方只能来自已确认 Thread Claim、承诺记忆或 Owner 确认。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventRelationKind {
+    /// 事件由该参与者发送（结构事实）。
+    SentBy,
+    /// 事件 @ 到该参与者（结构事实，协议只携带 actor_id）。
+    Mentions,
+    /// 事件回复该参与者发送的父事件（结构事实）。
+    RepliesTo,
+    /// 事件属于某有效线程（结构事实）。
+    MemberOfThread,
+    /// 事件是线程根事件，该参与者是线程发起人（结构事实）。
+    ThreadRootBy,
+    /// 已确认要求由该参与者提出（已确认 Request 声明）。
+    RequestedBy,
+    /// 已确认负责人（已确认来源/承诺记忆/Owner 确认；"我来处理"必须有来源并语义确认）。
+    AssignedTo,
+    /// 已确认承诺人（已确认承诺记忆）。
+    PromisedBy,
+    /// 已确认受益方（已确认承诺记忆）。
+    Benefits,
+}
+
+impl std::fmt::Display for EventRelationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl EventRelationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SentBy => "sent_by",
+            Self::Mentions => "mentions",
+            Self::RepliesTo => "replies_to",
+            Self::MemberOfThread => "member_of_thread",
+            Self::ThreadRootBy => "thread_root_by",
+            Self::RequestedBy => "requested_by",
+            Self::AssignedTo => "assigned_to",
+            Self::PromisedBy => "promised_by",
+            Self::Benefits => "benefits",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "sent_by" => Some(Self::SentBy),
+            "mentions" => Some(Self::Mentions),
+            "replies_to" => Some(Self::RepliesTo),
+            "member_of_thread" => Some(Self::MemberOfThread),
+            "thread_root_by" => Some(Self::ThreadRootBy),
+            "requested_by" => Some(Self::RequestedBy),
+            "assigned_to" => Some(Self::AssignedTo),
+            "promised_by" => Some(Self::PromisedBy),
+            "benefits" => Some(Self::Benefits),
+            _ => None,
+        }
+    }
+}
+
+/// 单条类型化事件关系。带账号作用域、种类、主体参与者、来源事件和确认标记；
+/// 未确认语义携带 `confirmed=false`，绝不与已确认事实混同。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRelation {
+    pub kind: EventRelationKind,
+    pub account: SourceAccountRef,
+    /// 关系客体参与者（如 RepliesTo 中被回复的发送者、AssignedTo 中的负责人）。
+    pub subject: AccountScopedParticipantRef,
+    /// MemberOfThread / ThreadRootBy 关联的有效线程。
+    pub thread_id: Option<EventThreadId>,
+    /// 支撑来源事件（有界，`MAX_RELATION_SOURCES`）。
+    pub source_event_ids: Vec<SourceEventId>,
+    pub trust: IdentityTrust,
+    pub confirmed: bool,
+    pub invalidation_reason: Option<String>,
+}
+
+/// 因果上下文中的事件引用（如回复父事件）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CausalEventRef {
+    pub source_event_id: SourceEventId,
+    pub sender: Option<ParticipantIdentity>,
+}
+
+/// 因果上下文中的有效线程引用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CausalThreadRef {
+    pub thread_id: EventThreadId,
+    pub status: ThreadStatus,
+    pub root_event_id: SourceEventId,
+    /// 线程根事件发送者 = 线程发起人。
+    pub root_sender: Option<ParticipantIdentity>,
+}
+
+/// 线程参与者的有界摘要（发送者集合，不含正文）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventParticipantSummary {
+    pub participant: AccountScopedParticipantRef,
+    pub display_name: Option<String>,
+    pub group_role: GroupRole,
+    pub event_count: u64,
+}
+
+/// 单事件的账号作用域因果上下文（THR-011/THR-012）。所有字段有界；
+/// 角色列表只容纳已确认语义，未确认时为空且 `ambiguous` 标记未决。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventCausalContextView {
+    pub source_event_id: SourceEventId,
+    pub account: SourceAccountRef,
+    /// 事件发送者。
+    pub sender: Option<ParticipantIdentity>,
+    /// 回复父事件及其发送者（回复根发送者 ≠ 当前发送者）。
+    pub reply_parent: Option<CausalEventRef>,
+    /// 有效线程及其根事件（根发送者 = 发起人）。
+    pub thread: Option<CausalThreadRef>,
+    /// @ 到的参与者（协议观察，有界）。@ 到的人绝不自动进入负责人/承诺人/受益方。
+    pub mentioned: Vec<AccountScopedParticipantRef>,
+    /// 已确认要求者。
+    pub requesters: Vec<AccountScopedParticipantRef>,
+    /// 已确认负责人。
+    pub assignees: Vec<AccountScopedParticipantRef>,
+    /// 已确认承诺人。
+    pub promisors: Vec<AccountScopedParticipantRef>,
+    /// 已确认受益方。
+    pub beneficiaries: Vec<AccountScopedParticipantRef>,
+    /// 线程参与者有界列表。
+    pub participants: Vec<EventParticipantSummary>,
+    /// 全部类型化关系（有界，`MAX_CAUSAL_RELATIONS`）。
+    pub relations: Vec<EventRelation>,
+    /// 语义无法唯一解析（如同名多候选人）时为 true。
+    pub ambiguous: bool,
+    /// 精确来源引用（有界，`MAX_CAUSAL_SOURCE_REFS`）。
+    pub source_refs: Vec<SourceEventId>,
 }
 
 // ===== 指代解析 =====
@@ -442,6 +759,52 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         thread_id: &EventThreadId,
     ) -> Result<Option<ThreadContextView>, InboundEventStoreError>;
+
+    /// 构建单事件的账号作用域因果上下文（THR-011/THR-012）。
+    /// 返回 None 表示该账号下不存在此事件。所有 SQL 强制 `account_id` 过滤；
+    /// 相同 actor_id / message_id / 昵称跨账号绝不互相关联。
+    async fn event_causal_context(
+        &self,
+        account: &SourceAccountRef,
+        source_event_id: &SourceEventId,
+    ) -> Result<Option<EventCausalContextView>, InboundEventStoreError>;
+
+    /// 构建参与者的账号作用域上下文（ID-004/ID-005/MEM-002）。
+    /// 返回 None 表示该账号内没有任何该参与者的证据。
+    /// `conversation`/`thread_id` 用于约束会话作用域观察（群名片/群角色），
+    /// 不是原样回显：未提供时群属性返回未知，绝不跨会话猜测。
+    /// 身份种类是档案键的一部分：同一账号内相同稳定 ID 存在多个身份命名空间
+    /// 的档案时（上游绑定冲突），本查询 fail-closed 返回错误，绝不静默合并。
+    async fn participant_context(
+        &self,
+        account: &SourceAccountRef,
+        actor_id: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, InboundEventStoreError>;
+
+    /// 按完整账号作用域参与者引用（账号 + 身份种类 + 稳定 ID）精确读取上下文。
+    /// 调用方（如按名解析的 Effect）已知身份种类时必须用本方法：档案按三元组
+    /// 精确命中，同账号下相同稳定 ID 的不同身份命名空间不会互相干扰，也不会
+    /// 触发宽松查询的歧义拒绝。
+    async fn participant_context_by_ref(
+        &self,
+        participant: &AccountScopedParticipantRef,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, InboundEventStoreError>;
+
+    /// 按显示名/别名/群名片有界解析参与者候选（THR-013 复合查询的第一阶段）。
+    /// 同一账号内匹配，跨账号绝不关联；最多返回 `limit`（1..=5）个候选。
+    /// 仅用于指代解析，绝不用于授权；解析歧义由调用方要求 Owner 澄清。
+    async fn participants_by_display_name(
+        &self,
+        account: &SourceAccountRef,
+        name: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+        limit: u16,
+    ) -> Result<Vec<AccountScopedParticipantRef>, InboundEventStoreError>;
 }
 
 // ===== 错误类型 =====
@@ -576,6 +939,224 @@ pub fn resolve_reference_from_candidates(
     }
 }
 
+// ===== 参与者上下文与因果上下文校验（ID-004/ID-005/THR-011/THR-012）=====
+
+/// 校验参与者上下文的所有硬上限（约束 7）。
+pub fn validate_participant_context(view: &ParticipantContextView) -> Result<(), RetrieverError> {
+    if view.aliases.len() > MAX_PARTICIPANT_ALIASES {
+        return Err(RetrieverError::InvalidData(format!(
+            "ParticipantContextView.aliases exceeds {}",
+            MAX_PARTICIPANT_ALIASES
+        )));
+    }
+    for alias in &view.aliases {
+        if alias.chars().count() > MAX_ATTRIBUTE_VALUE_CHARS {
+            return Err(RetrieverError::InvalidData(format!(
+                "alias exceeds {} chars",
+                MAX_ATTRIBUTE_VALUE_CHARS
+            )));
+        }
+    }
+    if view.attributes.len() > MAX_PARTICIPANT_ATTRIBUTES {
+        return Err(RetrieverError::InvalidData(format!(
+            "ParticipantContextView.attributes exceeds {}",
+            MAX_PARTICIPANT_ATTRIBUTES
+        )));
+    }
+    if view.related_event_ids.len() > MAX_RELATED_EVENT_REFS {
+        return Err(RetrieverError::InvalidData(format!(
+            "ParticipantContextView.related_event_ids exceeds {}",
+            MAX_RELATED_EVENT_REFS
+        )));
+    }
+    if let Some(display) = &view.display_name
+        && display.chars().count() > MAX_ATTRIBUTE_VALUE_CHARS
+    {
+        return Err(RetrieverError::InvalidData("display_name too long".into()));
+    }
+    if let Some(card) = &view.group_card
+        && card.chars().count() > MAX_ATTRIBUTE_VALUE_CHARS
+    {
+        return Err(RetrieverError::InvalidData("group_card too long".into()));
+    }
+    validate_attributes(&view.attributes)
+}
+
+/// 校验参与者上下文中的权限边界（Section 四/七）：
+/// 权限属性只能来自系统 Owner 的已验证账号绑定；昵称、群名片、群角色
+/// （含群主/管理员）或任何聊天内容、LLM 推断都不构成权限属性。
+/// 返回违反描述列表；空列表表示通过。
+pub fn check_participant_permission_boundary(view: &ParticipantContextView) -> Vec<String> {
+    let mut violations = Vec::new();
+    for attribute in &view.attributes {
+        if attribute.kind == ParticipantAttributeKind::Permission {
+            let identity = &view.participant.identity;
+            let allowed = identity.platform_kind == PlatformIdentityKind::Owner
+                && identity.trust == IdentityTrust::Verified;
+            if !allowed {
+                violations.push(format!(
+                    "permission attribute {} is not backed by verified owner binding",
+                    attribute.value.chars().take(80).collect::<String>()
+                ));
+            }
+        }
+    }
+    violations
+}
+
+/// 校验事件因果上下文的所有硬上限（约束 7）。
+pub fn validate_causal_context(view: &EventCausalContextView) -> Result<(), RetrieverError> {
+    if view.mentioned.len() > MAX_CAUSAL_MENTIONED {
+        return Err(RetrieverError::InvalidData(format!(
+            "EventCausalContextView.mentioned exceeds {}",
+            MAX_CAUSAL_MENTIONED
+        )));
+    }
+    if view.participants.len() > MAX_CAUSAL_PARTICIPANTS {
+        return Err(RetrieverError::InvalidData(format!(
+            "EventCausalContextView.participants exceeds {}",
+            MAX_CAUSAL_PARTICIPANTS
+        )));
+    }
+    if view.relations.len() > MAX_CAUSAL_RELATIONS {
+        return Err(RetrieverError::InvalidData(format!(
+            "EventCausalContextView.relations exceeds {}",
+            MAX_CAUSAL_RELATIONS
+        )));
+    }
+    if view.source_refs.len() > MAX_CAUSAL_SOURCE_REFS {
+        return Err(RetrieverError::InvalidData(format!(
+            "EventCausalContextView.source_refs exceeds {}",
+            MAX_CAUSAL_SOURCE_REFS
+        )));
+    }
+    for relation in &view.relations {
+        if relation.source_event_ids.len() > MAX_RELATION_SOURCES {
+            return Err(RetrieverError::InvalidData(format!(
+                "EventRelation {} source_event_ids exceeds {}",
+                relation.kind.as_str(),
+                MAX_RELATION_SOURCES
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 严格角色语义校验（THR-012）。返回违反描述列表；空列表表示通过。
+/// 校验的不变量：
+/// 1. 角色列表（要求者/负责人/承诺人/受益方）中的参与者必须被对应种类的
+///    已确认关系支撑 —— 被 @ 到不等于被指派，仅 Mentions 证据不足以支撑角色；
+/// 2. 已确认角色关系必须携带可回读来源，且来源出现在 `source_refs` 中；
+/// 3. 未确认的关系（`confirmed=false`）绝不进入已确认角色列表。
+///
+/// “提及 ≠ 指派”同时由仓储构造保证：@ 段只产生 Mentions 关系，
+/// 角色关系只从已确认 Thread Claim / 承诺记忆 / Owner 确认派生。
+pub fn check_causal_role_strictness(view: &EventCausalContextView) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    let confirmed_roles: Vec<&EventRelation> = view
+        .relations
+        .iter()
+        .filter(|r| {
+            r.confirmed
+                && matches!(
+                    r.kind,
+                    EventRelationKind::RequestedBy
+                        | EventRelationKind::AssignedTo
+                        | EventRelationKind::PromisedBy
+                        | EventRelationKind::Benefits
+                )
+        })
+        .collect();
+
+    // 不变量 1：未确认语义不得出现在已确认角色列表中。
+    let role_lists: [(&str, &[AccountScopedParticipantRef], EventRelationKind); 4] = [
+        (
+            "requesters",
+            &view.requesters,
+            EventRelationKind::RequestedBy,
+        ),
+        ("assignees", &view.assignees, EventRelationKind::AssignedTo),
+        ("promisors", &view.promisors, EventRelationKind::PromisedBy),
+        (
+            "beneficiaries",
+            &view.beneficiaries,
+            EventRelationKind::Benefits,
+        ),
+    ];
+    for (list_name, list, kind) in role_lists {
+        for participant in list {
+            let supported = confirmed_roles.iter().any(|r| {
+                r.kind == kind
+                    && r.subject.account == participant.account
+                    && r.subject.identity.stable_id == participant.identity.stable_id
+            });
+            if !supported {
+                violations.push(format!(
+                    "{list_name} contains {} without a confirmed {kind} relation",
+                    participant.identity.stable_id
+                ));
+            }
+        }
+    }
+
+    // 不变量 2：已确认角色关系必须携带可回读来源。
+    for relation in &confirmed_roles {
+        if relation.source_event_ids.is_empty()
+            || !relation
+                .source_event_ids
+                .iter()
+                .any(|id| view.source_refs.contains(id))
+        {
+            violations.push(format!(
+                "confirmed {} relation lacks a readable source ref",
+                relation.kind.as_str()
+            ));
+        }
+    }
+    violations
+}
+
+/// 判定参与者是否拥有系统 Owner 权限。Owner 权限只能来自已验证的账号绑定
+/// 或平台签名验证；昵称、群名片、群角色（含群主/管理员）、聊天内容
+/// 或 LLM 推断一律不构成授权。任何输入都返回确定的 bool，绝不猜测。
+pub fn grants_owner_authority(
+    kind: PlatformIdentityKind,
+    trust: IdentityTrust,
+    _group_role: GroupRole,
+) -> bool {
+    kind == PlatformIdentityKind::Owner && trust == IdentityTrust::Verified
+}
+
+fn validate_attributes(attributes: &[ParticipantAttribute]) -> Result<(), RetrieverError> {
+    for attribute in attributes {
+        if attribute.value.chars().count() > MAX_ATTRIBUTE_VALUE_CHARS {
+            return Err(RetrieverError::InvalidData(format!(
+                "ParticipantAttribute {} value exceeds {} chars",
+                attribute.kind.as_str(),
+                MAX_ATTRIBUTE_VALUE_CHARS
+            )));
+        }
+        if attribute.source_event_ids.len() > MAX_RELATION_SOURCES {
+            return Err(RetrieverError::InvalidData(format!(
+                "ParticipantAttribute {} source_event_ids exceeds {}",
+                attribute.kind.as_str(),
+                MAX_RELATION_SOURCES
+            )));
+        }
+        if attribute.confirmed && attribute.source_event_ids.is_empty() {
+            // 目录快照或 Owner 绑定可作来源；只有完全没有来源时才拒绝。
+            if attribute.directory_snapshot_id.is_none() {
+                return Err(RetrieverError::InvalidData(format!(
+                    "confirmed ParticipantAttribute {} lacks any source",
+                    attribute.kind.as_str()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +1164,226 @@ mod tests {
 
     fn account() -> SourceAccountRef {
         SourceAccountRef::new(MessageSource::NapCat, "account-1").unwrap()
+    }
+
+    fn actor_ref(account: &SourceAccountRef, id: &str) -> AccountScopedParticipantRef {
+        AccountScopedParticipantRef::new(
+            account.clone(),
+            PlatformIdentityKind::External,
+            id,
+            IdentityTrust::Observed,
+        )
+        .unwrap()
+    }
+
+    fn role_relation(
+        account: &SourceAccountRef,
+        kind: EventRelationKind,
+        subject: &AccountScopedParticipantRef,
+        source_event_id: &str,
+        confirmed: bool,
+    ) -> EventRelation {
+        EventRelation {
+            kind,
+            account: account.clone(),
+            subject: subject.clone(),
+            thread_id: None,
+            source_event_ids: vec![SourceEventId::new(source_event_id).unwrap()],
+            trust: IdentityTrust::Verified,
+            confirmed,
+            invalidation_reason: None,
+        }
+    }
+
+    /// 9.1 域表驱动测试：严格角色分离、未确认语义不升级、昵称/群角色不授权。
+    #[test]
+    fn causal_role_strictness_table_driven() {
+        let account = account();
+        let alice = actor_ref(&account, "alice-10001");
+        let bob = actor_ref(&account, "bob-10002");
+        let carol = actor_ref(&account, "carol-10003");
+        let event = SourceEventId::new("evt-1").unwrap();
+
+        // 合法视图：发送者 alice；回复根发送者 ≠ 当前发送者；@ 到 carol；
+        // 已确认要求者 alice 带来源；carol 仅被提及，绝不自动成为负责人。
+        let legal = EventCausalContextView {
+            source_event_id: event.clone(),
+            account: account.clone(),
+            sender: Some(
+                ParticipantIdentity::new(
+                    PlatformIdentityKind::External,
+                    "alice-10001",
+                    IdentityTrust::Observed,
+                )
+                .unwrap(),
+            ),
+            reply_parent: None,
+            thread: None,
+            mentioned: vec![carol.clone()],
+            requesters: vec![alice.clone()],
+            assignees: Vec::new(),
+            promisors: Vec::new(),
+            beneficiaries: Vec::new(),
+            participants: Vec::new(),
+            relations: vec![
+                role_relation(&account, EventRelationKind::SentBy, &alice, "evt-1", true),
+                role_relation(&account, EventRelationKind::Mentions, &carol, "evt-1", true),
+                role_relation(
+                    &account,
+                    EventRelationKind::RequestedBy,
+                    &alice,
+                    "evt-1",
+                    true,
+                ),
+            ],
+            ambiguous: false,
+            source_refs: vec![event.clone()],
+        };
+        assert!(
+            check_causal_role_strictness(&legal).is_empty(),
+            "合法角色视图不应有违规"
+        );
+
+        // 违规 1：carol 仅被 @（Mentions），却出现在负责人列表且无已确认关系 → 提及 ≠ 指派。
+        let mention_is_not_assignee = EventCausalContextView {
+            assignees: vec![carol.clone()],
+            ..legal.clone()
+        };
+        let violations = check_causal_role_strictness(&mention_is_not_assignee);
+        assert!(
+            violations.iter().any(|v| v.contains("assignees")),
+            "被@参与者不得自动成为负责人: {violations:?}"
+        );
+
+        // 违规 2：未确认（confirmed=false）的 RequestedBy 进入要求者列表 → 低置信不升级。
+        let unconfirmed_semantics = EventCausalContextView {
+            requesters: vec![bob.clone()],
+            relations: vec![role_relation(
+                &account,
+                EventRelationKind::RequestedBy,
+                &bob,
+                "evt-1",
+                false,
+            )],
+            ..legal.clone()
+        };
+        let violations = check_causal_role_strictness(&unconfirmed_semantics);
+        assert!(
+            violations.iter().any(|v| v.contains("requesters")),
+            "未确认语义不得伪装成已确认: {violations:?}"
+        );
+
+        // 违规 3：已确认角色关系缺少可回读来源。
+        let missing_source = EventCausalContextView {
+            source_refs: Vec::new(),
+            ..legal.clone()
+        };
+        let violations = check_causal_role_strictness(&missing_source);
+        assert!(
+            violations.iter().any(|v| v.contains("source")),
+            "已确认角色关系必须带可回读来源: {violations:?}"
+        );
+    }
+
+    /// 9.1 权限边界：昵称、群名片、群角色（含群主/管理员）绝不构成 Owner 权限。
+    #[test]
+    fn nickname_and_group_role_never_grant_owner_permission() {
+        let account = account();
+
+        // 只有"已验证的 Owner 身份"才拥有系统 Owner 权限。
+        assert!(grants_owner_authority(
+            PlatformIdentityKind::Owner,
+            IdentityTrust::Verified,
+            GroupRole::Member
+        ));
+        // 群主/管理员/普通成员 + 观察身份 ≠ Owner。
+        for role in [GroupRole::Owner, GroupRole::Admin, GroupRole::Member] {
+            assert!(!grants_owner_authority(
+                PlatformIdentityKind::External,
+                IdentityTrust::Observed,
+                role
+            ));
+            assert!(!grants_owner_authority(
+                PlatformIdentityKind::External,
+                IdentityTrust::Inferred,
+                role
+            ));
+        }
+        // 协议字段解析：未知值一律 Unknown，绝不猜测。
+        assert_eq!(GroupRole::parse_protocol(Some("owner")), GroupRole::Owner);
+        assert_eq!(GroupRole::parse_protocol(Some("admin")), GroupRole::Admin);
+        assert_eq!(GroupRole::parse_protocol(Some("member")), GroupRole::Member);
+        assert_eq!(GroupRole::parse_protocol(None), GroupRole::Unknown);
+        assert_eq!(
+            GroupRole::parse_protocol(Some("super_admin")),
+            GroupRole::Unknown
+        );
+
+        // 参与者上下文权限边界：昵称/群角色派生的 Permission 属性被拒绝。
+        let nickname_only = ParticipantContextView {
+            participant: AccountScopedParticipantRef::new(
+                account.clone(),
+                PlatformIdentityKind::External,
+                "bob-10002",
+                IdentityTrust::Observed,
+            )
+            .unwrap(),
+            display_name: Some("群主小明".into()),
+            group_card: None,
+            aliases: Vec::new(),
+            group_role: GroupRole::Owner,
+            attributes: vec![ParticipantAttribute {
+                kind: ParticipantAttributeKind::Permission,
+                value: "群主".into(),
+                trust: IdentityTrust::Observed,
+                confirmed: false,
+                source_event_ids: vec![SourceEventId::new("evt-1").unwrap()],
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            }],
+            conversation: None,
+            thread_id: None,
+            related_event_ids: Vec::new(),
+            unresolved_ambiguity: false,
+            expired_or_invalidated: false,
+        };
+        let violations = check_participant_permission_boundary(&nickname_only);
+        assert!(
+            violations.iter().any(|v| v.contains("permission")),
+            "昵称/群角色派生的权限属性必须被拒绝: {violations:?}"
+        );
+
+        // 已验证 Owner 的权限属性被允许。
+        let verified_owner = ParticipantContextView {
+            participant: AccountScopedParticipantRef::new(
+                account.clone(),
+                PlatformIdentityKind::Owner,
+                "owner-1",
+                IdentityTrust::Verified,
+            )
+            .unwrap(),
+            display_name: None,
+            group_card: None,
+            aliases: Vec::new(),
+            group_role: GroupRole::Unknown,
+            attributes: vec![ParticipantAttribute {
+                kind: ParticipantAttributeKind::Permission,
+                value: "系统 Owner（账号绑定）".into(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                source_event_ids: Vec::new(),
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            }],
+            conversation: None,
+            thread_id: None,
+            related_event_ids: Vec::new(),
+            unresolved_ambiguity: false,
+            expired_or_invalidated: false,
+        };
+        assert!(check_participant_permission_boundary(&verified_owner).is_empty());
     }
 
     #[test]

@@ -500,6 +500,7 @@ mod tests {
         ThreadActorRef {
             account: account(),
             actor_id: id.into(),
+            platform_identity_kind: None,
         }
     }
 

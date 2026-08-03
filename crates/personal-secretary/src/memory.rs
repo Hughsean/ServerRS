@@ -348,10 +348,12 @@ mod tests {
                 promisor: ThreadActorRef {
                     account: managed.clone(),
                     actor_id: "alice".into(),
+                    platform_identity_kind: None,
                 },
                 beneficiary: ThreadActorRef {
                     account: managed,
                     actor_id: "owner".into(),
+                    platform_identity_kind: None,
                 },
                 action: "发送报价单".into(),
                 due_at_unix_secs: Some(1_800_000_000),

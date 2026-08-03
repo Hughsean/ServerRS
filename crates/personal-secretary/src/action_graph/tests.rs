@@ -445,6 +445,7 @@ impl EffectExecutor<SecretaryActionEffect> for FakeEffectExecutor {
             typed_events: vec![QueryEffectTypedEvent {
                 source_event_id: SourceEventId::new("event-1").unwrap(),
                 actor_id: "actor-1".into(),
+                actor_kind: crate::PlatformIdentityKind::External,
                 occurred_at_unix_secs: 1_000,
                 excerpt: "关于报价单的讨论".into(),
             }],

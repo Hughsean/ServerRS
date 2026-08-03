@@ -325,6 +325,7 @@ WHERE source.candidate_id = ? FOR UPDATE
             actor: ThreadActorRef {
                 account: request.account.clone(),
                 actor_id: source.actor_platform_id,
+                platform_identity_kind: None,
             },
             occurred_at_unix_secs: source.occurred_at_unix_secs,
             content_trust_level: parse_trust(&source.content_trust_level)?,

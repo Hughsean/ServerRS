@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter, Set, TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseBackend,
+    DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, Set, Statement,
+    TransactionTrait,
 };
 use tracing::error;
 use uuid::Uuid;
@@ -23,6 +24,9 @@ use super::entities::{
 const ACCOUNT_ACTIVE: &str = "active";
 const MEMORY_NORMAL: &str = "normal";
 const PROCESSING_PENDING: &str = "pending";
+/// 档案/会话观察来源事件上限（与迁移 CHECK JSON_LENGTH(source_event_ids_json) <= 10 对齐）。
+/// 列表满时淘汰最旧来源、保留最新建立事件，保证当前值来源始终可失效校验。
+const MAX_PROFILE_SOURCE_EVENTS: usize = 10;
 
 pub(crate) struct MySqlInboundEventStore {
     pub(super) db: DatabaseConnection,
@@ -193,6 +197,47 @@ impl InboundEventStoreT for MySqlInboundEventStore {
         // Duplicate 路径在下方单独处理，因为 duplicate 会提前 commit。
         apply_pending_tombstone_in_txn(&transaction, account_id, message, source_event_id.as_str())
             .await?;
+
+        // ID-005：发送者观察档案（账号级昵称/别名）与群名片/群角色（会话级观察）
+        // 在同一事务内幂等 upsert。只记录显示信息，绝不构成授权；
+        // never_long_term 会话或受限单事件不进入人物长期上下文。
+        if let Some(profile) = &message.sender_profile {
+            // 单事件 + 会话隐私门：受限观察不得进入人物长期上下文。
+            if participant_observation_allowed(&transaction, conversation_id, &source_event_id)
+                .await?
+            {
+                upsert_participant_profile_in_txn(
+                    &transaction,
+                    account_id,
+                    &message.actor.id,
+                    message.actor.kind.as_str(),
+                    profile,
+                    &source_event_id,
+                    now,
+                )
+                .await?;
+                // 群名片/群角色按 (account, conversation, identity_kind, actor) 会话作用域保存；
+                // 私聊与控制会话没有群属性，不产生观察行。
+                if message.conversation.kind == crate::ConversationKind::Group {
+                    upsert_participant_conversation_observation_in_txn(
+                        &transaction,
+                        account_id,
+                        conversation_id,
+                        message.actor.kind.as_str(),
+                        &message.actor.id,
+                        profile,
+                        &source_event_id,
+                        now,
+                    )
+                    .await?;
+                }
+            } else {
+                tracing::trace!(
+                    source_event_id = %source_event_id.as_str(),
+                    "受限观察不进入人物上下文"
+                );
+            }
+        }
 
         transaction.commit().await.map_err(store_error)?;
         tracing::debug!(
@@ -522,5 +567,410 @@ async fn apply_pending_tombstone_in_txn(
             "消息入库事务内已应用 pending 撤回 tombstone 并传播 Artifact 失效"
         );
     }
+    Ok(())
+}
+
+/// 单事件 + 会话隐私门（fail-closed）：正文投影缺失、事件/会话为 never_long_term 或
+/// 事件已被撤回时，该观察不得进入人物长期上下文；envelope_only 仍保留信封级身份。
+#[derive(Debug, FromQueryResult)]
+struct EventPrivacyRow {
+    content_mode: Option<String>,
+    tombstone_status: Option<String>,
+}
+
+async fn participant_observation_allowed(
+    db: &sea_orm::DatabaseTransaction,
+    conversation_id: u64,
+    source_event_id: &SourceEventId,
+) -> Result<bool, InboundEventStoreError> {
+    let event_privacy = EventPrivacyRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT m.content_mode, t.status AS tombstone_status
+           FROM secretary_message_contents m
+           LEFT JOIN secretary_message_tombstones t
+             ON t.source_event_id = m.source_event_id AND t.status = 'applied'
+           WHERE m.source_event_id = ?"#,
+        [source_event_id.as_str().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    let Some(event_privacy) = event_privacy else {
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "事件正文投影缺失，跳过参与者观察"
+        );
+        return Ok(false);
+    };
+    if event_privacy.tombstone_status.is_some() {
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "事件已被撤回，跳过参与者观察"
+        );
+        return Ok(false);
+    }
+    if event_privacy.content_mode.as_deref() == Some("never_long_term") {
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "事件为 never_long_term，跳过参与者观察"
+        );
+        return Ok(false);
+    }
+    let memory_mode: String = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT memory_mode FROM secretary_conversations WHERE id = ?",
+            [conversation_id.into()],
+        ))
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            InboundEventStoreError::InvalidData(
+                "conversation vanished during profile upsert".into(),
+            )
+        })?
+        .try_get("", "memory_mode")
+        .map_err(|error| {
+            InboundEventStoreError::InvalidData(format!(
+                "conversation memory_mode decode failed: {error}"
+            ))
+        })?;
+    if memory_mode == "never_long_term" {
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "会话为 never_long_term，跳过参与者观察"
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// ID-005：发送者观察档案的幂等 upsert（同一入站事务内执行）。
+///
+/// 不变量：
+/// - 同一 (account_id, actor_platform_id, current=1) 至多一行（仅当前版本参与唯一
+///   约束，历史版本可无限累积）；显示信息变化时旧行 `current=0` 保留审计，
+///   旧显示名进入有界 aliases（≤10 条、每项 ≤200 字符、去重）；
+/// - 来源事件 ID 追加进 `source_event_ids_json`（≤10 个，去重）；
+/// - 昵称只是显示信息，绝不参与授权（群名片/群角色见会话观察 upsert）；
+/// - 调用方已通过 `participant_observation_allowed` 完成单事件/会话隐私门。
+#[allow(clippy::too_many_arguments)]
+async fn upsert_participant_profile_in_txn(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    actor_platform_id: &str,
+    platform_identity_kind: &str,
+    profile: &crate::ObservedSenderProfile,
+    source_event_id: &SourceEventId,
+    now: chrono::NaiveDateTime,
+) -> Result<(), InboundEventStoreError> {
+    let display_name = profile.nickname.chars().take(200).collect::<String>();
+
+    #[derive(Debug, FromQueryResult)]
+    struct CurrentProfileRow {
+        profile_id: u64,
+        display_name: String,
+        aliases_json: String,
+        source_event_ids_json: String,
+        established_by_event_id: Option<String>,
+    }
+
+    let current = CurrentProfileRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT profile_id, display_name,
+                  CAST(aliases_json AS CHAR) AS aliases_json,
+                  CAST(source_event_ids_json AS CHAR) AS source_event_ids_json,
+                  established_by_event_id
+           FROM secretary_participant_profiles
+           WHERE account_id = ? AND platform_identity_kind = ?
+             AND actor_platform_id = ? AND current = 1
+           LIMIT 1"#,
+        [
+            account_id.into(),
+            platform_identity_kind.into(),
+            actor_platform_id.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+
+    // 有界追加来源事件（≤10 个，去重）。列表已满时必须淘汰最旧来源、保留最新
+    // 建立事件：当前值（显示名/名片/角色）仍由最新事件建立，若把它截断丢弃，
+    // 该事件被撤回/删除后读取侧将无法发现当前值失效（P0 反例）。
+    let append_source =
+        |current_json: &str| -> Result<Vec<serde_json::Value>, InboundEventStoreError> {
+            let mut ids: Vec<String> = if current_json.trim().is_empty() || current_json == "null" {
+                Vec::new()
+            } else {
+                serde_json::from_str(current_json).map_err(|error| {
+                    InboundEventStoreError::InvalidData(format!(
+                        "participant profile source_event_ids_json decode failed: {error}"
+                    ))
+                })?
+            };
+            if !ids.iter().any(|id| id == source_event_id.as_str()) {
+                if ids.len() >= MAX_PROFILE_SOURCE_EVENTS {
+                    ids.remove(0);
+                }
+                ids.push(source_event_id.as_str().to_owned());
+            }
+            Ok(ids
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>())
+        };
+
+    let Some(current) = current else {
+        // 首次观察：直接插入 current 档案。
+        let sources = append_source("")?;
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_participant_profiles
+               (account_id, platform_identity_kind, actor_platform_id, display_name,
+                aliases_json, trust, confirmed, invalidated, source_event_ids_json,
+                established_by_event_id, current, first_seen_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'observed', 0, 0, ?, ?, 1, ?, ?)"#,
+            [
+                account_id.into(),
+                platform_identity_kind.into(),
+                actor_platform_id.into(),
+                display_name.clone().into(),
+                serde_json::json!(Vec::<serde_json::Value>::new())
+                    .to_string()
+                    .into(),
+                serde_json::json!(sources).to_string().into(),
+                source_event_id.as_str().into(),
+                now.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "已写入参与者档案首条观察"
+        );
+        return Ok(());
+    };
+
+    if current.display_name == display_name {
+        // 观察无变化：只追加来源事件。
+        let sources = append_source(&current.source_event_ids_json)?;
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_participant_profiles SET source_event_ids_json = ? WHERE profile_id = ?",
+            [
+                serde_json::json!(sources).to_string().into(),
+                current.profile_id.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+        return Ok(());
+    }
+
+    // 显示信息变化：旧行 current=0 保留审计，旧显示名进入有界 aliases（去重、≤10、≤200 字符）。
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "UPDATE secretary_participant_profiles SET current = 0 WHERE profile_id = ?",
+        [current.profile_id.into()],
+    ))
+    .await
+    .map_err(store_error)?;
+
+    let mut aliases: Vec<serde_json::Value> =
+        if current.aliases_json.trim().is_empty() || current.aliases_json == "null" {
+            Vec::new()
+        } else {
+            serde_json::from_str(&current.aliases_json).map_err(|error| {
+                InboundEventStoreError::InvalidData(format!(
+                    "participant profile aliases_json decode failed: {error}"
+                ))
+            })?
+        };
+    if !current.display_name.is_empty()
+        && !aliases.iter().any(|alias| {
+            alias.get("alias").and_then(serde_json::Value::as_str)
+                == Some(current.display_name.as_str())
+        })
+    {
+        // alias 的来源是建立该旧显示名的来源事件（established_by_event_id 精确
+        // 跟踪），绝不是触发本次变化的新事件；同名消息追加的来源不影响该精度。
+        let alias_source = current
+            .established_by_event_id
+            .clone()
+            .unwrap_or_else(|| source_event_id.as_str().to_owned());
+        aliases.push(serde_json::json!({
+            "alias": current.display_name.chars().take(200).collect::<String>(),
+            "source_event_id": alias_source,
+        }));
+    }
+    aliases.truncate(10);
+    let sources = append_source(&current.source_event_ids_json)?;
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_participant_profiles
+           (account_id, platform_identity_kind, actor_platform_id, display_name,
+            aliases_json, trust, confirmed, invalidated, source_event_ids_json,
+            established_by_event_id, current, first_seen_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'observed', 0, 0, ?, ?, 1, ?, ?)"#,
+        [
+            account_id.into(),
+            platform_identity_kind.into(),
+            actor_platform_id.into(),
+            display_name.into(),
+            serde_json::json!(aliases).to_string().into(),
+            serde_json::json!(sources).to_string().into(),
+            source_event_id.as_str().into(),
+            now.into(),
+            now.into(),
+        ],
+    ))
+    .await
+    .map_err(store_error)?;
+    tracing::trace!(
+        source_event_id = %source_event_id.as_str(),
+        "参与者档案显示信息已更新，旧显示名进入有界 aliases"
+    );
+    Ok(())
+}
+
+/// 会话（群）作用域观察：群名片/群角色按 (account, conversation, actor) 保存。
+/// 同一 Actor 在不同群的名片/角色互不覆盖；只显示不授权；
+/// 单事件受限（投影缺失 / never_long_term / 已撤回）同样跳过。
+#[allow(clippy::too_many_arguments)]
+async fn upsert_participant_conversation_observation_in_txn(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    conversation_id: u64,
+    platform_identity_kind: &str,
+    actor_platform_id: &str,
+    profile: &crate::ObservedSenderProfile,
+    source_event_id: &SourceEventId,
+    now: chrono::NaiveDateTime,
+) -> Result<(), InboundEventStoreError> {
+    let group_card = profile
+        .group_card
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    // 协议群角色必须归一化：缺失或未知值一律 unknown，否则 CHECK 约束会把
+    // 未知角色字符串打成整条消息入库失败。
+    let group_role = crate::GroupRole::parse_protocol(profile.group_role.as_deref())
+        .as_str()
+        .to_owned();
+
+    #[derive(Debug, FromQueryResult)]
+    struct ObservationRow {
+        observation_id: u64,
+        group_card: Option<String>,
+        group_role: String,
+        established_by_event_id: Option<String>,
+        source_event_ids_json: String,
+    }
+    let current = ObservationRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT observation_id, group_card, group_role, established_by_event_id,
+                  CAST(source_event_ids_json AS CHAR) AS source_event_ids_json
+           FROM secretary_participant_conversation_observations
+           WHERE account_id = ? AND conversation_id = ?
+             AND platform_identity_kind = ? AND actor_platform_id = ?"#,
+        [
+            account_id.into(),
+            conversation_id.into(),
+            platform_identity_kind.into(),
+            actor_platform_id.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+
+    let Some(current) = current else {
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_participant_conversation_observations
+               (account_id, conversation_id, platform_identity_kind, actor_platform_id,
+                group_card, group_role, established_by_event_id, source_event_ids_json,
+                first_seen_at, updated_at)
+               VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?)"#,
+            [
+                account_id.into(),
+                conversation_id.into(),
+                platform_identity_kind.into(),
+                actor_platform_id.into(),
+                group_card.clone().into(),
+                group_role.into(),
+                source_event_id.as_str().into(),
+                serde_json::json!(vec![source_event_id.as_str()])
+                    .to_string()
+                    .into(),
+                now.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+        tracing::trace!(
+            source_event_id = %source_event_id.as_str(),
+            "已写入会话作用域群名片/群角色观察"
+        );
+        return Ok(());
+    };
+
+    // 有界追加来源（≤10，去重）；列表满时淘汰最旧来源、保留最新建立事件
+    // （当前名片/角色由最新事件建立，不得在截断中丢失）。
+    let mut sources: Vec<String> = if current.source_event_ids_json.trim().is_empty()
+        || current.source_event_ids_json == "null"
+    {
+        Vec::new()
+    } else {
+        serde_json::from_str(&current.source_event_ids_json).map_err(|error| {
+            InboundEventStoreError::InvalidData(format!(
+                "conversation observation source_event_ids_json decode failed: {error}"
+            ))
+        })?
+    };
+    if !sources.iter().any(|id| id == source_event_id.as_str()) {
+        if sources.len() >= MAX_PROFILE_SOURCE_EVENTS {
+            sources.remove(0);
+        }
+        sources.push(source_event_id.as_str().to_owned());
+    }
+    // 名片或角色真正变化时，当前值由本次事件建立（独立失效校验用）；
+    // 仅追加来源、值未变化时保留原建立事件。
+    let established = if current.group_card.as_deref() != Some(group_card.as_str())
+        || current.group_role != group_role
+    {
+        source_event_id.as_str().to_owned()
+    } else {
+        current.established_by_event_id.unwrap_or_default()
+    };
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"UPDATE secretary_participant_conversation_observations
+           SET group_card = NULLIF(?, ''), group_role = ?,
+               established_by_event_id = NULLIF(?, ''),
+               source_event_ids_json = ?, updated_at = ?
+           WHERE observation_id = ?"#,
+        [
+            group_card.into(),
+            group_role.into(),
+            established.into(),
+            serde_json::json!(sources).to_string().into(),
+            now.into(),
+            current.observation_id.into(),
+        ],
+    ))
+    .await
+    .map_err(store_error)?;
+    tracing::trace!(
+        source_event_id = %source_event_id.as_str(),
+        "会话作用域群名片/群角色观察已更新"
+    );
     Ok(())
 }

@@ -791,6 +791,7 @@ fn review_context(
             actor: ThreadActorRef {
                 account: command_account,
                 actor_id: row.command_actor_id,
+                platform_identity_kind: None,
             },
             role: parse_role(&row.command_role)?,
             authorized_account: candidate_account,

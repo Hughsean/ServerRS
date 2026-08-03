@@ -33,6 +33,9 @@ pub enum SecretaryToolKind {
     GetSecretaryStatus,
     ListPendingOwnerWork,
     GetThreadContext,
+    GetEventCausalContext,
+    GetParticipantContext,
+    GetParticipantContextByName,
     DraftReminder,
     CreateSchedule,
     RescheduleItem,
@@ -98,6 +101,9 @@ impl SecretaryToolKind {
             | Self::GetSecretaryStatus
             | Self::ListPendingOwnerWork
             | Self::GetThreadContext
+            | Self::GetEventCausalContext
+            | Self::GetParticipantContext
+            | Self::GetParticipantContextByName
             | Self::ListNotificationPolicies
             | Self::ExplainNotificationDecision
             | Self::ListMemoryFacts
@@ -229,6 +235,28 @@ pub enum SecretaryAction {
     },
     GetThreadContext {
         thread_id: crate::EventThreadId,
+    },
+    /// 读取单事件的账号作用域因果上下文（THR-011/THR-012，L0 只读）。
+    GetEventCausalContext {
+        source_event_id: crate::SourceEventId,
+    },
+    /// 读取参与者的账号作用域上下文（ID-004/ID-005/MEM-002，L0 只读）。
+    GetParticipantContext {
+        /// 身份种类与稳定 ID 构成完整三元组身份：档案按 (account, kind, actor_id)
+        /// 精确读取，同账号下不同身份命名空间的相同 ID 不合并；由 TempRefMap
+        /// 从模型输出的 actor_ref 恢复，模型永远不直接输出真实 ID。
+        actor_kind: crate::PlatformIdentityKind,
+        actor_id: String,
+        conversation_ref: Option<crate::ConversationRef>,
+        thread_id: Option<crate::EventThreadId>,
+    },
+    /// 按显示名/别名/群名片解析人物并读取上下文（THR-013 复合查询，L0 只读）。
+    /// 解决"张三负责什么"式名字查询无法两轮执行的不可达链：解析与上下文在一个
+    /// 动作内完成；歧义时返回有界候选列表要求 Owner 澄清。
+    GetParticipantContextByName {
+        name: String,
+        conversation_ref: Option<crate::ConversationRef>,
+        thread_id: Option<crate::EventThreadId>,
     },
     DraftReminder {
         text: String,
@@ -472,6 +500,11 @@ impl SecretaryAction {
             Self::GetSecretaryStatus => SecretaryToolKind::GetSecretaryStatus,
             Self::ListPendingOwnerWork { .. } => SecretaryToolKind::ListPendingOwnerWork,
             Self::GetThreadContext { .. } => SecretaryToolKind::GetThreadContext,
+            Self::GetEventCausalContext { .. } => SecretaryToolKind::GetEventCausalContext,
+            Self::GetParticipantContext { .. } => SecretaryToolKind::GetParticipantContext,
+            Self::GetParticipantContextByName { .. } => {
+                SecretaryToolKind::GetParticipantContextByName
+            }
             Self::DraftReminder { .. } => SecretaryToolKind::DraftReminder,
             Self::CreateSchedule { .. } => SecretaryToolKind::CreateSchedule,
             Self::RescheduleItem { .. } => SecretaryToolKind::RescheduleItem,

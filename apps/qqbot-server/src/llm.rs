@@ -1097,6 +1097,7 @@ mod tests {
                 actor: ThreadActorRef {
                     account,
                     actor_id: "alice".into(),
+                    platform_identity_kind: None,
                 },
                 role: MessageRole::ExternalObservation,
                 occurred_at_unix_secs: 1,
@@ -1291,6 +1292,7 @@ mod tests {
             actor: ThreadActorRef {
                 account: account.clone(),
                 actor_id: actor_id.into(),
+                platform_identity_kind: None,
             },
             role: MessageRole::ExternalObservation,
             occurred_at_unix_secs: 1,

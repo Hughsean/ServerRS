@@ -12,9 +12,9 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ContentTrustLevel, ConversationRef, EventThreadId, MessageRole, RecentEventRef,
-    SecretaryAction, SecretaryActionProposal, SecretaryToolKind, SourceAccountRef, SourceEventId,
-    ThreadActorRef,
+    ContentTrustLevel, ConversationRef, EventThreadId, MessageRole, PlatformIdentityKind,
+    RecentEventRef, SecretaryAction, SecretaryActionProposal, SecretaryToolKind, SourceAccountRef,
+    SourceEventId, ThreadActorRef, VerifiedActorKind,
 };
 
 // ===== 有界常量 =====
@@ -93,6 +93,9 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | GetSecretaryStatus
             | ListPendingOwnerWork { .. }
             | GetThreadContext { .. }
+            | GetEventCausalContext { .. }
+            | GetParticipantContext { .. }
+            | GetParticipantContextByName { .. }
             | DraftReminder { .. }
             | AskOwnerClarification { .. }
             | CreateSchedule { .. }
@@ -166,12 +169,15 @@ pub struct PlannerCommandEvent {
 }
 
 /// Planner 输入中已检索的上下文摘要。由 Retrieve 节点填充，正文按内容策略脱敏后有界。
+/// `actor_kind` 携带发送者身份种类（与事件一致），使检索摘要的 actor 标签也能
+/// 映射为完整账号作用域参与者引用。
 #[derive(Debug, Clone)]
 pub struct PlannerRetrievedExcerpt {
     pub source_event_id: SourceEventId,
     pub excerpt: String,
     pub occurred_at_unix_secs: i64,
     pub actor_id: String,
+    pub actor_kind: VerifiedActorKind,
 }
 
 // ===== AgentEventView =====
@@ -351,9 +357,20 @@ pub struct QueryEffectTypedEvent {
     pub source_event_id: SourceEventId,
     /// 发送者 actor_id（账号作用域内）。
     pub actor_id: String,
+    /// 发送者身份种类。typed_events 是 Replan 观察中唯一会进入 LLM 的
+    /// 参与者身份信息，必须携带 kind，避免按名/按 ID 读取上下文时退化为
+    /// 无命名空间的宽松查询（P0-1 跨层闭环）。
+    #[serde(default = "default_typed_event_actor_kind")]
+    pub actor_kind: PlatformIdentityKind,
     pub occurred_at_unix_secs: i64,
     /// 有界正文摘录（不含任何稳定 ID 的纯文本）。
     pub excerpt: String,
+}
+
+/// 旧格式 result_ref（无 actor_kind 字段）反序列化时的保守兜底：
+/// External 命名空间不暴露 Owner/Bot 身份，且不触发歧义拒绝。
+fn default_typed_event_actor_kind() -> PlatformIdentityKind {
+    PlatformIdentityKind::External
 }
 
 // ===== QueryEffectResultV1 =====
@@ -847,6 +864,7 @@ mod tests {
             excerpt: "x".repeat(MAX_EXCERPT_CHARS + 1),
             occurred_at_unix_secs: 100,
             actor_id: "actor-1".into(),
+            actor_kind: VerifiedActorKind::External,
         });
         assert!(validate_planner_input(&input).is_err());
     }
@@ -859,6 +877,7 @@ mod tests {
             excerpt: String::new(),
             occurred_at_unix_secs: 100,
             actor_id: "actor-1".into(),
+            actor_kind: VerifiedActorKind::External,
         });
         assert!(validate_planner_input(&input).is_ok());
     }

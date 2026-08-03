@@ -176,7 +176,23 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         SecretaryAction::ReadSourceEvent { .. }
         | SecretaryAction::ListUpcomingItems { .. }
         | SecretaryAction::GetSecretaryStatus
-        | SecretaryAction::GetThreadContext { .. } => {}
+        | SecretaryAction::GetThreadContext { .. }
+        | SecretaryAction::GetEventCausalContext { .. } => {}
+        SecretaryAction::GetParticipantContext {
+            actor_kind: _,
+            actor_id,
+            conversation_ref: _,
+            thread_id: _,
+        } => {
+            bounded_text("actor_id", actor_id, 1, 191)?;
+        }
+        SecretaryAction::GetParticipantContextByName {
+            name,
+            conversation_ref: _,
+            thread_id: _,
+        } => {
+            bounded_text("name", name, 1, 200)?;
+        }
         SecretaryAction::ListPendingOwnerWork { limit } => {
             if !(1..=20).contains(limit) {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(

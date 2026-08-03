@@ -7,8 +7,10 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`deepseek/qqbot-bounded-replan-v1`，基线提交 `c251942`；工作树包含未提交的
-  CTX-004 实现与评审文档修正，尚未推送或合并。
+- 当前开发分支：`claude/qqbot-participant-causality-v1`，基线提交 `38dd23c`（有界 Replan 闭环）；
+  参与者稳定身份 + 事件因果关系 + 人物上下文 v1 已完成。23:49 复核的 2 个跨层 P0
+  （kind 在 Effect/TempRef 边界丢失、按名查询未验证当前值与 alias 自身建立来源）已于
+  2026-08-03 00:22 修复并通过闭环反例；2026-08-03 10:19 Codex 最终复核通过，切片批准提交。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -23,6 +25,14 @@
   真实入模，模型仅看到请求内临时引用，local_only 只向已验证 loopback 模型开放；关键 MySQL
   关系视图用例已在随机隔离 schema 通过。CTX-004 的生产路径 P0/P1 已闭合，全 Graph 闭环集成测试、
   隐私视图测试及随机隔离 MySQL 主路径测试均已完成；切片进入提交候选。
+  **本轮（未提交）**：参与者稳定身份与事件因果关系闭环 v1 已完成初版与既定主路径验证 ——
+  `AccountScopedParticipantRef` 账号作用域身份、`secretary_participant_profiles` 档案表与
+  `secretary_event_relations` 可重建 VIEW、`EventCausalContext`/`ParticipantContext` 两个 L0
+  只读投影、类型化因果角色（发送者/回复根/线程发起人/要求者/承诺人/负责人/受益方）、确认人物
+  记忆（职责/沟通偏好）接线与 envelope_only/失效来源保护、Planner 临时引用 fail-closed；
+  9.1/9.2/9.3 三组指定测试与第十节命令通过，随机隔离 schema 已清理；但独立复核发现档案
+  第三次变化唯一键冲突、群角色/群名片缺少会话作用域、隐私来源失效不完整、有效线程投影不一致、
+  未知 conversation_ref 静默降级及自然语言两步查询不可达，故未批准为切片完成。
 
 ## 历史分块
 
@@ -32,6 +42,96 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-02 23:49（Asia/Shanghai）`：Codex 提交前闭环复核未批准：
+  - P0：by-name 候选已携带 PlatformIdentityKind，但 Effect 只取 stable ID 再调用仅接受 actor ID 的
+    participant_context；报告中的双 kind 测试只验证候选仓储，复合 L0 Action 仍会报多命名空间歧义。
+    同样，TempRefMap actor 映射也只保存字符串 ID，完整账号作用域参与者引用尚未贯穿 Action。
+  - P0：按名 SQL 只验证 bounded source list，没有独立验证 Profile/Observation 的
+    established_by_event_id；alias JSON_TABLE 只投影 alias 文本，没有验证该 alias 自己的来源事件。
+    建立来源被窗口淘汰后再删除，直接上下文会失效，但按名解析仍可能命中。
+  - 已确认 23:40 的局部修改本身有效：保留最新来源、按会话限制 Observation JOIN、来源列表门、
+    alias 字段定向搜索及 kind 入数据库键均已进入生产代码；需要补的是跨层传递和属性级来源门。
+
+- `2026-08-02 23:40（Asia/Shanghai）`：第二次复核的 2 P0 + 1 P1 修复完成并复验通过
+  （详见 [`history/2026-08.md`](history/2026-08.md) 同时间条目）：
+  - P0 最新来源截断：档案/观察来源列表满 10 条时淘汰最旧保留第 11 条建立事件；
+    显示名/群名片/群角色增加 `established_by_event_id` 单列独立失效校验；
+    observation 表新增 `established_by_event_id` 列。
+  - P0 按名查询：`participants_by_display_name` 真实使用 conversation/thread 过滤群名片
+    （无会话绝不跨群）；Profile/Observation 匹配前经 JSON_TABLE 来源有效性门；
+    alias 只搜 `$.alias` 字段（不再误中 source_event_id）。
+  - P1 身份键：profiles/observations 新增 `platform_identity_kind` 并纳入唯一键；
+    读取按账号内稳定 ID 全量取出，跨命名空间歧义 fail-closed 拒绝，绝不静默合并。
+  - 测试：9.3 新增第 8/9/10 段反例（来源淘汰 + 建立事件失效、跨群同名片隔离 +
+    失效来源不参与解析、external/owner 同 ID 并存 + 歧义拒绝）全部真实通过；
+    fmt/clippy 零告警、lib 238+118、9.1/9.2 通过，随机 schema finally 清理。
+  - 未提交、未推送、未合并，`.mcp.json` 未触碰。
+
+- `2026-08-02 23:11（Asia/Shanghai）`：Codex 第二次复核参与者/因果关系 v1，原 4 P0 + 4 P1
+  修复主体得到确认，但仍不批准提交：
+  - P0：Profile 与 Conversation Observation 的有界来源都使用 `push -> truncate(10)`，列表满后
+    丢弃最新事件；当前显示值仍由该事件更新，却无法在它被撤回/删除后通过 `source_refs_valid` 失效。
+  - P0：复合按名查询的仓储实现忽略 conversation/thread，跨所有群观察匹配群名片，并且没有在
+    匹配前验证 Profile/Observation 来源；受限或已删除来源仍可决定人物解析结果。
+  - P1：领域身份包含 platform kind，但档案当前键仍只有 account + actor ID，同账号不同身份命名空间
+    的相同字符串会合并。现有测试未覆盖上述三个反例，TODO 已新增聚焦修复项。
+  - 已确认有效：仅当前版本唯一键、会话观察直接读取、正文投影缺失 fail-closed、有效线程查询、
+    未知 TempRef 拒绝、snapshot 类型和 alias establishment 来源修复均真实进入生产路径。
+
+- `2026-08-02 22:56（Asia/Shanghai）`：参与者/因果关系 v1 修复轮次完成，22:15 复核的 4 个 P0 + 4 个
+  P1 全部修复并复验通过，停候 Codex 复核（详见 [`history/2026-08.md`](history/2026-08.md) 同时间条目）：
+  - P0 修复：`current_head` 生成列唯一键只约束当前版本；群名片/群角色改为会话作用域观察表；
+    写入端逐事件 content_mode 门禁 + 读取端 JSON_TABLE 来源校验 + person/commitment LEFT JOIN
+    fail-closed；新增复合 L0 动作 `GetParticipantContextByName` 闭合 NL 人物查询链。
+  - P1 修复：线程参与者/承诺统一走 `secretary_effective_thread_events`；未知 conversation_ref
+    fail-closed 返回 `InvalidOutput`；`directory_snapshot_id` 改为 `CHAR(36)`；alias 来源改用
+    `established_by_event_id` 精确引用建立显示名的来源事件。
+  - 测试：9.3 主路径扩为 8 段（含第三次资料变化、跨群角色、投影删除、alias 来源、复合查询），
+    merge/split 有效线程测试新增并通过；9.2 扩展未注册引用 fail-closed；9.1 不变。
+  - 验证：fmt/clippy 零告警，lib 238+118 通过，9.1/9.2/9.3 全绿，随机隔离 schema finally 清理，
+    工作树边界无数字人文件；未提交、未推送、未合并，`.mcp.json` 未触碰。
+
+- `2026-08-02 22:15（Asia/Shanghai）`：Codex 对参与者/因果关系 v1 做独立复核，结论为**不批准提交**。
+  - P0：`UNIQUE(account_id, actor_platform_id, current)` 使第二条历史行无法产生，同一参与者第三次
+    显示资料变化会回滚消息入站；现有 MySQL 测试未覆盖。
+  - P0：群名片与群角色按账号 + Actor 全局保存，无法表达同一 Actor 在不同群的不同身份；
+    `participant_context` 接收 conversation/thread 参数却未据此过滤或验证证据。
+  - P0：档案只检查会话 memory_mode，且已确认人物/承诺查询在正文投影缺失时 fail-open；受限或
+    被删除的单事件来源仍可能支撑长期人物上下文。
+  - P0：提示要求 `ResolveReference -> GetParticipantContext`，但二者不在 Replan 白名单，单次
+    Owner 自然语言人物查询没有可达执行链。
+  - P1：线程参与者与承诺仍查询原始 `secretary_thread_events`；未知可选 conversation_ref 被静默
+    降级为 None。TODO 已新增对应修复项，原有测试通过仍如实保留为“已覆盖主路径”。
+
+- `2026-08-02 22:08（Asia/Shanghai）`：参与者稳定身份 + 事件因果关系 + 人物上下文 v1 实现与验证完成
+  （任务切片：ID-004/ID-005 + THR-011/THR-012/THR-013 + MEM-002），工作树停候 Codex 评审，未提交。
+  详见 [`history/2026-08.md`](history/2026-08.md) 同时间条目：
+  - 领域层：`AccountScopedParticipantRef`（账号作用域身份，复用 `ParticipantIdentity`）、
+    `GroupRole`（群主/管理员/成员/未知，协议字段归一化）、`ParticipantContextView`、
+    `EventCausalContextView` 与 `EventRelationKind`（SentBy/RepliesTo/MemberOfThread/ThreadRootBy/
+    Mentions/RequestedBy/AssignedTo/PromisedBy/Benefits）及其有界校验纯函数。
+  - 投影：`secretary_participant_profiles`（档案表，显示名/群名片/群角色/有界别名/来源）、
+    `secretary_event_relations` VIEW（5 个 UNION ALL 分支 + `JSON_TABLE`，可重建只读投影）。
+  - 生产写入：`ObservedSenderProfile` 入站档案，事务内幂等 upsert（首次观察/无变化追加来源/
+    变化旋转旧行进别名）；`never_long_term` 会话跳过；修复未知/空群角色字符串导致整条消息
+    入库失败的 CHECK 约束缺陷（`GroupRole::parse_protocol` 归一化）。
+  - 两个 L0 只读 Action：`GetEventCausalContext { source_event_id }`、
+    `GetParticipantContext { actor_id, conversation_ref?, thread_id? }`，接入风险策略、Planner
+    allowlist、序列化校验与 EffectExecutor；执行结果为有界安全中文摘要 + 类型化事件，LLM 只看到
+    `evt_N/actor_N/thread_N/conv_N` 临时引用，未注册引用 fail-closed。
+  - 人物记忆（MEM-002）：已确认 `PersonMemory` 的职责/沟通偏好进入参与者上下文；未批准候选
+    绝不进入确认字段；envelope_only/never_long_term/已召回来源不支撑人物事实；记忆保留
+    `source_event_ids` 且失效后不作为有效返回。
+  - 验证（第十节命令全部真实通过）：fmt/check/clippy 零告警；personal-secretary lib 238 条、
+    qqbot-server lib 118 条（2 条 MySQL 忽略）、workspace_boundaries 19 条全部通过；
+    9.1 领域表驱动（严格角色分离/未确认不伪装/昵称群角色不授权）、9.2 Fake Planner 隐私
+    fail-closed、9.3 随机隔离 MySQL 主路径（Alice 要求→Bob 回复并 @Carol→Carol 承诺；确认语义
+    Alice=要求者、Carol=承诺人、Alice=受益方、负责人为空；账号 B 复用 actor_id/message_id 零关联；
+    envelope_only 来源不泄漏；PlannerUseCase 全闭环恰好一条 Response Artifact）均真实通过，
+    随机 schema 在 finally 清理；另发现本会话两次旧结构失败运行残留 2 个 `qqbot_accept_pc*`
+    schema（panic 路径未清理，已修复测试结构）与 07-29/07-30 历史残留 5 个，待用户授权删除。
+  - 未提交、推送或合并，`.mcp.json` 未触碰。
 
 - `2026-08-02 20:28（Asia/Shanghai）`：CTX-004-VERIFY 完成 MySQL 主路径集成测试并真实通过：
   - **MySQL Replan 闭环测试**（`mysql_replan_two_rounds_effect_and_response_singleton`）：

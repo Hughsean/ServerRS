@@ -277,6 +277,52 @@ pub struct InboundMessageEnvelope {
     pub segments: Vec<ContentSegment>,
     /// 产生该观察的传输连接周期；历史回补事件允许为空。
     pub connection_epoch_id: Option<ConnectionEpochId>,
+    /// 发送者的观察档案（昵称/群名片/群角色）。只用于显示与指代候选，
+    /// 绝不构成授权；身份权威仍是 `actor`（SourceAccountRef + 稳定主体 ID）。
+    pub sender_profile: Option<ObservedSenderProfile>,
+}
+
+/// 发送者观察档案（ID-005）。仅信封级显示信息，不保存正文；
+/// `never_long_term` 会话的观察不进入人物长期上下文。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedSenderProfile {
+    /// 平台昵称（有界）。
+    pub nickname: String,
+    /// 群名片（群消息可带；私聊为 None）。
+    pub group_card: Option<String>,
+    /// 群角色协议原值（'owner'/'admin'/'member'/其他）；由领域层
+    /// `GroupRole::parse_protocol` 解析，未知值一律视为 Unknown。
+    pub group_role: Option<String>,
+}
+
+impl ObservedSenderProfile {
+    /// 昵称、群名片有界（与领域 `MAX_ATTRIBUTE_VALUE_CHARS` 对齐），群角色原值有界。
+    pub fn validate(&self) -> Result<(), InboundIdentityError> {
+        if self.nickname.chars().count() > 200 {
+            return Err(InboundIdentityError::Invalid(
+                "sender_profile.nickname exceeds 200 chars".into(),
+            ));
+        }
+        if self
+            .group_card
+            .as_ref()
+            .is_some_and(|card| card.chars().count() > 200)
+        {
+            return Err(InboundIdentityError::Invalid(
+                "sender_profile.group_card exceeds 200 chars".into(),
+            ));
+        }
+        if self
+            .group_role
+            .as_ref()
+            .is_some_and(|role| role.chars().count() > 16)
+        {
+            return Err(InboundIdentityError::Invalid(
+                "sender_profile.group_role exceeds 16 chars".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl InboundMessageEnvelope {
@@ -296,6 +342,7 @@ impl InboundMessageEnvelope {
             normalized_text: normalized_text.into(),
             segments,
             connection_epoch_id: None,
+            sender_profile: None,
         };
         value.validate()?;
         Ok(value)
@@ -304,6 +351,18 @@ impl InboundMessageEnvelope {
     pub fn observed_in(mut self, connection_epoch_id: ConnectionEpochId) -> Self {
         self.connection_epoch_id = Some(connection_epoch_id);
         self
+    }
+
+    /// 附加发送者观察档案；档案无效时返回错误（fail-closed，不静默丢弃显示数据）。
+    pub fn with_sender_profile(
+        mut self,
+        profile: Option<ObservedSenderProfile>,
+    ) -> Result<Self, InboundIdentityError> {
+        if let Some(ref profile) = profile {
+            profile.validate()?;
+        }
+        self.sender_profile = profile;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), InboundIdentityError> {
@@ -317,6 +376,9 @@ impl InboundMessageEnvelope {
         }
         for segment in &self.segments {
             segment.validate()?;
+        }
+        if let Some(ref profile) = self.sender_profile {
+            profile.validate()?;
         }
         Ok(())
     }
@@ -382,6 +444,8 @@ pub enum InboundIdentityError {
     EmptyField(&'static str),
     #[error("occurred_at_unix_secs must not be negative, got {0}")]
     NegativeTimestamp(i64),
+    #[error("invalid inbound value: {0}")]
+    Invalid(String),
 }
 
 fn require_non_empty(field: &'static str, value: &str) -> Result<(), InboundIdentityError> {

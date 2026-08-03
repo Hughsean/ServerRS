@@ -206,6 +206,20 @@ fn map_history_message(
         message.time,
         normalized_text,
         segments,
+        message
+            .sender
+            .as_ref()
+            .map(|sender| personal_secretary::ObservedSenderProfile {
+                nickname: sender.nickname.chars().take(200).collect(),
+                group_card: sender
+                    .card
+                    .as_ref()
+                    .map(|card| card.chars().take(200).collect()),
+                group_role: sender
+                    .role
+                    .as_ref()
+                    .map(|role| role.chars().take(16).collect()),
+            }),
     )
 }
 

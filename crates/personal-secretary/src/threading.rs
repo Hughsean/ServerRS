@@ -125,6 +125,11 @@ impl QuestionStatus {
 pub struct ThreadActorRef {
     pub account: SourceAccountRef,
     pub actor_id: String,
+    /// 平台身份种类（身份命名空间）。仅事件派生的 Actor 引用（如 AgentEventView
+    /// 的发送者）携带 Some；线程/记忆领域的引用多数不区分身份种类，为 None。
+    /// Some 时 TempRefMap 可映射为完整账号作用域参与者引用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_identity_kind: Option<crate::PlatformIdentityKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

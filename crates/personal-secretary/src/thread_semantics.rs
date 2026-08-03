@@ -433,6 +433,7 @@ mod tests {
         ThreadActorRef {
             account: SourceAccountRef::new(MessageSource::NapCat, "account").unwrap(),
             actor_id: id.into(),
+            platform_identity_kind: None,
         }
     }
 

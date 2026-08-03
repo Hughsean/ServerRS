@@ -129,6 +129,8 @@ fn migration_order(path: &std::path::Path) -> u8 {
         // 记忆候选：依赖 accounts/source_events/message_contents/action_runs/memory_facts
         // 等既有表，排序在全部 FollowUp 控制迁移之后（28）。
         name if name.contains("_memory_candidates.sql") => 28,
+        // 参与者档案与结构关系 VIEW：依赖 ingestion/threading/recall，排序在记忆候选之后（29）。
+        name if name.contains("_participant_context.sql") => 29,
         _ => 99,
     }
 }

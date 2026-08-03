@@ -11,13 +11,17 @@ use tracing::debug;
 use super::mysql_inbound::store_error;
 use crate::planner::AgentEventView;
 use crate::{
-    ContentTrustLevel, ConversationKind, ConversationRef, EventQuery, EventSearchResult,
-    EventThreadId, IdentityTrust, InboundEventStoreError, MessageRole, ParticipantIdentity,
+    AccountScopedParticipantRef, CausalEventRef, CausalThreadRef, ContentTrustLevel,
+    ConversationKind, ConversationRef, EventCausalContextView, EventParticipantSummary, EventQuery,
+    EventRelation, EventRelationKind, EventSearchResult, EventThreadId, GroupRole, IdentityTrust,
+    InboundEventStoreError, MAX_CAUSAL_MENTIONED, MAX_CAUSAL_PARTICIPANTS, MAX_CAUSAL_SOURCE_REFS,
+    MAX_PARTICIPANT_ALIASES, MAX_PARTICIPANT_ATTRIBUTES, MAX_RELATION_SOURCES, MessageRole,
+    ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
     PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
     RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId,
     ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
-    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, UpcomingItem, VerifiedActor,
-    VerifiedActorKind,
+    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem,
+    VerifiedActor, VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
@@ -32,6 +36,209 @@ pub(crate) struct MySqlRetrieverStore {
 impl MySqlRetrieverStore {
     pub(crate) fn new(db: DatabaseConnection) -> Self {
         Self { db }
+    }
+
+    /// participant_context 共享主体：身份种类与档案行已确定，执行证据读取与
+    /// 上下文组装（宽松按 ID 查询与按完整引用查询共用）。
+    #[allow(clippy::too_many_arguments)]
+    async fn participant_context_impl(
+        &self,
+        account: &SourceAccountRef,
+        account_id: u64,
+        identity_kind: &str,
+        actor_id: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+        profile: Option<ProfileRow>,
+    ) -> Result<Option<ParticipantContextView>, InboundEventStoreError> {
+        let related_event_ids = load_related_event_ids(&self.db, account_id, actor_id).await?;
+        let person_memory = load_confirmed_person_memory(&self.db, account_id, actor_id).await?;
+
+        let identity_trust = profile
+            .as_ref()
+            .map(|profile| parse_identity_trust(&profile.trust))
+            .transpose()?
+            .unwrap_or(IdentityTrust::Observed);
+        let kind = parse_actor_kind(identity_kind)?;
+        let view_participant = AccountScopedParticipantRef::new(
+            account.clone(),
+            PlatformIdentityKind::from_verified_actor_kind(kind),
+            actor_id.to_owned(),
+            identity_trust,
+        )
+        .map_err(domain_err)?;
+
+        // ---- 会话作用域观察（P0-2）----
+        // conversation 参数优先；否则由线程根事件所在会话推导；两者皆无时群属性
+        // 返回未知，绝不跨会话猜测（同一 Actor 在不同群的名片/角色互不污染）。
+        let observation_conversation_id = match conversation {
+            Some(conversation) => {
+                resolve_conversation_id(&self.db, account_id, conversation).await?
+            }
+            None => match thread_id {
+                Some(thread_id) => {
+                    resolve_thread_conversation_id(&self.db, account_id, thread_id).await?
+                }
+                None => None,
+            },
+        };
+        let observation = match observation_conversation_id {
+            Some(conversation_id) => {
+                load_conversation_observation(
+                    &self.db,
+                    account_id,
+                    conversation_id,
+                    identity_kind,
+                    actor_id,
+                )
+                .await?
+            }
+            None => None,
+        };
+        // 观察失效闭环：历史来源整体有效 + 当前名片/角色的建立事件独立有效。
+        // 来源列表有界且淘汰最旧后可能不含建立事件，因此当前值必须单独校验
+        // established_by_event_id，不能只依赖历史来源列表。
+        let observation_established_valid = match &observation {
+            Some(observation) => match observation.established_by_event_id.as_deref() {
+                Some(id) => single_event_valid(&self.db, account_id, id).await?,
+                None => false,
+            },
+            None => false,
+        };
+        let observation_valid = match &observation {
+            Some(observation) => {
+                source_refs_valid(&self.db, account_id, &observation.source_event_ids_json).await?
+                    && observation_established_valid
+            }
+            None => false,
+        };
+        let group_card = if observation_valid {
+            observation.as_ref().and_then(|o| o.group_card.clone())
+        } else {
+            None
+        };
+        let group_role = if observation_valid {
+            observation
+                .as_ref()
+                .map(|o| GroupRole::parse_protocol(Some(&o.group_role)))
+                .unwrap_or(GroupRole::Unknown)
+        } else {
+            GroupRole::Unknown
+        };
+
+        // ---- 档案失效闭环（P0-3）----
+        // 档案行被标记失效或任一来源已撤回/投影缺失/降级为 never_long_term 时，
+        // 不得把旧显示名/别名/档案属性当有效事实返回。
+        let profile_valid = match &profile {
+            Some(profile) if profile.invalidated == 0 => {
+                source_refs_valid(&self.db, account_id, &profile.source_event_ids_json).await?
+            }
+            _ => false,
+        };
+        // 当前显示名由 established_by_event_id 建立（来源列表可能已把它淘汰），
+        // 该建立事件失效（撤回/删除/降级）时显示名必须独立失效。
+        let established_valid = match &profile {
+            Some(profile) => match profile.established_by_event_id.as_deref() {
+                Some(id) => single_event_valid(&self.db, account_id, id).await?,
+                None => false,
+            },
+            None => false,
+        };
+        // display 值只在档案整体有效且建立事件有效时才返回。
+        let display_name = if profile_valid && established_valid {
+            profile.as_ref().and_then(|p| {
+                if p.display_name.trim().is_empty() {
+                    None
+                } else {
+                    Some(p.display_name.clone())
+                }
+            })
+        } else {
+            None
+        };
+        let mut aliases: Vec<String> = if profile_valid {
+            profile
+                .as_ref()
+                .map(|p| parse_aliases(&p.aliases_json))
+                .transpose()?
+                .unwrap_or_default()
+                .into_iter()
+                .take(MAX_PARTICIPANT_ALIASES)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        aliases.truncate(MAX_PARTICIPANT_ALIASES);
+
+        // 每条属性独立携带来源与失效状态；召回/失效的来源不得支撑新事实。
+        // DisplayName/GroupCard 的来源精确引用建立事件，而非有界历史列表。
+        let mut attributes: Vec<ParticipantAttribute> = Vec::new();
+        if let (Some(profile), Some(display)) = (&profile, display_name.as_ref())
+            && profile_valid
+        {
+            let display_sources = profile
+                .established_by_event_id
+                .as_deref()
+                .and_then(|id| SourceEventId::new(id).ok())
+                .map(|id| vec![id])
+                .unwrap_or_default();
+            attributes.push(ParticipantAttribute {
+                kind: ParticipantAttributeKind::DisplayName,
+                value: display.chars().take(200).collect(),
+                trust: identity_trust,
+                confirmed: profile.confirmed != 0,
+                source_event_ids: display_sources,
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            });
+        }
+        if observation_valid
+            && let (Some(card), Some(observation)) = (group_card.as_ref(), &observation)
+        {
+            let card_sources = observation
+                .established_by_event_id
+                .as_deref()
+                .and_then(|id| SourceEventId::new(id).ok())
+                .map(|id| vec![id])
+                .unwrap_or_default();
+            attributes.push(ParticipantAttribute {
+                kind: ParticipantAttributeKind::GroupCard,
+                value: card.chars().take(200).collect(),
+                trust: IdentityTrust::Observed,
+                confirmed: false,
+                source_event_ids: card_sources,
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            });
+        }
+        // MEM-002：已确认人物记忆补充关系/职责/沟通偏好；未批准的候选绝不进入确认字段。
+        for fact in person_memory {
+            for attribute in fact.into_attributes() {
+                if attributes.len() < MAX_PARTICIPANT_ATTRIBUTES {
+                    attributes.push(attribute);
+                }
+            }
+        }
+        // 权限描述：v1 无权限记忆生产者；只有账号绑定的 Owner 由身份派生，不伪造来源。
+        // 权限边界由 check_participant_permission_boundary 守卫。
+
+        let expired_or_invalidated = profile.is_some() && !profile_valid;
+
+        Ok(Some(ParticipantContextView {
+            participant: view_participant,
+            display_name,
+            group_card,
+            aliases,
+            group_role,
+            attributes,
+            conversation: conversation.cloned(),
+            thread_id: thread_id.cloned(),
+            related_event_ids,
+            unresolved_ambiguity: false, // 稳定 actor_id 显式查询，无命名歧义。
+            expired_or_invalidated,
+        }))
     }
 }
 
@@ -549,6 +756,457 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         }))
     }
 
+    async fn event_causal_context(
+        &self,
+        account: &SourceAccountRef,
+        source_event_id: &SourceEventId,
+    ) -> Result<Option<EventCausalContextView>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+
+        // 事件信封（含当前档案显示名）。账号强制过滤；不存在则整体返回 None。
+        let Some(event) = CausalEventRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind,
+                      e.reply_to_event_id, p.display_name
+               FROM secretary_source_events e
+               LEFT JOIN secretary_participant_profiles p
+                 ON p.account_id = e.account_id AND p.actor_platform_id = e.actor_platform_id
+                    AND p.current = 1
+               WHERE e.source_event_id = ? AND e.account_id = ?"#,
+            [source_event_id.as_str().into(), account_id.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?
+        else {
+            return Ok(None);
+        };
+
+        // 回复父事件及其发送者（同账号强制；跨账号绝不关联）。
+        let reply_parent =
+            load_reply_parent(&self.db, account_id, event.reply_to_event_id.as_deref()).await?;
+
+        // 有效线程（合并/拆分后的视图）+ 根事件 + 发起人。根发送者 = 线程发起人，不是 Owner 判定。
+        let thread = load_effective_thread(&self.db, account_id, source_event_id).await?;
+
+        // @ 到的参与者（协议观察，仅 actor_id；绝不构成指派）。
+        let mentioned = load_mentioned_actors(&self.db, account_id, source_event_id).await?;
+
+        // 线程参与者有界列表（含当前档案显示名与群角色）。
+        let participants = match &thread {
+            Some(thread) => {
+                load_thread_participants(&self.db, account, account_id, &thread.thread_id).await?
+            }
+            None => Vec::new(),
+        };
+
+        // 结构关系从可重建 VIEW（secretary_event_relations）读取：sent_by / mentions /
+        // replies_to / member_of_thread / thread_root_by，全部账号强制。
+        let structural =
+            load_structural_relations(&self.db, account, account_id, source_event_id).await?;
+
+        // 已确认要求者：线程上 status=confirmed 的 request 声明（Requester 必须带来源）。
+        let confirmed_requesters =
+            load_confirmed_requesters(&self.db, account_id, thread.as_ref()).await?;
+
+        // 已确认承诺/受益方：与线程来源事件关联的 confirmed commitment 记忆。
+        let confirmed_commitments =
+            load_confirmed_commitments(&self.db, account_id, thread.as_ref()).await?;
+
+        // ---- 组装类型化关系与角色列表 ----
+        // 结构关系（sent_by/mentions/replies_to/member_of_thread/thread_root_by）
+        // 直接采用可重建 VIEW（secretary_event_relations）的结果，不重复构造；
+        // 语义角色（requested_by/promised_by/benefits）在下方从已确认来源追加。
+        let mut relations: Vec<EventRelation> = structural;
+        let mut source_refs: Vec<SourceEventId> = Vec::new();
+        let mut push_source = |id: SourceEventId| {
+            if !source_refs.iter().any(|existing| existing == &id)
+                && source_refs.len() < MAX_CAUSAL_SOURCE_REFS
+            {
+                source_refs.push(id);
+            }
+        };
+        push_source(source_event_id.clone());
+        if let Some(ref parent) = reply_parent {
+            push_source(parent.source_event_id.clone());
+        }
+        if let Some(ref thread) = thread {
+            push_source(thread.root_event_id.clone());
+        }
+
+        let mut requesters = Vec::new();
+        for claim in confirmed_requesters {
+            for source in claim.source_event_ids.iter().take(MAX_RELATION_SOURCES) {
+                push_source(source.clone());
+            }
+            let subject = account_scoped(
+                account,
+                claim.actor_kind.as_str(),
+                claim.claimant_actor_id.as_str(),
+            )?;
+            relations.push(EventRelation {
+                kind: EventRelationKind::RequestedBy,
+                account: account.clone(),
+                subject: subject.clone(),
+                thread_id: thread.as_ref().map(|t| t.thread_id.clone()),
+                source_event_ids: claim
+                    .source_event_ids
+                    .iter()
+                    .take(MAX_RELATION_SOURCES)
+                    .cloned()
+                    .collect(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                invalidation_reason: None,
+            });
+            requesters.push(subject);
+        }
+
+        let mut promisors = Vec::new();
+        let mut beneficiaries = Vec::new();
+        for commitment in confirmed_commitments {
+            let sources: Vec<SourceEventId> = commitment
+                .source_event_ids
+                .iter()
+                .take(MAX_RELATION_SOURCES)
+                .cloned()
+                .collect();
+            for source in &sources {
+                push_source(source.clone());
+            }
+            let promisor = account_scoped(
+                account,
+                commitment.promisor_kind.as_str(),
+                commitment.promisor.as_str(),
+            )?;
+            relations.push(EventRelation {
+                kind: EventRelationKind::PromisedBy,
+                account: account.clone(),
+                subject: promisor.clone(),
+                thread_id: thread.as_ref().map(|t| t.thread_id.clone()),
+                source_event_ids: sources.clone(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                invalidation_reason: None,
+            });
+            promisors.push(promisor);
+            let beneficiary = account_scoped(
+                account,
+                commitment.beneficiary_kind.as_str(),
+                commitment.beneficiary.as_str(),
+            )?;
+            relations.push(EventRelation {
+                kind: EventRelationKind::Benefits,
+                account: account.clone(),
+                subject: beneficiary.clone(),
+                thread_id: thread.as_ref().map(|t| t.thread_id.clone()),
+                source_event_ids: sources,
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                invalidation_reason: None,
+            });
+            beneficiaries.push(beneficiary);
+        }
+
+        Ok(Some(EventCausalContextView {
+            source_event_id: source_event_id.clone(),
+            account: account.clone(),
+            sender: Some(participant_from_parts(
+                &event.actor_kind,
+                &event.actor_platform_id,
+                event.display_name.clone(),
+            )?),
+            reply_parent: reply_parent.map(|parent| CausalEventRef {
+                source_event_id: parent.source_event_id.clone(),
+                sender: participant_from_parts(
+                    &parent.actor_kind,
+                    &parent.actor_platform_id,
+                    parent.display_name.clone(),
+                )
+                .ok(),
+            }),
+            thread: thread.map(|thread| CausalThreadRef {
+                thread_id: thread.thread_id.clone(),
+                status: thread.status,
+                root_event_id: thread.root_event_id.clone(),
+                root_sender: thread.root_sender.clone(),
+            }),
+            mentioned: mentioned
+                .iter()
+                .map(|actor_id| {
+                    AccountScopedParticipantRef::new(
+                        account.clone(),
+                        PlatformIdentityKind::External,
+                        actor_id.clone(),
+                        IdentityTrust::Observed,
+                    )
+                    .map_err(domain_err)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            requesters,
+            assignees: Vec::new(), // v1 无负责人生产者；无证据即未知，绝不猜测。
+            promisors,
+            beneficiaries,
+            participants,
+            relations,
+            ambiguous: false, // 事件/参与者均为显式稳定 ID，无命名歧义。
+            source_refs,
+        }))
+    }
+
+    async fn participant_context(
+        &self,
+        account: &SourceAccountRef,
+        actor_id: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+
+        // 宽松查询（调用方只有账号 + 稳定 ID）：读取全部 current 档案行并
+        // fail-closed —— 恰好一行 → 以行的身份种类为准；多行（跨命名空间冲突）
+        // → 显式错误，绝不静默合并；零行 → 退回事件证据的存在性判断。
+        let mut profiles = load_current_profiles(&self.db, account_id, actor_id).await?;
+        if profiles.len() > 1 {
+            return Err(InboundEventStoreError::InvalidData(format!(
+                "账号内稳定 ID {actor_id} 存在多个身份命名空间的档案，拒绝歧义读取"
+            )));
+        }
+        let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
+        let profile = profiles.pop();
+        if profile.is_none() && event_kind.is_none() {
+            return Ok(None);
+        }
+        // 身份种类优先取档案行（档案键的一部分），无档案时由最近事件恢复。
+        let identity_kind = profile
+            .as_ref()
+            .map(|profile| profile.platform_identity_kind.clone())
+            .or(event_kind)
+            .unwrap_or_else(|| "external".into());
+        self.participant_context_impl(
+            account,
+            account_id,
+            &identity_kind,
+            actor_id,
+            conversation,
+            thread_id,
+            profile,
+        )
+        .await
+    }
+
+    /// 精确查询（调用方已知完整三元组身份）：档案按身份种类精确命中，同账号下
+    /// 相同稳定 ID 的不同身份命名空间互不干扰，也不触发宽松查询的歧义拒绝。
+    async fn participant_context_by_ref(
+        &self,
+        participant: &AccountScopedParticipantRef,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+    ) -> Result<Option<ParticipantContextView>, InboundEventStoreError> {
+        let account = &participant.account;
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let actor_id = participant.stable_id();
+        let identity_kind = participant.identity.platform_kind.as_str();
+        let profile =
+            load_current_profile_by_kind(&self.db, account_id, identity_kind, actor_id).await?;
+        let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
+        if profile.is_none() && event_kind.is_none() {
+            return Ok(None);
+        }
+        self.participant_context_impl(
+            account,
+            account_id,
+            identity_kind,
+            actor_id,
+            conversation,
+            thread_id,
+            profile,
+        )
+        .await
+    }
+
+    async fn participants_by_display_name(
+        &self,
+        account: &SourceAccountRef,
+        name: &str,
+        conversation: Option<&ConversationRef>,
+        thread_id: Option<&EventThreadId>,
+        limit: u16,
+    ) -> Result<Vec<AccountScopedParticipantRef>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        // LIKE 前缀匹配需转义通配符，避免用户输入中的 % / _ 扩展成宽匹配。
+        let escaped = name
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let prefix = format!("{escaped}%");
+        // 群名片只在解析出的目标会话内匹配；未提供 conversation/thread 时绝不
+        // 跨所有群搜索群名片（同一名片在多个群指向不同人时不得制造歧义）。
+        let observation_conversation_id = match conversation {
+            Some(conversation) => {
+                resolve_conversation_id(&self.db, account_id, conversation).await?
+            }
+            None => match thread_id {
+                Some(thread_id) => {
+                    resolve_thread_conversation_id(&self.db, account_id, thread_id).await?
+                }
+                None => None,
+            },
+        };
+
+        #[derive(Debug, FromQueryResult)]
+        struct CandidateRow {
+            actor_platform_id: String,
+            platform_identity_kind: String,
+            trust: String,
+        }
+        // 来源有效性门与 source_refs_valid 语义一致：档案/观察的来源事件必须存在、
+        // 无 applied 撤回、会话与事件均非 never_long_term、正文投影存在，且列表非空。
+        // 属性级建立来源门（P0-2）：档案显示名、观察群名片、每个别名各自携带
+        // established_by_event_id / source_event_id 指向其建立事件；该事件被挤出
+        // 10 条有界来源窗口或被撤回/降级后，对应属性不得再支撑 by-name 命中。
+        // 单事件有效性用派生表驱动（MySQL 8.4 支持相关派生表），语义与
+        // single_event_valid 完全一致：事件缺失/撤回/never_long_term/无投影即失效。
+        let rows = CandidateRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT p.actor_platform_id, p.platform_identity_kind, p.trust
+               FROM secretary_participant_profiles p
+               LEFT JOIN secretary_participant_conversation_observations o
+                 ON o.account_id = p.account_id
+                    AND o.platform_identity_kind = p.platform_identity_kind
+                    AND o.actor_platform_id = p.actor_platform_id
+                    AND o.invalidated = 0
+                    -- 无会话参数（NULL）时观察不参与 JOIN，群名片绝不跨群匹配。
+                    AND (? IS NOT NULL AND o.conversation_id = ?)
+               WHERE p.account_id = ? AND p.current = 1
+                 AND JSON_LENGTH(p.source_event_ids_json) > 0
+                 AND NOT EXISTS (
+                     SELECT 1 FROM JSON_TABLE(CAST(p.source_event_ids_json AS CHAR), '$[*]'
+                         COLUMNS (sid VARCHAR(191) PATH '$')) jt
+                     LEFT JOIN secretary_source_events e
+                       ON e.source_event_id = jt.sid AND e.account_id = p.account_id
+                     LEFT JOIN secretary_conversations c ON c.id = e.conversation_id
+                     LEFT JOIN secretary_message_contents m ON m.source_event_id = jt.sid
+                     LEFT JOIN secretary_message_tombstones t
+                       ON t.source_event_id = jt.sid AND t.status = 'applied'
+                     WHERE e.source_event_id IS NULL
+                        OR t.source_event_id IS NOT NULL
+                        OR c.memory_mode = 'never_long_term'
+                        OR m.content_mode = 'never_long_term'
+                        OR m.source_event_id IS NULL
+                 )
+                 AND (
+                     -- 显示名分支：当前显示名由 established_by_event_id 建立，
+                     -- 该事件必须独立有效（可能已不在有界来源列表中）。
+                     (p.display_name = ? OR p.display_name LIKE ? ESCAPE '\\')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM (SELECT p.established_by_event_id AS sid) r
+                         LEFT JOIN secretary_source_events ed
+                           ON ed.source_event_id = r.sid AND ed.account_id = p.account_id
+                         LEFT JOIN secretary_conversations cd ON cd.id = ed.conversation_id
+                         LEFT JOIN secretary_message_contents md ON md.source_event_id = r.sid
+                         LEFT JOIN secretary_message_tombstones td
+                           ON td.source_event_id = r.sid AND td.status = 'applied'
+                         WHERE ed.source_event_id IS NULL
+                            OR td.source_event_id IS NOT NULL
+                            OR cd.memory_mode = 'never_long_term'
+                            OR md.content_mode = 'never_long_term'
+                            OR md.source_event_id IS NULL
+                     )
+                     -- 别名分支：命中的别名必须携带自身来源事件且该来源独立有效，
+                     -- 不依赖聚合来源列表（旧显示名建立事件可能已被淘汰）。
+                     OR EXISTS (SELECT 1 FROM JSON_TABLE(CAST(p.aliases_json AS CHAR), '$[*]'
+                         COLUMNS (alias VARCHAR(200) PATH '$.alias',
+                                  src VARCHAR(191) PATH '$.source_event_id')) aj
+                         WHERE (aj.alias = ? OR aj.alias LIKE ? ESCAPE '\\')
+                           AND NOT EXISTS (
+                               SELECT 1 FROM (SELECT aj.src AS sid) r2
+                               LEFT JOIN secretary_source_events ea
+                                 ON ea.source_event_id = r2.sid AND ea.account_id = p.account_id
+                               LEFT JOIN secretary_conversations ca ON ca.id = ea.conversation_id
+                               LEFT JOIN secretary_message_contents ma ON ma.source_event_id = r2.sid
+                               LEFT JOIN secretary_message_tombstones ta
+                                 ON ta.source_event_id = r2.sid AND ta.status = 'applied'
+                               WHERE ea.source_event_id IS NULL
+                                  OR ta.source_event_id IS NOT NULL
+                                  OR ca.memory_mode = 'never_long_term'
+                                  OR ma.content_mode = 'never_long_term'
+                                  OR ma.source_event_id IS NULL
+                           ))
+                     OR (o.observation_id IS NOT NULL
+                         AND JSON_LENGTH(o.source_event_ids_json) > 0
+                         AND (o.group_card = ? OR o.group_card LIKE ? ESCAPE '\\')
+                         -- 群名片分支：当前名片由 o.established_by_event_id 建立，
+                         -- 同样要求建立事件独立有效。
+                         AND NOT EXISTS (
+                             SELECT 1 FROM (SELECT o.established_by_event_id AS sid) r3
+                             LEFT JOIN secretary_source_events eo
+                               ON eo.source_event_id = r3.sid AND eo.account_id = o.account_id
+                             LEFT JOIN secretary_conversations co ON co.id = eo.conversation_id
+                             LEFT JOIN secretary_message_contents mo ON mo.source_event_id = r3.sid
+                             LEFT JOIN secretary_message_tombstones tz
+                               ON tz.source_event_id = r3.sid AND tz.status = 'applied'
+                             WHERE eo.source_event_id IS NULL
+                                OR tz.source_event_id IS NOT NULL
+                                OR co.memory_mode = 'never_long_term'
+                                OR mo.content_mode = 'never_long_term'
+                                OR mo.source_event_id IS NULL
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM JSON_TABLE(CAST(o.source_event_ids_json AS CHAR), '$[*]'
+                                 COLUMNS (sid VARCHAR(191) PATH '$')) jo
+                             LEFT JOIN secretary_source_events e2
+                               ON e2.source_event_id = jo.sid AND e2.account_id = o.account_id
+                             LEFT JOIN secretary_conversations c2 ON c2.id = e2.conversation_id
+                             LEFT JOIN secretary_message_contents m2 ON m2.source_event_id = jo.sid
+                             LEFT JOIN secretary_message_tombstones t2
+                               ON t2.source_event_id = jo.sid AND t2.status = 'applied'
+                             WHERE e2.source_event_id IS NULL
+                                OR t2.source_event_id IS NOT NULL
+                                OR c2.memory_mode = 'never_long_term'
+                                OR m2.content_mode = 'never_long_term'
+                                OR m2.source_event_id IS NULL
+                         ))
+                 )
+               GROUP BY p.actor_platform_id, p.platform_identity_kind, p.trust
+               ORDER BY MAX(p.updated_at) DESC
+               LIMIT ?"#,
+            [
+                // NULL 参数用 Option 内的 None（sea-query 1.x Value 无 Null 变体）。
+                observation_conversation_id
+                    .map(sea_orm::Value::from)
+                    .unwrap_or(sea_orm::Value::BigUnsigned(None)),
+                observation_conversation_id
+                    .map(sea_orm::Value::from)
+                    .unwrap_or(sea_orm::Value::BigUnsigned(None)),
+                account_id.into(),
+                name.into(),
+                prefix.clone().into(),
+                name.into(),
+                prefix.clone().into(),
+                name.into(),
+                prefix.into(),
+                (limit as i64).into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let kind = parse_actor_kind(&row.platform_identity_kind)?;
+                let trust = parse_identity_trust(&row.trust)?;
+                AccountScopedParticipantRef::new(
+                    account.clone(),
+                    PlatformIdentityKind::from_verified_actor_kind(kind),
+                    row.actor_platform_id,
+                    trust,
+                )
+                .map_err(domain_err)
+            })
+            .collect()
+    }
+
     /// 列出账号最近的 N 条事件证据视图，包含发送者、@、Reply、Thread 和内容策略。
     /// 数据库先按 received_at 倒序取最近 N 条，Rust 侧再反转为时间正序。
     async fn list_recent_event_views(
@@ -724,9 +1382,15 @@ fn map_recent_event_view_row(
     let trust = parse_content_trust(&row.memory_mode)?;
     // content_trust_level 为 envelope_only/never_long_term 时清空正文
     let excerpt = filter_excerpt_by_trust(row.excerpt.unwrap_or_default(), trust);
+    // 事件派生的 Actor 引用携带身份种类（来自事件 actor_kind），
+    // 使 TempRefMap 能映射为完整账号作用域参与者引用。
     let actor = ThreadActorRef {
         account: account.clone(),
         actor_id: row.actor_platform_id,
+        platform_identity_kind: Some(
+            parse_actor_kind(&row.actor_kind)
+                .map(PlatformIdentityKind::from_verified_actor_kind)?,
+        ),
     };
     // 解析 mentioned_actor_ids JSON 数组
     let mentioned_actors = parse_mentioned_actor_ids(&row.mentioned_actor_ids, account)?;
@@ -793,6 +1457,9 @@ fn parse_mentioned_actor_ids(
         .map(|actor_id| ThreadActorRef {
             account: account.clone(),
             actor_id,
+            // @ 到的参与者由协议只带 actor_id；事件关系 VIEW 中 mentions 固定为
+            // external 观察（提及 ≠ 指派），身份种类按 External 处理。
+            platform_identity_kind: Some(PlatformIdentityKind::External),
         })
         .collect())
 }
@@ -1096,4 +1763,889 @@ struct RecentEventViewRow {
     excerpt: Option<String>,
     mentioned_actor_ids: Option<String>,
     mention_all: Option<i8>,
+}
+
+// ===== 事件因果上下文与参与者上下文的查询辅助（THR-011/THR-012/ID-004/ID-005）=====
+
+/// 事件发送者身份的可信等级：Owner 来自绑定判定（Verified），其余为协议观察（Observed）。
+fn identity_trust_for_kind(actor_kind: &str) -> IdentityTrust {
+    if actor_kind == "owner" {
+        IdentityTrust::Verified
+    } else {
+        IdentityTrust::Observed
+    }
+}
+
+/// 构造账号作用域参与者引用（复用 ParticipantIdentity，不建平行身份体系）。
+fn account_scoped(
+    account: &SourceAccountRef,
+    actor_kind: &str,
+    actor_platform_id: &str,
+) -> Result<AccountScopedParticipantRef, InboundEventStoreError> {
+    let kind = parse_actor_kind(actor_kind)?;
+    AccountScopedParticipantRef::new(
+        account.clone(),
+        PlatformIdentityKind::from_verified_actor_kind(kind),
+        actor_platform_id,
+        identity_trust_for_kind(actor_kind),
+    )
+    .map_err(domain_err)
+}
+
+/// 构造带显示名的 ParticipantIdentity（显示名只做展示与指代候选，不授权）。
+fn participant_from_parts(
+    actor_kind: &str,
+    actor_platform_id: &str,
+    display_name: Option<String>,
+) -> Result<ParticipantIdentity, InboundEventStoreError> {
+    let mut identity = participant_for(actor_kind, actor_platform_id)?;
+    identity.display_name = display_name.filter(|name| !name.trim().is_empty());
+    Ok(identity)
+}
+
+fn parse_identity_trust(value: &str) -> Result<IdentityTrust, InboundEventStoreError> {
+    match value {
+        "verified" => Ok(IdentityTrust::Verified),
+        "observed" => Ok(IdentityTrust::Observed),
+        "inferred" => Ok(IdentityTrust::Inferred),
+        other => Err(InboundEventStoreError::InvalidData(format!(
+            "unknown participant profile trust: {other}"
+        ))),
+    }
+}
+
+/// 解析档案 aliases_json（[{"alias","source_event_id"}] → 有界字符串列表）。
+fn parse_aliases(value: &str) -> Result<Vec<String>, InboundEventStoreError> {
+    if value.trim().is_empty() || value == "null" {
+        return Ok(Vec::new());
+    }
+    let items: Vec<serde_json::Value> = serde_json::from_str(value).map_err(|error| {
+        InboundEventStoreError::InvalidData(format!(
+            "participant profile aliases_json decode failed: {error}"
+        ))
+    })?;
+    Ok(items
+        .into_iter()
+        .filter_map(|item| {
+            item.get("alias")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect())
+}
+
+#[derive(Debug, FromQueryResult)]
+struct CausalEventRow {
+    source_event_id: String,
+    actor_platform_id: String,
+    actor_kind: String,
+    reply_to_event_id: Option<String>,
+    display_name: Option<String>,
+}
+
+/// 回复父事件的类型化数据（同账号强制；跨账号绝不关联）。
+struct CausalParentData {
+    source_event_id: SourceEventId,
+    actor_platform_id: String,
+    actor_kind: String,
+    display_name: Option<String>,
+}
+
+/// 回复父事件（同账号强制；跨账号绝不关联）。
+async fn load_reply_parent(
+    db: &DatabaseConnection,
+    account_id: u64,
+    reply_to_event_id: Option<&str>,
+) -> Result<Option<CausalParentData>, InboundEventStoreError> {
+    let Some(parent_id) = reply_to_event_id else {
+        return Ok(None);
+    };
+    let row = CausalEventRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT p.source_event_id, p.actor_platform_id, p.actor_kind,
+                  p.reply_to_event_id, pp.display_name
+           FROM secretary_source_events p
+           LEFT JOIN secretary_participant_profiles pp
+             ON pp.account_id = p.account_id AND pp.actor_platform_id = p.actor_platform_id
+                AND pp.current = 1
+           WHERE p.source_event_id = ? AND p.account_id = ?"#,
+        [parent_id.into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    row.map(|row| {
+        Ok(CausalParentData {
+            source_event_id: SourceEventId::new(row.source_event_id).map_err(domain_err)?,
+            actor_platform_id: row.actor_platform_id,
+            actor_kind: row.actor_kind,
+            display_name: row.display_name,
+        })
+    })
+    .transpose()
+}
+
+#[derive(Debug, FromQueryResult)]
+struct CausalThreadRow {
+    thread_id: String,
+    status: String,
+    root_event_id: String,
+    root_actor_platform_id: String,
+    root_actor_kind: String,
+    root_display_name: Option<String>,
+}
+
+/// 有效线程的类型化数据（根发送者 = 线程发起人，不是 Owner 判定）。
+struct CausalThreadData {
+    thread_id: EventThreadId,
+    status: ThreadStatus,
+    root_event_id: SourceEventId,
+    root_sender: Option<ParticipantIdentity>,
+}
+
+/// 有效线程（合并/拆分后的 secretary_effective_thread_events 视图）+ 根事件 + 发起人。
+async fn load_effective_thread(
+    db: &DatabaseConnection,
+    account_id: u64,
+    source_event_id: &SourceEventId,
+) -> Result<Option<CausalThreadData>, InboundEventStoreError> {
+    let row = CausalThreadRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT t.thread_id, t.status, t.root_event_id,
+                  r.actor_platform_id AS root_actor_platform_id,
+                  r.actor_kind AS root_actor_kind,
+                  rp.display_name AS root_display_name
+           FROM secretary_effective_thread_events ev
+           JOIN secretary_event_threads t ON t.thread_id = ev.thread_id
+           JOIN secretary_source_events e ON e.source_event_id = ev.source_event_id
+           JOIN secretary_source_events r ON r.source_event_id = t.root_event_id
+           LEFT JOIN secretary_participant_profiles rp
+             ON rp.account_id = t.account_id AND rp.actor_platform_id = r.actor_platform_id
+                AND rp.current = 1
+           WHERE ev.source_event_id = ? AND e.account_id = ? AND t.account_id = ?
+           LIMIT 1"#,
+        [
+            source_event_id.as_str().into(),
+            account_id.into(),
+            account_id.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    row.map(|row| {
+        Ok(CausalThreadData {
+            thread_id: EventThreadId::new(row.thread_id).map_err(domain_err)?,
+            status: parse_thread_status(&row.status)?,
+            root_event_id: SourceEventId::new(row.root_event_id).map_err(domain_err)?,
+            root_sender: Some(participant_from_parts(
+                &row.root_actor_kind,
+                &row.root_actor_platform_id,
+                row.root_display_name,
+            )?),
+        })
+    })
+    .transpose()
+}
+
+/// @ 到的参与者（协议观察，仅 actor_id；绝不构成指派）。
+async fn load_mentioned_actors(
+    db: &DatabaseConnection,
+    account_id: u64,
+    source_event_id: &SourceEventId,
+) -> Result<Vec<String>, InboundEventStoreError> {
+    #[derive(Debug, FromQueryResult)]
+    struct MentionedRow {
+        mentioned_json: Option<String>,
+    }
+    let row = MentionedRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT CAST(m.mentioned_actor_ids AS CHAR) AS mentioned_json
+           FROM secretary_message_contents m
+           JOIN secretary_source_events e ON e.source_event_id = m.source_event_id
+           WHERE m.source_event_id = ? AND e.account_id = ?"#,
+        [source_event_id.as_str().into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    let Some(row) = row else {
+        return Ok(Vec::new());
+    };
+    let Some(json) = row.mentioned_json else {
+        return Ok(Vec::new());
+    };
+    if json.trim().is_empty() || json == "null" {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = serde_json::from_str(&json).map_err(|error| {
+        InboundEventStoreError::InvalidData(format!("invalid mentioned_actor_ids JSON: {error}"))
+    })?;
+    Ok(ids.into_iter().take(MAX_CAUSAL_MENTIONED).collect())
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ThreadParticipantRow {
+    actor_platform_id: String,
+    actor_kind: String,
+    event_count: i64,
+    display_name: Option<String>,
+    group_role: Option<String>,
+}
+
+/// 线程参与者有界列表（含当前档案显示名与事件所在会话的群角色，不含正文）。
+/// 线程成员关系取自 `secretary_effective_thread_events`（合并/拆分后的有效线程，
+/// 不返回旧 Thread 成员）；群角色取自会话作用域观察，绝不跨会话猜测。
+async fn load_thread_participants(
+    db: &DatabaseConnection,
+    account: &SourceAccountRef,
+    account_id: u64,
+    thread_id: &EventThreadId,
+) -> Result<Vec<EventParticipantSummary>, InboundEventStoreError> {
+    let rows = ThreadParticipantRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT e.actor_platform_id, e.actor_kind, COUNT(*) AS event_count,
+                  p.display_name, o.group_role
+           FROM secretary_effective_thread_events te
+           JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+           LEFT JOIN secretary_participant_profiles p
+             ON p.account_id = e.account_id
+                AND p.platform_identity_kind = e.actor_kind
+                AND p.actor_platform_id = e.actor_platform_id
+                AND p.current = 1
+           LEFT JOIN secretary_participant_conversation_observations o
+             ON o.account_id = e.account_id
+                AND o.conversation_id = e.conversation_id
+                AND o.platform_identity_kind = e.actor_kind
+                AND o.actor_platform_id = e.actor_platform_id
+                AND o.invalidated = 0
+           WHERE te.thread_id = ? AND e.account_id = ?
+           GROUP BY e.actor_platform_id, e.actor_kind, p.display_name, o.group_role
+           ORDER BY event_count DESC, e.actor_platform_id
+           LIMIT ?"#,
+        [
+            thread_id.as_str().into(),
+            account_id.into(),
+            (MAX_CAUSAL_PARTICIPANTS as i64).into(),
+        ],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let kind = parse_actor_kind(&row.actor_kind)?;
+            let participant = AccountScopedParticipantRef::new(
+                account.clone(),
+                PlatformIdentityKind::from_verified_actor_kind(kind),
+                row.actor_platform_id,
+                identity_trust_for_kind(&row.actor_kind),
+            )
+            .map_err(domain_err)?;
+            Ok(EventParticipantSummary {
+                participant,
+                display_name: row.display_name.filter(|name| !name.trim().is_empty()),
+                group_role: GroupRole::parse_protocol(row.group_role.as_deref()),
+                event_count: checked_count(row.event_count)?,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, FromQueryResult)]
+struct StructuralRelationRow {
+    relation_kind: String,
+    subject_actor_id: String,
+    subject_actor_kind: String,
+    thread_id: Option<String>,
+    confirmed: i8,
+}
+
+/// 结构关系从可重建 VIEW（secretary_event_relations）读取，账号强制过滤。
+async fn load_structural_relations(
+    db: &DatabaseConnection,
+    account: &SourceAccountRef,
+    account_id: u64,
+    source_event_id: &SourceEventId,
+) -> Result<Vec<EventRelation>, InboundEventStoreError> {
+    let rows = StructuralRelationRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT relation_kind, subject_actor_id, subject_actor_kind, thread_id, confirmed
+           FROM secretary_event_relations
+           WHERE source_event_id = ? AND account_id = ?
+           ORDER BY relation_kind, subject_actor_id"#,
+        [source_event_id.as_str().into(), account_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let kind = EventRelationKind::parse(&row.relation_kind).ok_or_else(|| {
+                InboundEventStoreError::InvalidData(format!(
+                    "unknown relation_kind in view: {}",
+                    row.relation_kind
+                ))
+            })?;
+            Ok(EventRelation {
+                kind,
+                account: account.clone(),
+                subject: AccountScopedParticipantRef::new(
+                    account.clone(),
+                    PlatformIdentityKind::from_verified_actor_kind(parse_actor_kind(
+                        &row.subject_actor_kind,
+                    )?),
+                    row.subject_actor_id,
+                    identity_trust_for_kind(&row.subject_actor_kind),
+                )
+                .map_err(domain_err)?,
+                thread_id: row
+                    .thread_id
+                    .map(EventThreadId::new)
+                    .transpose()
+                    .map_err(domain_err)?,
+                source_event_ids: vec![source_event_id.clone()],
+                trust: identity_trust_for_kind(&row.subject_actor_kind),
+                confirmed: row.confirmed != 0,
+                invalidation_reason: None,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ConfirmedRequesterRow {
+    claimant_actor_id: String,
+    actor_kind: String,
+    source_event_ids: Option<String>,
+}
+
+/// 已确认要求者的类型化数据（来源可回读）。
+struct ConfirmedRequesterData {
+    claimant_actor_id: String,
+    actor_kind: String,
+    source_event_ids: Vec<SourceEventId>,
+}
+
+/// 已确认要求者：线程上 status=confirmed 的 request 声明，来源可回读。
+async fn load_confirmed_requesters(
+    db: &DatabaseConnection,
+    account_id: u64,
+    thread: Option<&CausalThreadData>,
+) -> Result<Vec<ConfirmedRequesterData>, InboundEventStoreError> {
+    let Some(thread) = thread else {
+        return Ok(Vec::new());
+    };
+    let rows = ConfirmedRequesterRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT c.claimant_actor_id, c.claim_kind, c.status,
+                  GROUP_CONCAT(s.source_event_id SEPARATOR ',') AS source_event_ids,
+                  (SELECT e2.actor_kind
+                   FROM secretary_source_events e2
+                   WHERE e2.account_id = t.account_id
+                     AND e2.actor_platform_id = c.claimant_actor_id
+                   ORDER BY e2.occurred_at_unix_secs DESC, e2.source_event_id DESC
+                   LIMIT 1) AS actor_kind
+           FROM secretary_thread_claims c
+           JOIN secretary_event_threads t ON t.thread_id = c.thread_id
+           JOIN secretary_thread_claim_sources s ON s.claim_id = c.claim_id
+           WHERE c.thread_id = ? AND t.account_id = ?
+             AND c.claim_kind = 'request' AND c.status = 'confirmed'
+           GROUP BY c.claim_id, c.claimant_actor_id, c.claim_kind, c.status
+           LIMIT 5"#,
+        [thread.thread_id.as_str().into(), account_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ConfirmedRequesterData {
+                claimant_actor_id: row.claimant_actor_id,
+                actor_kind: row.actor_kind,
+                source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ConfirmedCommitmentRow {
+    fact_json: String,
+    source_event_ids: Option<String>,
+}
+
+/// 已确认承诺的类型化数据（promisor / beneficiary + 来源）。
+struct ConfirmedCommitmentData {
+    promisor: String,
+    promisor_kind: String,
+    beneficiary: String,
+    beneficiary_kind: String,
+    source_event_ids: Vec<SourceEventId>,
+}
+
+/// 已确认承诺记忆（与线程来源事件关联的 confirmed commitment；只保留 Pending 状态）。
+async fn load_confirmed_commitments(
+    db: &DatabaseConnection,
+    account_id: u64,
+    thread: Option<&CausalThreadData>,
+) -> Result<Vec<ConfirmedCommitmentData>, InboundEventStoreError> {
+    let Some(thread) = thread else {
+        return Ok(Vec::new());
+    };
+    let rows = ConfirmedCommitmentRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT CAST(f.fact_json AS CHAR) AS fact_json,
+                  GROUP_CONCAT(s.source_event_id SEPARATOR ',') AS source_event_ids
+           FROM secretary_memory_facts f
+           JOIN secretary_memory_fact_sources s ON s.fact_id = f.fact_id
+           -- 线程成员关系取有效线程视图（合并/拆分后），不返回旧 Thread 的承诺关系。
+           JOIN secretary_effective_thread_events te ON te.source_event_id = s.source_event_id
+           WHERE f.account_id = ? AND f.fact_kind = 'commitment' AND f.fact_status = 'confirmed'
+             AND (f.valid_until_unix_secs IS NULL OR f.valid_until_unix_secs > ?)
+             AND te.thread_id = ?
+             -- envelope_only / never_long_term / 正文投影缺失 / 已召回来源不得支撑人物长期
+             -- 事实（约束 6/7）。LEFT JOIN 未命中时 m2.source_event_id 为 NULL，必须显式
+             -- 判为受限（fail-closed）。
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources fs2
+                 JOIN secretary_source_events e2 ON e2.source_event_id = fs2.source_event_id
+                 JOIN secretary_conversations c2 ON c2.id = e2.conversation_id
+                 LEFT JOIN secretary_message_contents m2
+                   ON m2.source_event_id = fs2.source_event_id
+                 WHERE fs2.fact_id = f.fact_id
+                   AND (c2.memory_mode IN ('envelope_only', 'never_long_term')
+                        OR m2.content_mode IN ('envelope_only', 'never_long_term')
+                        OR m2.source_event_id IS NULL)
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources fs3
+                 JOIN secretary_message_tombstones t3
+                   ON t3.source_event_id = fs3.source_event_id
+                 WHERE fs3.fact_id = f.fact_id AND t3.status = 'applied'
+             )
+           GROUP BY f.fact_id, f.fact_json
+           LIMIT 4"#,
+        [
+            account_id.into(),
+            Utc::now().timestamp().into(),
+            thread.thread_id.as_str().into(),
+        ],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    let mut commitments = Vec::with_capacity(rows.len());
+    for row in rows {
+        let payload: crate::CommitmentMemory =
+            serde_json::from_str(&row.fact_json).map_err(|error| {
+                InboundEventStoreError::InvalidData(format!(
+                    "confirmed commitment fact_json decode failed: {error}"
+                ))
+            })?;
+        // 只保留活跃承诺；已完成/已取消的承诺不支撑 PromisedBy/Benefits。
+        if payload.status != crate::CommitmentStatus::Pending {
+            continue;
+        }
+        let promisor_kind = load_actor_kind_from_events(db, account_id, &payload.promisor.actor_id)
+            .await?
+            .unwrap_or_else(|| "external".into());
+        let beneficiary_kind =
+            load_actor_kind_from_events(db, account_id, &payload.beneficiary.actor_id)
+                .await?
+                .unwrap_or_else(|| "external".into());
+        commitments.push(ConfirmedCommitmentData {
+            promisor: payload.promisor.actor_id,
+            promisor_kind,
+            beneficiary: payload.beneficiary.actor_id,
+            beneficiary_kind,
+            source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
+        });
+    }
+    Ok(commitments)
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ProfileRow {
+    platform_identity_kind: String,
+    display_name: String,
+    aliases_json: String,
+    trust: String,
+    confirmed: i8,
+    invalidated: i8,
+    source_event_ids_json: String,
+    established_by_event_id: Option<String>,
+}
+
+/// 账号内稳定 ID 的全部 current 档案行（跨身份命名空间）。
+/// 身份 = account + 身份种类 + 稳定 ID，唯一键含身份种类：同账号下不同命名空间的
+/// 相同稳定 ID 是不同参与者，调用方负责在冲突时 fail-closed。
+async fn load_current_profiles(
+    db: &DatabaseConnection,
+    account_id: u64,
+    actor_id: &str,
+) -> Result<Vec<ProfileRow>, InboundEventStoreError> {
+    ProfileRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT platform_identity_kind, display_name,
+                  CAST(aliases_json AS CHAR) AS aliases_json, trust,
+                  confirmed, invalidated,
+                  CAST(source_event_ids_json AS CHAR) AS source_event_ids_json,
+                  established_by_event_id
+           FROM secretary_participant_profiles
+           WHERE account_id = ? AND actor_platform_id = ? AND current = 1
+           ORDER BY platform_identity_kind"#,
+        [account_id.into(), actor_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)
+}
+
+/// 按完整三元组身份（account + 身份种类 + 稳定 ID）精确读取 current 档案行。
+/// 唯一键含身份种类，同账号下至多一行；用于 by-ref 查询，无歧义可能。
+async fn load_current_profile_by_kind(
+    db: &DatabaseConnection,
+    account_id: u64,
+    platform_identity_kind: &str,
+    actor_id: &str,
+) -> Result<Option<ProfileRow>, InboundEventStoreError> {
+    ProfileRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT platform_identity_kind, display_name,
+                  CAST(aliases_json AS CHAR) AS aliases_json, trust,
+                  confirmed, invalidated,
+                  CAST(source_event_ids_json AS CHAR) AS source_event_ids_json,
+                  established_by_event_id
+           FROM secretary_participant_profiles
+           WHERE account_id = ? AND platform_identity_kind = ?
+             AND actor_platform_id = ? AND current = 1
+           LIMIT 1"#,
+        [
+            account_id.into(),
+            platform_identity_kind.into(),
+            actor_id.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ConversationObservationRow {
+    group_card: Option<String>,
+    group_role: String,
+    established_by_event_id: Option<String>,
+    source_event_ids_json: String,
+}
+
+/// 会话作用域观察（群名片/群角色）：按 (account, conversation, identity_kind, actor)
+/// 精确命中，绝不跨会话猜测；行已失效（invalidated=1）时视为无观察。
+async fn load_conversation_observation(
+    db: &DatabaseConnection,
+    account_id: u64,
+    conversation_id: u64,
+    platform_identity_kind: &str,
+    actor_id: &str,
+) -> Result<Option<ConversationObservationRow>, InboundEventStoreError> {
+    ConversationObservationRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT group_card, group_role, established_by_event_id,
+                  CAST(source_event_ids_json AS CHAR) AS source_event_ids_json
+           FROM secretary_participant_conversation_observations
+           WHERE account_id = ? AND conversation_id = ?
+             AND platform_identity_kind = ? AND actor_platform_id = ?
+             AND invalidated = 0
+           LIMIT 1"#,
+        [
+            account_id.into(),
+            conversation_id.into(),
+            platform_identity_kind.into(),
+            actor_id.into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)
+}
+
+/// ConversationRef → 账号作用域内的会话行 ID（不存在时返回 None，不报错：
+/// 观察证据缺失按"无该会话观察"处理，跨账号绝不关联）。
+async fn resolve_conversation_id(
+    db: &DatabaseConnection,
+    account_id: u64,
+    conversation: &ConversationRef,
+) -> Result<Option<u64>, InboundEventStoreError> {
+    let row = AccountIdRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT id
+           FROM secretary_conversations
+           WHERE account_id = ? AND conversation_kind = ? AND platform_conversation_id = ?"#,
+        [
+            account_id.into(),
+            conversation.kind.as_str().into(),
+            conversation.id.clone().into(),
+        ],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map(|row| row.id))
+}
+
+/// 线程 → 根事件所在会话（线程无会话列，取根事件会话作为群属性作用域）。
+async fn resolve_thread_conversation_id(
+    db: &DatabaseConnection,
+    account_id: u64,
+    thread_id: &EventThreadId,
+) -> Result<Option<u64>, InboundEventStoreError> {
+    let row = AccountIdRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT e.conversation_id AS id
+           FROM secretary_event_threads t
+           JOIN secretary_source_events e ON e.source_event_id = t.root_event_id
+           WHERE t.thread_id = ? AND t.account_id = ?
+           LIMIT 1"#,
+        [thread_id.as_str().into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map(|row| row.id))
+}
+
+/// 单个建立事件的独立有效性（P0：当前值必须由建立事件支撑，不受有界来源列表
+/// 淘汰影响）。语义与 source_refs_valid 一致：事件必须存在、无撤回、非
+/// never_long_term、正文投影存在。
+async fn single_event_valid(
+    db: &DatabaseConnection,
+    account_id: u64,
+    event_id: &str,
+) -> Result<bool, InboundEventStoreError> {
+    let json = serde_json::json!([event_id]).to_string();
+    source_refs_valid(db, account_id, &json).await
+}
+
+/// 来源有效性（fail-closed）：来源事件消失、已被撤回、正文投影缺失或会话/事件为
+/// never_long_term 时，该档案/观察不得作为长期事实返回。来源列表为空视为无效。
+async fn source_refs_valid(
+    db: &DatabaseConnection,
+    account_id: u64,
+    source_json: &str,
+) -> Result<bool, InboundEventStoreError> {
+    if source_json.trim().is_empty() || source_json == "null" {
+        return Ok(false);
+    }
+    let sources: Vec<String> = serde_json::from_str(source_json).map_err(|error| {
+        InboundEventStoreError::InvalidData(format!("source_event_ids_json decode failed: {error}"))
+    })?;
+    if sources.is_empty() {
+        return Ok(false);
+    }
+    #[derive(Debug, FromQueryResult)]
+    struct ValidityRow {
+        valid: i8,
+    }
+    let row = ValidityRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT NOT EXISTS (
+             SELECT 1 FROM JSON_TABLE(CAST(? AS CHAR), '$[*]'
+                 COLUMNS (sid VARCHAR(191) PATH '$')) jt
+             LEFT JOIN secretary_source_events e
+               ON e.source_event_id = jt.sid AND e.account_id = ?
+             LEFT JOIN secretary_conversations c ON c.id = e.conversation_id
+             LEFT JOIN secretary_message_contents m ON m.source_event_id = jt.sid
+             LEFT JOIN secretary_message_tombstones t
+               ON t.source_event_id = jt.sid AND t.status = 'applied'
+             WHERE e.source_event_id IS NULL
+                OR t.source_event_id IS NOT NULL
+                OR c.memory_mode = 'never_long_term'
+                OR m.content_mode = 'never_long_term'
+                OR m.source_event_id IS NULL
+           ) AS valid"#,
+        [source_json.into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map(|row| row.valid != 0).unwrap_or(false))
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ActorKindRow {
+    actor_kind: String,
+}
+
+async fn load_actor_kind_from_events(
+    db: &DatabaseConnection,
+    account_id: u64,
+    actor_id: &str,
+) -> Result<Option<String>, InboundEventStoreError> {
+    let row = ActorKindRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT actor_kind
+           FROM secretary_source_events
+           WHERE account_id = ? AND actor_platform_id = ?
+           ORDER BY occurred_at_unix_secs DESC, source_event_id DESC
+           LIMIT 1"#,
+        [account_id.into(), actor_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map(|row| row.actor_kind))
+}
+
+#[derive(Debug, FromQueryResult)]
+struct RecentEventIdRow {
+    source_event_id: String,
+}
+
+async fn load_related_event_ids(
+    db: &DatabaseConnection,
+    account_id: u64,
+    actor_id: &str,
+) -> Result<Vec<SourceEventId>, InboundEventStoreError> {
+    let rows = RecentEventIdRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT source_event_id
+           FROM secretary_source_events
+           WHERE account_id = ? AND actor_platform_id = ?
+           ORDER BY occurred_at_unix_secs DESC, source_event_id DESC
+           LIMIT 10"#,
+        [account_id.into(), actor_id.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| SourceEventId::new(row.source_event_id).map_err(domain_err))
+        .collect()
+}
+
+#[derive(Debug, FromQueryResult)]
+struct PersonMemoryRow {
+    fact_json: String,
+    source_event_ids: Option<String>,
+}
+
+/// 已确认人物记忆 → 类型化属性（关系/职责/沟通偏好）。未批准候选绝不进入确认字段；
+/// 已确认记忆必须携带来源；来源失效/过期后由上层调用方负责整体失效。
+async fn load_confirmed_person_memory(
+    db: &DatabaseConnection,
+    account_id: u64,
+    actor_id: &str,
+) -> Result<Vec<PersonMemoryFactAttributes>, InboundEventStoreError> {
+    let rows = PersonMemoryRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT CAST(f.fact_json AS CHAR) AS fact_json,
+                  GROUP_CONCAT(s.source_event_id SEPARATOR ',') AS source_event_ids
+           FROM secretary_memory_facts f
+           JOIN secretary_memory_fact_sources s ON s.fact_id = f.fact_id
+           WHERE f.account_id = ? AND f.fact_kind = 'person' AND f.fact_status = 'confirmed'
+             AND (f.valid_until_unix_secs IS NULL OR f.valid_until_unix_secs > ?)
+             AND JSON_UNQUOTE(JSON_EXTRACT(CAST(f.fact_json AS CHAR), '$.person.actor_id')) = ?
+             -- envelope_only / never_long_term / 正文投影缺失 / 已召回来源不得支撑人物长期
+             -- 事实（约束 6/7）。LEFT JOIN 未命中时 m2.source_event_id 为 NULL，必须显式
+             -- 判为受限（fail-closed），否则已删除投影的来源仍会放行事实。
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources fs2
+                 JOIN secretary_source_events e2 ON e2.source_event_id = fs2.source_event_id
+                 JOIN secretary_conversations c2 ON c2.id = e2.conversation_id
+                 LEFT JOIN secretary_message_contents m2
+                   ON m2.source_event_id = fs2.source_event_id
+                 WHERE fs2.fact_id = f.fact_id
+                   AND (c2.memory_mode IN ('envelope_only', 'never_long_term')
+                        OR m2.content_mode IN ('envelope_only', 'never_long_term')
+                        OR m2.source_event_id IS NULL)
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources fs3
+                 JOIN secretary_message_tombstones t3
+                   ON t3.source_event_id = fs3.source_event_id
+                 WHERE fs3.fact_id = f.fact_id AND t3.status = 'applied'
+             )
+           GROUP BY f.fact_id, f.fact_json
+           LIMIT 5"#,
+        [
+            account_id.into(),
+            Utc::now().timestamp().into(),
+            actor_id.into(),
+        ],
+    ))
+    .all(db)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let payload: crate::PersonMemory =
+                serde_json::from_str(&row.fact_json).map_err(|error| {
+                    InboundEventStoreError::InvalidData(format!(
+                        "confirmed person memory fact_json decode failed: {error}"
+                    ))
+                })?;
+            let sources = parse_source_event_id_list(row.source_event_ids)?;
+            Ok(PersonMemoryFactAttributes { payload, sources })
+        })
+        .collect()
+}
+
+/// 已确认人物记忆的解析结果（携带来源事件）。
+struct PersonMemoryFactAttributes {
+    payload: crate::PersonMemory,
+    sources: Vec<SourceEventId>,
+}
+
+impl PersonMemoryFactAttributes {
+    fn into_attributes(self) -> Vec<ParticipantAttribute> {
+        let mut attributes = Vec::new();
+        if let Some(relationship) = self
+            .payload
+            .relationship
+            .filter(|value| !value.trim().is_empty())
+        {
+            attributes.push(ParticipantAttribute {
+                kind: ParticipantAttributeKind::Relationship,
+                value: relationship.chars().take(200).collect(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                source_event_ids: self.sources.clone(),
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            });
+        }
+        for responsibility in self.payload.responsibilities {
+            if responsibility.trim().is_empty() {
+                continue;
+            }
+            attributes.push(ParticipantAttribute {
+                kind: ParticipantAttributeKind::Responsibility,
+                value: responsibility.chars().take(200).collect(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                source_event_ids: self.sources.clone(),
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            });
+        }
+        for preference in self.payload.communication_preferences {
+            if preference.trim().is_empty() {
+                continue;
+            }
+            attributes.push(ParticipantAttribute {
+                kind: ParticipantAttributeKind::CommunicationPreference,
+                value: preference.chars().take(200).collect(),
+                trust: IdentityTrust::Verified,
+                confirmed: true,
+                source_event_ids: self.sources.clone(),
+                directory_snapshot_id: None,
+                invalidated: false,
+                invalidation_reason: None,
+            });
+        }
+        attributes
+    }
 }

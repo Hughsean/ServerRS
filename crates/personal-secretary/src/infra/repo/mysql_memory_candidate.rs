@@ -983,6 +983,7 @@ fn build_candidate_events(
             actor: ThreadActorRef {
                 account: account.clone(),
                 actor_id: row.actor_platform_id,
+                platform_identity_kind: None,
             },
             role: parse_role(&row.message_role)?,
             occurred_at_unix_secs: row.occurred_at_unix_secs,
