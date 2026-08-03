@@ -40,10 +40,27 @@ async fn isolated_db(suffix: &str) -> (DatabaseConnection, String) {
         .unwrap_or_default()
         .to_owned();
     assert!(
-        base_schema.starts_with("qqbot_accept_"),
+        base_schema.starts_with("qqbot_accept_")
+            && base_schema
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
         "refusing to run acceptance tests against non-isolated schema: {base_schema}"
     );
-    let schema = format!("{base_schema}{suffix}");
+    assert!(
+        suffix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    );
+    let random = uuid::Uuid::new_v4().simple().to_string();
+    let tail = format!("{suffix}-{}", &random[..12]);
+    let max_base_len = 64usize
+        .checked_sub(tail.len())
+        .expect("test schema suffix must fit MySQL identifier limit");
+    assert!(max_base_len >= "qqbot_accept_".len());
+    let schema = format!(
+        "{}{tail}",
+        &base_schema[..base_schema.len().min(max_base_len)]
+    );
     // 用基础连接创建派生 schema（模式授权覆盖 qqbot_accept_%）。
     let base = Database::connect(&base_url)
         .await
@@ -155,6 +172,64 @@ impl ActionPlannerT for NameQueryPlanner {
     }
 }
 
+/// CMD-010 防线 A：建立真实验证的 QQ 开放平台 OwnerCommand + active
+/// OwnerBinding（managed = NapCat 托管账号）。ActionRun 只能由这种命令创建。
+#[allow(clippy::too_many_arguments)]
+async fn owner_command_with_binding_9_3(
+    db: &DatabaseConnection,
+    inbound: &Arc<dyn personal_secretary::PersonalSecretaryStoreT>,
+    managed: &SourceAccountRef,
+    command_account_id: &str,
+    message_id: &str,
+    text: &str,
+) -> Result<SourceEventId, String> {
+    let command_event_id = inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(
+                    MessageSource::QqOpenPlatform,
+                    command_account_id,
+                    message_id,
+                )
+                .expect("valid command source fixture"),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv")
+                    .expect("valid owner control fixture"),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid")
+                    .expect("valid owner actor fixture"),
+                1_800_000_090,
+                text.to_string(),
+                Vec::new(),
+            )
+            .expect("valid owner command"),
+        )
+        .await
+        .map_err(|e| format!("owner command persist failed: {e}"))?
+        .source_event_id()
+        .clone();
+    let binding = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT IGNORE INTO secretary_owner_bindings \
+             (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+             SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+             FROM secretary_accounts managed CROSS JOIN secretary_accounts command \
+             WHERE managed.source_channel = 'napcat' AND managed.platform_account_id = ? \
+               AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+            vec![
+                sea_orm::Value::String(Some(uuid::Uuid::new_v4().to_string())),
+                sea_orm::Value::String(Some(managed.account_id.clone())),
+                sea_orm::Value::String(Some(command_account_id.to_string())),
+            ],
+        ))
+        .await
+        .map_err(|e| format!("owner binding persist failed: {e}"))?;
+    assert!(
+        binding.rows_affected() <= 1,
+        "binding insert is idempotent for the same Owner identity"
+    );
+    Ok(command_event_id)
+}
+
 async fn scalar_u64(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm::Value>) -> u64 {
     let row = db
         .query_one_raw(Statement::from_sql_and_values(
@@ -187,16 +262,16 @@ async fn scalar_str(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm::Val
 #[tokio::test]
 #[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated qqbot_accept_* schema"]
 async fn participant_causality_mysql_main_path() {
-    let (db, schema) = isolated_db("").await;
+    // 修复预先存在缺陷：空后缀会让派生 schema 等于基础 schema，
+    // finally 的 DROP 会误删共享基础库（qqbot_accept_ci），导致后续
+    // 测试全部 connect 失败。改用随机派生 schema，finally 只清理自己的。
+    let (db, schema) = isolated_db("_main").await;
     // 场景放入独立 task：断言 panic 时先拿到 JoinError，保证清理必然执行。
     let outcome = tokio::spawn(scenario(db.clone())).await;
-    // finally：随机 schema 清理（无 DROP 权限时失败不阻塞断言）。
-    let cleanup = db
-        .execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))
-        .await;
-    if let Err(error) = cleanup {
-        eprintln!("schema cleanup skipped (needs DROP privilege): {error}");
-    }
+    // finally：随机 schema 必须清理；清理失败属于验收基础设施失败，不能吞掉。
+    db.execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))
+        .await
+        .expect("drop participant causality schema");
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(message)) => panic!("participant causality scenario must pass: {message}"),
@@ -751,11 +826,24 @@ async fn scenario(db: DatabaseConnection) -> Result<(), String> {
     );
 
     // 6) 完整 PlannerUseCase 闭环：L0 查询 → Effect → 恰好一条 Response Artifact。
+    // CMD-010 防线 A：ActionRun 只能由经过验证的 QQ 开放平台 OwnerCommand
+    // 创建（领取/Resume 复验 message_role + actor_kind + active binding），
+    // 测试命令事件必须用 OwnerCommand 而非 NapCat 群消息。每段 run 用独立
+    // 命令事件（action_runs 唯一键含 command_source_event_id）。
+    let cmd_ev = owner_command_with_binding_9_3(
+        &db,
+        &inbound,
+        &acct_a,
+        "cmd-acct-9-3",
+        "m-cmd-1",
+        "查询事件因果",
+    )
+    .await?;
     let action_store = build_mysql_action_store(db.clone());
-    let run_id = ActionRunId::for_owner_command(&e1, "participant-causality-v1");
+    let run_id = ActionRunId::for_owner_command(&cmd_ev, "participant-causality-v1");
     let seed = ActionRunSeed {
         account: acct_a.clone(),
-        command_source_event_id: e1.clone(),
+        command_source_event_id: cmd_ev.clone(),
         command_text: "查询事件因果".into(),
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_100,
@@ -823,10 +911,21 @@ async fn scenario(db: DatabaseConnection) -> Result<(), String> {
     //     GetParticipantContextByName("Carol") → 解析 + 上下文 → 响应含已确认职责。
     //     命令事件必须与 6) 的 e1 不同：action_runs 业务唯一键是
     //     (account_id, command_source_event_id, planner_version)，重复 ensure 会静默跳过。
-    let run_id2 = ActionRunId::for_owner_command(&e2, "participant-causality-by-name-v1");
+    // 独立命令事件：action_runs 业务唯一键含 command_source_event_id，
+    // 与 6) 共用同一命令会静默跳过创建。
+    let cmd_ev2 = owner_command_with_binding_9_3(
+        &db,
+        &inbound,
+        &acct_a,
+        "cmd-acct-9-3",
+        "m-cmd-2",
+        "Carol 负责什么",
+    )
+    .await?;
+    let run_id2 = ActionRunId::for_owner_command(&cmd_ev2, "participant-causality-by-name-v1");
     let seed2 = ActionRunSeed {
         account: acct_a.clone(),
-        command_source_event_id: e2.clone(),
+        command_source_event_id: cmd_ev2.clone(),
         command_text: "Carol 负责什么".into(),
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_200,
@@ -1141,7 +1240,7 @@ async fn scenario(db: DatabaseConnection) -> Result<(), String> {
     // ---- 10) 身份命名空间隔离（P1-C 反例）----
     // 同账号下同一稳定 ID 以 Owner 身份出现：档案/观察按身份种类隔离并存、
     // 不撞唯一键；participant_context 跨命名空间歧义时 fail-closed 拒绝读取。
-    let owner_ev = ingest(
+    let _owner_ev = ingest(
         inbound.as_ref(),
         InboundMessageEnvelope::new(
             SourceMessageRef::new(MessageSource::NapCat, ACCT_A, "m-owner-1")
@@ -1200,11 +1299,20 @@ async fn scenario(db: DatabaseConnection) -> Result<(), String> {
     // 跨命名空间歧义拒绝）→ Response 成功且携带 Owner 显示名。
     // 若 kind 在 Effect 边界丢失（旧实现只传 actor_id），会退化为宽松查询
     // participant_context 并 fail-closed 报歧义，Response 不可能成功。
+    let cmd_ev3 = owner_command_with_binding_9_3(
+        &db,
+        &inbound,
+        &acct_a,
+        "cmd-acct-9-3",
+        "m-cmd-3",
+        "Alice-主 是谁",
+    )
+    .await?;
     let action_store3 = build_mysql_action_store(db.clone());
-    let run_id3 = ActionRunId::for_owner_command(&owner_ev, "participant-causality-owner-v1");
+    let run_id3 = ActionRunId::for_owner_command(&cmd_ev3, "participant-causality-owner-v1");
     let seed3 = ActionRunSeed {
         account: acct_a.clone(),
-        command_source_event_id: owner_ev.clone(),
+        command_source_event_id: cmd_ev3.clone(),
         command_text: "Alice-主 是谁".into(),
         conversation_id: "owner-conv".into(),
         occurred_at_unix_secs: 1_800_000_600,
@@ -1371,12 +1479,9 @@ async fn scenario(db: DatabaseConnection) -> Result<(), String> {
 async fn effective_thread_projection_after_merge_mysql() {
     let (db, schema) = isolated_db("_merge").await;
     let outcome = tokio::spawn(merge_scenario(db.clone())).await;
-    let cleanup = db
-        .execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))
-        .await;
-    if let Err(error) = cleanup {
-        eprintln!("schema cleanup skipped (needs DROP privilege): {error}");
-    }
+    db.execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))
+        .await
+        .expect("drop effective thread schema");
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(message)) => panic!("effective thread scenario must pass: {message}"),

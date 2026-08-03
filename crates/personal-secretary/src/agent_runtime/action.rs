@@ -248,8 +248,15 @@ pub enum SecretaryAction {
         query: String,
         limit: u16,
     },
+    /// 解析非显式指代（"他""那条消息"等）。CMD-010 防线 C：
+    /// 默认只能在显式作用域（已登记 conversation_ref/thread_ref）内解析；
+    /// 无作用域时不猜唯一解，返回澄清/OpenReference。
     ResolveReference {
         expression: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation_ref: Option<crate::ConversationRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<crate::EventThreadId>,
     },
     ListUpcomingItems {
         horizon_secs: u64,

@@ -169,7 +169,11 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 ));
             }
         }
-        SecretaryAction::ResolveReference { expression } => {
+        SecretaryAction::ResolveReference {
+            expression,
+            conversation_ref: _,
+            thread_id: _,
+        } => {
             bounded_text("expression", expression, 1, 1_000)?;
         }
         SecretaryAction::ListUpcomingItems { horizon_secs } if *horizon_secs == 0 => {

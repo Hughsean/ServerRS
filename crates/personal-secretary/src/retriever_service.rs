@@ -296,6 +296,11 @@ impl RetrieverUseCase {
         expression: &str,
         context: &ReferenceContext,
     ) -> Result<ReferenceResolution, RetrieverUseCaseError> {
+        if &context.account != account {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "reference context account must match the requested account".into(),
+            ));
+        }
         if expression.trim().is_empty() {
             return Err(RetrieverUseCaseError::InvalidInput(
                 "expression must not be empty".into(),

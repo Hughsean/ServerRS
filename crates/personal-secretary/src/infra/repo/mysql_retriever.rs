@@ -440,10 +440,31 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         &self,
         account: &SourceAccountRef,
         expression: &str,
-        _context: &ReferenceContext,
+        context: &ReferenceContext,
     ) -> Result<Vec<ReferenceCandidate>, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
-        // 简单实现：按 actor_platform_id 或 normalized_text 模糊匹配
+        // CMD-010 防线 C：非显式引用只能在当前作用域内解析。作用域 =
+        // Owner 显式提供的会话/线程（context.current_conversation /
+        // current_thread_id，均由已登记引用解析而来）。两者都无时返回空候选，
+        // 由用例层生成 OpenReference/澄清响应 —— 绝不按"最新一个"或
+        // "全局最相似一个"在账号内跨群模糊匹配。
+        let conversation_id = match &context.current_conversation {
+            Some(conversation) => {
+                match resolve_conversation_id(&self.db, account_id, conversation).await? {
+                    Some(id) => Some(id),
+                    // 显式会话已失效或不属于账号时不得静默退化为仅按 Thread 查询。
+                    None => return Ok(Vec::new()),
+                }
+            }
+            None => None,
+        };
+        let scoped_thread_id = context
+            .current_thread_id
+            .as_ref()
+            .map(EventThreadId::as_str);
+        if conversation_id.is_none() && scoped_thread_id.is_none() {
+            return Ok(Vec::new());
+        }
         let rows = ReferenceCandidateRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind, te.thread_id,
@@ -453,6 +474,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
                WHERE e.account_id = ?
                  AND (e.actor_platform_id LIKE ? OR m.normalized_text LIKE ?)
+                 AND (? IS NULL OR e.conversation_id = ?)
+                 AND (? IS NULL OR te.thread_id = ?)
                  AND NOT EXISTS (
                      SELECT 1 FROM secretary_message_tombstones t
                      WHERE t.source_event_id = e.source_event_id
@@ -466,6 +489,19 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                 account_id.into(),
                 format!("%{expression}%").into(),
                 format!("%{expression}%").into(),
+                // NULL 参数用 Option 内的 None（sea-query 1.x Value 无 Null 变体）。
+                conversation_id
+                    .map(sea_orm::Value::from)
+                    .unwrap_or(sea_orm::Value::BigUnsigned(None)),
+                conversation_id
+                    .map(sea_orm::Value::from)
+                    .unwrap_or(sea_orm::Value::BigUnsigned(None)),
+                scoped_thread_id
+                    .map(|tid| tid.to_owned().into())
+                    .unwrap_or(sea_orm::Value::String(None)),
+                scoped_thread_id
+                    .map(|tid| tid.to_owned().into())
+                    .unwrap_or(sea_orm::Value::String(None)),
             ],
         ))
         .all(&self.db)

@@ -174,44 +174,27 @@ pub(crate) async fn verify_action_lease<C: ConnectionTrait>(
     Ok(())
 }
 
-/// 复验命令 SourceEvent 是 OwnerCommand，且账号下恰好一个 active OwnerBinding
-/// 同时匹配托管账号、命令账号与 Owner actor；任何偏差都按未授权拒绝。
+/// 复验命令 SourceEvent 是 OwnerCommand（`message_role` 与权威 `actor_kind`），
+/// 且账号下恰好一个 active OwnerBinding 同时匹配托管账号、命令账号与
+/// Owner actor（CMD-010 防线 A：完整身份 = managed + command + owner +
+/// identity kind 四元组）。实现委托共享授权 helper，禁止复制授权 SQL。
 pub(crate) async fn verify_owner_command<C: ConnectionTrait>(
     db: &C,
     ctx: &ControlEffectCtx<'_>,
     managed_account_id: u64,
 ) -> Result<(), ControlAuthError> {
-    let command = CommandRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT account_id, actor_platform_id, message_role FROM secretary_source_events \
-         WHERE source_event_id = ? FOR UPDATE",
-        [ctx.command_source_event_id.as_str().into()],
-    ))
-    .one(db)
+    super::super::owner_authorization::verify_owner_command(
+        db,
+        ctx.command_source_event_id,
+        managed_account_id,
+    )
     .await
-    .map_err(database_error)?
-    .ok_or(ControlAuthError::Unauthorized)?;
-    if command.message_role != "owner_command" {
-        return Err(ControlAuthError::Unauthorized);
-    }
-    let bindings = BindingRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT command_account_id, owner_actor_id FROM secretary_owner_bindings \
-         WHERE managed_account_id = ? AND status = 'active' LIMIT 2 FOR UPDATE",
-        [managed_account_id.into()],
-    ))
-    .all(db)
-    .await
-    .map_err(database_error)?;
-    match bindings.as_slice() {
-        [binding]
-            if binding.command_account_id == command.account_id
-                && binding.owner_actor_id == command.actor_platform_id =>
-        {
-            Ok(())
+    .map_err(|error| match error {
+        super::super::owner_authorization::OwnerAuthError::Unauthorized => {
+            ControlAuthError::Unauthorized
         }
-        _ => Err(ControlAuthError::Unauthorized),
-    }
+        super::super::owner_authorization::OwnerAuthError::Database => ControlAuthError::Database,
+    })
 }
 
 /// 加载既有 Effect Receipt；必须校验 run_id + proposal_id + 完整 Action 完全一致，
@@ -301,19 +284,6 @@ pub(crate) fn database_error(_: sea_orm::DbErr) -> ControlAuthError {
 #[derive(FromQueryResult)]
 struct IdRow {
     id: u64,
-}
-
-#[derive(FromQueryResult)]
-struct CommandRow {
-    account_id: u64,
-    actor_platform_id: String,
-    message_role: String,
-}
-
-#[derive(FromQueryResult)]
-struct BindingRow {
-    command_account_id: u64,
-    owner_actor_id: String,
 }
 
 #[derive(FromQueryResult)]

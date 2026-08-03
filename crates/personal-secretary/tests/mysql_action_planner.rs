@@ -228,6 +228,35 @@ fn owner_command(account_id: &str, message_id: &str, text: &str) -> InboundMessa
     .unwrap()
 }
 
+/// 建立 active OwnerBinding。CMD-010 防线 A 后，ActionRun 领取/Resume 与
+/// 写类 Effect 都会复验 binding，测试拓扑必须提供与命令事件匹配的 binding。
+async fn insert_active_binding(
+    db: &sea_orm::DatabaseConnection,
+    managed_channel: &str,
+    managed_id: &str,
+    command_account_id: &str,
+) {
+    let updated = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_owner_bindings \
+             (binding_id, managed_account_id, command_account_id, owner_actor_id, status) \
+             SELECT ?, managed.id, command.id, 'owner-openid', 'active' \
+             FROM secretary_accounts managed CROSS JOIN secretary_accounts command \
+             WHERE managed.source_channel = ? AND managed.platform_account_id = ? \
+               AND command.source_channel = 'qq_open_platform' AND command.platform_account_id = ?",
+            vec![
+                uuid::Uuid::new_v4().to_string().into(),
+                managed_channel.to_owned().into(),
+                managed_id.to_owned().into(),
+                command_account_id.to_owned().into(),
+            ],
+        ))
+        .await
+        .expect("active owner binding must persist");
+    assert_eq!(updated.rows_affected(), 1, "exactly one active binding");
+}
+
 #[tokio::test]
 #[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated MySQL schema"]
 async fn mysql_action_planner_full_lifecycle_restart_no_duplicate() {
@@ -253,7 +282,10 @@ async fn mysql_action_planner_full_lifecycle_restart_no_duplicate() {
         IngestMessageOutcome::Duplicate { .. } => panic!("expected accepted"),
     };
 
-    // 2. 幂等创建 action_run（run_id 从 source_event_id 派生）
+    // 2. 幂等创建 action_run（run_id 从 source_event_id 派生）。
+    //    领取/Resume 会复验 active OwnerBinding（CMD-010 防线 A），
+    //    测试拓扑必须提供与命令事件匹配的 binding。
+    insert_active_binding(&db, "qq_open_platform", &account_id, &account_id).await;
     let action_store = build_mysql_action_store(db.clone());
     let run_id = ActionRunId::for_owner_command(&source_event_id, "v1");
     let seed = ActionRunSeed {
@@ -383,6 +415,8 @@ async fn mysql_action_planner_lease_expiry_allows_reclaim() {
         _ => panic!("expected accepted"),
     };
 
+    // 领取会复验 active OwnerBinding（CMD-010 防线 A）。
+    insert_active_binding(&db, "qq_open_platform", &account_id, &account_id).await;
     let action_store = build_mysql_action_store(db.clone());
     let run_id = ActionRunId::for_owner_command(&source_event_id, "v1");
     let seed = ActionRunSeed {
@@ -520,7 +554,8 @@ async fn mysql_action_planner_retriever_effect_response_roundtrip() {
         _ => panic!("expected accepted"),
     };
 
-    // 2. 创建 action_run
+    // 2. 创建 action_run（领取会复验 active OwnerBinding，CMD-010 防线 A）
+    insert_active_binding(&db, "qq_open_platform", &account_id, &account_id).await;
     let action_store = build_mysql_action_store(db.clone());
     let run_id = ActionRunId::for_owner_command(&source_event_id, "v1");
     let seed = ActionRunSeed {
@@ -655,7 +690,7 @@ struct SuspendPolicyPlanner {
 
 #[async_trait]
 impl ActionPlannerT for SuspendPolicyPlanner {
-    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+    async fn plan(&self, input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
         Ok(PlannerOutput::Proposal(
             SecretaryActionProposal::new(
                 SecretaryAction::SetNotificationCategoryImportance {
@@ -674,7 +709,7 @@ impl ActionPlannerT for SuspendPolicyPlanner {
                     bypass_quiet: false,
                 },
                 "测试重启后确认通知策略变更",
-                Vec::new(),
+                vec![input.command.source_event_id.clone()],
                 Some("resume-policy-effect-v1".into()),
             )
             .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
@@ -918,12 +953,12 @@ struct SuspendThreadControlPlanner {
 
 #[async_trait]
 impl ActionPlannerT for SuspendThreadControlPlanner {
-    async fn plan(&self, _input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+    async fn plan(&self, input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
         Ok(PlannerOutput::Proposal(
             SecretaryActionProposal::new(
                 self.action.clone(),
                 "测试 Owner 线程控制审批",
-                Vec::new(),
+                vec![input.command.source_event_id.clone()],
                 Some(self.planner_version.clone()),
             )
             .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
@@ -1287,6 +1322,8 @@ async fn mysql_action_planner_suspend_resume_cas_single_consume() {
         _ => panic!("expected accepted"),
     };
 
+    // 领取/Resume 会复验 active OwnerBinding（CMD-010 防线 A）。
+    insert_active_binding(&db, "qq_open_platform", &account_id, &account_id).await;
     let action_store = build_mysql_action_store(db.clone());
     let run_id = ActionRunId::for_owner_command(&source_event_id, "v1");
     let seed = ActionRunSeed {

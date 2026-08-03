@@ -22,6 +22,7 @@ mod mysql_thread_links;
 mod mysql_thread_mutations;
 mod mysql_thread_semantics;
 mod mysql_threading;
+mod owner_authorization;
 
 pub(crate) use mysql_action_store::{BoundActionCheckpointStore, MySqlActionStore};
 pub(crate) use mysql_agenda::MySqlAgendaStore;

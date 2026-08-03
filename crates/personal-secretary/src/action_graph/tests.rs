@@ -437,6 +437,7 @@ fn replan_allowed_tools_are_all_l0_readonly() {
         SecretaryToolKind::SearchRecentEvents,
         SecretaryToolKind::ReadSourceEvent,
         SecretaryToolKind::SearchEventThreads,
+        SecretaryToolKind::ResolveReference,
         SecretaryToolKind::ListUpcomingItems,
         SecretaryToolKind::GetSecretaryStatus,
         SecretaryToolKind::ListPendingOwnerWork,
@@ -447,13 +448,10 @@ fn replan_allowed_tools_are_all_l0_readonly() {
             "{kind:?} should be replan-eligible"
         );
     }
-    // GetThreadContext 和 ResolveReference 的摘要含稳定 thread/actor/evidence ID，
-    // 且当前没有类型化事件投影，不得进入 Replan 白名单。
+    // GetThreadContext 的摘要仍含稳定 thread/actor/evidence ID，且当前没有
+    // 类型化事件投影，不得进入 Replan 白名单。
     assert!(!is_replan_observation_tool(
         SecretaryToolKind::GetThreadContext
-    ));
-    assert!(!is_replan_observation_tool(
-        SecretaryToolKind::ResolveReference
     ));
 }
 
@@ -503,6 +501,122 @@ impl ActionPlannerT for RecordingPlanner {
             .next()
             .ok_or_else(|| PlannerError::UnparseableOutput("no more outputs".into()))
     }
+}
+
+fn plan_node_test_context(command_event: &SourceEventId) -> std::sync::Arc<ActionRunContext> {
+    std::sync::Arc::new(ActionRunContext {
+        account: SourceAccountRef::new(MessageSource::NapCat, "test-account").unwrap(),
+        command_source_event_id: command_event.clone(),
+        command_text: "测试 OwnerCommand".into(),
+        conversation_id: "conv-test".into(),
+        occurred_at_unix_secs: 1_800_000_000,
+        timezone_offset_secs: 28_800,
+        timezone: "Asia/Shanghai".into(),
+        now_unix_secs: 1_800_000_000,
+        lease_token: ActionLeaseToken::generate(),
+        is_local_loopback: false,
+    })
+}
+
+fn plan_node_test_state(command_event: &SourceEventId) -> AgentState<SecretaryAgentState> {
+    AgentState::new(
+        SecretaryAgentState::new(
+            "test goal",
+            Vec::new(),
+            vec![command_event.clone()],
+            vec![RecentEventRef {
+                source_event_id: command_event.clone(),
+                summary: "OwnerCommand".into(),
+            }],
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn plan_node_rejects_write_without_authoritative_command_evidence() {
+    let command_event = SourceEventId::new("cmd-domain-evidence").unwrap();
+    let unrelated_event = SourceEventId::new("untrusted-chat-event").unwrap();
+    let proposal = SecretaryActionProposal::new(
+        SecretaryAction::DraftReminder {
+            text: "提醒内容".into(),
+            due_at_unix: 1_900_000_000,
+        },
+        "来自不可信聊天正文",
+        vec![unrelated_event],
+        None,
+    )
+    .unwrap();
+    let planner = std::sync::Arc::new(RecordingPlanner::new(vec![PlannerOutput::Proposal(
+        proposal,
+    )]));
+    let node = PlanNode::new(planner, None, plan_node_test_context(&command_event)).unwrap();
+
+    let error = match node
+        .execute(&plan_node_test_state(&command_event), &test_context())
+        .await
+    {
+        Ok(_) => panic!("domain PlanNode must reject missing OwnerCommand evidence"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("缺少本轮 OwnerCommand 证据"));
+}
+
+#[tokio::test]
+async fn plan_node_with_open_reference_allows_only_owner_clarification() {
+    let command_event = SourceEventId::new("cmd-open-reference").unwrap();
+    let proposal = SecretaryActionProposal::new(
+        SecretaryAction::SearchRecentEvents {
+            query: "继续猜那个人".into(),
+            limit: 20,
+            since_unix_secs: None,
+            until_unix_secs: None,
+            conversation: None,
+            thread_id: None,
+            actor_id: None,
+        },
+        "绕过澄清继续检索",
+        vec![command_event.clone()],
+        None,
+    )
+    .unwrap();
+    let planner = std::sync::Arc::new(RecordingPlanner::new(vec![PlannerOutput::Proposal(
+        proposal,
+    )]));
+    let node = PlanNode::new(planner, None, plan_node_test_context(&command_event)).unwrap();
+    let mut business = SecretaryAgentState::new(
+        "test goal",
+        Vec::new(),
+        vec![command_event.clone()],
+        vec![RecentEventRef {
+            source_event_id: command_event.clone(),
+            summary: "OwnerCommand".into(),
+        }],
+    )
+    .unwrap();
+    business
+        .apply_update(SecretaryAgentUpdate::WorkingContext(
+            WorkingContextUpdate::ReplanEvidence {
+                evidence_refs: Vec::new(),
+                resolved_thread_refs: Vec::new(),
+                resolved_participant_refs: Vec::new(),
+                resolved_fact_refs: Vec::new(),
+                open_references: vec![crate::OpenReference {
+                    kind: crate::OpenReferenceKind::AmbiguousReference,
+                    label: "未能唯一确定所指对象".into(),
+                    source_event_ids: Vec::new(),
+                    reason: "作用域内存在多个候选".into(),
+                }],
+            },
+        ))
+        .unwrap();
+    let state = AgentState::new(business);
+
+    let error = match node.execute(&state, &test_context()).await {
+        Ok(_) => panic!("open reference must force owner clarification"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("只能请求 Owner 澄清"));
 }
 
 /// 返回预设 QueryEffectResultV1 receipt 的 Fake EffectExecutor。

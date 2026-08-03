@@ -384,42 +384,25 @@ async fn verify_action_lease<C: ConnectionTrait>(
     Ok(())
 }
 
+/// 复验命令事件是 OwnerCommand（含权威 actor_kind）且 active OwnerBinding
+/// 匹配（CMD-010 防线 A 四元组）。委托共享授权 helper，禁止复制授权 SQL。
 async fn verify_owner_command<C: ConnectionTrait>(
     db: &C,
     request: &ThreadControlEffectRequest,
     managed_account_id: u64,
 ) -> Result<(), ThreadControlStoreError> {
-    let command = CommandRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT account_id, actor_platform_id, message_role FROM secretary_source_events \
-         WHERE source_event_id = ? FOR UPDATE",
-        [request.command_source_event_id.as_str().into()],
-    ))
-    .one(db)
+    super::owner_authorization::verify_owner_command(
+        db,
+        &request.command_source_event_id,
+        managed_account_id,
+    )
     .await
-    .map_err(database_error)?
-    .ok_or(ThreadControlStoreError::Unauthorized)?;
-    if command.message_role != "owner_command" {
-        return Err(ThreadControlStoreError::Unauthorized);
-    }
-    let bindings = BindingRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT command_account_id, owner_actor_id FROM secretary_owner_bindings \
-         WHERE managed_account_id = ? AND status = 'active' LIMIT 2 FOR UPDATE",
-        [managed_account_id.into()],
-    ))
-    .all(db)
-    .await
-    .map_err(database_error)?;
-    match bindings.as_slice() {
-        [binding]
-            if binding.command_account_id == command.account_id
-                && binding.owner_actor_id == command.actor_platform_id =>
-        {
-            Ok(())
+    .map_err(|error| match error {
+        super::owner_authorization::OwnerAuthError::Unauthorized => {
+            ThreadControlStoreError::Unauthorized
         }
-        _ => Err(ThreadControlStoreError::Unauthorized),
-    }
+        super::owner_authorization::OwnerAuthError::Database => ThreadControlStoreError::Database,
+    })
 }
 
 async fn load_receipt<C: ConnectionTrait>(
@@ -556,19 +539,6 @@ fn database_error(_: sea_orm::DbErr) -> ThreadControlStoreError {
 #[derive(FromQueryResult)]
 struct IdRow {
     id: u64,
-}
-
-#[derive(FromQueryResult)]
-struct CommandRow {
-    account_id: u64,
-    actor_platform_id: String,
-    message_role: String,
-}
-
-#[derive(FromQueryResult)]
-struct BindingRow {
-    command_account_id: u64,
-    owner_actor_id: String,
 }
 
 #[derive(FromQueryResult)]

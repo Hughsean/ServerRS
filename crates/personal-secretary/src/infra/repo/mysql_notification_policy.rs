@@ -1021,68 +1021,28 @@ async fn verify_action_lease(
     Ok(())
 }
 
+/// 复验命令事件是 OwnerCommand（含权威 actor_kind）且 active OwnerBinding
+/// 匹配（CMD-010 防线 A 四元组）。委托共享授权 helper；重复 binding 的
+/// Conflict 语义由共享 helper 的“恰好一条”判定天然覆盖，无需复制授权 SQL。
 async fn verify_effect_owner_authorization(
     db: &sea_orm::DatabaseTransaction,
     request: &crate::NotificationPolicyEffectRequest,
     managed_account_id: u64,
 ) -> Result<(), NotificationPolicyStoreError> {
-    // 第一步：读取命令事件并锁定，确认其为 owner_command。
-    let command_row = CommandAuthRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT account_id, actor_platform_id, message_role \
-         FROM secretary_source_events \
-         WHERE source_event_id = ? FOR UPDATE",
-        [request.command_source_event_id.as_str().into()],
-    ))
-    .one(db)
+    super::owner_authorization::verify_owner_command(
+        db,
+        &request.command_source_event_id,
+        managed_account_id,
+    )
     .await
-    .map_err(database_error)?
-    .ok_or(NotificationPolicyStoreError::Unauthorized)?;
-    if command_row.message_role != "owner_command" {
-        return Err(NotificationPolicyStoreError::Unauthorized);
-    }
-
-    // 第二步：读取目标账号的所有 active OwnerBinding（最多 2 条用于检测重复），
-    // 不做按 command account 的预先 JOIN，确保重复 binding 能被显式捕获。
-    let bindings = BindingAuthRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::MySql,
-        "SELECT binding_id, command_account_id, owner_actor_id \
-         FROM secretary_owner_bindings \
-         WHERE managed_account_id = ? AND status = 'active' \
-         LIMIT 2 FOR UPDATE",
-        [managed_account_id.into()],
-    ))
-    .all(db)
-    .await
-    .map_err(database_error)?;
-    match bindings.as_slice() {
-        [] => Err(NotificationPolicyStoreError::Unauthorized),
-        [binding] => {
-            if binding.command_account_id == command_row.account_id
-                && binding.owner_actor_id == command_row.actor_platform_id
-            {
-                Ok(())
-            } else {
-                Err(NotificationPolicyStoreError::Unauthorized)
-            }
+    .map_err(|error| match error {
+        super::owner_authorization::OwnerAuthError::Unauthorized => {
+            NotificationPolicyStoreError::Unauthorized
         }
-        _ => Err(NotificationPolicyStoreError::Conflict),
-    }
-}
-
-#[derive(FromQueryResult)]
-struct CommandAuthRow {
-    account_id: u64,
-    actor_platform_id: String,
-    message_role: String,
-}
-
-#[derive(FromQueryResult)]
-struct BindingAuthRow {
-    #[allow(dead_code)]
-    binding_id: String,
-    command_account_id: u64,
-    owner_actor_id: String,
+        super::owner_authorization::OwnerAuthError::Database => {
+            NotificationPolicyStoreError::Database
+        }
+    })
 }
 
 async fn load_policy_effect_receipt(

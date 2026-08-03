@@ -71,6 +71,7 @@ pub fn is_replan_observation_tool(kind: SecretaryToolKind) -> bool {
         SecretaryToolKind::SearchRecentEvents
             | SecretaryToolKind::ReadSourceEvent
             | SecretaryToolKind::SearchEventThreads
+            | SecretaryToolKind::ResolveReference
             | SecretaryToolKind::ListUpcomingItems
             | SecretaryToolKind::GetSecretaryStatus
             | SecretaryToolKind::ListPendingOwnerWork

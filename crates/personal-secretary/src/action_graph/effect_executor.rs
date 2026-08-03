@@ -10,8 +10,8 @@ use agent_core::graph::{EffectEnvelope, EffectError, EffectErrorKind, EffectExec
 use async_trait::async_trait;
 
 use crate::{
-    AccountScopedParticipantRef, AgendaApplyRequest, AgendaItemId, AgendaMutation, AgendaUseCase,
-    ConversationMemoryModeInput, EventQuery, FollowUpControlEffectRequest,
+    AccountScopedParticipantRef, AgendaApplyRequest, AgendaError, AgendaItemId, AgendaMutation,
+    AgendaUseCase, ConversationMemoryModeInput, EventQuery, FollowUpControlEffectRequest,
     FollowUpControlStoreError, FollowUpControlUseCase, MemoryCandidateControlEffectRequest,
     MemoryCandidateControlStoreError, MemoryCandidateControlUseCase, MemoryCandidateUseCase,
     MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
@@ -580,7 +580,7 @@ impl SecretaryActionEffectExecutor {
                 mutation,
             })
             .await
-            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+            .map_err(agenda_effect_error)?;
         Ok(Some(SecretaryActionReceipt {
             proposal_id: proposal.proposal_id.clone(),
             result_ref: receipt.result_ref,
@@ -889,11 +889,18 @@ impl SecretaryActionEffectExecutor {
                     Vec::new(),
                 )
             }
-            SecretaryAction::ResolveReference { expression } => {
+            SecretaryAction::ResolveReference {
+                expression,
+                conversation_ref,
+                thread_id,
+            } => {
+                // CMD-010 防线 C：解析作用域只来自 Owner 显式提供的已登记
+                // conversation_ref / thread_ref；无作用域时用例层不返回候选，
+                // 回执携带歧义标记，供 ReplanDecision 登记 OpenReference。
                 let context = ReferenceContext {
                     account: self.account.clone(),
-                    current_conversation: None,
-                    current_thread_id: None,
+                    current_conversation: conversation_ref.clone(),
+                    current_thread_id: thread_id.clone(),
                     recent_events: Vec::new(),
                     now_unix_secs: self.now_unix_secs,
                     timezone: "UTC".into(),
@@ -907,12 +914,36 @@ impl SecretaryActionEffectExecutor {
                 } else {
                     format!("指代已解析：{}", resolution.evidence)
                 };
+                // 唯一解析只把一条权威来源投影为 typed_event；稳定事件/Actor ID
+                // 由下一轮 LLM 适配层替换为 evt_N/actor_N。歧义时不暴露候选集合，
+                // 仅登记 OpenReference 并强制 Owner 澄清。
+                let mut source_event_ids = Vec::new();
+                let mut typed_events = Vec::new();
+                if !resolution.ambiguous
+                    && let Some(event_id) = resolution.resolved_event_ids.first()
+                    && let Some(detail) = retriever
+                        .read_source_event(event_id, &self.account)
+                        .await
+                        .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?
+                {
+                    source_event_ids.push(detail.source_event_id.clone());
+                    typed_events.push(QueryEffectTypedEvent {
+                        source_event_id: detail.source_event_id,
+                        actor_id: detail.actor.id,
+                        actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
+                            detail.actor.kind,
+                        ),
+                        occurred_at_unix_secs: detail.occurred_at_unix_secs,
+                        // 指代解析只需要身份与来源，不把正文再次送入模型。
+                        excerpt: String::new(),
+                    });
+                }
                 // 歧义标记进入回执，供 ReplanDecision 登记未解决指代（CMD-009 目标 A）。
                 query_effect_json_ambiguous(
                     SecretaryToolKind::ResolveReference,
                     &summary,
-                    &[],
-                    Vec::new(),
+                    &source_event_ids,
+                    typed_events,
                     resolution.ambiguous,
                 )
             }
@@ -1236,6 +1267,19 @@ fn policy_effect_error(error: crate::NotificationPolicyUseCaseError) -> EffectEr
             | crate::NotificationPolicyStoreError::Database,
         ) => EffectErrorKind::Transient,
         _ => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn agenda_effect_error(error: AgendaError) -> EffectError {
+    let kind = match error {
+        AgendaError::Database(_) => EffectErrorKind::UnknownCommit,
+        AgendaError::Invalid(_)
+        | AgendaError::NotFound
+        | AgendaError::VersionConflict
+        | AgendaError::Unauthorized
+        | AgendaError::LeaseLost
+        | AgendaError::Store(_) => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
 }

@@ -194,6 +194,12 @@ pub enum AgendaError {
     NotFound,
     #[error("agenda item version conflict")]
     VersionConflict,
+    #[error("agenda mutation is not authorized")]
+    Unauthorized,
+    #[error("agenda action lease was lost")]
+    LeaseLost,
+    #[error("agenda database operation failed: {0}")]
+    Database(String),
     #[error("agenda store failed: {0}")]
     Store(String),
 }

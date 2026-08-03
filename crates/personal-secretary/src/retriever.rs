@@ -3,8 +3,6 @@
 //! 本模块定义协议无关的检索查询、结果类型、指代解析上下文和 Store 端口。
 //! 领域层不依赖 SeaORM、NapCat 或 LLM；复杂查询在基础设施仓储中实现。
 
-use std::collections::HashSet;
-
 use async_trait::async_trait;
 
 use crate::planner::AgentEventView;
@@ -983,30 +981,43 @@ pub fn filter_for_model(
 }
 
 /// 判定指代解析结果：从候选集合中判定唯一、歧义或无结果。
+///
+/// CMD-010 防线 C：
+/// - 候选去重使用完整账号作用域参与者身份（kind + stable id），同稳定 ID
+///   在不同 identity kind 下绝不合并（另一群同 ID 的 Owner 与 external 不会
+///   让指代"恰好唯一"）；
+/// - 歧义时 `resolved_*` 全部为 None，绝不猜测"最新一个"或"全局最相似一个"；
+///   调用方据此生成 OpenReference/澄清响应，不执行写 Action。
 pub fn resolve_reference_from_candidates(
     candidates: Vec<ReferenceCandidate>,
-    _context: &ReferenceContext,
+    context: &ReferenceContext,
 ) -> ReferenceResolution {
     if candidates.is_empty() {
+        // CMD-010 防线 C：当前作用域内 0 个候选同样是"未解析"信号——必须向
+        // Owner 澄清，绝不把空结果当作"已解析"（不执行写 Action、不猜测）。
         return ReferenceResolution {
             resolved_actor_id: None,
             resolved_thread_id: None,
             resolved_event_ids: Vec::new(),
-            ambiguous: false,
-            evidence: "无匹配候选".into(),
+            ambiguous: true,
+            evidence: "当前作用域内无匹配候选，需 Owner 澄清".into(),
         };
     }
 
-    // 收集所有不重复的 actor_id 和 thread_id
-    let mut actor_ids: Vec<String> = Vec::new();
+    // 按完整身份（platform_kind + stable_id）与 thread 去重；scope 内 0 个或
+    // 多个合法候选都不猜唯一解。
+    let mut participants: Vec<ParticipantIdentity> = Vec::new();
     let mut thread_ids: Vec<EventThreadId> = Vec::new();
-    let mut all_event_ids: HashSet<String> = HashSet::new();
+    let mut all_event_ids: Vec<SourceEventId> = Vec::new();
 
     for candidate in &candidates {
-        if let Some(actor_id) = &candidate.actor_id
-            && !actor_ids.contains(actor_id)
+        if let Some(participant) = &candidate.participant
+            && !participants.iter().any(|existing| {
+                existing.platform_kind == participant.platform_kind
+                    && existing.stable_id == participant.stable_id
+            })
         {
-            actor_ids.push(actor_id.clone());
+            participants.push(participant.clone());
         }
         if let Some(thread_id) = &candidate.thread_id
             && !thread_ids.contains(thread_id)
@@ -1014,36 +1025,37 @@ pub fn resolve_reference_from_candidates(
             thread_ids.push(thread_id.clone());
         }
         for event_id in &candidate.source_event_ids {
-            all_event_ids.insert(event_id.as_str().to_owned());
+            if !all_event_ids.contains(event_id) {
+                all_event_ids.push(event_id.clone());
+            }
         }
     }
 
-    let resolved_event_ids: Vec<SourceEventId> = all_event_ids
-        .into_iter()
-        .filter_map(|id| SourceEventId::new(id).ok())
-        .collect();
-
-    // 唯一 actor 且唯一 thread -> 非歧义
-    if actor_ids.len() == 1 && thread_ids.len() <= 1 {
+    let scoped = context.current_conversation.is_some() || context.current_thread_id.is_some();
+    // 恰好一个完整身份且至多一个线程 -> 非歧义（仅当存在解析作用域时；
+    // 无会话/线程作用域的账号级模糊命中不视为唯一，避免跨群静默绑定）。
+    if participants.len() == 1 && thread_ids.len() <= 1 && scoped {
         return ReferenceResolution {
-            resolved_actor_id: actor_ids.first().cloned(),
+            resolved_actor_id: participants
+                .first()
+                .map(|participant| participant.stable_id.clone()),
             resolved_thread_id: thread_ids.first().cloned(),
-            resolved_event_ids,
+            resolved_event_ids: all_event_ids,
             ambiguous: false,
             evidence: format!("匹配到唯一候选（{}个证据）", candidates.len()),
         };
     }
 
-    // 多个候选 -> 歧义
+    // 多个候选或无作用域 -> 歧义：返回澄清信号，不绑定任何候选。
     ReferenceResolution {
-        resolved_actor_id: actor_ids.first().cloned(),
-        resolved_thread_id: thread_ids.first().cloned(),
-        resolved_event_ids,
+        resolved_actor_id: None,
+        resolved_thread_id: None,
+        resolved_event_ids: all_event_ids,
         ambiguous: true,
         evidence: format!(
-            "匹配到 {} 个候选（{} 个 actor，{} 个线程），需 Owner 澄清",
+            "匹配到 {} 个候选（{} 个参与者，{} 个线程），需 Owner 澄清",
             candidates.len(),
-            actor_ids.len(),
+            participants.len(),
             thread_ids.len()
         ),
     }
@@ -1270,6 +1282,7 @@ fn validate_attributes(attributes: &[ParticipantAttribute]) -> Result<(), Retrie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ConversationKind;
     use crate::{MessageSource, SourceAccountRef};
 
     fn account() -> SourceAccountRef {
@@ -1638,12 +1651,15 @@ mod tests {
             timezone: "Asia/Shanghai".into(),
         };
         let result = resolve_reference_from_candidates(Vec::new(), &context);
-        assert!(!result.ambiguous);
+        // CMD-010 防线 C：空候选 = 未解析，必须生成澄清信号而非"已解析"。
+        assert!(result.ambiguous);
         assert!(result.resolved_actor_id.is_none());
     }
 
     #[test]
-    fn resolve_single_candidate_not_ambiguous() {
+    fn resolve_without_scope_single_candidate_is_ambiguous() {
+        // CMD-010 防线 C：无会话/线程作用域的账号级唯一命中不得静默绑定
+        // （可能是另一群/另一身份命名空间的同 ID 参与者），一律要求澄清。
         let context = ReferenceContext {
             account: account(),
             current_conversation: None,
@@ -1654,7 +1670,46 @@ mod tests {
         };
         let candidate = ReferenceCandidate {
             actor_id: Some("12345".into()),
-            participant: None,
+            participant: Some(
+                ParticipantIdentity::new(
+                    PlatformIdentityKind::External,
+                    "12345",
+                    IdentityTrust::Observed,
+                )
+                .unwrap(),
+            ),
+            thread_id: None,
+            source_event_ids: vec![SourceEventId::new("event-1").unwrap()],
+            evidence: "匹配".into(),
+        };
+        let result = resolve_reference_from_candidates(vec![candidate], &context);
+        assert!(result.ambiguous, "无作用域时不得解析");
+        assert!(result.resolved_actor_id.is_none(), "不得猜测最新一个");
+    }
+
+    #[test]
+    fn resolve_scoped_single_participant_not_ambiguous() {
+        // 显式作用域 + 唯一完整身份（kind + actor_id）→ 允许精确解析（C.4）。
+        let mut context = ReferenceContext {
+            account: account(),
+            current_conversation: None,
+            current_thread_id: None,
+            recent_events: Vec::new(),
+            now_unix_secs: 1000,
+            timezone: "Asia/Shanghai".into(),
+        };
+        context.current_conversation =
+            Some(ConversationRef::new(ConversationKind::Group, "group-a").unwrap());
+        let candidate = ReferenceCandidate {
+            actor_id: Some("12345".into()),
+            participant: Some(
+                ParticipantIdentity::new(
+                    PlatformIdentityKind::External,
+                    "12345",
+                    IdentityTrust::Observed,
+                )
+                .unwrap(),
+            ),
             thread_id: None,
             source_event_ids: vec![SourceEventId::new("event-1").unwrap()],
             evidence: "匹配".into(),
@@ -1665,10 +1720,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_multiple_actors_ambiguous() {
+    fn resolve_same_actor_different_kind_is_ambiguous() {
+        // CMD-010 防线 C：同稳定 ID 在不同 identity kind（如 Owner 与 external）
+        // 是两个参与者，不得因"唯一字符串"静默绑定到其中之一。
         let context = ReferenceContext {
             account: account(),
-            current_conversation: None,
+            current_conversation: Some(
+                ConversationRef::new(ConversationKind::Group, "group-a").unwrap(),
+            ),
             current_thread_id: None,
             recent_events: Vec::new(),
             now_unix_secs: 1000,
@@ -1676,22 +1735,37 @@ mod tests {
         };
         let candidates = vec![
             ReferenceCandidate {
-                actor_id: Some("111".into()),
-                participant: None,
+                actor_id: Some("12345".into()),
+                participant: Some(
+                    ParticipantIdentity::new(
+                        PlatformIdentityKind::Owner,
+                        "12345",
+                        IdentityTrust::Verified,
+                    )
+                    .unwrap(),
+                ),
                 thread_id: None,
                 source_event_ids: vec![SourceEventId::new("event-1").unwrap()],
-                evidence: "候选1".into(),
+                evidence: "Owner 身份候选".into(),
             },
             ReferenceCandidate {
-                actor_id: Some("222".into()),
-                participant: None,
+                actor_id: Some("12345".into()),
+                participant: Some(
+                    ParticipantIdentity::new(
+                        PlatformIdentityKind::External,
+                        "12345",
+                        IdentityTrust::Observed,
+                    )
+                    .unwrap(),
+                ),
                 thread_id: None,
                 source_event_ids: vec![SourceEventId::new("event-2").unwrap()],
-                evidence: "候选2".into(),
+                evidence: "External 身份候选".into(),
             },
         ];
         let result = resolve_reference_from_candidates(candidates, &context);
-        assert!(result.ambiguous);
+        assert!(result.ambiguous, "不同 identity kind 不得合并为唯一候选");
+        assert!(result.resolved_actor_id.is_none());
     }
 
     #[test]

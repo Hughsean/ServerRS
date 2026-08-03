@@ -62,6 +62,7 @@ pub async fn isolated_db(suffix: &str) -> (DatabaseConnection, String) {
     (db, schema)
 }
 
+#[allow(dead_code)] // 仅被部分 MySQL 测试 target 引用（cmd009/project_commitment）
 pub async fn drop_schema(db: &DatabaseConnection, schema: &str) {
     db.execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))
         .await
@@ -91,6 +92,8 @@ pub async fn scalar_u64(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm:
     }
 }
 
+/// 共享夹具被多个测试 target 使用不同子集；未使用方不触发 dead_code。
+#[allow(dead_code)]
 pub async fn scalar_string(
     db: &DatabaseConnection,
     sql: &str,

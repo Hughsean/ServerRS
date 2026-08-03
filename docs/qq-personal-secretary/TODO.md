@@ -14,14 +14,13 @@
 
 ## 0. 当前状态
 
-- 当前分支：`claude/qqbot-cmd009-bounded-state-v1`。
-- 当前切片：`CMD-009` 跨阶段有界状态（`AgentWorkingContextV1` 版本化工作上下文）、长期事件
-  检索排序（SearchRecentEvents 可选时间窗/会话/线程/Actor 硬过滤 + 确定性排序 + LIKE 转义）与
-  冲突驱动回读（候选批准冲突结构化回执 → 恰好一次 L0 回读 → 冲突轮 allowlist）。实现、领域/LLM
-  MySQL 测试与文档同步已完成；Codex 已修复冲突路由、local_only 回读与工作上下文投影缺口，
-  独立复核通过，随本提交收口。
+- 当前分支：`claude/qqbot-cmd010-command-security-v1`。
+- 当前切片：`CMD-010` Owner 越权、提示注入和跨会话指代歧义防线（授权四元组全链路复验、非 L0
+  写 Proposal 强制 OwnerCommand 证据、指代解析显式作用域与 fail-closed）。Codex 独立复核发现的
+  Run 创建授权、领域层证据门、歧义 Replan、Agenda 错误分类及测试隔离问题均已修复；本地与
+  隔离 MySQL 验证通过，进入约定的单次提交。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `CMD-010` Owner 越权、提示注入和跨会话指代歧义的关键端到端防线。
+- 下一步：提交 CMD-010 后进入 `EVT-006` 入站批处理与可观察背压。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -99,8 +98,10 @@
     Planner 两次、Effect Receipt 一条、Response 一份，重建仓储后回执仍可读取且不重复。
 - [x] `CTX-004-P0-PRIVACY` Query Effect 必须保存类型化实体字段；LLM 投影阶段将事件/Actor/会话/
   Thread 映射为 TempRefMap 临时引用。禁止对包含稳定 ID 的 summary 做原样透传或字符串替换。
-  第四轮修复：GetThreadContext/ResolveReference 已移出 Replan 白名单（7 工具）；typed_events 为空时
-  只输出有界计数摘要，绝不回退 raw summary；映射缺失时 `build_llm_views` 返回 Err（fail-closed）。
+  第四轮修复时 GetThreadContext/ResolveReference 因缺少安全投影而移出 Replan 白名单；CMD-010
+  为 ResolveReference 增加类型化来源投影与歧义 OpenReference 后安全恢复该只读工具，
+  GetThreadContext 仍不进入 Replan。typed_events 为空时只输出有界计数摘要，绝不回退 raw
+  summary；映射缺失时 `build_llm_views` 返回 Err（fail-closed）。
   新增 `validate_tool_observation` 校验 typed_events 数量/去重/字段长度/集合一致性。
 - [x] `CTX-004-P0-RESPONSE` Replan 最终 NoAction/回答必须形成有界 `OwnerResponseDraft`；预算耗尽时
   QueryEffectResultV1 也必须渲染为安全中文摘要，不能把 JSON 原文放入响应。Outcome 路径已正确；
@@ -232,7 +233,34 @@
   - 验证：领域 Graph 与 working_context 模块测试、LLM 映射测试（全部结构化引用真实 ID
     不入模、未登记 fact_ref 拒绝）、2 个 CMD-009 隔离 MySQL 场景与 8 个 Action Planner
     隔离 MySQL 场景真实通过；workspace boundaries 19/19；严格 Clippy 与格式检查通过。
-- [ ] `CMD-010` 完成 Owner 越权、提示注入和跨会话指代歧义的关键端到端防线；不建立庞大矩阵。
+- [x] `CMD-010` Owner 越权、提示注入和跨会话指代歧义防线（详见 HISTORY 2026-08-03）：
+  - 目标 A：Owner 越权防线——NapCat 群主/管理员/“@Owner”/同 ID 伪指令只产生观察事件，
+    `ensure_action_run` 在插入前即事务内复验 OwnerCommand 与 active binding，绝不创建 ActionRun；
+    领取与 Resume 重新读取原始 SourceEvent
+    （`message_role='owner_command'` + `actor_kind='owner'`）并 JOIN 当前 active OwnerBinding，
+    校验完整四元组（managed account + command account + owner actor + identity kind）；
+    Agenda 等写 Effect 在租约校验后复验 OwnerCommand，审批后、提交前撤销/替换 binding 一律
+    拒绝，且不写审计、Receipt 与业务状态；共享授权 helper 统一各写入路径，Planner/Checkpoint
+    缓存身份一概不信任。
+  - 目标 B：提示注入防线——聊天正文、检索结果、Observation、昵称、群名片、历史记忆一律视为
+    不可信数据，只有 `PlannerInput.command` 对应的已验证 OwnerCommand 是权威请求；注入字符串
+    不提升权限；所有引用继续使用 evt_N/actor_N/conv_N/thread_N/fact_N 临时映射，未登记/
+    跨账号引用 fail-closed；Observation 只增加证据，不改变 Owner 身份/风险/审批/allowlist；
+    非 L0 Action 的 Proposal 必须引用本轮 OwnerCommand 的 command_event_ref，仅引用不可信
+    历史事件的写 Proposal 拒绝；L2/L3 继续 Suspend；拒绝日志只记有界原因码/Action kind/
+    类型化 ID，不记录正文。证据门同时位于 LLM adapter 与领域 `PlanNode`，替换 Planner 实现也
+    不能绕过。
+  - 目标 C：跨会话歧义防线——非显式指代（他/这个人/那件事/这条消息）只在 Owner 指定或当前
+    证据所属的 conversation/thread 作用域内解析；同账号两群同昵称/同 ID 不同 identity kind
+    不静默绑定；0 个或多个候选返回有界 OpenReference/澄清且不执行写 Action；只有 Owner 明确
+    提供已登记 conversation_ref/thread_ref/actor_ref/event_ref 才允许精确解析；所有查询
+    account scoped。`ResolveReference` 重新进入有界 Replan：唯一结果只投影类型化来源，歧义结果
+    只形成 OpenReference；工作上下文存在 OpenReference 时领域层只允许 AskOwnerClarification。
+  - 验证：领域引用解析与 LLM 映射测试（无作用域歧义、同 actor 不同 kind 歧义、写 Proposal
+    无 command 证据拒绝、OpenReference 强制澄清等）、CMD-010 2/2、Action Planner 8/8、
+    Participant/Causality 2/2 隔离 MySQL 场景真实通过，派生 schema 随机命名且 finally 清理；
+    personal-secretary 248/248、qqbot-server 124/124（另 2 项 live LLM ignored）、workspace
+    boundaries 19/19；严格 Clippy、格式与 diff 检查通过。
 
 ## 2. 可靠事件、空窗与恢复
 

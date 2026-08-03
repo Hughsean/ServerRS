@@ -229,6 +229,7 @@ impl ThreadMutationStoreT for MySqlThreadMutationStore {
                 AND binding.status = 'active'
                WHERE proposal.proposal_id = ?
                  AND command.message_role = 'owner_command'
+                 AND command.actor_kind = 'owner'
                  AND command_account.source_channel = 'qq_open_platform'
                FOR UPDATE"#,
             [
@@ -418,6 +419,7 @@ impl ThreadMutationStoreT for MySqlThreadMutationStore {
                  ON reversion.proposal_id = proposal.proposal_id
                WHERE proposal.proposal_id = ?
                  AND command.message_role = 'owner_command'
+                 AND command.actor_kind = 'owner'
                  AND command_account.source_channel = 'qq_open_platform'
                FOR UPDATE"#,
             [

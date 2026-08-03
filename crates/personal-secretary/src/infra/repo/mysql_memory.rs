@@ -369,7 +369,7 @@ impl MemoryStoreT for MySqlMemoryStore {
                 AND binding.command_account_id = command.account_id
                 AND binding.owner_actor_id = command.actor_platform_id
                 AND binding.status = 'active'
-               WHERE fact.fact_id = ? FOR UPDATE"#,
+               WHERE fact.fact_id = ? AND command.actor_kind = 'owner' FOR UPDATE"#,
             [
                 input.command_source_event_id.as_str().into(),
                 input.fact_id.as_str().into(),
@@ -466,6 +466,7 @@ impl MemoryStoreT for MySqlMemoryStore {
                     AND binding.status = 'active'
                    WHERE managed.source_channel = ?
                      AND managed.platform_account_id = ?
+                     AND command.actor_kind = 'owner'
                    FOR UPDATE"#,
                 [
                     input.conversation.kind.as_str().into(),

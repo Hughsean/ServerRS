@@ -7,9 +7,10 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`claude/qqbot-cmd009-bounded-state-v1`。
-  2026-08-03 已完成 QQBot Schema Baseline v1、项目/承诺记忆闭环、旧测试基础设施清理与
-  CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）。
+- 当前开发分支：`claude/qqbot-cmd010-command-security-v1`。
+  2026-08-03 已完成 QQBot Schema Baseline v1、项目/承诺记忆闭环、旧测试基础设施清理、
+  CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）与 CMD-010（Owner 越权、
+  提示注入与跨会话指代歧义防线）。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -18,6 +19,21 @@
   冲突轮 allowlist（AskOwnerClarification/CorrectMemoryFact），不覆盖/supersede/重放。
   Codex 复核发现并修复冲突路由方向、local_only 冲突回读、结构化引用未完整投影、旧自由文本
   反向泄露与半更新状态问题；聚焦 MySQL 复验通过，随本提交收口。
+- **本轮（CMD-010）**：Owner 越权、提示注入与跨会话指代歧义三条防线。A：只有已验证的 QQ
+  开放平台 OwnerCommand 能创建/领取/恢复 ActionRun 与执行写 Effect —— 最终事务重新读取原始
+  SourceEvent（`message_role='owner_command'` + `actor_kind='owner'`）并 JOIN 当前 active
+  OwnerBinding 校验完整四元组（managed + command + owner actor + identity kind），共享
+  `owner_authorization::verify_owner_command` helper，审批后、提交前撤销/替换 binding 整体
+  拒绝且零副作用；NapCat 群主/管理员/“@Owner”/同 ID 只产生观察事件。B：聊天正文、检索结果、
+  Observation、昵称、群名片、历史记忆均为不可信数据，只有 `PlannerInput.command` 对应的
+  已验证 OwnerCommand 是权威请求；临时引用继续 fail-closed，非 L0 写 Proposal 必须引用
+  本轮 OwnerCommand 的 `command_event_ref`。C：非显式指代只在显式/当前证据所属
+  conversation/thread 作用域内解析，0 或多个候选返回有界 OpenReference/澄清，绝不静默跨群
+  绑定；显式 `conversation_ref/thread_ref/actor_ref/event_ref` 才允许精确解析；查询一律
+  account scoped。
+  Codex 复核进一步把 Run 创建授权和写 Proposal 证据门下沉到 MySQL/领域边界，恢复
+  ResolveReference 的类型化 Replan/OpenReference 澄清闭环，并将 Agenda 数据库失败精确分类为
+  UnknownCommit；聚焦 MySQL 主路径与测试 schema 清理均已复验通过。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台
@@ -52,6 +68,17 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-03 21:10（Asia/Shanghai）`：Codex 完成 CMD-010 独立复核与修复。新增
+  `ensure_action_run` 创建前 OwnerCommand 授权、领域 `PlanNode` 非 L0 命令证据门和 OpenReference
+  强制澄清门；ResolveReference 以类型化来源恢复有界 Replan，显式失效会话不再降级为 thread-only；
+  Agenda 错误恢复 Unauthorized/LeaseLost/Database 分类。真实 MySQL 中 CMD-010 2/2、Action
+  Planner 8/8、Participant/Causality 2/2 通过；personal-secretary 248/248、qqbot-server
+  124/124、workspace boundaries 19/19，严格 Clippy/格式/diff 均通过。未连接真实 QQ/NapCat。
+
+- `2026-08-03 20:18（Asia/Shanghai）`：CMD-010 Owner 越权、提示注入与跨会话指代歧义防线
+  实现、聚焦验证与文档同步完成，停在工作树等待复核；未 commit/push/merge/stash。详见
+  [`history/2026-08.md`](history/2026-08.md) 同时间条目（实现、验证与 Git 状态）。
 
 - `2026-08-03 18:45（Asia/Shanghai）`：Codex 完成 CMD-009 独立复核。修复冲突上下文写入后
   Router 反向结束导致第二轮 Planner 不可达、远程模型可能读取 local_only 事实来源、工作上下文

@@ -53,11 +53,46 @@ impl ActionStoreT for MySqlActionStore {
         seed: &ActionRunSeed,
     ) -> Result<bool, ActionStoreError> {
         let account_id = resolve_account_id(&self.db, &seed.account).await?;
+        // 幂等重放只返回既有 Run，不需要重新授予已经发生过的创建动作。
+        if let Some(existing) = ExistingRunRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT run_id FROM secretary_action_runs WHERE account_id = ? AND command_source_event_id = ? AND planner_version = 'v1'",
+            vec![account_id.into(), seed.command_source_event_id.as_str().into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?
+        {
+            debug!(
+                requested_run_id = run_id.as_str(),
+                existing_run_id = existing.run_id,
+                "action run already exists"
+            );
+            return Ok(false);
+        }
         let now = Utc::now().naive_utc();
         let recent_json = serde_json::to_string(&seed.recent_events)
             .map_err(|e| ActionStoreError::InvalidData(e.to_string()))?;
-        let result = self
-            .db
+        let transaction = self.db.begin().await.map_err(store_error)?;
+        // CMD-010 防线 A：创建本身也必须由权威 OwnerCommand 授权，不能先插入
+        // 任意 ActionRun 再依赖 Worker 领取时过滤。
+        super::super::owner_authorization::verify_owner_command(
+            &transaction,
+            &seed.command_source_event_id,
+            account_id,
+        )
+        .await
+        .map_err(|error| match error {
+            super::super::owner_authorization::OwnerAuthError::Unauthorized => {
+                ActionStoreError::InvalidData(
+                    "action run creation is not authorized by an OwnerCommand".into(),
+                )
+            }
+            super::super::owner_authorization::OwnerAuthError::Database => {
+                ActionStoreError::Database("action run authorization query failed".into())
+            }
+        })?;
+        let result = transaction
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
                 r#"INSERT IGNORE INTO secretary_action_runs
@@ -87,10 +122,10 @@ impl ActionStoreT for MySqlActionStore {
         } else {
             let existing = ExistingRunRow::find_by_statement(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
-                "SELECT run_id FROM secretary_action_runs WHERE account_id = ? AND command_source_event_id = ? AND planner_version = 'v1'",
+                "SELECT run_id FROM secretary_action_runs WHERE account_id = ? AND command_source_event_id = ? AND planner_version = 'v1' FOR UPDATE",
                 vec![account_id.into(), seed.command_source_event_id.as_str().into()],
             ))
-            .one(&self.db)
+            .one(&transaction)
             .await
             .map_err(store_error)?
             .ok_or_else(|| {
@@ -104,6 +139,7 @@ impl ActionStoreT for MySqlActionStore {
                 "action run already exists"
             );
         }
+        transaction.commit().await.map_err(store_error)?;
         Ok(created)
     }
 
@@ -134,23 +170,55 @@ impl ActionStoreT for MySqlActionStore {
             .map_err(|_| ActionStoreError::InvalidData("lease_secs exceeds i64".into()))?;
         let lease_expires = now + chrono::Duration::seconds(lease_secs);
 
-        // CAS 领取：status='pending' AND (next_eligible_at IS NULL OR next_eligible_at <= NOW(6))
+        // CAS 领取：status='pending' AND (next_eligible_at IS NULL OR next_eligible_at <= NOW(6))。
+        // CMD-010 防线 A：领取（Worker 处理）必须复验命令事件仍是权威
+        // OwnerCommand（message_role + actor_kind）且 active OwnerBinding 仍
+        // 匹配；binding 被撤销/替换的 run 不会被领取，从而不产生任何 Effect、
+        // 业务状态或 Receipt 副作用（由 Effect 事务层授权兜底）。
+        // 多表 UPDATE 不支持 ORDER BY（MySQL 1221），先用派生表按 created_at
+        // ASC 选出 FIFO 目标再更新（保留原有领取顺序语义）。
         let result = self
             .db
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
                 r#"UPDATE secretary_action_runs
-                   SET status = 'running', worker_id = ?, lease_token = ?, lease_expires_at = ?,
-                       updated_at = ?
-                   WHERE status = 'pending'
-                     AND (next_eligible_at IS NULL OR next_eligible_at <= ?)
-                   ORDER BY created_at ASC
-                   LIMIT 1"#,
+                   INNER JOIN (
+                       SELECT r.run_id
+                       FROM secretary_action_runs r
+                       INNER JOIN secretary_source_events cmd
+                         ON cmd.source_event_id = r.command_source_event_id
+                       INNER JOIN secretary_accounts command_account
+                         ON command_account.id = cmd.account_id
+                       INNER JOIN secretary_conversations command_conversation
+                         ON command_conversation.id = cmd.conversation_id
+                       INNER JOIN secretary_owner_bindings b
+                         ON b.managed_account_id = r.account_id
+                        AND b.command_account_id = cmd.account_id
+                        AND b.owner_actor_id = cmd.actor_platform_id
+                        AND b.status = 'active'
+                       WHERE r.status = 'pending'
+                         AND (r.next_eligible_at IS NULL OR r.next_eligible_at <= ?)
+                         AND cmd.message_role = 'owner_command'
+                         AND cmd.actor_kind = 'owner'
+                         AND cmd.event_type = 'message'
+                         AND cmd.source_channel = 'qq_open_platform'
+                         AND command_account.source_channel = 'qq_open_platform'
+                         AND command_conversation.conversation_kind = 'owner_control'
+                         AND 1 = (
+                             SELECT COUNT(*) FROM secretary_owner_bindings active_binding
+                             WHERE active_binding.managed_account_id = r.account_id
+                               AND active_binding.status = 'active'
+                         )
+                       ORDER BY r.created_at ASC
+                       LIMIT 1
+                   ) AS pick ON pick.run_id = secretary_action_runs.run_id
+                   SET status = 'running', worker_id = ?, lease_token = ?,
+                       lease_expires_at = ?, updated_at = ?"#,
                 [
+                    now.into(),
                     worker_id.into(),
                     lease_token.as_str().into(),
                     lease_expires.into(),
-                    now.into(),
                     now.into(),
                 ],
             ))
@@ -192,17 +260,43 @@ impl ActionStoreT for MySqlActionStore {
             .map_err(|_| ActionStoreError::InvalidData("lease_secs exceeds i64".into()))?;
         let lease_token = ActionLeaseToken::generate();
         let lease_expires = now + chrono::Duration::seconds(lease_secs);
+        // CMD-010 防线 A：Resume（Suspend 后恢复）同样复验命令事件与 active
+        // OwnerBinding。审批后、Effect 提交前 OwnerBinding 被撤销或替换时，
+        // resume 不领取（返回 LeaseLost），不修改业务状态、不写成功 Receipt、
+        // 不返回乐观成功。
         let result = self
             .db
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
-                r#"UPDATE secretary_action_runs
-                   SET status = 'running', worker_id = ?, lease_token = ?, lease_expires_at = ?,
-                       updated_at = ?
-                   WHERE run_id = ? AND status = 'suspended'
-                     AND command_source_event_id = ?
-                     AND JSON_UNQUOTE(JSON_EXTRACT(last_checkpoint_json, '$.checkpoint_id')) = ?
-                     AND JSON_UNQUOTE(JSON_EXTRACT(last_checkpoint_json, '$.proposal_id')) = ?"#,
+                r#"UPDATE secretary_action_runs r
+                   INNER JOIN secretary_source_events cmd
+                     ON cmd.source_event_id = r.command_source_event_id
+                   INNER JOIN secretary_accounts command_account
+                     ON command_account.id = cmd.account_id
+                   INNER JOIN secretary_conversations command_conversation
+                     ON command_conversation.id = cmd.conversation_id
+                   INNER JOIN secretary_owner_bindings b
+                     ON b.managed_account_id = r.account_id
+                    AND b.command_account_id = cmd.account_id
+                    AND b.owner_actor_id = cmd.actor_platform_id
+                    AND b.status = 'active'
+                   SET r.status = 'running', r.worker_id = ?, r.lease_token = ?,
+                       r.lease_expires_at = ?, r.updated_at = ?
+                   WHERE r.run_id = ? AND r.status = 'suspended'
+                     AND r.command_source_event_id = ?
+                     AND JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.checkpoint_id')) = ?
+                     AND JSON_UNQUOTE(JSON_EXTRACT(r.last_checkpoint_json, '$.proposal_id')) = ?
+                     AND cmd.message_role = 'owner_command'
+                     AND cmd.actor_kind = 'owner'
+                     AND cmd.event_type = 'message'
+                     AND cmd.source_channel = 'qq_open_platform'
+                     AND command_account.source_channel = 'qq_open_platform'
+                     AND command_conversation.conversation_kind = 'owner_control'
+                     AND 1 = (
+                         SELECT COUNT(*) FROM secretary_owner_bindings active_binding
+                         WHERE active_binding.managed_account_id = r.account_id
+                           AND active_binding.status = 'active'
+                     )"#,
                 [
                     claim.worker_id.clone().into(),
                     lease_token.as_str().into(),

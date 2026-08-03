@@ -162,6 +162,38 @@ impl AgentNode<SecretaryAgentState> for PlanNode {
             .map_err(|e| NodeError::with_source(NodeErrorKind::Transient, e))?;
         validate_planner_output(&output)
             .map_err(|e| NodeError::with_source(NodeErrorKind::Invariant, e))?;
+        // CMD-010 防线 B：证据门属于领域边界，不能只依赖某个 LLM 适配器。
+        // 任何 Planner 实现产生的非 L0 Proposal 都必须引用本轮权威 OwnerCommand。
+        if let PlannerOutput::Proposal(ref proposal) = output
+            && proposal.action.kind().policy().risk > crate::SecretaryRiskLevel::L0ReadOnly
+            && !proposal
+                .source_event_ids
+                .contains(&self.context.command_source_event_id)
+        {
+            return Err(NodeError::with_source(
+                NodeErrorKind::Invariant,
+                crate::PlannerError::InvalidOutput(format!(
+                    "{:?} 写动作缺少本轮 OwnerCommand 证据",
+                    proposal.action.kind()
+                )),
+            ));
+        }
+        // CMD-010 防线 C：上一轮产生未解决指代时，只允许向 Owner 澄清；
+        // 不允许模型利用歧义候选直接构造任何写动作或继续猜测其他 Action。
+        if let PlannerOutput::Proposal(ref proposal) = output
+            && business
+                .working_context()
+                .is_some_and(|working| !working.open_references.is_empty())
+            && !matches!(
+                proposal.action,
+                crate::SecretaryAction::AskOwnerClarification { .. }
+            )
+        {
+            return Err(NodeError::with_source(
+                NodeErrorKind::Invariant,
+                crate::PlannerError::DisallowedAction("存在未解决指代时只能请求 Owner 澄清".into()),
+            ));
+        }
         // CMD-009 目标 C：冲突轮次（工作上下文已有未解决冲突）只允许向 Owner 解释、
         // 请求澄清或提议仍需 L2 审批的修正动作；绝不能自动再次执行原
         // ApproveMemoryCandidate。结构上强制，不依赖模型自律。

@@ -68,8 +68,24 @@ impl AgendaStoreT for MySqlAgendaStore {
             .await
             .map_err(map_db)?;
         if lease.rows_affected() != 1 {
-            return Err(AgendaError::Store("action lease lost".into()));
+            return Err(AgendaError::LeaseLost);
         }
+        // CMD-010 防线 A：Agenda 是写类 Effect，必须在最终事务内复验
+        // OwnerCommand（权威 SourceEvent 角色与 actor_kind）与 active
+        // OwnerBinding；审批后、提交前 binding 被撤销时整笔拒绝，不写
+        // 业务状态、审计或成功 Receipt。
+        super::owner_authorization::verify_owner_command(
+            &transaction,
+            &request.command_source_event_id,
+            account_id,
+        )
+        .await
+        .map_err(|error| match error {
+            super::owner_authorization::OwnerAuthError::Unauthorized => AgendaError::Unauthorized,
+            super::owner_authorization::OwnerAuthError::Database => {
+                AgendaError::Database("owner authorization query failed".into())
+            }
+        })?;
 
         let (item, from_version) = match &request.mutation {
             AgendaMutation::Create {
@@ -437,7 +453,7 @@ fn map_row(row: AgendaRow, account: SourceAccountRef) -> Result<AgendaItem, Agen
 
 fn map_db(error: sea_orm::DbErr) -> AgendaError {
     let mapped = store_error(error);
-    AgendaError::Store(mapped.to_string())
+    AgendaError::Database(mapped.to_string())
 }
 
 #[derive(Debug, FromQueryResult)]
