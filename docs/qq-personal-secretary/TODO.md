@@ -4,8 +4,9 @@
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
-> 开发规则：按垂直切片推进；一个切片完成、复核并提交后再进入下一切片。旧验收矩阵只作历史
-> 证据，不再作为日常门禁；测试数量与风险相称。需要用户凭据、QQ/NapCat 实机或远端管理权限的
+> 开发规则：按垂直切片推进；一个切片完成、复核并提交后再进入下一切片。旧验收矩阵、签名
+> attestation 和依赖真实 QQ/NapCat 的仓库内人工验收测试已移除；测试数量与风险相称。需要用户
+> 凭据、QQ/NapCat 实机或远端管理权限的
 > 事项单列为 `EXTERNAL`，不得伪造完成，也不得阻塞可在本地继续的任务。
 >
 > **提交硬规则：任何 QQBot 代码、配置、迁移或测试提交，必须在同一提交中同步本文件、
@@ -13,9 +14,10 @@
 
 ## 0. 当前状态
 
-- 当前分支：`claude/qqbot-project-commitment-memory-v1`（基于 `0cfbe91`）。
-- 当前切片：`MEM-003/MEM-004` 项目记忆与承诺记忆闭环 v1 已完成；2026-08-03 14:00
-  经 Codex 使用随机隔离 MySQL 独立复核，3/3 聚焦测试通过。
+- 当前分支：`claude/qqbot-project-commitment-memory-v1`（HEAD `1779c71`）。
+- 当前切片：QQBot 旧测试与废弃验收基础设施清理；删除全部长期忽略且失真的聚合验收目标、
+  acceptance workflow/脚本/矩阵，以及依赖真实 QQ/NapCat 的旧人工测试；保留现行 Action
+  Planner、参与者因果、项目承诺 MySQL 聚焦测试和 NapCat 本地 mock 测试。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
 - 下一步：进入 `CMD-009` 跨阶段有界状态、长期事件检索排序和冲突驱动回读。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -24,6 +26,17 @@
 ## 1. 立即执行顺序
 
 ### 1.1 收口当前切片
+
+- [x] `TEST-CLEANUP-001` 删除 10,287 行、38 项全部 `#[ignore]` 的旧
+  `mysql_ingestion.rs` 聚合测试，以及旧 `qqbot_acceptance_mysql` / `qqbot_acceptance_runtime`
+  验收目标；这些目标默认不运行、长期与现行状态机漂移，不能继续充当可靠门禁。
+- [x] `TEST-CLEANUP-002` 删除废弃的验收矩阵 JSON、PowerShell 门禁与 attestation helper、GitHub
+  workflow；历史计划和月度记录仍保留，作为当时发生过的事实而非可执行入口。
+- [x] `TEST-CLEANUP-003` 删除仓库内真实 QQ/NapCat E2E、双账号主动群测试和旧 live 契约测试；
+  NapCat 仍保持只读，未来实机验证作为明确授权的外部上线步骤，不再常驻开发测试集。
+- [x] `TEST-CLEANUP-VERIFY` 已通过格式检查、QQBot 三个 crate 全 targets 编译、严格 Clippy、
+  personal-secretary 238/238、qqbot 63/63、qqbot-server 118/118（2 项 live LLM ignored）和
+  workspace boundaries 19/19；保留的 13 项 MySQL 测试均成功编译并按预期保持显式 ignored。
 
 - [x] `DB-BASELINE-001` 将 33 个压缩前迁移移入 `database/archive/pre_v1`，从随机隔离 MySQL
   的最终结构生成 `baseline/20260803_qqbot_schema_v1.sql`；基线只含最终 DDL，不含业务数据、

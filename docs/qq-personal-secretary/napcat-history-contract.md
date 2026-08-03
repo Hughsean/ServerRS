@@ -77,9 +77,10 @@ Reply 1 条；四条均关联连接周期，Reply 的 `reply_to_event_id` 成功
 操作。历史消息 ID、序列号和账号 ID 统一解析为字符串，避免 64 位 ID 在其他语言或 JSON
 链路中丢失精度；单页数量限制为 1–100。
 
-`crates/qqbot/tests/napcat_live.rs` 是只读忽略型实机契约测试；
-`crates/qqbot/tests/napcat_active_group_live.rs` 是必须显式配置两个账号和获批群号的主动测试，
-源码只包含 `send_group_msg`，并在统一清理路径撤回自己发送的测试消息。
+旧的仓库内 NapCat live 与双账号主动群测试已于 2026-08-03 删除。它们长期默认忽略、依赖本地
+账号和明确授权的测试群，不再适合作为日常代码门禁。适配器边界继续由本地 HTTP capability mock
+和 Heartbeat WebSocket mock 覆盖；真实 NapCat 验证只在上线前、用户明确授权后作为外部步骤执行，
+不得在常规测试中主动发送或撤回 QQ 消息。
 
 当前只完成类型化适配器，**已启动自动回补 Worker**。回补 Worker 与实时 WebSocket 接收
 解耦，按 `uncertain -> backfilling` 原子领取 Gap，有界分页读取历史，历史消息经与实时

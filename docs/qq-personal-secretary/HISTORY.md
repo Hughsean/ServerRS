@@ -7,8 +7,8 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`claude/qqbot-project-commitment-memory-v1`，基线提交 `0cfbe91`。
-  2026-08-03 已完成 QQBot Schema Baseline v1。
+- 当前开发分支：`claude/qqbot-project-commitment-memory-v1`，HEAD `1779c71`。
+  2026-08-03 已完成 QQBot Schema Baseline v1 与项目/承诺记忆闭环，正在收口旧测试基础设施。
 - **本轮（MEM-003/MEM-004）**：项目记忆闭环 + 承诺生命周期闭环 v1 已完成；
   2026-08-03 14:00（Asia/Shanghai）经 Codex 使用随机隔离 MySQL 独立复核，3/3 聚焦场景通过；
   未连接真实 QQ/NapCat，已达到提交条件。
@@ -21,7 +21,8 @@
   以及 Action Run 的持久化 Suspend/Resume CAS 闭环。
   **新增（本轮）**：协议无关 AgendaItem/Mutation、创建/查询/改期/稍后提醒/完成/取消 Action、
   L2 Owner 审批、不可变审计、版本 fencing、到期 Scheduler 和复用的 Owner-only Outbox。
-- 当前边界：NapCat 保持只读；旧验收矩阵只保留历史用途，不再作为日常开发门禁。结构化记忆候选
+- 当前边界：NapCat 保持只读；旧验收矩阵、attestation 门禁与仓库内真实 QQ/NapCat 人工验收
+  测试已经删除，历史文档只记录其曾经发生，不再提供可执行入口。结构化记忆候选
   (MEM-011) 已提交（`94ef5d9`）。Agent 有界事件证据视图 v1 已完成：有界最近窗口与 retrieved
   真实入模，模型仅看到请求内临时引用，local_only 只向已验证 loopback 模型开放；关键 MySQL
   关系视图用例已在随机隔离 schema 通过。CTX-004 的生产路径 P0/P1 已闭合，全 Graph 闭环集成测试、
@@ -45,6 +46,14 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-03 14:41（Asia/Shanghai）`：开始并完成 QQBot 旧测试清理的文件级变更：删除
+  10,287 行且 38 项全部默认忽略的 `mysql_ingestion.rs`、两套旧 acceptance 测试目标、真实
+  QQ/NapCat E2E/live 测试，以及配套验收矩阵、PowerShell attestation/门禁和 GitHub workflow。
+  保留现行 `mysql_action_planner`、参与者因果、项目承诺 MySQL 聚焦测试及 NapCat 本地 mock；
+  数字人测试和业务未触碰。14:43 完成验证：格式、三个相关 crate 全 targets 编译、严格 Clippy、
+  personal-secretary 238/238、qqbot 63/63、qqbot-server 118/118（2 ignored）与 workspace
+  boundaries 19/19 全部通过；净删除 17,389 行、增加 47 行文档。
 
 - `2026-08-02 23:49（Asia/Shanghai）`：Codex 提交前闭环复核未批准：
   - P0：by-name 候选已携带 PlatformIdentityKind，但 Effect 只取 stable ID 再调用仅接受 actor ID 的
