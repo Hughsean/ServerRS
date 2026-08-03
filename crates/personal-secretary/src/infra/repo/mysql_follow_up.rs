@@ -123,7 +123,7 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                      WHERE successor.supersedes_fact_id = fact.fact_id
                  )
                  AND JSON_UNQUOTE(JSON_EXTRACT(fact.fact_json, '$.payload.data.status')) IN ('pending', 'proposed')
-                 AND JSON_EXTRACT(fact.fact_json, '$.payload.data.due_at_unix_secs') IS NOT NULL
+                 AND JSON_TYPE(JSON_EXTRACT(fact.fact_json, '$.payload.data.due_at_unix_secs')) = 'INTEGER'
                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(fact.fact_json, '$.payload.data.due_at_unix_secs')) AS SIGNED) <= ?
                ORDER BY fact.updated_at, fact.fact_id LIMIT ?"#,
             [horizon.into(), limit.into()],

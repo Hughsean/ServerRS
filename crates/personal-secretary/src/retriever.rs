@@ -262,7 +262,7 @@ impl ParticipantIdentity {
 }
 
 /// 平台身份种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlatformIdentityKind {
     /// Owner 本人（通过配置绑定或平台签名验证）。
     Owner,
@@ -278,6 +278,15 @@ impl PlatformIdentityKind {
             Self::Owner => "owner",
             Self::OfficialBot => "official_bot",
             Self::External => "external",
+        }
+    }
+
+    /// JSON 字段值（与 serde 默认序列化一致，PascalCase）。
+    pub fn serialized_name(self) -> &'static str {
+        match self {
+            Self::Owner => "Owner",
+            Self::OfficialBot => "OfficialBot",
+            Self::External => "External",
         }
     }
 
@@ -689,6 +698,82 @@ pub struct ReferenceResolution {
     pub evidence: String,
 }
 
+// ===== 项目记忆查询（MEM-003）=====
+
+/// 项目记忆的有界摘要条目（`list_projects` 返回）。
+/// 只含导航信息；完整上下文通过 `query_project` 获取。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMemorySummary {
+    pub project_key: String,
+    pub goal: String,
+    /// 成员数量（有界；详情在 `ProjectContextView` 中展开）。
+    pub member_count: usize,
+    pub progress: Option<String>,
+    pub risk_count: usize,
+    pub blocker_count: usize,
+    pub fact_id: crate::MemoryFactId,
+    pub updated_at_unix_secs: Option<i64>,
+}
+
+/// 单个项目的完整上下文视图（`query_project` 返回）。
+/// 所有字段有界；成员携带身份类型；来源事件引用可回读。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectContextView {
+    pub project_key: String,
+    pub goal: String,
+    /// 带身份类型的项目成员列表。旧数据回退到 `member_actor_ids` 时，
+    /// 身份类型标记为 External（调用方应在展示层标注"未知"）。
+    pub members: Vec<crate::ProjectMemberRef>,
+    /// 是否为旧数据（仅有 member_actor_ids、无 member_actor_refs）。
+    pub legacy_member_ids: bool,
+    pub progress: Option<String>,
+    pub risks: Vec<String>,
+    pub blockers: Vec<String>,
+    pub artifact_refs: Vec<String>,
+    pub decision_ids: Vec<crate::ThreadDecisionId>,
+    pub fact_id: crate::MemoryFactId,
+    pub confidence_bps: u16,
+    /// 精确来源事件引用（可回读）。
+    pub source_event_ids: Vec<SourceEventId>,
+    pub valid_until_unix_secs: Option<i64>,
+}
+
+// ===== 承诺记忆查询（MEM-004）=====
+
+/// 承诺查询的过滤条件。所有字段可选，组合使用。
+#[derive(Debug, Clone)]
+pub struct CommitmentQuery {
+    pub account: SourceAccountRef,
+    /// 承诺状态过滤：pending/fulfilled/cancelled。
+    pub status: Option<crate::CommitmentStatus>,
+    /// 截止时间范围起始（Unix 秒，含）。
+    pub due_since_unix_secs: Option<i64>,
+    /// 截止时间范围结束（Unix 秒，含）。
+    pub due_until_unix_secs: Option<i64>,
+    /// 承诺人过滤（平台身份种类 + 稳定主体 ID）。None = 不过滤；
+    /// Some 时 SQL 同时匹配 kind 和 actor_id（旧数据无 kind 字段不命中）。
+    pub promisor: Option<crate::ProjectMemberRef>,
+    /// 受益方过滤（平台身份种类 + 稳定主体 ID）。None = 不过滤；
+    /// Some 时 SQL 同时匹配 kind 和 actor_id。
+    pub beneficiary: Option<crate::ProjectMemberRef>,
+    /// 返回上限。1..=100。
+    pub limit: u16,
+}
+
+/// 承诺记忆的有界条目（`list_commitments` 返回）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitmentSummary {
+    pub fact_id: crate::MemoryFactId,
+    pub promisor: crate::ProjectMemberRef,
+    pub beneficiary: crate::ProjectMemberRef,
+    pub action: String,
+    pub due_at_unix_secs: Option<i64>,
+    pub status: crate::CommitmentStatus,
+    pub source_event_ids: Vec<SourceEventId>,
+    pub follow_up_id: Option<String>,
+    pub follow_up_status: Option<String>,
+}
+
 // ===== Store 端口 =====
 
 /// Retriever 存储端口。基础设施层实现，领域层定义。
@@ -805,6 +890,30 @@ pub trait RetrieverStoreT: Send + Sync {
         thread_id: Option<&EventThreadId>,
         limit: u16,
     ) -> Result<Vec<AccountScopedParticipantRef>, InboundEventStoreError>;
+
+    /// 列出当前账号的所有活跃项目记忆（Confirmed、未过期/删除/取代、来源有效）。
+    /// 返回有界列表，每个条目只含导航信息；详情通过 `query_project` 获取。
+    async fn list_projects(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<ProjectMemorySummary>, InboundEventStoreError>;
+
+    /// 查询单个项目的完整上下文：目标、成员、进展、风险、阻塞、决策、Artifact 引用
+    /// 和精确来源事件引用。只返回 Confirmed/未过期/来源有效的记忆；
+    /// 不同账号的相同 project_key 完全隔离。
+    async fn query_project(
+        &self,
+        account: &SourceAccountRef,
+        project_key: &str,
+    ) -> Result<Option<ProjectContextView>, InboundEventStoreError>;
+
+    /// 查询承诺记忆（MEM-004 B2）。支持按状态、截止时间范围、参与者过滤；
+    /// 返回有界列表，包含关联的 FollowUp 引用。
+    async fn list_commitments(
+        &self,
+        query: &CommitmentQuery,
+    ) -> Result<Vec<CommitmentSummary>, InboundEventStoreError>;
 }
 
 // ===== 错误类型 =====

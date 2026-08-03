@@ -555,6 +555,10 @@ pub(super) async fn apply_batch_snooze<C: ConnectionTrait>(
 }
 
 /// 锁定 FollowUp 并执行完成：scheduled -> completed，版本精确 +1，due 不变；
+/// 同时关闭承诺生命周期缺口（MEM-004 B3）：若 FollowUp 来源是承诺记忆
+/// （reason_code = 'commitment_due'），在同事务内把旧 Pending Commitment Fact
+/// supersede 并落一条新的 Confirmed Fulfilled Commitment Fact，
+/// `completion_source_event_id` 指向本次授权 OwnerCommand。
 /// 完成后关联通知被压制，Scheduler 不得重新创建该事项。
 pub(super) async fn apply_complete<C: ConnectionTrait>(
     db: &C,
@@ -577,9 +581,11 @@ pub(super) async fn apply_complete<C: ConnectionTrait>(
             ));
         }
     };
-    let item = FollowUpItemRow::find_by_statement(Statement::from_sql_and_values(
+    let item = CompleteFollowUpRow::find_by_statement(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
-        "SELECT status, due_at_unix_secs, source_version FROM secretary_follow_up_items \
+        "SELECT status, due_at_unix_secs, source_version, reason_code, \
+                source_memory_fact_id \
+         FROM secretary_follow_up_items \
          WHERE follow_up_id = ? AND account_id = ? FOR UPDATE",
         [follow_up_id.into(), account_id.into()],
     ))
@@ -594,6 +600,28 @@ pub(super) async fn apply_complete<C: ConnectionTrait>(
             "follow_up status or source_version changed since approval".into(),
         ));
     }
+    // B3: 若 FollowUp 来源是承诺记忆，闭合一致性缺口。
+    // 只有承诺类 FollowUp 才需要更新底层 Commitment Fact；
+    // 项目阻塞类 FollowUp 不涉及承诺状态。
+    // fail-closed：承诺类必须有 source_memory_fact_id，缺失不得继续完成。
+    let commitment_closed = if item.reason_code == "commitment_due" {
+        let fact_id = item.source_memory_fact_id.as_deref().ok_or_else(|| {
+            FollowUpControlStoreError::InvalidData(
+                "commitment_due follow_up is missing source_memory_fact_id".into(),
+            )
+        })?;
+        close_commitment_on_complete(
+            db,
+            fact_id,
+            account_id,
+            request.command_source_event_id.as_str(),
+            &request.effect_id,
+            follow_up_id,
+        )
+        .await?
+    } else {
+        false
+    };
     lock_and_check_outbox(
         db,
         account_id,
@@ -632,6 +660,21 @@ pub(super) async fn apply_complete<C: ConnectionTrait>(
         follow_up_id,
     )
     .await?;
+    let result_ref = if commitment_closed {
+        format!(
+            "跟进事项 {} 已完成，关联承诺已标记为已履行（版本 {} -> {}）",
+            follow_up_id,
+            item.source_version,
+            item.source_version + 1
+        )
+    } else {
+        format!(
+            "跟进事项 {} 已完成（版本 {} -> {}）",
+            follow_up_id,
+            item.source_version,
+            item.source_version + 1
+        )
+    };
     Ok(AppliedControl {
         follow_up_id: follow_up_id.to_owned(),
         control_kind: "complete",
@@ -642,12 +685,7 @@ pub(super) async fn apply_complete<C: ConnectionTrait>(
         previous_due_at_unix_secs: None,
         current_due_at_unix_secs: None,
         reason,
-        result_ref: format!(
-            "跟进事项 {} 已完成（版本 {} -> {}）",
-            follow_up_id,
-            item.source_version,
-            item.source_version + 1
-        ),
+        result_ref,
     })
 }
 
@@ -672,11 +710,21 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
     ordered.sort_by(|a, b| a.follow_up_id.as_str().cmp(b.follow_up_id.as_str()));
 
     // 阶段 1：锁定全部目标并校验状态/版本；任一不存在/不匹配立即失败。
+    // 使用 CompleteFollowUpRow 同时获取 reason_code 与 source_memory_fact_id，
+    // 用于后续承诺闭环（MEM-004 B3）。
+    struct BatchCompleteItem<'a> {
+        target: &'a FollowUpControlTarget,
+        source_version: u64,
+        reason_code: String,
+        source_memory_fact_id: Option<String>,
+    }
     let mut locked = Vec::with_capacity(ordered.len());
     for target in &ordered {
-        let item = FollowUpItemRow::find_by_statement(Statement::from_sql_and_values(
+        let item = CompleteFollowUpRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            "SELECT status, due_at_unix_secs, source_version FROM secretary_follow_up_items \
+            "SELECT status, due_at_unix_secs, source_version, reason_code, \
+                    source_memory_fact_id \
+             FROM secretary_follow_up_items \
              WHERE follow_up_id = ? AND account_id = ? FOR UPDATE",
             [target.follow_up_id.as_str().into(), account_id.into()],
         ))
@@ -691,7 +739,12 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
                 "follow_up status or source_version changed since approval".into(),
             ));
         }
-        locked.push((target, item));
+        locked.push(BatchCompleteItem {
+            target,
+            source_version: item.source_version,
+            reason_code: item.reason_code,
+            source_memory_fact_id: item.source_memory_fact_id,
+        });
     }
     // 阶段 2：锁定全部关联 Outbox（legacy + policy-owned 回溯）并拒绝 claimed。
     for target in &ordered {
@@ -705,9 +758,30 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
         )
         .await?;
     }
+    // 阶段 2.5：关闭承诺生命周期缺口（MEM-004 B3）。
+    // 必须在 Outbox 锁定后、FollowUp 状态 UPDATE 前执行，保证 all-or-nothing。
+    // fail-closed：承诺类必须有 source_memory_fact_id。
+    for item in &locked {
+        if item.reason_code == "commitment_due" {
+            let fact_id = item.source_memory_fact_id.as_deref().ok_or_else(|| {
+                FollowUpControlStoreError::InvalidData(
+                    "commitment_due follow_up is missing source_memory_fact_id".into(),
+                )
+            })?;
+            close_commitment_on_complete(
+                db,
+                fact_id,
+                account_id,
+                request.command_source_event_id.as_str(),
+                &request.effect_id,
+                item.target.follow_up_id.as_str(),
+            )
+            .await?;
+        }
+    }
     // 阶段 3：全部校验通过后才执行 CAS 更新（status -> completed，version 精确 +1，
     // due 不变）。
-    for (target, _) in &locked {
+    for item in &locked {
         let updated = db
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
@@ -717,9 +791,9 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
                  WHERE follow_up_id = ? AND account_id = ? AND status = 'scheduled' \
                    AND source_version = ?",
                 [
-                    target.follow_up_id.as_str().into(),
+                    item.target.follow_up_id.as_str().into(),
                     account_id.into(),
-                    target.expected_source_version.into(),
+                    item.target.expected_source_version.into(),
                 ],
             ))
             .await
@@ -743,9 +817,9 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
     }
     // 阶段 5：组装每目标审计与有界结果文案（只含数量与 FollowUp ID）。
     let mut controls = Vec::with_capacity(locked.len());
-    for (target, item) in &locked {
+    for item in &locked {
         controls.push(AppliedControl {
-            follow_up_id: target.follow_up_id.as_str().to_owned(),
+            follow_up_id: item.target.follow_up_id.as_str().to_owned(),
             control_kind: "complete",
             previous_status: "scheduled",
             current_status: "completed",
@@ -756,7 +830,7 @@ pub(super) async fn apply_batch_complete<C: ConnectionTrait>(
             reason: reason.clone(),
             result_ref: format!(
                 "跟进事项 {} 已完成（版本 {} -> {}）",
-                target.follow_up_id.as_str(),
+                item.target.follow_up_id.as_str(),
                 item.source_version,
                 item.source_version + 1
             ),
@@ -782,8 +856,186 @@ struct FollowUpItemRow {
     source_version: u64,
 }
 
+/// `apply_complete` 专用行模型：比 FollowUpItemRow 多取 `reason_code` 与
+/// `source_memory_fact_id`，用于判定是否需关闭承诺一致性缺口。
+#[derive(FromQueryResult)]
+struct CompleteFollowUpRow {
+    status: String,
+    #[allow(dead_code)]
+    due_at_unix_secs: i64,
+    source_version: u64,
+    reason_code: String,
+    source_memory_fact_id: Option<String>,
+}
+
 #[derive(FromQueryResult)]
 struct TimeWindowRow {
     is_future: i64,
     within_365_days: i64,
+}
+
+/// `close_commitment_on_complete` 专用：锁定时需拿到 fact_status 与 fact_json。
+#[derive(FromQueryResult)]
+struct CommitmentCloseRow {
+    fact_json: String,
+    fact_status: String,
+}
+
+/// 完成 FollowUp 时闭合承诺生命周期缺口（MEM-004 B3）。
+///
+/// 在同一事务内：
+/// 1. 锁定来源 Commitment Fact（Pending 状态）；
+/// 2. 校验仍属本账号、仍为 Pending 且未被并发 supersede；
+/// 3. 落新 Confirmed Fulfilled Commitment Fact，`completion_source_event_id` 指向
+///    本次授权 OwnerCommand，`supersedes_fact_id` 指回旧 Fact；
+/// 4. 旧 Pending Fact → superseded。
+///
+/// 任一步失败全部回滚（调用方在同一事务内）。
+async fn close_commitment_on_complete<C: ConnectionTrait>(
+    db: &C,
+    source_fact_id: &str,
+    account_id: u64,
+    command_source_event_id: &str,
+    effect_id: &str,
+    follow_up_id: &str,
+) -> Result<bool, FollowUpControlStoreError> {
+    // 1. 锁定来源 Commitment Fact
+    let fact = CommitmentCloseRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT CAST(fact_json AS CHAR) AS fact_json, fact_status \
+             FROM secretary_memory_facts \
+             WHERE fact_id = ? AND account_id = ? AND fact_kind = 'commitment' \
+               AND fact_status = 'confirmed' \
+             FOR UPDATE",
+        [source_fact_id.into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(|| {
+        FollowUpControlStoreError::InvalidData(
+            "source commitment fact not found or is not active".into(),
+        )
+    })?;
+    if fact.fact_status != "confirmed" {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "source commitment fact is no longer confirmed".into(),
+        ));
+    }
+    let mem_fact: crate::MemoryFact = serde_json::from_str(&fact.fact_json).map_err(|error| {
+        FollowUpControlStoreError::InvalidData(format!(
+            "stored commitment fact is invalid: {error}"
+        ))
+    })?;
+    let commitment = match &mem_fact.payload {
+        crate::MemoryPayload::Commitment(c) => c,
+        _ => {
+            return Err(FollowUpControlStoreError::InvalidData(
+                "source fact is not a commitment".into(),
+            ));
+        }
+    };
+    if commitment.status != crate::CommitmentStatus::Pending {
+        // 已经是 Fulfilled/Cancelled：承诺生命周期已由并发 Effect 关闭，
+        // 本次完成仍然写 FollowUp completed，但不重复创建 Fulfilled Fact。
+        return Ok(false);
+    }
+
+    // 2. 构造 Fulfilled Commitment Fact（重建完整 MemoryFact）
+    let new_fact_id = crate::MemoryFactId::new(super::authorization::stable_id(
+        "commitment-fulfilled",
+        &format!("{}\0{}", effect_id, follow_up_id),
+    ))
+    .map_err(|e| FollowUpControlStoreError::InvalidData(e.to_string()))?;
+    let old_fact_id = crate::MemoryFactId::new(source_fact_id)
+        .map_err(|e| FollowUpControlStoreError::InvalidData(e.to_string()))?;
+    let completion_evt = crate::SourceEventId::new(command_source_event_id)
+        .map_err(|e| FollowUpControlStoreError::InvalidData(e.to_string()))?;
+    // 更新 payload 中的承诺状态
+    let mut new_payload = commitment.clone();
+    new_payload.status = crate::CommitmentStatus::Fulfilled;
+    new_payload.completion_source_event_id = Some(completion_evt.clone());
+    // 追加 completion_source_event_id 到来源列表
+    let mut new_source_ids = mem_fact.source_event_ids.clone();
+    if !new_source_ids.contains(&completion_evt) {
+        new_source_ids.push(completion_evt);
+    }
+    let new_fact = crate::MemoryFact {
+        fact_id: new_fact_id.clone(),
+        account: mem_fact.account.clone(),
+        subject_key: mem_fact.subject_key.clone(),
+        payload: crate::MemoryPayload::Commitment(new_payload),
+        status: crate::MemoryFactStatus::Confirmed,
+        confidence_bps: mem_fact.confidence_bps,
+        source_event_ids: new_source_ids,
+        valid_until_unix_secs: mem_fact.valid_until_unix_secs,
+        supersedes_fact_id: Some(old_fact_id.clone()),
+    };
+    // 写入前通过领域校验（subject_key、status、confidence_bps 等硬约束）。
+    crate::validate_memory_fact(&new_fact).map_err(|e| {
+        FollowUpControlStoreError::InvalidData(format!(
+            "fulfilled commitment fact validation failed: {e}"
+        ))
+    })?;
+    let new_fact_json = serde_json::to_string(&new_fact).map_err(|error| {
+        FollowUpControlStoreError::InvalidData(format!(
+            "cannot serialize fulfilled commitment: {error}"
+        ))
+    })?;
+    // 3. 标记旧 Pending Fact → superseded
+    let superseded = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_memory_facts \
+             SET fact_status = 'superseded' \
+             WHERE fact_id = ? AND account_id = ? AND fact_status = 'confirmed'",
+            [source_fact_id.into(), account_id.into()],
+        ))
+        .await
+        .map_err(database_error)?;
+    if superseded.rows_affected() != 1 {
+        return Err(FollowUpControlStoreError::InvalidData(
+            "commitment fact supersede CAS failed".into(),
+        ));
+    }
+    // 4. 落新 Confirmed Fulfilled Fact
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_memory_facts \
+             (fact_id, account_id, fact_kind, subject_key, fact_json, fact_status, \
+              confidence_bps, valid_until_unix_secs, supersedes_fact_id) \
+             SELECT ?, account_id, fact_kind, subject_key, ?, 'confirmed', \
+                    confidence_bps, valid_until_unix_secs, ? \
+             FROM secretary_memory_facts \
+             WHERE fact_id = ? AND account_id = ?",
+        [
+            new_fact_id.as_str().into(),
+            new_fact_json.into(),
+            old_fact_id.as_str().into(),
+            source_fact_id.into(),
+            account_id.into(),
+        ],
+    ))
+    .await
+    .map_err(database_error)?;
+    // 5. 复制来源引用到新 Fact
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT INTO secretary_memory_fact_sources (fact_id, source_event_id) \
+             SELECT ?, source_event_id \
+             FROM secretary_memory_fact_sources WHERE fact_id = ?",
+        [new_fact_id.as_str().into(), source_fact_id.into()],
+    ))
+    .await
+    .map_err(database_error)?;
+    // 6. 追加 completion_source_event_id 到来源列表
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "INSERT IGNORE INTO secretary_memory_fact_sources (fact_id, source_event_id) \
+         VALUES (?, ?)",
+        [new_fact_id.as_str().into(), command_source_event_id.into()],
+    ))
+    .await
+    .map_err(database_error)?;
+    Ok(true)
 }

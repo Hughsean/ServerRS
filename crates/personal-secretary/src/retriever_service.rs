@@ -8,9 +8,10 @@ use thiserror::Error;
 
 use crate::planner::AgentEventView;
 use crate::{
-    AccountScopedParticipantRef, Clock, ContentTrustLevel, ConversationRef, EventCausalContextView,
-    EventQuery, EventSearchResult, EventThreadId, InboundEventStoreError, ParticipantContextView,
-    PendingOwnerWorkItem, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
+    AccountScopedParticipantRef, Clock, CommitmentQuery, CommitmentSummary, ContentTrustLevel,
+    ConversationRef, EventCausalContextView, EventQuery, EventSearchResult, EventThreadId,
+    InboundEventStoreError, ParticipantContextView, PendingOwnerWorkItem, ProjectContextView,
+    ProjectMemorySummary, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
     SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, SystemClock,
     ThreadContextView, ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
     check_participant_permission_boundary, filter_for_model, resolve_reference_from_candidates,
@@ -316,6 +317,47 @@ impl RetrieverUseCase {
         )
     }
 
+    /// 列出当前账号的所有活跃项目记忆（MEM-003 A2）。
+    pub async fn list_projects(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<ProjectMemorySummary>, RetrieverUseCaseError> {
+        if !(1..=20).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "project list limit must be in 1..=20".into(),
+            ));
+        }
+        Ok(self.store.list_projects(account, limit).await?)
+    }
+
+    /// 查询单个项目的完整上下文（MEM-003 A2）。
+    pub async fn query_project(
+        &self,
+        account: &SourceAccountRef,
+        project_key: &str,
+    ) -> Result<Option<ProjectContextView>, RetrieverUseCaseError> {
+        if project_key.trim().is_empty() || project_key.chars().count() > 191 {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "project_key must be non-empty and bounded".into(),
+            ));
+        }
+        Ok(self.store.query_project(account, project_key).await?)
+    }
+
+    /// 查询承诺记忆（MEM-004 B2）。
+    pub async fn list_commitments(
+        &self,
+        query: &CommitmentQuery,
+    ) -> Result<Vec<CommitmentSummary>, RetrieverUseCaseError> {
+        if !(1..=100).contains(&query.limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "commitment query limit must be in 1..=100".into(),
+            ));
+        }
+        Ok(self.store.list_commitments(query).await?)
+    }
+
     pub fn now_unix_secs(&self) -> i64 {
         self.clock.now_unix_secs()
     }
@@ -447,6 +489,26 @@ mod tests {
             _thread_id: Option<&EventThreadId>,
             _limit: u16,
         ) -> Result<Vec<AccountScopedParticipantRef>, InboundEventStoreError> {
+            Ok(Vec::new())
+        }
+        async fn list_projects(
+            &self,
+            _account: &SourceAccountRef,
+            _limit: u16,
+        ) -> Result<Vec<ProjectMemorySummary>, InboundEventStoreError> {
+            Ok(Vec::new())
+        }
+        async fn query_project(
+            &self,
+            _account: &SourceAccountRef,
+            _project_key: &str,
+        ) -> Result<Option<ProjectContextView>, InboundEventStoreError> {
+            Ok(None)
+        }
+        async fn list_commitments(
+            &self,
+            _query: &CommitmentQuery,
+        ) -> Result<Vec<CommitmentSummary>, InboundEventStoreError> {
             Ok(Vec::new())
         }
     }

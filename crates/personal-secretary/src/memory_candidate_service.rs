@@ -316,6 +316,7 @@ impl MemoryCandidateExtractorT for ConservativeMemoryCandidateExtractor {
                         project_key: project_key.into(),
                         goal: goal.into(),
                         member_actor_ids: Vec::new(),
+                        member_actor_refs: Vec::new(),
                         progress: None,
                         decision_ids: Vec::new(),
                         risks: Vec::new(),

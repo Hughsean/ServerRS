@@ -13,12 +13,11 @@
 
 ## 0. 当前状态
 
-- 当前分支：`codex/qqbot-schema-baseline-v1`（基于 `7175d68`）。
-- 当前切片：`DB-BASELINE-001` 已在 2026-08-03 10:54 完成。压缩前 33 个迁移已归档，
-  全新数据库改用包含 78 张表、2 个 View 和 166 个外键的 Schema Baseline v1；共享加载器支持
-  空库基线、旧完整迁移链采用、后续增量和部分结构 fail-closed。
+- 当前分支：`claude/qqbot-project-commitment-memory-v1`（基于 `0cfbe91`）。
+- 当前切片：`MEM-003/MEM-004` 项目记忆与承诺记忆闭环 v1 已完成；2026-08-03 14:00
+  经 Codex 使用随机隔离 MySQL 独立复核，3/3 聚焦测试通过。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：提交 Baseline v1 切片后进入 `MEM-003/MEM-004` 项目记忆与承诺记忆闭环。
+- 下一步：进入 `CMD-009` 跨阶段有界状态、长期事件检索排序和冲突驱动回读。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -188,8 +187,15 @@
 
 ### 1.4 继续业务 TODO（P0）
 
-- [ ] `MEM-003` 完成项目记忆候选生产、Owner 审批、项目成员/进展/风险/阻塞查询及来源回读。
-- [ ] `MEM-004` 完成承诺记忆自动候选生产与确认入口；只有确认且有期限的承诺进入 Scheduler。
+- [x] `MEM-003` 项目记忆闭环 v1：项目成员使用带身份 kind 的稳定引用，旧裸 ID 明确标记未知；
+  `list_projects`/`query_project` 已接入 Planner、Retriever、Effect 与证据回读，账号隔离和全部来源
+  fail-closed 已由真实 MySQL 验证。
+- [x] `MEM-004` 承诺记忆闭环 v1：`list_commitments` 支持状态、期限和类型化参与者过滤；
+  单条与批量 `CompleteFollowUp` 在同事务内完成 Pending → superseded → Fulfilled，Dismiss/Snooze
+  不改变承诺语义；无期限承诺不进入 Scheduler。
+- [x] `MEM-003/MEM-004-TEST`：3 个聚焦 MySQL 场景真实通过，覆盖项目跨账号与召回失效、
+  完整 Owner 授权链与版本回滚、幂等重放、无期限不调度及批量 all-or-nothing。测试派生 schema
+  名称已限制在 MySQL 64 字节内，可兼容正式验收脚本生成的较长基础名。
 - [ ] `CMD-009` 在 `AgentEventView` 上补齐跨阶段有界状态、长期事件检索排序和冲突驱动回读。
 - [ ] `CMD-010` 完成 Owner 越权、提示注入和跨会话指代歧义的关键端到端防线；不建立庞大矩阵。
 

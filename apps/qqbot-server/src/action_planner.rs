@@ -16,10 +16,10 @@ use serde::Deserialize;
 use tracing::debug;
 
 use personal_secretary::{
-    AccountScopedParticipantRef, ActionPlannerT, Clock, ContentTrustLevel, ConversationKind,
-    ConversationRef, EventThreadId, FollowUpControlTarget, FollowUpId, IdentityTrust,
-    MemoryCandidateId, MemoryCandidateKind, MemoryCandidateStatus, MemoryFactId, MemoryPayload,
-    OpenQuestionId, PlannerError, PlannerInput, PlannerOutput, PlatformIdentityKind,
+    AccountScopedParticipantRef, ActionPlannerT, Clock, CommitmentStatus, ContentTrustLevel,
+    ConversationKind, ConversationRef, EventThreadId, FollowUpControlTarget, FollowUpId,
+    IdentityTrust, MemoryCandidateId, MemoryCandidateKind, MemoryCandidateStatus, MemoryFactId,
+    MemoryPayload, OpenQuestionId, PlannerError, PlannerInput, PlannerOutput, PlatformIdentityKind,
     ResponseExpectationControlTarget, ResponseExpectationId, SecretaryAction,
     SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId, ThreadStatus,
     validate_planner_output,
@@ -91,7 +91,8 @@ confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
 dismiss_response_expectation, dismiss_response_expectations, list_memory_candidates,
-approve_memory_candidate, reject_memory_candidate。记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
+approve_memory_candidate, reject_memory_candidate, list_projects, query_project, list_commitments。
+记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
 expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
 snooze_follow_up 必须提供 follow_up_id、expected_source_version（同样来自 version N）、
@@ -115,6 +116,9 @@ dismiss_response_expectation 必须提供 expectation_id、expected_source_versi
 和 reason，且 targets 数量为 1..=20、ID 不得重复；任一目标的 ID 或版本缺失时不要输出
 dismiss_response_expectations，改为要求 Owner 澄清；
 list_memory_candidates 列出待审批的结构化记忆候选（limit 1..=100，默认 10）；
+list_projects 列出所有活跃项目（limit 1..=20，默认 10）；
+query_project 查询单个项目详情（project_key 必填）；
+list_commitments 查询承诺（可选 status: pending/fulfilled/cancelled、due_since_unix_secs、due_until_unix_secs、promisor_actor_ref/beneficiary_actor_ref 按参与者过滤、limit 1..=100 默认 10）；
 approve_memory_candidate 必须提供 candidate_id、expected_candidate_version
 （一律来自 ListMemoryCandidates 展示的 vN，禁止从正文猜测版本）和 reason；
 reject_memory_candidate 必须提供 candidate_id、expected_candidate_version
@@ -250,6 +254,12 @@ impl LlmActionPlanner {
                     expected_candidate_version,
                     candidate_status,
                     candidate_kind,
+                    project_key: None,
+                    commitment_status: None,
+                    due_since_unix_secs: None,
+                    due_until_unix_secs: None,
+                    promisor_actor_ref: None,
+                    beneficiary_actor_ref: None,
                 };
                 let action = build_action(&raw, temp_ref_map)?;
                 let evidence: Vec<SourceEventId> = resolve_event_refs(&evidence, temp_ref_map)?;
@@ -382,6 +392,18 @@ struct RawProposalFields<'a> {
     expected_candidate_version: Option<u64>,
     candidate_status: Option<MemoryCandidateStatus>,
     candidate_kind: Option<MemoryCandidateKind>,
+    /// 项目键（query_project）。
+    project_key: Option<String>,
+    /// 承诺状态过滤（list_commitments）；从 LLM 输出反序列化，None 表示不过滤。
+    commitment_status: Option<CommitmentStatus>,
+    /// 承诺截止时间起始（list_commitments）。
+    due_since_unix_secs: Option<i64>,
+    /// 承诺截止时间结束（list_commitments）。
+    due_until_unix_secs: Option<i64>,
+    /// 承诺人临时引用（list_commitments），通过 TempRefMap 解析。
+    promisor_actor_ref: Option<String>,
+    /// 受益方临时引用（list_commitments），通过 TempRefMap 解析。
+    beneficiary_actor_ref: Option<String>,
 }
 
 /// 批量忽略目标的嵌套 DTO；显式拒绝未知字段，防止模型夹带额外键。
@@ -850,6 +872,55 @@ fn build_action(
                     .ok_or_else(|| PlannerError::InvalidOutput("missing memory_mode".into()))?,
             })
         }
+        "list_projects" => Ok(SecretaryAction::ListProjects {
+            limit: raw.limit.unwrap_or(10),
+        }),
+        "query_project" => Ok(SecretaryAction::QueryProject {
+            project_key: raw
+                .project_key
+                .clone()
+                .ok_or_else(|| PlannerError::InvalidOutput("missing project_key".into()))?,
+        }),
+        "list_commitments" => Ok(SecretaryAction::ListCommitments {
+            status: raw.commitment_status,
+            due_since_unix_secs: raw.due_since_unix_secs,
+            due_until_unix_secs: raw.due_until_unix_secs,
+            promisor: raw
+                .promisor_actor_ref
+                .as_deref()
+                .map(|actor_ref| {
+                    let participant =
+                        temp_ref_map.resolve_actor_ref(actor_ref).ok_or_else(|| {
+                            PlannerError::InvalidOutput(format!(
+                                "unresolved promisor_actor_ref: {actor_ref}"
+                            ))
+                        })?;
+                    personal_secretary::ProjectMemberRef::new(
+                        participant.identity.platform_kind,
+                        participant.stable_id(),
+                    )
+                    .map_err(|e| PlannerError::InvalidOutput(e.to_string()))
+                })
+                .transpose()?,
+            beneficiary: raw
+                .beneficiary_actor_ref
+                .as_deref()
+                .map(|actor_ref| {
+                    let participant =
+                        temp_ref_map.resolve_actor_ref(actor_ref).ok_or_else(|| {
+                            PlannerError::InvalidOutput(format!(
+                                "unresolved beneficiary_actor_ref: {actor_ref}"
+                            ))
+                        })?;
+                    personal_secretary::ProjectMemberRef::new(
+                        participant.identity.platform_kind,
+                        participant.stable_id(),
+                    )
+                    .map_err(|e| PlannerError::InvalidOutput(e.to_string()))
+                })
+                .transpose()?,
+            limit: raw.limit.unwrap_or(10),
+        }),
         other => Err(PlannerError::DisallowedAction(format!(
             "unknown tool: {other}"
         ))),
@@ -1400,6 +1471,9 @@ fn tool_kind_display_name(kind: personal_secretary::SecretaryToolKind) -> &'stat
         ListMemoryCandidates => "列出记忆候选",
         ApproveMemoryCandidate => "批准记忆候选",
         RejectMemoryCandidate => "拒绝记忆候选",
+        ListProjects => "列出项目",
+        QueryProject => "查询项目",
+        ListCommitments => "列出承诺",
     }
 }
 

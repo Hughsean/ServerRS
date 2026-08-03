@@ -78,6 +78,9 @@ pub enum SecretaryToolKind {
     ListMemoryCandidates,
     ApproveMemoryCandidate,
     RejectMemoryCandidate,
+    ListProjects,
+    QueryProject,
+    ListCommitments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +111,10 @@ impl SecretaryToolKind {
             | Self::ExplainNotificationDecision
             | Self::ListMemoryFacts
             | Self::ReadMemoryFactSources
-            | Self::ListMemoryCandidates => SecretaryToolPolicy {
+            | Self::ListMemoryCandidates
+            | Self::ListProjects
+            | Self::QueryProject
+            | Self::ListCommitments => SecretaryToolPolicy {
                 risk: L0ReadOnly,
                 requires_confirmation: false,
                 reversible: true,
@@ -487,6 +493,25 @@ pub enum SecretaryAction {
         expected_candidate_version: u64,
         reason: String,
     },
+    /// 列出当前账号的所有活跃项目记忆（L0 只读，有界）。
+    ListProjects {
+        limit: u16,
+    },
+    /// 查询单个项目的完整上下文：目标、成员、进展、风险、阻塞、决策和来源（L0 只读）。
+    QueryProject {
+        project_key: String,
+    },
+    /// 查询承诺记忆（MEM-004 B2）。支持按状态、截止时间、参与者过滤。
+    ListCommitments {
+        status: Option<crate::CommitmentStatus>,
+        due_since_unix_secs: Option<i64>,
+        due_until_unix_secs: Option<i64>,
+        /// 承诺人过滤（平台身份种类 + 稳定主体 ID）。None = 不过滤。
+        promisor: Option<crate::ProjectMemberRef>,
+        /// 受益方过滤（平台身份种类 + 稳定主体 ID）。None = 不过滤。
+        beneficiary: Option<crate::ProjectMemberRef>,
+        limit: u16,
+    },
 }
 
 impl SecretaryAction {
@@ -565,6 +590,9 @@ impl SecretaryAction {
             Self::ListMemoryCandidates { .. } => SecretaryToolKind::ListMemoryCandidates,
             Self::ApproveMemoryCandidate { .. } => SecretaryToolKind::ApproveMemoryCandidate,
             Self::RejectMemoryCandidate { .. } => SecretaryToolKind::RejectMemoryCandidate,
+            Self::ListProjects { .. } => SecretaryToolKind::ListProjects,
+            Self::QueryProject { .. } => SecretaryToolKind::QueryProject,
+            Self::ListCommitments { .. } => SecretaryToolKind::ListCommitments,
         }
     }
 }

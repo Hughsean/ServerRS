@@ -1264,6 +1264,338 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             .map(|row| map_recent_event_view_row(row, &account_owned))
             .collect()
     }
+
+    async fn list_projects(
+        &self,
+        account: &SourceAccountRef,
+        limit: u16,
+    ) -> Result<Vec<crate::ProjectMemorySummary>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let now = Utc::now().timestamp();
+        let rows = ProjectListRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT f.fact_id, CAST(f.fact_json AS CHAR) AS fact_json,
+                      CAST(UNIX_TIMESTAMP(f.updated_at) AS SIGNED) AS updated_at_unix
+               FROM secretary_memory_facts f
+               WHERE f.account_id = ? AND f.fact_kind = 'project'
+                 AND f.fact_status = 'confirmed'
+                 AND (f.valid_until_unix_secs IS NULL OR f.valid_until_unix_secs > ?)
+                 AND EXISTS (
+                   SELECT 1 FROM secretary_memory_fact_sources fs0
+                   WHERE fs0.fact_id = f.fact_id
+                 )
+               AND NOT EXISTS (
+                   SELECT 1 FROM secretary_memory_fact_sources fs
+                   LEFT JOIN secretary_source_events se
+                     ON se.source_event_id = fs.source_event_id AND se.account_id = ?
+                   LEFT JOIN secretary_message_tombstones t
+                     ON t.source_event_id = fs.source_event_id AND t.status = 'applied'
+                   LEFT JOIN secretary_conversations c ON c.id = se.conversation_id
+                   LEFT JOIN secretary_message_contents mc ON mc.source_event_id = fs.source_event_id
+                   WHERE fs.fact_id = f.fact_id
+                     AND (se.source_event_id IS NULL
+                          OR t.source_event_id IS NOT NULL
+                          OR c.memory_mode IS NULL OR c.memory_mode IN ('never_long_term', 'envelope_only')
+                          OR mc.content_mode IS NULL OR mc.content_mode IN ('never_long_term', 'envelope_only')
+                          OR mc.source_event_id IS NULL)
+                 )
+               ORDER BY f.updated_at DESC, f.fact_id DESC
+               LIMIT ?"#,
+            vec![
+                account_id.into(),
+                now.into(),
+                account_id.into(),
+                (limit as u64).into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let fact: crate::MemoryFact =
+                    serde_json::from_str(&row.fact_json).map_err(|e| {
+                        InboundEventStoreError::InvalidData(format!("invalid project fact: {e}"))
+                    })?;
+                let project = match &fact.payload {
+                    crate::MemoryPayload::Project(p) => p,
+                    _ => {
+                        return Err(InboundEventStoreError::InvalidData(
+                            "stored fact is not a project".into(),
+                        ));
+                    }
+                };
+                let pk = project.project_key.clone();
+                let goal = project.goal.chars().take(200).collect::<String>();
+                let member_count = project.effective_members().len();
+                let progress = project
+                    .progress
+                    .as_ref()
+                    .map(|p| p.chars().take(200).collect::<String>());
+                let risk_count = project.risks.len();
+                let blocker_count = project.blockers.len();
+                Ok(crate::ProjectMemorySummary {
+                    project_key: pk,
+                    goal,
+                    member_count,
+                    progress,
+                    risk_count,
+                    blocker_count,
+                    fact_id: crate::MemoryFactId::new(row.fact_id)
+                        .map_err(|e| InboundEventStoreError::InvalidData(e.to_string()))?,
+                    updated_at_unix_secs: Some(row.updated_at_unix),
+                })
+            })
+            .collect()
+    }
+
+    async fn query_project(
+        &self,
+        account: &SourceAccountRef,
+        project_key: &str,
+    ) -> Result<Option<crate::ProjectContextView>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let now = Utc::now().timestamp();
+        let row = ProjectDetailRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT f.fact_id, CAST(f.fact_json AS CHAR) AS fact_json,
+                      f.confidence_bps, f.valid_until_unix_secs
+               FROM secretary_memory_facts f
+               WHERE f.account_id = ? AND f.fact_kind = 'project'
+                 AND f.fact_status = 'confirmed'
+                 AND (f.valid_until_unix_secs IS NULL OR f.valid_until_unix_secs > ?)
+                 AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.project_key')) = ?
+               ORDER BY f.updated_at DESC, f.fact_id DESC
+               LIMIT 1"#,
+            vec![account_id.into(), now.into(), project_key.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let fact: crate::MemoryFact = serde_json::from_str(&row.fact_json).map_err(|e| {
+            InboundEventStoreError::InvalidData(format!("invalid project fact: {e}"))
+        })?;
+        let project = match &fact.payload {
+            crate::MemoryPayload::Project(p) => p,
+            _ => {
+                return Err(InboundEventStoreError::InvalidData(
+                    "stored fact is not a project".into(),
+                ));
+            }
+        };
+        // 验证所有来源均仍有效（fail-closed：任一无效或零来源即拒绝）。
+        let source_valid =
+            ProjectSourceCheckRow::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"SELECT 1 AS present
+               FROM secretary_memory_fact_sources fs0
+               WHERE fs0.fact_id = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM secretary_memory_fact_sources fs
+                   LEFT JOIN secretary_source_events se
+                     ON se.source_event_id = fs.source_event_id AND se.account_id = ?
+                   LEFT JOIN secretary_message_tombstones t
+                     ON t.source_event_id = fs.source_event_id AND t.status = 'applied'
+                   LEFT JOIN secretary_conversations c ON c.id = se.conversation_id
+                   LEFT JOIN secretary_message_contents mc
+                     ON mc.source_event_id = fs.source_event_id
+                   WHERE fs.fact_id = fs0.fact_id
+                     AND (se.source_event_id IS NULL
+                          OR t.source_event_id IS NOT NULL
+                          OR c.memory_mode IS NULL OR c.memory_mode IN ('never_long_term', 'envelope_only')
+                          OR mc.content_mode IS NULL OR mc.content_mode IN ('never_long_term', 'envelope_only')
+                          OR mc.source_event_id IS NULL)
+                 )
+               LIMIT 1"#,
+                vec![row.fact_id.clone().into(), account_id.into()],
+            ))
+            .one(&self.db)
+            .await
+            .map_err(store_error)?;
+        if source_valid.is_none() {
+            return Ok(None);
+        }
+        // Clone project for owned values (behind &fact.payload reference).
+        let project_key = project.project_key.clone();
+        let goal = project.goal.clone();
+        let has_member_refs = !project.member_actor_refs.is_empty();
+        let legacy_member_ids = !has_member_refs && !project.member_actor_ids.is_empty();
+        let members = if has_member_refs {
+            project.member_actor_refs.clone()
+        } else {
+            project
+                .member_actor_ids
+                .iter()
+                .map(|id| crate::ProjectMemberRef {
+                    platform_identity_kind: None,
+                    actor_id: id.clone(),
+                })
+                .collect()
+        };
+        let decisions: Vec<crate::ThreadDecisionId> = project.decision_ids.clone();
+        let progress = project.progress.clone();
+        let risks = project.risks.clone();
+        let blockers = project.blockers.clone();
+        let artifact_refs = project.artifact_refs.clone();
+        Ok(Some(crate::ProjectContextView {
+            project_key,
+            goal,
+            members,
+            legacy_member_ids,
+            progress,
+            risks,
+            blockers,
+            artifact_refs,
+            decision_ids: decisions,
+            fact_id: crate::MemoryFactId::new(row.fact_id)
+                .map_err(|e| InboundEventStoreError::InvalidData(e.to_string()))?,
+            confidence_bps: row.confidence_bps,
+            source_event_ids: fact.source_event_ids,
+            valid_until_unix_secs: row.valid_until_unix_secs,
+        }))
+    }
+
+    async fn list_commitments(
+        &self,
+        query: &crate::CommitmentQuery,
+    ) -> Result<Vec<crate::CommitmentSummary>, InboundEventStoreError> {
+        let account_id = resolve_account_id(&self.db, &query.account).await?;
+        let now = Utc::now().timestamp();
+        let limit = query.limit.clamp(1, 100);
+        let mut params: Vec<sea_orm::Value> = Vec::new();
+        params.push(account_id.into());
+        params.push(now.into());
+        params.push(account_id.into());
+        // 动态拼接状态过滤
+        let status_clause = match &query.status {
+            Some(status) => {
+                params.push(status.as_str().into());
+                " AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.status')) = ?"
+            }
+            None => "",
+        };
+        // 动态拼接承诺人过滤（kind + actor_id，fail-closed）
+        let promisor_clause = match &query.promisor {
+            Some(promisor) => {
+                params.push(promisor.actor_id.clone().into());
+                if let Some(kind) = promisor.platform_identity_kind {
+                    params.push(kind.serialized_name().into());
+                    " AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.promisor.actor_id')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.promisor.platform_identity_kind')) = ?"
+                } else {
+                    // 旧数据无 kind 字段：要求 IS NULL（有 kind 的新数据不会错误命中）。
+                    " AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.promisor.actor_id')) = ? AND JSON_EXTRACT(f.fact_json, '$.payload.data.promisor.platform_identity_kind') IS NULL"
+                }
+            }
+            None => "",
+        };
+        // 动态拼接受益方过滤（kind + actor_id，fail-closed）
+        let beneficiary_clause = match &query.beneficiary {
+            Some(beneficiary) => {
+                params.push(beneficiary.actor_id.clone().into());
+                if let Some(kind) = beneficiary.platform_identity_kind {
+                    params.push(kind.serialized_name().into());
+                    " AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.beneficiary.actor_id')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.beneficiary.platform_identity_kind')) = ?"
+                } else {
+                    " AND JSON_UNQUOTE(JSON_EXTRACT(f.fact_json, '$.payload.data.beneficiary.actor_id')) = ? AND JSON_EXTRACT(f.fact_json, '$.payload.data.beneficiary.platform_identity_kind') IS NULL"
+                }
+            }
+            None => "",
+        };
+        // 动态拼接 due 范围
+        let due_since_clause = match query.due_since_unix_secs {
+            Some(since) => {
+                params.push(since.into());
+                " AND JSON_EXTRACT(f.fact_json, '$.payload.data.due_at_unix_secs') >= ?"
+            }
+            None => "",
+        };
+        let due_until_clause = match query.due_until_unix_secs {
+            Some(until) => {
+                params.push(until.into());
+                " AND JSON_EXTRACT(f.fact_json, '$.payload.data.due_at_unix_secs') <= ?"
+            }
+            None => "",
+        };
+        params.push((limit as u64).into());
+        let sql = format!(
+            r#"SELECT f.fact_id, CAST(f.fact_json AS CHAR) AS fact_json,
+                      fu.follow_up_id, fu.status AS follow_up_status
+               FROM secretary_memory_facts f
+               LEFT JOIN secretary_follow_up_items fu
+                 ON fu.source_memory_fact_id = f.fact_id
+                 AND fu.status = 'scheduled'
+               WHERE f.account_id = ? AND f.fact_kind = 'commitment'
+                 AND f.fact_status = 'confirmed'
+                 AND (f.valid_until_unix_secs IS NULL OR f.valid_until_unix_secs > ?)
+                 AND EXISTS (
+                   SELECT 1 FROM secretary_memory_fact_sources fs0
+                   WHERE fs0.fact_id = f.fact_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM secretary_memory_fact_sources fs
+                   LEFT JOIN secretary_source_events se
+                     ON se.source_event_id = fs.source_event_id AND se.account_id = ?
+                   LEFT JOIN secretary_message_tombstones t
+                     ON t.source_event_id = fs.source_event_id AND t.status = 'applied'
+                   LEFT JOIN secretary_conversations c ON c.id = se.conversation_id
+                   LEFT JOIN secretary_message_contents mc
+                     ON mc.source_event_id = fs.source_event_id
+                   WHERE fs.fact_id = f.fact_id
+                     AND (se.source_event_id IS NULL
+                          OR t.source_event_id IS NOT NULL
+                          OR c.memory_mode IS NULL OR c.memory_mode = 'never_long_term'
+                          OR mc.content_mode IS NULL OR mc.content_mode = 'never_long_term'
+                          OR mc.source_event_id IS NULL)
+                 ){status_clause}{promisor_clause}{beneficiary_clause}{due_since_clause}{due_until_clause}
+               ORDER BY f.updated_at DESC, f.fact_id DESC
+               LIMIT ?"#
+        );
+        let rows = CommitmentListRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            &sql,
+            params,
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let fact: crate::MemoryFact =
+                    serde_json::from_str(&row.fact_json).map_err(|e| {
+                        InboundEventStoreError::InvalidData(format!("invalid commitment fact: {e}"))
+                    })?;
+                let commitment = match &fact.payload {
+                    crate::MemoryPayload::Commitment(c) => c,
+                    _ => {
+                        return Err(InboundEventStoreError::InvalidData(
+                            "stored fact is not a commitment".into(),
+                        ));
+                    }
+                };
+                Ok(crate::CommitmentSummary {
+                    fact_id: crate::MemoryFactId::new(row.fact_id)
+                        .map_err(|e| InboundEventStoreError::InvalidData(e.to_string()))?,
+                    promisor: crate::ProjectMemberRef {
+                        platform_identity_kind: commitment.promisor.platform_identity_kind,
+                        actor_id: commitment.promisor.actor_id.clone(),
+                    },
+                    beneficiary: crate::ProjectMemberRef {
+                        platform_identity_kind: commitment.beneficiary.platform_identity_kind,
+                        actor_id: commitment.beneficiary.actor_id.clone(),
+                    },
+                    action: commitment.action.clone(),
+                    due_at_unix_secs: commitment.due_at_unix_secs,
+                    status: commitment.status,
+                    source_event_ids: fact.source_event_ids.clone(),
+                    follow_up_id: row.follow_up_id,
+                    follow_up_status: row.follow_up_status,
+                })
+            })
+            .collect()
+    }
 }
 
 /// 通过 SourceAccountRef 解析 secretary_accounts.id。
@@ -2648,4 +2980,35 @@ impl PersonMemoryFactAttributes {
         }
         attributes
     }
+}
+
+// ===== 项目/承诺查询行模型（MEM-003/MEM-004）=====
+
+#[derive(Debug, FromQueryResult)]
+struct ProjectListRow {
+    fact_id: String,
+    fact_json: String,
+    updated_at_unix: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ProjectDetailRow {
+    fact_id: String,
+    fact_json: String,
+    confidence_bps: u16,
+    valid_until_unix_secs: Option<i64>,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ProjectSourceCheckRow {
+    #[allow(dead_code)]
+    present: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct CommitmentListRow {
+    fact_id: String,
+    fact_json: String,
+    follow_up_id: Option<String>,
+    follow_up_status: Option<String>,
 }

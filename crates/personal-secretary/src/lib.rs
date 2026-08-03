@@ -109,7 +109,7 @@ pub use memory::{
     CommitmentMemory, CommitmentStatus, ConversationMemoryModeInput, ConversationMemoryModeReceipt,
     MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId,
     MemoryFactStatus, MemoryFactView, MemoryPayload, MemorySourceExcerpt, MemoryWriteReceipt,
-    PersonMemory, ProjectMemory, validate_memory_delete, validate_memory_fact,
+    PersonMemory, ProjectMemberRef, ProjectMemory, validate_memory_delete, validate_memory_fact,
     validate_memory_payload,
 };
 pub use memory_candidate::{
@@ -169,20 +169,21 @@ pub use response_expectation_control_service::{
     ResponseExpectationControlStoreT, ResponseExpectationControlUseCase,
 };
 pub use retriever::{
-    AccountScopedParticipantRef, CausalEventRef, CausalThreadRef, ContentTrustLevel,
-    EventCausalContextView, EventParticipantSummary, EventQuery, EventRelation, EventRelationKind,
-    EventSearchResult, GroupRole, IdentityTrust, MAX_ATTRIBUTE_VALUE_CHARS, MAX_CAUSAL_MENTIONED,
-    MAX_CAUSAL_PARTICIPANTS, MAX_CAUSAL_RELATIONS, MAX_CAUSAL_SOURCE_REFS, MAX_PARTICIPANT_ALIASES,
-    MAX_PARTICIPANT_ATTRIBUTES, MAX_PARTICIPANT_SOURCE_REFS, MAX_RELATED_EVENT_REFS,
-    MAX_RELATION_SOURCES, ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView,
-    ParticipantIdentity, ParticipantRef, PendingOwnerWorkItem, PlatformIdentityKind,
-    ReferenceCandidate, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
-    SecretaryStatusView, SourceEventDetail, ThreadActorSummary, ThreadClaimSummary,
-    ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult,
-    UpcomingItem, check_causal_role_strictness, check_participant_permission_boundary,
-    filter_for_model, grants_owner_authority, is_allowed_for_model,
-    resolve_reference_from_candidates, validate_causal_context, validate_event_query,
-    validate_participant_context,
+    AccountScopedParticipantRef, CausalEventRef, CausalThreadRef, CommitmentQuery,
+    CommitmentSummary, ContentTrustLevel, EventCausalContextView, EventParticipantSummary,
+    EventQuery, EventRelation, EventRelationKind, EventSearchResult, GroupRole, IdentityTrust,
+    MAX_ATTRIBUTE_VALUE_CHARS, MAX_CAUSAL_MENTIONED, MAX_CAUSAL_PARTICIPANTS, MAX_CAUSAL_RELATIONS,
+    MAX_CAUSAL_SOURCE_REFS, MAX_PARTICIPANT_ALIASES, MAX_PARTICIPANT_ATTRIBUTES,
+    MAX_PARTICIPANT_SOURCE_REFS, MAX_RELATED_EVENT_REFS, MAX_RELATION_SOURCES,
+    ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
+    ParticipantRef, PendingOwnerWorkItem, PlatformIdentityKind, ProjectContextView,
+    ProjectMemorySummary, ReferenceCandidate, ReferenceContext, ReferenceResolution,
+    RetrieverError, RetrieverStoreT, SecretaryStatusView, SourceEventDetail, ThreadActorSummary,
+    ThreadClaimSummary, ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary,
+    ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
+    check_participant_permission_boundary, filter_for_model, grants_owner_authority,
+    is_allowed_for_model, resolve_reference_from_candidates, validate_causal_context,
+    validate_event_query, validate_participant_context,
 };
 pub use retriever_service::{RetrieverPolicy, RetrieverUseCase, RetrieverUseCaseError};
 pub use store::{

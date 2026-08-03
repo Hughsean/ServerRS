@@ -178,6 +178,43 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         | SecretaryAction::GetSecretaryStatus
         | SecretaryAction::GetThreadContext { .. }
         | SecretaryAction::GetEventCausalContext { .. } => {}
+        SecretaryAction::ListProjects { limit } => {
+            if !(1..=20).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "ListProjects limit must be in 1..=20".into(),
+                ));
+            }
+        }
+        SecretaryAction::QueryProject { project_key } => {
+            bounded_text("project_key", project_key, 1, 191)?;
+        }
+        SecretaryAction::ListCommitments {
+            status: _,
+            due_since_unix_secs,
+            due_until_unix_secs,
+            promisor,
+            beneficiary,
+            limit,
+        } => {
+            if !(1..=100).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "ListCommitments limit must be in 1..=100".into(),
+                ));
+            }
+            if let (Some(since), Some(until)) = (due_since_unix_secs, due_until_unix_secs)
+                && since > until
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "due_since_unix_secs must not exceed due_until_unix_secs".into(),
+                ));
+            }
+            if let Some(p) = promisor {
+                validate_project_member_ref("promisor", p)?;
+            }
+            if let Some(b) = beneficiary {
+                validate_project_member_ref("beneficiary", b)?;
+            }
+        }
         SecretaryAction::GetParticipantContext {
             actor_kind: _,
             actor_id,
@@ -694,6 +731,24 @@ pub fn validate_response_draft(
         return Err(SecretaryAgentRuntimeError::InvalidResponseDraft(
             "created_at_unix_secs must not be negative".into(),
         ));
+    }
+    Ok(())
+}
+
+/// 校验参与者引用必须有确定的身份 kind 和有效的 actor_id。
+fn validate_project_member_ref(
+    field: &str,
+    value: &crate::ProjectMemberRef,
+) -> Result<(), SecretaryAgentRuntimeError> {
+    if value.platform_identity_kind.is_none() {
+        return Err(SecretaryAgentRuntimeError::InvalidProposal(format!(
+            "{field} must have a known platform_identity_kind"
+        )));
+    }
+    if value.actor_id.trim().is_empty() || value.actor_id.len() > 191 {
+        return Err(SecretaryAgentRuntimeError::InvalidProposal(format!(
+            "{field}.actor_id must contain 1..=191 bytes"
+        )));
     }
     Ok(())
 }

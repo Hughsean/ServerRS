@@ -7,9 +7,11 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`codex/qqbot-schema-baseline-v1`，基线提交 `7175d68`（参与者身份与因果关系
-  闭环）。2026-08-03 10:54 已完成 QQBot Schema Baseline v1：33 个压缩前迁移归档，空库入口
-  收敛为最终结构基线，后续仅执行新增量迁移；结构等价、幂等、旧链采用与 fail-closed 已验证。
+- 当前开发分支：`claude/qqbot-project-commitment-memory-v1`，基线提交 `0cfbe91`。
+  2026-08-03 已完成 QQBot Schema Baseline v1。
+- **本轮（MEM-003/MEM-004）**：项目记忆闭环 + 承诺生命周期闭环 v1 已完成；
+  2026-08-03 14:00（Asia/Shanghai）经 Codex 使用随机隔离 MySQL 独立复核，3/3 聚焦场景通过；
+  未连接真实 QQ/NapCat，已达到提交条件。
 - 当前能力：可靠入站、空窗回补、确定性 EventThread、类型化语义、跨会话关联候选、Owner
   关联审核、高影响线程变更的持久化 Suspend/Resume、授权撤销、语义失效，以及来源化人物/
   项目/承诺结构记忆、证据回读、Owner 派生记忆删除、承诺提醒 Outbox、独立 QQ 开放平台

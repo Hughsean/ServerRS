@@ -10,7 +10,7 @@ use personal_secretary::{
     MemoryCandidateExtractorError, MemoryCandidateExtractorT, MemoryCandidateId,
     MemoryCandidateSource, MemoryCandidateStatus, MemoryCandidateVersion, MemoryPayload,
     OpenQuestionCandidate, OpenQuestionId, PersonMemory, ProjectMemory, SourceEventId,
-    ThreadClaimCandidate, ThreadClaimId, ThreadDecisionCandidate, ThreadDecisionId,
+    ThreadActorRef, ThreadClaimCandidate, ThreadClaimId, ThreadDecisionCandidate, ThreadDecisionId,
     ThreadSemanticExtractorError, ThreadSemanticExtractorT, ThreadSemanticPatch,
     candidate_fingerprint, validate_semantic_patch,
 };
@@ -727,15 +727,28 @@ impl LlmMemoryCandidateExtractor {
         }
         let project_key = project.project_key.trim().to_owned();
         let sources = map_candidate_sources(maps, project.source_event_ids)?;
-        // 成员用批次内 actor 标签引用，映射回真实账号作用域身份。
-        let mut member_actor_ids = Vec::with_capacity(project.member_actor_ids.len());
+        // 成员用批次内 actor 标签引用，映射回完整账号作用域身份引用。
+        let mut member_actor_refs: Vec<personal_secretary::ProjectMemberRef> =
+            Vec::with_capacity(project.member_actor_ids.len());
         for member_ref in project.member_actor_ids {
-            member_actor_ids.push(resolve_actor(maps, &member_ref)?.to_owned());
+            let actor = resolve_actor(maps, &member_ref)?;
+            let member_ref =
+                match actor.platform_identity_kind {
+                    Some(kind) => personal_secretary::ProjectMemberRef::new(kind, &actor.actor_id)
+                        .map_err(|e| {
+                            candidate_extractor_error(format!("invalid project member ref: {e}"))
+                        })?,
+                    None => personal_secretary::ProjectMemberRef::legacy(&actor.actor_id).map_err(
+                        |e| candidate_extractor_error(format!("invalid project member ref: {e}")),
+                    )?,
+                };
+            member_actor_refs.push(member_ref);
         }
         let payload = MemoryPayload::Project(ProjectMemory {
             project_key: project_key.clone(),
             goal: project.goal.trim().to_owned(),
-            member_actor_ids,
+            member_actor_ids: Vec::new(),
+            member_actor_refs,
             progress: project.progress.filter(|value| !value.trim().is_empty()),
             decision_ids: Vec::new(),
             risks: project.risks,
@@ -856,33 +869,41 @@ impl MemoryCandidateExtractorT for LlmMemoryCandidateExtractor {
 struct InputMaps<'a> {
     /// evt_N -> 批次事件（权威 actor 与来源都从这里取）。
     events_by_ref: HashMap<String, &'a MemoryCandidateEvent>,
-    /// actor_N -> 真实 actor_id（平台账号标识仅存在本地）。
-    actors_by_ref: HashMap<String, &'a str>,
+    /// actor_N -> 发送者 ThreadActorRef（含平台身份种类）。
+    actors_by_ref: HashMap<String, &'a ThreadActorRef>,
 }
 
 /// 构造输入序列化数组与本地映射表。事件按可见顺序编号 evt_1..；Actor 按首次
-/// 出现顺序编号 actor_1..（同一 Actor 复用同一标签）。
+/// 出现顺序编号 actor_1..（同一 (kind, actor_id) 复用同一标签；
+/// 同 actor_id 不同 kind 产生不同标签，杜绝身份命名空间合并）。
 fn build_input_maps<'a>(
     events: &'a [&'a MemoryCandidateEvent],
     max_event_chars: usize,
 ) -> (InputMaps<'a>, Vec<CandidateInputEvent>) {
     let mut events_by_ref = HashMap::with_capacity(events.len());
     let mut actors_by_ref = HashMap::new();
-    let mut actor_refs: HashMap<&'a str, String> = HashMap::new();
+    let mut actor_refs: HashMap<
+        (Option<personal_secretary::PlatformIdentityKind>, &'a str),
+        String,
+    > = HashMap::new();
     let mut next_actor = 1usize;
     let mut input = Vec::with_capacity(events.len());
     for (index, event) in events.iter().enumerate() {
         let event_ref = format!("evt_{}", index + 1);
         events_by_ref.insert(event_ref.clone(), *event);
+        let dedup_key = (
+            event.actor.platform_identity_kind,
+            event.actor.actor_id.as_str(),
+        );
         let actor_ref = actor_refs
-            .entry(event.actor.actor_id.as_str())
+            .entry(dedup_key)
             .or_insert_with(|| {
                 let label = format!("actor_{next_actor}");
                 next_actor += 1;
                 label
             })
             .clone();
-        actors_by_ref.insert(actor_ref.clone(), event.actor.actor_id.as_str());
+        actors_by_ref.insert(actor_ref.clone(), &event.actor);
         input.push(CandidateInputEvent {
             ref_id: event_ref,
             actor_ref,
@@ -984,7 +1005,7 @@ fn require_event<'a>(
 fn resolve_actor<'a>(
     maps: &InputMaps<'a>,
     actor_ref: &str,
-) -> Result<&'a str, MemoryCandidateExtractorError> {
+) -> Result<&'a ThreadActorRef, MemoryCandidateExtractorError> {
     maps.actors_by_ref.get(actor_ref).copied().ok_or_else(|| {
         candidate_extractor_error("candidate cites an actor outside the visible batch")
     })

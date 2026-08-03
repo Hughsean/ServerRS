@@ -64,6 +64,17 @@ pub enum CommitmentStatus {
     Cancelled,
 }
 
+impl CommitmentStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proposed => "proposed",
+            Self::Pending => "pending",
+            Self::Fulfilled => "fulfilled",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonMemory {
     pub person: ThreadActorRef,
@@ -72,16 +83,90 @@ pub struct PersonMemory {
     pub communication_preferences: Vec<String>,
 }
 
+/// 项目中的单个成员引用，带身份类型与稳定 actor_id。
+/// 复用 `PlatformIdentityKind` 作为身份种类，不定义含义重复的类型。
+/// `platform_identity_kind` 为 `None` 表示来自旧数据（仅有 `member_actor_ids`），
+/// 此时身份类型不可知，只能展示不能用于授权。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMemberRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_identity_kind: Option<crate::PlatformIdentityKind>,
+    pub actor_id: String,
+}
+
+impl ProjectMemberRef {
+    pub fn new(
+        platform_identity_kind: crate::PlatformIdentityKind,
+        actor_id: impl Into<String>,
+    ) -> Result<Self, MemoryFactError> {
+        let actor_id = actor_id.into();
+        if actor_id.trim().is_empty() || actor_id.len() > 191 {
+            return Err(MemoryFactError::Invalid(
+                "ProjectMemberRef.actor_id must contain 1..=191 bytes".into(),
+            ));
+        }
+        Ok(Self {
+            platform_identity_kind: Some(platform_identity_kind),
+            actor_id,
+        })
+    }
+
+    /// 旧数据回退：身份类型未知。
+    pub fn legacy(actor_id: impl Into<String>) -> Result<Self, MemoryFactError> {
+        let actor_id = actor_id.into();
+        if actor_id.trim().is_empty() || actor_id.len() > 191 {
+            return Err(MemoryFactError::Invalid(
+                "ProjectMemberRef.actor_id must contain 1..=191 bytes".into(),
+            ));
+        }
+        Ok(Self {
+            platform_identity_kind: None,
+            actor_id,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectMemory {
     pub project_key: String,
     pub goal: String,
+    /// 旧格式：裸 actor_id 列表。仅保留用于反序列化兼容旧 ProjectMemory JSON；
+    /// 新数据不再写入此字段。旧成员的身份类型在查询时显示为"未知"。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_actor_ids: Vec<String>,
+    /// 带身份类型的项目成员引用。新数据优先使用此字段；
+    /// 旧数据反序列化时此字段为空（`#[serde(default)]`），绝不崩溃。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_actor_refs: Vec<ProjectMemberRef>,
     pub progress: Option<String>,
     pub decision_ids: Vec<ThreadDecisionId>,
     pub risks: Vec<String>,
     pub blockers: Vec<String>,
     pub artifact_refs: Vec<String>,
+}
+
+impl ProjectMemory {
+    /// 返回当前有效的成员列表：优先使用 `member_actor_refs`，旧数据回退到
+    /// `member_actor_ids`（此时身份类型为 `None`，调用方应在展示层标记为"未知"，
+    /// 且未知身份不得用于授权判断）。
+    pub fn effective_members(&self) -> Vec<ProjectMemberRef> {
+        if !self.member_actor_refs.is_empty() {
+            self.member_actor_refs.clone()
+        } else {
+            self.member_actor_ids
+                .iter()
+                .map(|id| ProjectMemberRef {
+                    platform_identity_kind: None,
+                    actor_id: id.clone(),
+                })
+                .collect()
+        }
+    }
+
+    /// 成员身份类型是否来自旧数据（仅 `member_actor_ids` 存在时返回 true）。
+    pub fn has_legacy_member_ids_only(&self) -> bool {
+        self.member_actor_refs.is_empty() && !self.member_actor_ids.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,7 +330,46 @@ pub fn validate_memory_payload(
             validate_text("project_key", &project.project_key, 191)?;
             validate_text("goal", &project.goal, 4000)?;
             validate_optional_text("progress", project.progress.as_deref(), 4000)?;
-            validate_text_list("member_actor_ids", &project.member_actor_ids, 100, 191)?;
+            // 兼容旧 member_actor_ids：旧数据成员数上限仍为 100。
+            if project.member_actor_ids.len() > 100 {
+                return Err(MemoryFactError::Invalid(
+                    "member_actor_ids must not exceed 100 items".into(),
+                ));
+            }
+            for member_id in &project.member_actor_ids {
+                if member_id.trim().is_empty() || member_id.len() > 191 {
+                    return Err(MemoryFactError::Invalid(format!(
+                        "member_actor_id {member_id} must contain 1..=191 bytes"
+                    )));
+                }
+            }
+            // 新 member_actor_refs 上限同为 100。
+            if project.member_actor_refs.len() > 100 {
+                return Err(MemoryFactError::Invalid(
+                    "member_actor_refs must not exceed 100 items".into(),
+                ));
+            }
+            for member in &project.member_actor_refs {
+                if member.actor_id.trim().is_empty() || member.actor_id.len() > 191 {
+                    return Err(MemoryFactError::Invalid(format!(
+                        "ProjectMemberRef.actor_id {} must contain 1..=191 bytes",
+                        member.actor_id
+                    )));
+                }
+                if let Some(kind) = member.platform_identity_kind
+                    && !matches!(
+                        kind,
+                        crate::PlatformIdentityKind::Owner
+                            | crate::PlatformIdentityKind::OfficialBot
+                            | crate::PlatformIdentityKind::External
+                    )
+                {
+                    return Err(MemoryFactError::Invalid(format!(
+                        "ProjectMemberRef.platform_identity_kind {:?} is invalid",
+                        member.platform_identity_kind
+                    )));
+                }
+            }
             validate_text_list("risks", &project.risks, 100, 1000)?;
             validate_text_list("blockers", &project.blockers, 100, 1000)?;
             validate_text_list("artifact_refs", &project.artifact_refs, 100, 1000)?;

@@ -706,6 +706,75 @@ impl SecretaryActionEffectExecutor {
                     Vec::new(),
                 )
             }
+            SecretaryAction::ListProjects { limit } => {
+                let summaries = retriever
+                    .list_projects(&self.account, *limit)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                let summary = format_project_list(&summaries);
+                query_effect_json(SecretaryToolKind::ListProjects, &summary, &[], Vec::new())
+            }
+            SecretaryAction::QueryProject { project_key } => {
+                let view = retriever
+                    .query_project(&self.account, project_key)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                let (summary, source_ids) = match view {
+                    Some(ref v) => (format_project_detail(v), v.source_event_ids.clone()),
+                    None => (
+                        format!("未找到项目「{project_key}」或来源已失效").to_owned(),
+                        Vec::new(),
+                    ),
+                };
+                query_effect_json(
+                    SecretaryToolKind::QueryProject,
+                    &summary,
+                    &source_ids,
+                    Vec::new(),
+                )
+            }
+            SecretaryAction::ListCommitments {
+                status,
+                due_since_unix_secs,
+                due_until_unix_secs,
+                promisor,
+                beneficiary,
+                limit,
+            } => {
+                let query = crate::CommitmentQuery {
+                    account: self.account.clone(),
+                    status: *status,
+                    due_since_unix_secs: *due_since_unix_secs,
+                    due_until_unix_secs: *due_until_unix_secs,
+                    promisor: promisor.clone(),
+                    beneficiary: beneficiary.clone(),
+                    limit: *limit,
+                };
+                let items = retriever
+                    .list_commitments(&query)
+                    .await
+                    .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
+                let summary = format_commitment_list(&items);
+                // 收集所有承诺的精确来源引用（去重、有界），供后续证据回读。
+                const MAX_SOURCE_IDS: usize = 20;
+                let mut source_ids: Vec<SourceEventId> = Vec::new();
+                for item in &items {
+                    for sid in &item.source_event_ids {
+                        if source_ids.len() >= MAX_SOURCE_IDS {
+                            break;
+                        }
+                        if !source_ids.contains(sid) {
+                            source_ids.push(sid.clone());
+                        }
+                    }
+                }
+                query_effect_json(
+                    SecretaryToolKind::ListCommitments,
+                    &summary,
+                    &source_ids,
+                    Vec::new(),
+                )
+            }
             SecretaryAction::SearchRecentEvents { query, limit } => {
                 let event_query = EventQuery {
                     account: self.account.clone(),
@@ -1307,6 +1376,102 @@ fn format_memory_candidates(views: &[crate::MemoryCandidateView]) -> String {
         );
         if output.chars().count() + item.chars().count() > 900 {
             output.push_str("\n其余候选已省略");
+            break;
+        }
+        output.push_str(&item);
+    }
+    output
+}
+
+/// 格式化项目列表摘要（MEM-003）。
+fn format_project_list(summaries: &[crate::ProjectMemorySummary]) -> String {
+    if summaries.is_empty() {
+        return "当前没有活跃的项目记忆".into();
+    }
+    let mut output = format!("当前有 {} 个项目：", summaries.len());
+    for (i, s) in summaries.iter().enumerate().take(10) {
+        let progress = s.progress.as_deref().unwrap_or("无");
+        let item = format!(
+            "\n{}. {} | 目标: {} | 成员 {} | 风险 {} | 阻塞 {} | {}",
+            i + 1,
+            s.project_key,
+            s.goal,
+            s.member_count,
+            s.risk_count,
+            s.blocker_count,
+            progress,
+        );
+        if output.chars().count() + item.chars().count() > 1500 {
+            output.push_str("\n其余项目已省略");
+            break;
+        }
+        output.push_str(&item);
+    }
+    output
+}
+
+/// 格式化单个项目详情（MEM-003）。
+fn format_project_detail(view: &crate::ProjectContextView) -> String {
+    let mut output = format!("项目「{}」\n目标: {}\n", view.project_key, view.goal);
+    if !view.members.is_empty() {
+        output.push_str("成员: ");
+        let member_strs: Vec<String> = view
+            .members
+            .iter()
+            .map(|m| {
+                let kind_label = match m.platform_identity_kind {
+                    Some(kind) => kind.as_str(),
+                    None => "未知身份",
+                };
+                format!("{}({kind_label})", m.actor_id)
+            })
+            .collect();
+        output.push_str(&member_strs.join(", "));
+        output.push('\n');
+        if view.legacy_member_ids {
+            output.push_str("（成员身份类型来自旧数据，显示为未知）\n");
+        }
+    }
+    if let Some(progress) = &view.progress {
+        output.push_str(&format!("进展: {progress}\n"));
+    }
+    if !view.risks.is_empty() {
+        output.push_str(&format!("风险: {}\n", view.risks.join("; ")));
+    }
+    if !view.blockers.is_empty() {
+        output.push_str(&format!("阻塞: {}\n", view.blockers.join("; ")));
+    }
+    if !view.decision_ids.is_empty() {
+        output.push_str(&format!("决策数: {}\n", view.decision_ids.len()));
+    }
+    if !view.artifact_refs.is_empty() {
+        output.push_str(&format!("产出物: {}\n", view.artifact_refs.join(", ")));
+    }
+    output.push_str(&format!("记忆版本: {}", view.fact_id.as_str()));
+    output
+}
+
+/// 格式化承诺列表摘要（MEM-004 B2）。
+fn format_commitment_list(items: &[crate::CommitmentSummary]) -> String {
+    if items.is_empty() {
+        return "未找到匹配的承诺".into();
+    }
+    let mut output = format!("找到 {} 条承诺：", items.len());
+    for (i, c) in items.iter().enumerate().take(10) {
+        let due = c
+            .due_at_unix_secs
+            .map(|ts| format!("{}", ts))
+            .unwrap_or_else(|| "无截止".into());
+        let fu = c.follow_up_id.as_deref().unwrap_or("无跟进");
+        let item = format!(
+            "\n{}. {} → {} @ {due} | {} | 跟进: {fu}",
+            i + 1,
+            c.promisor.actor_id,
+            c.beneficiary.actor_id,
+            c.status.as_str(),
+        );
+        if output.chars().count() + item.chars().count() > 1500 {
+            output.push_str("\n其余承诺已省略");
             break;
         }
         output.push_str(&item);

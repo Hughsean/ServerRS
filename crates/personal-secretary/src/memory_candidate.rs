@@ -390,11 +390,20 @@ fn payload_actors_observed_in_batch(
         .collect::<HashSet<_>>();
     let required = match payload {
         MemoryPayload::Person(person) => vec![person.person.actor_id.as_str()],
-        MemoryPayload::Project(project) => project
-            .member_actor_ids
-            .iter()
-            .map(String::as_str)
-            .collect(),
+        MemoryPayload::Project(project) => {
+            let mut ids: Vec<&str> = project
+                .member_actor_refs
+                .iter()
+                .map(|m| m.actor_id.as_str())
+                .collect();
+            // 兼容旧 member_actor_ids：两个列表的 actor_id 都必须能在批次内观察到。
+            for legacy_id in &project.member_actor_ids {
+                if !ids.contains(&legacy_id.as_str()) {
+                    ids.push(legacy_id.as_str());
+                }
+            }
+            ids
+        }
         MemoryPayload::Commitment(commitment) => vec![
             commitment.promisor.actor_id.as_str(),
             commitment.beneficiary.actor_id.as_str(),
@@ -644,7 +653,11 @@ mod tests {
         let project_payload = MemoryPayload::Project(ProjectMemory {
             project_key: "alpha".into(),
             goal: "上线".into(),
-            member_actor_ids: vec!["alice".into()],
+            member_actor_ids: Vec::new(),
+            member_actor_refs: vec![
+                crate::ProjectMemberRef::new(crate::PlatformIdentityKind::External, "alice")
+                    .unwrap(),
+            ],
             progress: None,
             decision_ids: Vec::new(),
             risks: Vec::new(),
