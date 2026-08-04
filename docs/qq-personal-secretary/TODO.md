@@ -15,8 +15,8 @@
 ## 0. 当前状态
 
 - 当前分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
-- 当前状态：`EVT-006` 已完成；个人秘书核心与 QQBot 组合根已按洋葱方向重构，当前工作树等待复核，
-  尚未 commit/push/merge/stash。
+- 当前状态：`EVT-006` 已完成；个人秘书核心与 QQBot 组合根已按洋葱方向重构并完成本地分批提交，
+  尚未 push/merge/stash。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
 - 下一切片：`EVT-007` Reply 子事件先于父事件到达时的跨重启解析与幂等回填。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
