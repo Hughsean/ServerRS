@@ -3,49 +3,87 @@
 //! 本 crate 只描述可信身份、对话、入站消息和指令权限，不依赖 NapCat、
 //! QQ 开放平台、数据库或 Web 框架。
 
+#[path = "application/action_graph/mod.rs"]
 mod action_graph;
-mod agenda;
+#[path = "application/agenda_service.rs"]
 mod agenda_service;
-mod agent_runtime;
-mod artifact;
+#[path = "application/artifact_service.rs"]
 mod artifact_service;
-mod continuity;
-mod directory;
-mod directory_service;
-mod follow_up;
-mod follow_up_control_service;
-mod follow_up_service;
-mod health;
-mod health_service;
-mod inbound;
-mod memory;
-mod memory_candidate;
-mod memory_candidate_service;
-mod memory_service;
-mod notification_policy;
-mod notification_policy_service;
-mod planner;
-mod planner_service;
-mod recall;
-mod recall_service;
-mod response_expectation_control_service;
-mod retriever;
-mod retriever_service;
-mod store;
-mod thread_control_service;
-mod thread_link_service;
-mod thread_links;
-mod thread_mutation_service;
-mod thread_mutations;
-mod thread_semantic_service;
-mod thread_semantics;
-mod thread_service;
-mod threading;
-
-mod backfill;
+#[path = "application/backfill_service.rs"]
 mod backfill_service;
+#[path = "application/directory_service.rs"]
+mod directory_service;
+#[path = "application/follow_up_control_service.rs"]
+mod follow_up_control_service;
+#[path = "application/follow_up_service.rs"]
+mod follow_up_service;
+#[path = "application/health_service.rs"]
+mod health_service;
+#[path = "application/memory_candidate_service.rs"]
+mod memory_candidate_service;
+#[path = "application/memory_service.rs"]
+mod memory_service;
+#[path = "application/notification_policy_service.rs"]
+mod notification_policy_service;
+#[path = "application/planner_service.rs"]
+mod planner_service;
+#[path = "application/recall_service.rs"]
+mod recall_service;
+#[path = "application/response_expectation_control_service.rs"]
+mod response_expectation_control_service;
+#[path = "application/retriever_service.rs"]
+mod retriever_service;
+#[path = "application/store.rs"]
+mod store;
+#[path = "application/thread_control_service.rs"]
+mod thread_control_service;
+#[path = "application/thread_link_service.rs"]
+mod thread_link_service;
+#[path = "application/thread_mutation_service.rs"]
+mod thread_mutation_service;
+#[path = "application/thread_semantic_service.rs"]
+mod thread_semantic_service;
+#[path = "application/thread_service.rs"]
+mod thread_service;
 
-mod infra;
+#[path = "domain/agenda.rs"]
+mod agenda;
+#[path = "domain/agent_runtime/mod.rs"]
+mod agent_runtime;
+#[path = "domain/artifact.rs"]
+mod artifact;
+#[path = "domain/backfill.rs"]
+mod backfill;
+#[path = "domain/continuity.rs"]
+mod continuity;
+#[path = "domain/directory.rs"]
+mod directory;
+#[path = "domain/follow_up.rs"]
+mod follow_up;
+#[path = "domain/health.rs"]
+mod health;
+#[path = "domain/inbound.rs"]
+mod inbound;
+#[path = "domain/memory.rs"]
+mod memory;
+#[path = "domain/memory_candidate.rs"]
+mod memory_candidate;
+#[path = "domain/notification_policy.rs"]
+mod notification_policy;
+#[path = "domain/planner.rs"]
+mod planner;
+#[path = "domain/recall.rs"]
+mod recall;
+#[path = "domain/retriever.rs"]
+mod retriever;
+#[path = "domain/thread_links.rs"]
+mod thread_links;
+#[path = "domain/thread_mutations.rs"]
+mod thread_mutations;
+#[path = "domain/thread_semantics.rs"]
+mod thread_semantics;
+#[path = "domain/threading.rs"]
+mod threading;
 
 pub use action_graph::{
     ActionGraphError, ActionGraphRuntime, ActionLeaseToken, ActionRunContext, ActionRunId,
@@ -163,7 +201,9 @@ pub use planner::{
     parse_datetime_with_timezone, parse_iso_datetime, validate_agent_event_view,
     validate_planner_input, validate_planner_output, validate_tool_observation,
 };
-pub use planner_service::{PlannerRunReport, PlannerUseCase, PlannerUseCaseError};
+pub use planner_service::{
+    ActionCheckpointStoreFactoryT, PlannerRunReport, PlannerUseCase, PlannerUseCaseError,
+};
 pub use recall::{
     ClaimedRecallEvent, InvalidationTarget, RecallCorrelationKey, RecallError, RecallEvent,
     RecallEventId, RecallFailureKind, RecallKind, TombstoneRecord, TombstoneStatus,
@@ -256,19 +296,6 @@ pub use backfill::{
 pub use backfill_service::{
     BackfillGapUseCase, BackfillStateStoreT, BackfillStateStoreWithIngestionT,
     HistoryBackfillSourceT,
-};
-
-pub use infra::{
-    build_bound_action_checkpoint_store, build_mysql_action_store, build_mysql_agenda_store,
-    build_mysql_artifact_store, build_mysql_backfill_store, build_mysql_directory_store,
-    build_mysql_follow_up_control_store, build_mysql_follow_up_store,
-    build_mysql_inbound_event_store, build_mysql_memory_candidate_control_store,
-    build_mysql_memory_candidate_store, build_mysql_memory_store,
-    build_mysql_notification_policy_store, build_mysql_owner_binding_store,
-    build_mysql_recall_store, build_mysql_response_expectation_control_store,
-    build_mysql_retriever_store, build_mysql_thread_control_store, build_mysql_thread_link_store,
-    build_mysql_thread_mutation_checkpoint_store, build_mysql_thread_mutation_store,
-    build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。

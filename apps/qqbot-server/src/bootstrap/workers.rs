@@ -6,9 +6,10 @@
 
 use std::sync::Arc;
 
-use personal_secretary::{
-    FollowUpUseCase, LegacyNotificationReconciliationConfig, PlannerUseCase,
-    build_mysql_inbound_event_store,
+use personal_secretary::{FollowUpUseCase, LegacyNotificationReconciliationConfig, PlannerUseCase};
+use personal_secretary_mysql::{
+    build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
+    build_mysql_owner_binding_store,
 };
 use sea_orm::DatabaseConnection;
 
@@ -22,7 +23,10 @@ use crate::follow_up_worker::FollowUpHandle;
 use crate::health_runtime::{HealthLogHandle, HealthReader};
 use crate::memory_candidates::MemoryCandidatesHandle;
 use crate::notification_policy_worker::NotificationPolicyHandle;
-use crate::qq_open_platform::{OfficialPlatformHandle, spawn_official_platform};
+use crate::qq_open_platform::{
+    OfficialPlatformHandle, OfficialPlatformPorts, spawn_official_platform,
+};
+use crate::qq_open_platform_mysql::{MySqlGatewaySessionStore, MySqlRawEventStore};
 use crate::recall::RecallWorkerHandle;
 use crate::runtime::RuntimeError;
 use crate::thread_links::ThreadLinksHandle;
@@ -131,8 +135,8 @@ pub(crate) async fn reconcile_legacy_notification_outbox(
     config: &crate::config::NotificationPolicyConfig,
 ) -> Result<(), RuntimeError> {
     let follow_up = FollowUpUseCase::new(
-        personal_secretary::build_mysql_follow_up_store(db.clone()),
-        personal_secretary::build_mysql_memory_store(db),
+        build_mysql_follow_up_store(db.clone()),
+        build_mysql_memory_store(db),
     );
     let report = follow_up
         .reconcile_legacy_notifications(&LegacyNotificationReconciliationConfig {
@@ -181,10 +185,12 @@ pub(crate) async fn assemble_official_platform(
         return Ok(());
     }
     let inbound = build_mysql_inbound_event_store(db.clone());
+    let owner_bindings = build_mysql_owner_binding_store(db.clone());
+    let session_store = Arc::new(MySqlGatewaySessionStore::new(db.clone()));
+    let raw_events = Arc::new(MySqlRawEventStore::new(db.clone()));
     let official_handle = spawn_official_platform(
         config.qq_open_platform.clone(),
-        db.clone(),
-        inbound,
+        OfficialPlatformPorts::new(inbound, owner_bindings, session_store, raw_events),
         Arc::clone(follow_up_use_case),
         account.clone(),
         action_planner_use_case.clone(),

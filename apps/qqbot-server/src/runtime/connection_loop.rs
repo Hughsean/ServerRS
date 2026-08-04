@@ -108,7 +108,9 @@ pub(super) async fn run_connection_loop(
             recall_use_case.clone(),
             artifact_use_case.clone(),
             artifact_default_ttl_secs,
-            health_state.clone(),
+            health_state
+                .clone()
+                .map(|state| state as Arc<dyn crate::ingestion_worker::IngestionHealthReporterT>),
             Some(Arc::clone(&ingestion_metrics)),
         );
         let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {

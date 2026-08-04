@@ -36,11 +36,14 @@ impl NapCatEventHandler for PersonalSecretaryInboundHandler {
                     tracing::debug!(group_id = event.group_id, "群消息不在白名单内，跳过");
                     return Ok(());
                 }
-                self.queue.try_enqueue(self.mapper.map_group(event)?)?
+                self.queue
+                    .try_enqueue(self.mapper.map_group(event)?)
+                    .map_err(|error| NapCatError::Handler(error.to_string()))?
             }
-            NapCatEvent::PrivateMessage(event) => {
-                self.queue.try_enqueue(self.mapper.map_private(event)?)?
-            }
+            NapCatEvent::PrivateMessage(event) => self
+                .queue
+                .try_enqueue(self.mapper.map_private(event)?)
+                .map_err(|error| NapCatError::Handler(error.to_string()))?,
             NapCatEvent::GroupMemberIncrease(event) => tracing::info!(
                 group_id = event.group_id,
                 user_id = event.user_id,

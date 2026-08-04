@@ -6,9 +6,10 @@
 
 use std::path::PathBuf;
 
-use personal_secretary::{
-    FollowUpUseCase, NotificationPolicyUseCase, SystemClock, build_mysql_follow_up_store,
-    build_mysql_memory_store, build_mysql_notification_policy_store,
+use personal_secretary::{FollowUpUseCase, NotificationPolicyUseCase, SystemClock};
+use personal_secretary_mysql::{
+    build_mysql_artifact_store, build_mysql_follow_up_store, build_mysql_memory_store,
+    build_mysql_notification_policy_store, build_mysql_recall_store,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -193,7 +194,7 @@ async fn run_with_shutdown(
 
     // B6 Artifact：入站创建 + TTL Worker。
     let artifact_use_case = if config.artifact.enabled {
-        let store = personal_secretary::build_mysql_artifact_store(infra.db.clone());
+        let store = build_mysql_artifact_store(infra.db.clone());
         let use_case = std::sync::Arc::new(personal_secretary::ArtifactUseCase::new(store));
         handles.artifact_ttl = Some(crate::artifact_ttl_worker::spawn_artifact_ttl_worker(
             std::sync::Arc::clone(&use_case),
@@ -246,7 +247,7 @@ async fn run_with_shutdown(
     }
 
     // B3 撤回闭环：回调先 durable enqueue，Worker 再以 lease 领取并持久化 tombstone。
-    let recall_store = personal_secretary::build_mysql_recall_store(infra.db.clone());
+    let recall_store = build_mysql_recall_store(infra.db.clone());
     let recall_use_case = std::sync::Arc::new(personal_secretary::RecallUseCase::new(recall_store));
     let (recall_queue, recall_worker) = crate::recall::spawn_recall_worker_with_telemetry(
         std::sync::Arc::clone(&recall_use_case),

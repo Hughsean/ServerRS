@@ -7,8 +7,10 @@ members = [
     "crates/ai-core",
     "crates/digital-human",
     "crates/personal-secretary",
+    "crates/personal-secretary-mysql",
     "crates/qqbot",
     "crates/qq-open-platform",
+    "tools/architecture-tests",
 ]
 default-members = ["apps/digital-human-server", "apps/qqbot-server"]
 
@@ -22,6 +24,7 @@ agent-core = { path = "crates/agent-core" }
 ai-core = { path = "crates/ai-core" }
 digital-human = { path = "crates/digital-human", default-features = false }
 personal-secretary = { path = "crates/personal-secretary" }
+personal-secretary-mysql = { path = "crates/personal-secretary-mysql" }
 qqbot = { path = "crates/qqbot" }
 qq-open-platform = { path = "crates/qq-open-platform" }
 

@@ -7,9 +7,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use personal_secretary::{
-    MessageSource, PersonalSecretaryStoreT, SourceAccountRef, build_mysql_inbound_event_store,
-};
+use personal_secretary::{MessageSource, PersonalSecretaryStoreT, SourceAccountRef};
+use personal_secretary_mysql::build_mysql_inbound_event_store;
 use sea_orm::{ConnectOptions, Database};
 
 use crate::config::AppConfig;

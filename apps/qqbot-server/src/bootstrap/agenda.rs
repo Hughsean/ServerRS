@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use personal_secretary::{AgendaUseCase, SystemClock, build_mysql_agenda_store};
+use personal_secretary::{AgendaUseCase, SystemClock};
+use personal_secretary_mysql::build_mysql_agenda_store;
 use sea_orm::DatabaseConnection;
 
 use crate::agenda_notification_worker::spawn_agenda_notification_worker;

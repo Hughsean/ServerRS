@@ -10,6 +10,8 @@ use personal_secretary::{
     DeterministicThreadPlanner, DeterministicThreadPolicy, DirectorySyncUseCase,
     MemoryCandidateExtractorT, MemoryCandidateUseCase, SourceAccountRef, ThreadLinkUseCase,
     ThreadProjectionUseCase, ThreadSemanticExtractorT, ThreadSemanticUseCase,
+};
+use personal_secretary_mysql::{
     build_mysql_backfill_store, build_mysql_memory_candidate_store, build_mysql_thread_link_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
@@ -174,13 +176,11 @@ pub(crate) async fn assemble_thread_workers(
     if config.backfill.enabled {
         let backfill_store = build_mysql_backfill_store(db.clone(), config.backfill.lease_secs);
         let napcat_readonly = Arc::new(NapCatApiClient::new(config.napcat.http_base_url.clone()));
-        let history_source = Arc::new(
-            crate::backfill::napcat_history_source::NapCatHistorySource::new(
-                napcat_readonly,
-                account.clone(),
-                config.napcat.self_qq_id,
-            ),
-        );
+        let history_source = Arc::new(crate::napcat_history_source::NapCatHistorySource::new(
+            napcat_readonly,
+            account.clone(),
+            config.napcat.self_qq_id,
+        ));
         let budget = config
             .backfill
             .budget()
@@ -208,9 +208,9 @@ pub(crate) async fn assemble_thread_workers(
     // 不在每次 WebSocket 重连时无条件下载完整目录（TTL 内跳过）。
     // 1 MiB 上限拒绝时保持 uncertain，不提高上限、不转空数组。
     if config.directory_sync.enabled {
-        let directory_store = personal_secretary::build_mysql_directory_store(db.clone());
+        let directory_store = personal_secretary_mysql::build_mysql_directory_store(db.clone());
         let napcat_readonly = Arc::new(NapCatApiClient::new(config.napcat.http_base_url.clone()));
-        let directory_source = Arc::new(crate::directory_sync::NapCatDirectorySource::new(
+        let directory_source = Arc::new(crate::napcat_directory::NapCatDirectorySource::new(
             napcat_readonly,
         ));
         let budget = config.directory_sync.budget();

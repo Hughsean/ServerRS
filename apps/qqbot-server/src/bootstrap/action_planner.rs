@@ -11,7 +11,10 @@ use personal_secretary::{
     MemoryCandidateUseCase, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
     PlannerOutput, PlannerUseCase, ResponseExpectationControlUseCase, RetrieverPolicy,
     RetrieverUseCase, SecretaryAgentState, SourceAccountRef, SystemClock, ThreadControlUseCase,
-    build_mysql_action_store, build_mysql_agenda_store, build_mysql_follow_up_control_store,
+};
+use personal_secretary_mysql::{
+    build_mysql_action_checkpoint_store_factory, build_mysql_action_store,
+    build_mysql_agenda_store, build_mysql_follow_up_control_store,
     build_mysql_memory_candidate_control_store, build_mysql_memory_candidate_store,
     build_mysql_memory_store, build_mysql_notification_policy_store,
     build_mysql_response_expectation_control_store, build_mysql_retriever_store,
@@ -71,7 +74,7 @@ pub(crate) async fn assemble_action_planner(
         retriever_store,
         RetrieverPolicy::default(),
     ));
-    // checkpoint_store 参数仅为满足签名；生产用 with_checkpoint_db 注入 MySQL。
+    // 构造参数提供保守回退；生产路径用适配器工厂按业务 run_id 创建持久化 CheckpointStore。
     let placeholder_checkpoint: Arc<dyn CheckpointStore<SecretaryAgentState>> =
         Arc::new(InMemoryCheckpointStore::new());
     let agenda = Arc::new(AgendaUseCase::new(
@@ -133,7 +136,7 @@ pub(crate) async fn assemble_action_planner(
         .with_memory_candidate(memory_candidate)
         .with_memory_candidate_control(memory_candidate_control)
         .with_loopback(is_loopback)
-        .with_checkpoint_db(db),
+        .with_checkpoint_store_factory(build_mysql_action_checkpoint_store_factory(db)),
     );
     let handle = spawn_action_planner_worker(Arc::clone(&use_case), config.action_planner.clone());
     tracing::info!(

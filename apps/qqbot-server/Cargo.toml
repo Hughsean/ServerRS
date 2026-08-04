@@ -11,6 +11,7 @@ dotenvy.workspace = true
 fs2.workspace = true
 futures-util.workspace = true
 personal-secretary.workspace = true
+personal-secretary-mysql.workspace = true
 qqbot.workspace = true
 qq-open-platform.workspace = true
 reqwest = { workspace = true, features = ["stream"] }

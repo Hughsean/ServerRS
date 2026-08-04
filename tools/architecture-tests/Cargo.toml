@@ -1,0 +1,8 @@
+[package]
+name = "architecture-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dev-dependencies]
+toml.workspace = true
