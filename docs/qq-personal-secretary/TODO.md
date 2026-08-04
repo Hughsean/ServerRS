@@ -15,8 +15,8 @@
 ## 0. 当前状态
 
 - 当前分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
-- 当前状态：`EVT-006` 入站微批处理 + 可观察背压 + 合成负载闭环已完成独立复核、增强 MySQL
-  聚焦测试、CMD-010 安全回归、常规门禁、三份文档同步和唯一提交。
+- 当前状态：`EVT-006` 已完成；个人秘书核心与 QQBot 组合根已按洋葱方向重构，当前工作树等待复核，
+  尚未 commit/push/merge/stash。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
 - 下一切片：`EVT-007` Reply 子事件先于父事件到达时的跨重启解析与幂等回填。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -36,6 +36,12 @@
 - [x] `TEST-CLEANUP-VERIFY` 已通过格式检查、QQBot 三个 crate 全 targets 编译、严格 Clippy、
   personal-secretary 238/238、qqbot 63/63、qqbot-server 118/118（2 项 live LLM ignored）和
   workspace boundaries 19/19；保留的 13 项 MySQL 测试均成功编译并按预期保持显式 ignored。
+
+- [x] `ARCH-QQBOT-002` 将 `qqbot-server/src` 的业务 Worker、协议适配器和技术实现分别迁入
+  `application/`、`adapters/`、`infrastructure/`；bootstrap/config/runtime 保持组合根职责。
+  QQ Open Platform 改为注入 OwnerBinding、GatewaySession 和 raw-event 端口，SeaORM SQL 实现
+  下沉 infrastructure；NapCat 目录/历史映射移入 adapters；ingestion 的队列错误和健康报告改为
+  应用类型/端口。架构门禁持续禁止 application 反向依赖 QQ 协议、MySQL、HTTP、文件和加密实现。
 
 - [x] `DB-BASELINE-001` 将 33 个压缩前迁移移入 `database/archive/pre_v1`，从随机隔离 MySQL
   的最终结构生成 `baseline/20260803_qqbot_schema_v1.sql`；基线只含最终 DDL，不含业务数据、
@@ -346,6 +352,17 @@
 回读、Agenda、FollowUp、ResponseExpectation、统一通知策略、Owner Outbox、Action Graph、L2
 Suspend/Resume、MySQL Checkpoint、Effect Receipt、OwnerBinding、群白名单、NapCat 只读边界、QQ
 开放平台协议适配、运行期健康聚合和 QQBot 独立数据库。
+
+架构边界已按洋葱依赖方向拆分：`personal-secretary/src/domain` 保存领域模型与规则，
+`personal-secretary/src/application` 保存用例与端口，`personal-secretary-mysql` 独立实现 SeaORM/MySQL
+适配器和集成测试；`qqbot-server/src/application` 保存运行编排 Worker，`adapters` 保存 NapCat/QQ
+开放平台映射，`infrastructure` 保存 LLM、健康、Recall WAL 与 QQ Open Platform SQL 实现；
+`tools/architecture-tests` 负责全 workspace 静态架构门禁。内层禁止反向依赖 MySQL、SQLx、QQ
+协议或具体基础设施类型。
+
+测试资产已完成一轮保守去重：`mysql_action_planner.rs` 删除被更强 Replan/重启场景覆盖的两条旧
+happy path，保留 6 条账号隔离、租约、事务、Suspend/Resume、CAS 与多轮 Replan MySQL 证据；
+NapCat 协议测试和近期 CMD-009/CMD-010/项目承诺/EVT-006 测试继续保留。
 
 准确完成时间、测试证据、迁移、外部影响和提交记录统一查询 [`HISTORY.md`](HISTORY.md) 与
 [`history/`](history/)。若本索引与代码或历史证据冲突，以当前代码和可复现证据为准，并立即修正

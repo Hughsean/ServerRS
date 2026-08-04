@@ -69,6 +69,30 @@
 
 ## 最近事件
 
+- `2026-08-04 14:54（Asia/Shanghai）`：继续完成 `qqbot-server` 洋葱边界重构。源文件按
+  `application/adapters/infrastructure` 物理分层并用显式模块路径保持现有 crate API；QQ Open
+  Platform 编排不再接收 `DatabaseConnection` 或构造 MySQL store，而是注入 OwnerBinding、
+  GatewaySession 和 raw-event 端口，SQL 实现下沉 infrastructure。NapCat 目录/历史 source 移入
+  adapters；ingestion 用应用层队列错误和健康报告端口，application 生产代码不再引用 NapCat 或
+  infrastructure 具体类型。新增架构守卫后 20/20，QQBot 131/131（2 ignored），fmt/all-targets
+  check 通过。无数据库迁移，未连接真实 QQ/NapCat；未 commit/push/merge/stash。
+
+- `2026-08-04 14:38（Asia/Shanghai）`：完成 QQBot 个人秘书洋葱目录与编译依赖重构。
+  `personal-secretary` 物理拆为 domain/application 并移除 SeaORM；新增
+  `personal-secretary-mysql` 承载 55 个仓储文件和全部 MySQL 测试；Planner 通过
+  `ActionCheckpointStoreFactoryT` 端口获取持久化 Checkpoint，不再持有 `DatabaseConnection`。
+  全仓架构门禁从数字人测试目录迁至 `tools/architecture-tests`，取消服务层 DB 豁免。
+  fmt、all-targets check、严格 Clippy、248 项领域/应用测试、131 项 QQBot 测试、19 项架构门禁，
+  以及 MySQL Action Planner 6/6、CMD-010 2/2、EVT-006 1/1 均通过；随机 schema 已清理。
+  无数据库迁移，未连接真实 QQ/NapCat；未 commit/push/merge/stash。
+
+- `2026-08-04 13:56（Asia/Shanghai）`：保守精简 QQBot 旧 MySQL 测试资产。删除
+  `mysql_action_planner.rs` 中已被更强多轮 Replan/重启场景覆盖的完整生命周期 happy path 与
+  单轮 Retriever/Effect roundtrip，共减少 326 行；保留的 6 条账号隔离、租约、事务、
+  Suspend/Resume、CAS 与多轮 Replan 场景在随机隔离 MySQL schema 中 6/6 通过，schema 已清理。
+  fmt、all-targets check、严格 Clippy、两 crate 单元测试和 workspace boundaries 均通过；未提交、
+  未 push/merge/stash，未连接真实 QQ/NapCat。
+
 - `2026-08-04 13:38（Asia/Shanghai）`：Docker 命名管道权限恢复后，增强版
   `evt006_ingestion_batch_mysql` 1/1 与 CMD-010 Owner 安全回归 2/2 再次真实通过；增强场景覆盖
   数据库中途失败整批回滚、恢复重试与幂等重放，随机 `evt006s1` schema 已清理。EVT-006
