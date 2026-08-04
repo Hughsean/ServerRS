@@ -276,6 +276,80 @@ queue_capacity = 65537
 }
 
 #[test]
+fn rejects_invalid_ingestion_batch_bounds_and_capacity_relation() {
+    let cases = [
+        (
+            "batch_size = 0",
+            "batch_size",
+            "queue_capacity = 64\nbatch_size = 0",
+        ),
+        (
+            "batch_flush_ms = 0",
+            "batch_flush_ms",
+            "queue_capacity = 64\nbatch_flush_ms = 0",
+        ),
+        (
+            "queue_capacity < batch_size",
+            "queue_capacity must be >= batch_size",
+            "queue_capacity = 2\nbatch_size = 3",
+        ),
+    ];
+    for (label, expected, ingestion) in cases {
+        let error = parse(&format!(
+            r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs@127.0.0.1:3306/serverrs_qq"
+
+[ingestion]
+{ingestion}
+"#
+        ))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{label} must be rejected: {error}"
+        );
+    }
+}
+
+#[test]
+fn ingestion_batch_env_overrides_are_applied_before_validation() {
+    let mut config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs@127.0.0.1:3306/serverrs_qq"
+"#,
+    )
+    .unwrap();
+    unsafe {
+        std::env::set_var("QQBOT_INGESTION_QUEUE_CAPACITY", "128");
+        std::env::set_var("QQBOT_INGESTION_BATCH_SIZE", "32");
+        std::env::set_var("QQBOT_INGESTION_BATCH_FLUSH_MS", "25");
+    }
+    let result = config.apply_env_overrides();
+    unsafe {
+        std::env::remove_var("QQBOT_INGESTION_QUEUE_CAPACITY");
+        std::env::remove_var("QQBOT_INGESTION_BATCH_SIZE");
+        std::env::remove_var("QQBOT_INGESTION_BATCH_FLUSH_MS");
+    }
+    result.unwrap();
+    assert_eq!(config.ingestion.queue_capacity, 128);
+    assert_eq!(config.ingestion.batch_size, 32);
+    assert_eq!(config.ingestion.batch_flush_ms, 25);
+    config.validate(std::path::Path::new(".")).unwrap();
+}
+
+#[test]
 fn default_backfill_configuration_loads_and_validates() {
     let config = parse(
         r#"

@@ -18,7 +18,7 @@ use qqbot::napcat::{NapCatConnectionObserver, NapCatError, NapCatEventHandler, N
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::inbound::NapCatInboundMapper;
-use crate::ingestion_worker::{WorkerReport, spawn_ingestion_worker};
+use crate::ingestion_worker::{IngestionMetrics, WorkerReport, spawn_ingestion_worker};
 
 use super::RuntimeError;
 use super::handlers::PersonalSecretaryInboundHandler;
@@ -42,6 +42,7 @@ pub(super) async fn run_connection_loop(
     artifact_use_case: Option<Arc<ArtifactUseCase>>,
     artifact_default_ttl_secs: u64,
     health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
+    ingestion_metrics: Arc<IngestionMetrics>,
     shutdown_source: &mut ShutdownSource,
 ) -> Result<(), RuntimeError> {
     let mut backoff = config.napcat.reconnect_initial_secs;
@@ -108,6 +109,7 @@ pub(super) async fn run_connection_loop(
             artifact_use_case.clone(),
             artifact_default_ttl_secs,
             health_state.clone(),
+            Some(Arc::clone(&ingestion_metrics)),
         );
         let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {
             mapper: NapCatInboundMapper::new(config.napcat.self_qq_id),

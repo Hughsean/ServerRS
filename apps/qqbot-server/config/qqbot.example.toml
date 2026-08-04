@@ -38,6 +38,8 @@ max_candidates_per_kind = 20
 
 [ingestion]
 queue_capacity = 1024
+batch_size = 64
+batch_flush_ms = 10
 retry_initial_ms = 100
 retry_max_ms = 5000
 shutdown_drain_timeout_secs = 10

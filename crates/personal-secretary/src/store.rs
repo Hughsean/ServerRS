@@ -68,6 +68,19 @@ pub trait InboundEventStoreT: Send + Sync {
         &self,
         message: &InboundMessageEnvelope,
     ) -> Result<IngestMessageOutcome, InboundEventStoreError>;
+
+    /// 批量原子地保存消息及其结构化内容，单个短事务内完成。
+    /// 默认委托给单消息入口（兼容 Fake 测试仓储）；MySQL 实现会重写为真实批量事务。
+    async fn insert_messages_if_absent(
+        &self,
+        messages: &[InboundMessageEnvelope],
+    ) -> Result<Vec<IngestMessageOutcome>, InboundEventStoreError> {
+        let mut results = Vec::with_capacity(messages.len());
+        for message in messages {
+            results.push(self.insert_message_if_absent(message).await?);
+        }
+        Ok(results)
+    }
 }
 
 #[async_trait]

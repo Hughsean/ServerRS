@@ -85,6 +85,7 @@ struct WebsocketProducer(Arc<RuntimeHealthState>);
 struct HistoryProducer(Arc<RuntimeHealthState>);
 struct DatabaseProducer(Arc<RuntimeHealthState>);
 struct RecallSpoolProducer(Arc<RecallSpoolTelemetry>);
+struct IngestionMetricsProducer(Arc<crate::ingestion_worker::IngestionMetrics>);
 struct WorkerProducer {
     state: Arc<RuntimeHealthState>,
     stale_secs: u64,
@@ -251,6 +252,43 @@ impl HealthSnapshotProducer for RecallSpoolProducer {
         }
     }
 }
+#[async_trait]
+impl HealthSnapshotProducer for IngestionMetricsProducer {
+    fn name(&self) -> &'static str {
+        "ingestion"
+    }
+
+    async fn health(&self) -> SubsystemHealth {
+        let snapshot = self.0.snapshot();
+        let mut metrics = BTreeMap::new();
+        metrics.insert("queue_capacity".into(), snapshot.queue_capacity);
+        metrics.insert("queue_depth".into(), snapshot.queue_depth);
+        metrics.insert("in_flight".into(), snapshot.in_flight);
+        metrics.insert("high_watermark".into(), snapshot.high_watermark);
+        metrics.insert("accepted".into(), snapshot.accepted);
+        metrics.insert("duplicates".into(), snapshot.duplicates);
+        metrics.insert("invalid".into(), snapshot.invalid);
+        metrics.insert("dropped".into(), snapshot.dropped);
+        metrics.insert("batches_committed".into(), snapshot.batches_committed);
+        metrics.insert("last_batch_size".into(), snapshot.last_batch_size);
+        metrics.insert("overflow_pending".into(), snapshot.overflow_pending);
+        let status = if snapshot.last_failure_at > snapshot.last_success_at {
+            HealthStatus::Degraded
+        } else if snapshot.accepted == 0 && snapshot.duplicates == 0 && snapshot.invalid == 0 {
+            HealthStatus::Uncertain
+        } else {
+            HealthStatus::Healthy
+        };
+        SubsystemHealth {
+            name: self.name().into(),
+            status,
+            last_success_at_unix_secs: nonzero_time(snapshot.last_success_at),
+            last_error: (snapshot.overflow_pending > 0).then(|| "overflow_detected".into()),
+            metrics,
+        }
+    }
+}
+
 fn state_status(state: u8) -> HealthStatus {
     match state {
         HEALTHY => HealthStatus::Healthy,
@@ -267,6 +305,7 @@ pub fn build_runtime_health_aggregator(
     state: Arc<RuntimeHealthState>,
     cache_ttl_secs: u64,
     worker_success_stale_secs: u64,
+    ingestion_metrics: Option<Arc<crate::ingestion_worker::IngestionMetrics>>,
 ) -> HealthAggregator {
     let mut aggregator = HealthAggregator::new(Duration::from_secs(cache_ttl_secs.max(1)));
     aggregator.add_producer(Arc::new(WebsocketProducer(Arc::clone(&state))));
@@ -276,6 +315,9 @@ pub fn build_runtime_health_aggregator(
         state,
         stale_secs: worker_success_stale_secs.max(1),
     }));
+    if let Some(metrics) = ingestion_metrics {
+        aggregator.add_producer(Arc::new(IngestionMetricsProducer(metrics)));
+    }
     aggregator
 }
 
@@ -284,6 +326,7 @@ pub fn build_runtime_health_aggregator_with_recall_spool(
     recall_spool: Arc<RecallSpoolTelemetry>,
     cache_ttl_secs: u64,
     worker_success_stale_secs: u64,
+    ingestion_metrics: Option<Arc<crate::ingestion_worker::IngestionMetrics>>,
 ) -> HealthAggregator {
     let mut aggregator = HealthAggregator::new(Duration::from_secs(cache_ttl_secs.max(1)));
     aggregator.add_producer(Arc::new(WebsocketProducer(Arc::clone(&state))));
@@ -294,6 +337,9 @@ pub fn build_runtime_health_aggregator_with_recall_spool(
         state,
         stale_secs: worker_success_stale_secs.max(1),
     }));
+    if let Some(metrics) = ingestion_metrics {
+        aggregator.add_producer(Arc::new(IngestionMetricsProducer(metrics)));
+    }
     aggregator
 }
 
@@ -310,6 +356,20 @@ mod tests {
         assert_eq!(health.metrics.get("backlog"), Some(&3));
         assert_eq!(health.metrics.get("capacity_used_ratio_bps"), Some(&2_500));
         assert_eq!(health.metrics.get("quarantine_count"), Some(&2));
+        assert_eq!(health.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn ingestion_health_recovers_after_a_later_success() {
+        let metrics = Arc::new(crate::ingestion_worker::IngestionMetrics::default());
+        metrics.accepted.store(1, Ordering::Release);
+        metrics.last_failure_at.store(20, Ordering::Release);
+        let producer = IngestionMetricsProducer(Arc::clone(&metrics));
+        assert_eq!(producer.health().await.status, HealthStatus::Degraded);
+
+        metrics.last_success_at.store(21, Ordering::Release);
+        let health = producer.health().await;
+        assert_eq!(health.status, HealthStatus::Healthy);
         assert_eq!(health.last_error, None);
     }
 }

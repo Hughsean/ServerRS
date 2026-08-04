@@ -7,10 +7,10 @@
 
 - 主干分支：`Main`（`ea2226a`）；Owner 通知策略响应工件已合并。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
-- 当前开发分支：`claude/qqbot-cmd010-command-security-v1`。
+- 当前开发分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
   2026-08-03 已完成 QQBot Schema Baseline v1、项目/承诺记忆闭环、旧测试基础设施清理、
-  CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）与 CMD-010（Owner 越权、
-  提示注入与跨会话指代歧义防线）。
+  CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）、CMD-010（Owner 越权、
+  提示注入与跨会话指代歧义防线）与 EVT-006（入站微批处理、可观察背压）。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -68,6 +68,22 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-04 13:38（Asia/Shanghai）`：Docker 命名管道权限恢复后，增强版
+  `evt006_ingestion_batch_mysql` 1/1 与 CMD-010 Owner 安全回归 2/2 再次真实通过；增强场景覆盖
+  数据库中途失败整批回滚、恢复重试与幂等重放，随机 `evt006s1` schema 已清理。EVT-006
+  复核与验证全部闭合，进入唯一提交；未连接真实 QQ/NapCat。
+
+- `2026-08-03 22:04（Asia/Shanghai）`：EVT-006 入站微批处理 + 可观察背压 + 合成负载闭环
+  实现、Worker 聚焦验证与文档同步完成。详见
+  [`history/2026-08.md`](history/2026-08.md) 同时间条目（实现、验证与 Git 状态）。
+
+- `2026-08-04 13:28（Asia/Shanghai）`：Codex 独立复核 EVT-006，修复共享健康指标未接入运行时、
+  排空后 queue depth 不归零、overflow Gap 健康状态无法恢复，以及批量统一时间戳触发
+  `RecordNotInserted` 的幂等 upsert 缺陷；收紧入站错误日志为固定 error code。随机隔离 MySQL
+  初版 `evt006_ingestion_batch_mysql` 1/1、CMD-010 Owner 安全回归 2/2 真实通过，schema 已清理；
+  后续补强整批回滚/恢复重试断言，已通过格式、严格 Clippy 与编译，但当前沙箱拒绝 Docker
+  命名管道，增强场景尚待最终复跑，故未提交。未连接真实 QQ/NapCat，未 push/merge/stash。
 
 - `2026-08-03 21:10（Asia/Shanghai）`：Codex 完成 CMD-010 独立复核与修复。新增
   `ensure_action_run` 创建前 OwnerCommand 授权、领域 `PlanNode` 非 L0 命令证据门和 OpenReference

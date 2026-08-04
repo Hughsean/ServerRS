@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseBackend,
     DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, Set, Statement,
@@ -53,208 +53,212 @@ impl InboundEventStoreT for MySqlInboundEventStore {
         &self,
         message: &InboundMessageEnvelope,
     ) -> Result<IngestMessageOutcome, InboundEventStoreError> {
-        tracing::trace!(
-            source = message.source.channel.as_str(),
-            source_account_id = %message.source.account_id,
-            platform_message_id = %message.source.message_id,
-            conversation_kind = message.conversation.kind.as_str(),
-            conversation_id = %message.conversation.id,
-            connection_epoch_id = message
-                .connection_epoch_id
-                .as_ref()
-                .map(ConnectionEpochId::as_str),
-            "开始执行个人秘书消息幂等事务"
-        );
-        message
-            .validate()
-            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+        let mut results = self
+            .insert_messages_if_absent(std::slice::from_ref(message))
+            .await?;
+        Ok(results
+            .pop()
+            .expect("batch insert must return one result for singleton"))
+    }
+
+    async fn insert_messages_if_absent(
+        &self,
+        messages: &[InboundMessageEnvelope],
+    ) -> Result<Vec<IngestMessageOutcome>, InboundEventStoreError> {
+        if messages.is_empty() {
+            return Ok(Vec::new());
+        }
+        // 前置校验：任意消息不满足结构不变量时立即返回 InvalidData，
+        // 让 Worker 二分隔离 poison 消息。
+        for message in messages {
+            message
+                .validate()
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+        }
 
         let transaction = self.db.begin().await.map_err(store_error)?;
         let now = Utc::now().naive_utc();
-        let account_id =
-            ensure_account_ref(&transaction, &message.source.account_ref(), now).await?;
-        let conversation_id = ensure_conversation(&transaction, account_id, message, now).await?;
-        let reply_to_event_id = resolve_reply(&transaction, account_id, message).await?;
+        let mut outcomes = Vec::with_capacity(messages.len());
 
-        let proposed_event_id = Uuid::new_v4().to_string();
-        let source_event = secretary_source_events::ActiveModel {
-            source_event_id: Set(proposed_event_id.clone()),
-            account_id: Set(account_id),
-            conversation_id: Set(conversation_id),
-            source_channel: Set(message.source.channel.as_str().into()),
-            platform_event_id: Set(message.source.message_id.clone()),
-            event_type: Set("message".into()),
-            actor_platform_id: Set(message.actor.id.clone()),
-            actor_kind: Set(message.actor.kind.as_str().into()),
-            message_role: Set(message.role().as_str().into()),
-            occurred_at_unix_secs: Set(message.occurred_at_unix_secs),
-            reply_to_platform_event_id: Set(message
-                .reply_to_platform_message_id()
-                .map(str::to_owned)),
-            reply_to_event_id: Set(reply_to_event_id.as_ref().map(|id| id.as_str().to_owned())),
-            processing_status: Set(PROCESSING_PENDING.into()),
-            received_at: Set(now),
-            created_at: Set(now),
-        };
-        secretary_source_events::Entity::insert(source_event)
-            .on_conflict(
-                OnConflict::columns([
-                    secretary_source_events::Column::AccountId,
-                    secretary_source_events::Column::PlatformEventId,
-                ])
-                .update_column(secretary_source_events::Column::PlatformEventId)
-                .to_owned(),
-            )
-            .exec(&transaction)
-            .await
-            .map_err(store_error)?;
-
-        let stored = secretary_source_events::Entity::find()
-            .filter(secretary_source_events::Column::AccountId.eq(account_id))
-            .filter(
-                secretary_source_events::Column::PlatformEventId
-                    .eq(message.source.message_id.clone()),
-            )
-            .one(&transaction)
-            .await
-            .map_err(store_error)?
-            .ok_or_else(|| {
-                error!("source event vanished after idempotent insert");
-                InboundEventStoreError::Unavailable
-            })?;
-        let source_event_id = SourceEventId::new(stored.source_event_id.clone())?;
-
-        if stored.source_event_id != proposed_event_id {
-            // 重复投递：仍尝试关联 pending tombstone（撤回先到、消息后到的补偿路径）。
-            let source_event_id = SourceEventId::new(stored.source_event_id.clone())?;
-            apply_pending_tombstone_in_txn(
-                &transaction,
-                account_id,
-                message,
-                source_event_id.as_str(),
-            )
-            .await?;
-            transaction.commit().await.map_err(store_error)?;
-            tracing::trace!(
-                source_event_id = %source_event_id.as_str(),
-                platform_message_id = %message.source.message_id,
-                "个人秘书消息事务命中重复事件"
-            );
-            return Ok(IngestMessageOutcome::Duplicate { source_event_id });
-        }
-
-        let mut persisted_segments = message.segments.clone();
-        for segment in &mut persisted_segments {
-            if let crate::ContentSegment::Media { source_url, .. } = segment {
-                *source_url = None;
-            }
-        }
-        let segments = serde_json::to_value(&persisted_segments)
-            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
-        let mentioned_actor_ids =
-            serde_json::to_value(message.mentioned_actor_ids().collect::<Vec<_>>())
-                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
-        let content = secretary_message_contents::ActiveModel {
-            source_event_id: Set(stored.source_event_id),
-            normalized_text: Set(message.normalized_text.clone()),
-            segments: Set(segments),
-            mentioned_actor_ids: Set(mentioned_actor_ids),
-            mention_all: Set(message.mentions_all()),
-            content_mode: Set(MEMORY_NORMAL.into()),
-            created_at: Set(now),
-        };
-        secretary_message_contents::Entity::insert(content)
-            .exec(&transaction)
-            .await
-            .map_err(store_error)?;
-        transaction
-            .execute_raw(sea_orm::Statement::from_sql_and_values(
-                sea_orm::DatabaseBackend::MySql,
-                "INSERT IGNORE INTO secretary_artifact_derivations (source_event_id) VALUES (?)",
-                [source_event_id.as_str().into()],
-            ))
-            .await
-            .map_err(store_error)?;
-
-        if let Some(connection_epoch_id) = &message.connection_epoch_id {
-            record_ingestion_continuity(
-                &transaction,
-                account_id,
-                conversation_id,
-                connection_epoch_id,
-                &source_event_id,
-                message,
-                now,
-            )
-            .await?;
-        }
-
-        // 父消息后到回填：本消息作为父消息，把同账号内此前因父消息尚未入库而未解析的
-        // 子消息 reply_to_event_id 回填为当前事件。不跨账号、幂等。
-        backfill_child_reply_edges(&transaction, account_id, &source_event_id, message).await?;
-
-        // B3：撤回先到时的 pending tombstone，在消息 Accepted 时同事务自动关联。
-        // Duplicate 路径在下方单独处理，因为 duplicate 会提前 commit。
-        apply_pending_tombstone_in_txn(&transaction, account_id, message, source_event_id.as_str())
-            .await?;
-
-        // ID-005：发送者观察档案（账号级昵称/别名）与群名片/群角色（会话级观察）
-        // 在同一事务内幂等 upsert。只记录显示信息，绝不构成授权；
-        // never_long_term 会话或受限单事件不进入人物长期上下文。
-        if let Some(profile) = &message.sender_profile {
-            // 单事件 + 会话隐私门：受限观察不得进入人物长期上下文。
-            if participant_observation_allowed(&transaction, conversation_id, &source_event_id)
-                .await?
-            {
-                upsert_participant_profile_in_txn(
-                    &transaction,
-                    account_id,
-                    &message.actor.id,
-                    message.actor.kind.as_str(),
-                    profile,
-                    &source_event_id,
-                    now,
-                )
-                .await?;
-                // 群名片/群角色按 (account, conversation, identity_kind, actor) 会话作用域保存；
-                // 私聊与控制会话没有群属性，不产生观察行。
-                if message.conversation.kind == crate::ConversationKind::Group {
-                    upsert_participant_conversation_observation_in_txn(
-                        &transaction,
-                        account_id,
-                        conversation_id,
-                        message.actor.kind.as_str(),
-                        &message.actor.id,
-                        profile,
-                        &source_event_id,
-                        now,
-                    )
-                    .await?;
+        for message in messages {
+            match process_message_in_transaction(&transaction, message, now).await {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(error) => {
+                    let _ = transaction.rollback().await;
+                    return Err(error);
                 }
-            } else {
-                tracing::trace!(
-                    source_event_id = %source_event_id.as_str(),
-                    "受限观察不进入人物上下文"
-                );
             }
         }
 
         transaction.commit().await.map_err(store_error)?;
-        tracing::debug!(
-            source_event_id = %source_event_id.as_str(),
-            platform_message_id = %message.source.message_id,
-            connection_epoch_id = message
-                .connection_epoch_id
-                .as_ref()
-                .map(ConnectionEpochId::as_str),
-            reply_to_event_id = reply_to_event_id.as_ref().map(SourceEventId::as_str),
-            "个人秘书消息幂等事务已提交"
-        );
-        Ok(IngestMessageOutcome::Accepted {
-            source_event_id,
-            reply_to_event_id,
-        })
+
+        for outcome in &outcomes {
+            tracing::debug!(
+                source_event_id = %outcome.source_event_id().as_str(),
+                platform_message_id = match outcome {
+                    IngestMessageOutcome::Accepted { .. } => "batch-accepted",
+                    IngestMessageOutcome::Duplicate { .. } => "batch-duplicate",
+                },
+                "批量消息幂等事务已提交"
+            );
+        }
+        Ok(outcomes)
     }
+}
+
+/// 在已有事务内处理单条消息，不提交、不回滚。
+async fn process_message_in_transaction(
+    transaction: &sea_orm::DatabaseTransaction,
+    message: &InboundMessageEnvelope,
+    now: chrono::NaiveDateTime,
+) -> Result<IngestMessageOutcome, InboundEventStoreError> {
+    let account_id = ensure_account_ref(transaction, &message.source.account_ref(), now).await?;
+    let conversation_id = ensure_conversation(transaction, account_id, message, now).await?;
+    let reply_to_event_id = resolve_reply(transaction, account_id, message).await?;
+
+    let proposed_event_id = Uuid::new_v4().to_string();
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_source_events
+               (source_event_id, account_id, conversation_id, source_channel,
+                platform_event_id, event_type, actor_platform_id, actor_kind,
+                message_role, occurred_at_unix_secs, reply_to_platform_event_id,
+                reply_to_event_id, processing_status, received_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE platform_event_id = VALUES(platform_event_id)"#,
+            [
+                proposed_event_id.clone().into(),
+                account_id.into(),
+                conversation_id.into(),
+                message.source.channel.as_str().into(),
+                message.source.message_id.clone().into(),
+                "message".into(),
+                message.actor.id.clone().into(),
+                message.actor.kind.as_str().into(),
+                message.role().as_str().into(),
+                message.occurred_at_unix_secs.into(),
+                message
+                    .reply_to_platform_message_id()
+                    .map(str::to_owned)
+                    .into(),
+                reply_to_event_id
+                    .as_ref()
+                    .map(|id| id.as_str().to_owned())
+                    .into(),
+                PROCESSING_PENDING.into(),
+                now.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+
+    let stored = secretary_source_events::Entity::find()
+        .filter(secretary_source_events::Column::AccountId.eq(account_id))
+        .filter(
+            secretary_source_events::Column::PlatformEventId.eq(message.source.message_id.clone()),
+        )
+        .one(transaction)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            error!("source event vanished after idempotent insert");
+            InboundEventStoreError::Unavailable
+        })?;
+    let source_event_id = SourceEventId::new(stored.source_event_id.clone())?;
+
+    if stored.source_event_id != proposed_event_id {
+        // 重复投递：在批量事务内仍关联 pending tombstone，但不提前提交。
+        apply_pending_tombstone_in_txn(transaction, account_id, message, source_event_id.as_str())
+            .await?;
+        return Ok(IngestMessageOutcome::Duplicate { source_event_id });
+    }
+
+    // Accepted 路径：写入内容、回填回复边、关联 tombstone、更新观察档案。
+    let mut persisted_segments = message.segments.clone();
+    for segment in &mut persisted_segments {
+        if let crate::ContentSegment::Media { source_url, .. } = segment {
+            *source_url = None;
+        }
+    }
+    let segments = serde_json::to_value(&persisted_segments)
+        .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+    let mentioned_actor_ids =
+        serde_json::to_value(message.mentioned_actor_ids().collect::<Vec<_>>())
+            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+    let content = secretary_message_contents::ActiveModel {
+        source_event_id: Set(stored.source_event_id),
+        normalized_text: Set(message.normalized_text.clone()),
+        segments: Set(segments),
+        mentioned_actor_ids: Set(mentioned_actor_ids),
+        mention_all: Set(message.mentions_all()),
+        content_mode: Set(MEMORY_NORMAL.into()),
+        created_at: Set(now),
+    };
+    secretary_message_contents::Entity::insert(content)
+        .exec(transaction)
+        .await
+        .map_err(store_error)?;
+    transaction
+        .execute_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::MySql,
+            "INSERT IGNORE INTO secretary_artifact_derivations (source_event_id) VALUES (?)",
+            [source_event_id.as_str().into()],
+        ))
+        .await
+        .map_err(store_error)?;
+
+    if let Some(connection_epoch_id) = &message.connection_epoch_id {
+        record_ingestion_continuity(
+            transaction,
+            account_id,
+            conversation_id,
+            connection_epoch_id,
+            &source_event_id,
+            message,
+            now,
+        )
+        .await?;
+    }
+
+    backfill_child_reply_edges(transaction, account_id, &source_event_id, message).await?;
+
+    apply_pending_tombstone_in_txn(transaction, account_id, message, source_event_id.as_str())
+        .await?;
+
+    if let Some(profile) = &message.sender_profile
+        && participant_observation_allowed(transaction, conversation_id, &source_event_id).await?
+    {
+        upsert_participant_profile_in_txn(
+            transaction,
+            account_id,
+            &message.actor.id,
+            message.actor.kind.as_str(),
+            profile,
+            &source_event_id,
+            now,
+        )
+        .await?;
+        if message.conversation.kind == crate::ConversationKind::Group {
+            upsert_participant_conversation_observation_in_txn(
+                transaction,
+                account_id,
+                conversation_id,
+                message.actor.kind.as_str(),
+                &message.actor.id,
+                profile,
+                &source_event_id,
+                now,
+            )
+            .await?;
+        }
+    }
+
+    Ok(IngestMessageOutcome::Accepted {
+        source_event_id,
+        reply_to_event_id,
+    })
 }
 
 pub(super) async fn ensure_account_ref(
@@ -262,27 +266,23 @@ pub(super) async fn ensure_account_ref(
     account: &SourceAccountRef,
     now: chrono::NaiveDateTime,
 ) -> Result<u64, InboundEventStoreError> {
-    let model = secretary_accounts::ActiveModel {
-        id: NotSet,
-        source_channel: Set(account.channel.as_str().into()),
-        platform_account_id: Set(account.account_id.clone()),
-        status: Set(ACCOUNT_ACTIVE.into()),
-        policy_epoch: Set(0),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
-    secretary_accounts::Entity::insert(model)
-        .on_conflict(
-            OnConflict::columns([
-                secretary_accounts::Column::SourceChannel,
-                secretary_accounts::Column::PlatformAccountId,
-            ])
-            .update_column(secretary_accounts::Column::UpdatedAt)
-            .to_owned(),
-        )
-        .exec(db)
-        .await
-        .map_err(store_error)?;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_accounts
+           (source_channel, platform_account_id, status, policy_epoch, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)"#,
+        [
+            account.channel.as_str().into(),
+            account.account_id.clone().into(),
+            ACCOUNT_ACTIVE.into(),
+            0_i32.into(),
+            now.into(),
+            now.into(),
+        ],
+    ))
+    .await
+    .map_err(store_error)?;
     secretary_accounts::Entity::find()
         .filter(secretary_accounts::Column::SourceChannel.eq(account.channel.as_str()))
         .filter(secretary_accounts::Column::PlatformAccountId.eq(account.account_id.clone()))
@@ -421,26 +421,21 @@ async fn ensure_conversation(
     message: &InboundMessageEnvelope,
     now: chrono::NaiveDateTime,
 ) -> Result<u64, InboundEventStoreError> {
-    let model = secretary_conversations::ActiveModel {
-        id: NotSet,
-        account_id: Set(account_id),
-        conversation_kind: Set(message.conversation.kind.as_str().into()),
-        platform_conversation_id: Set(message.conversation.id.clone()),
-        memory_mode: Set(MEMORY_NORMAL.into()),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
-    secretary_conversations::Entity::insert(model)
-        .on_conflict(
-            OnConflict::columns([
-                secretary_conversations::Column::AccountId,
-                secretary_conversations::Column::ConversationKind,
-                secretary_conversations::Column::PlatformConversationId,
-            ])
-            .update_column(secretary_conversations::Column::UpdatedAt)
-            .to_owned(),
-        )
-        .exec(db)
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_conversations
+           (account_id, conversation_kind, platform_conversation_id, memory_mode, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)"#,
+        [
+            account_id.into(),
+            message.conversation.kind.as_str().into(),
+            message.conversation.id.clone().into(),
+            MEMORY_NORMAL.into(),
+            now.into(),
+            now.into(),
+        ],
+    ))
         .await
         .map_err(store_error)?;
     secretary_conversations::Entity::find()
@@ -511,8 +506,12 @@ async fn backfill_child_reply_edges(
 }
 
 pub(super) fn store_error(error: sea_orm::DbErr) -> InboundEventStoreError {
-    error!(%error, "personal secretary inbound store operation failed");
-    InboundEventStoreError::Database(error.to_string())
+    let _ = error;
+    error!(
+        error_code = "database_operation_failed",
+        "personal secretary inbound store operation failed"
+    );
+    InboundEventStoreError::Database("database operation failed".into())
 }
 
 /// B3：在消息入库事务内把匹配的 pending tombstone 转为 applied，并传播 Artifact 失效。

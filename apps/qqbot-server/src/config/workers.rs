@@ -10,12 +10,16 @@ use serde::Deserialize;
 
 use super::ConfigError;
 
-/// 入站消息队列与重试配置。
+/// 入站消息队列、微批与重试配置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IngestionConfig {
     #[serde(default = "default_ingestion_queue_capacity")]
     pub queue_capacity: usize,
+    #[serde(default = "default_ingestion_batch_size")]
+    pub batch_size: usize,
+    #[serde(default = "default_ingestion_batch_flush_ms")]
+    pub batch_flush_ms: u64,
     #[serde(default = "default_ingestion_retry_initial_ms")]
     pub retry_initial_ms: u64,
     #[serde(default = "default_ingestion_retry_max_ms")]
@@ -28,6 +32,8 @@ impl Default for IngestionConfig {
     fn default() -> Self {
         Self {
             queue_capacity: default_ingestion_queue_capacity(),
+            batch_size: default_ingestion_batch_size(),
+            batch_flush_ms: default_ingestion_batch_flush_ms(),
             retry_initial_ms: default_ingestion_retry_initial_ms(),
             retry_max_ms: default_ingestion_retry_max_ms(),
             shutdown_drain_timeout_secs: default_ingestion_shutdown_drain_timeout_secs(),
@@ -37,6 +43,14 @@ impl Default for IngestionConfig {
 
 fn default_ingestion_queue_capacity() -> usize {
     1_024
+}
+
+fn default_ingestion_batch_size() -> usize {
+    64
+}
+
+fn default_ingestion_batch_flush_ms() -> u64 {
+    10
 }
 
 fn default_ingestion_retry_initial_ms() -> u64 {

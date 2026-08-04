@@ -1,6 +1,6 @@
 # 个人 QQ 智能秘书执行看板
 
-> 最后整理：2026-08-03（Asia/Shanghai）
+> 最后整理：2026-08-04（Asia/Shanghai）
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
@@ -14,13 +14,11 @@
 
 ## 0. 当前状态
 
-- 当前分支：`claude/qqbot-cmd010-command-security-v1`。
-- 当前切片：`CMD-010` Owner 越权、提示注入和跨会话指代歧义防线（授权四元组全链路复验、非 L0
-  写 Proposal 强制 OwnerCommand 证据、指代解析显式作用域与 fail-closed）。Codex 独立复核发现的
-  Run 创建授权、领域层证据门、歧义 Replan、Agenda 错误分类及测试隔离问题均已修复；本地与
-  隔离 MySQL 验证通过，进入约定的单次提交。
+- 当前分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
+- 当前状态：`EVT-006` 入站微批处理 + 可观察背压 + 合成负载闭环已完成独立复核、增强 MySQL
+  聚焦测试、CMD-010 安全回归、常规门禁、三份文档同步和唯一提交。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：提交 CMD-010 后进入 `EVT-006` 入站批处理与可观察背压。
+- 下一切片：`EVT-007` Reply 子事件先于父事件到达时的跨重启解析与幂等回填。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -264,8 +262,23 @@
 
 ## 2. 可靠事件、空窗与恢复
 
-- [ ] `EVT-006` 完成入站批处理与可观察背压；已有有界队列、重试 Worker、幂等消费和并发关闭
-  不重做，只补真实缺口。
+- [x] `EVT-006` 入站微批处理与可观察背压（详见 HISTORY 2026-08-03 与 2026-08-04）：
+  - 目标 A：有界微批 Worker——`batch_size`/`batch_flush_ms` 配置化，Worker 用 `try_recv` 快速
+    填充 + 满批立即提交 + 未满等待超时；保持消息入队顺序；channel 关闭后处理残余并排空。
+  - 目标 B：批量数据库事务——新增 `InboundEventStoreT::insert_messages_if_absent` 端口方法，
+    MySQL 单事务处理整批，单条入口委托批入口，提取共享 `process_message_in_transaction`
+    helper，账号/会话/SourceEvent/Cursor/Epoch 完整性不变；post-hook 在事务提交后执行。
+  - 目标 C：poison 隔离——`InvalidData` 触发有界二分队列（≤1 条标记 invalid 并跳过，
+    ＞1 条二分继续定位），暂时错误整体重试，不丢邻居，不用递归。
+  - 目标 D：背压与可观察——`try_enqueue` 满时立即返回错误并聚合 overflow 计数；
+    `IngestionMetrics` 原子计数器追踪 queue_depth/high_watermark/accepted/duplicates/
+    invalid/retries/dropped/batches_committed/last_batch_size 等；`IngestionMetricsProducer`
+    实现 `HealthSnapshotProducer` 并接入 B7 聚合器。
+  - 验证：7 个 Worker 单元测试（含 1000 条合成微批、poison 二分隔离、queue_depth 水印、
+    批次计数、重试恢复）全部通过；初版 MySQL 聚焦测试 1/1、CMD-010 回归 2/2 真实通过；
+    增强场景真实证明数据库中途失败整批零 SourceEvent、恢复后全部 Accepted、再次重放全部
+    Duplicate 且事实数不增加；随机 schema 已精确清理。常规门禁为 personal-secretary 248/248、
+    qqbot-server 131 passed（2 ignored）、workspace boundaries 19/19。
 - [ ] `EVT-007` 补 Reply 子先父后解析的跨重启场景，以及确有业务需求的非消息 Reply 路径。
 - [ ] `EVT-009` 明确正文静态加密/密钥轮换/脱敏边界；继续执行
   `normal/local_only/envelope_only/never_long_term` 保存策略。

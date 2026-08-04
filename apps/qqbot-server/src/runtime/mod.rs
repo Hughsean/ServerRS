@@ -17,6 +17,7 @@ use crate::bootstrap;
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::follow_up_worker::spawn_follow_up_worker;
+use crate::ingestion_worker::IngestionMetrics;
 use crate::notification_policy_worker::spawn_notification_policy_worker;
 use crate::runtime::connection_loop::run_connection_loop;
 use crate::runtime::shutdown::ShutdownSource;
@@ -212,6 +213,8 @@ async fn run_with_shutdown(
     // B7 健康快照：Recall Spool 的 telemetry 与 WAL 使用同一实例，避免从日志猜测积压。
     let recall_spool_telemetry =
         crate::recall::RecallSpoolTelemetry::new(config.recall_wal.max_bytes);
+    // 所有 NapCat 重连共用同一份入站指标，健康快照才能覆盖当前连接周期。
+    let ingestion_metrics = std::sync::Arc::new(IngestionMetrics::default());
     let health_state = crate::health_runtime::RuntimeHealthState::new();
     health_state.mark_worker_started();
     if config.health.enabled {
@@ -221,6 +224,7 @@ async fn run_with_shutdown(
                 std::sync::Arc::clone(&recall_spool_telemetry),
                 config.health.cache_ttl_secs,
                 config.health.worker_success_stale_secs,
+                Some(std::sync::Arc::clone(&ingestion_metrics)),
             ),
         );
         let (health_reader, health_handle) = crate::health_runtime::spawn_health_log_worker(
@@ -269,6 +273,7 @@ async fn run_with_shutdown(
         artifact_use_case,
         config.artifact.default_ttl_secs,
         Some(std::sync::Arc::clone(&health_state)),
+        std::sync::Arc::clone(&ingestion_metrics),
         &mut shutdown_source,
     )
     .await

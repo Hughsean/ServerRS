@@ -2,6 +2,7 @@
 //!
 //! 需要 QQBOT_TEST_DATABASE_URL 指向隔离的 MySQL schema（`qqbot_accept_` 前缀）；
 //! 每个测试用基础 schema + 后缀 + 随机段派生独立 schema，测试结束时删除。
+#![allow(dead_code)]
 
 use personal_secretary::{
     ActionLeaseToken, ActionRunId, Clock, ConversationKind, ConversationRef,

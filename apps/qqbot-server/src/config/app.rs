@@ -126,6 +126,8 @@ impl AppConfig {
         apply_env_fields!(&mut self.ingestion;
             positive {
                 queue_capacity => "QQBOT_INGESTION_QUEUE_CAPACITY",
+                batch_size => "QQBOT_INGESTION_BATCH_SIZE",
+                batch_flush_ms => "QQBOT_INGESTION_BATCH_FLUSH_MS",
                 retry_initial_ms => "QQBOT_INGESTION_RETRY_INITIAL_MS",
                 retry_max_ms => "QQBOT_INGESTION_RETRY_MAX_MS",
                 shutdown_drain_timeout_secs => "QQBOT_INGESTION_SHUTDOWN_DRAIN_TIMEOUT_SECS",
@@ -211,6 +213,21 @@ impl AppConfig {
         if self.ingestion.queue_capacity == 0 || self.ingestion.queue_capacity > 65_536 {
             return Err(ConfigError::Invalid(
                 "ingestion.queue_capacity must be between 1 and 65536".into(),
+            ));
+        }
+        if !(1..=500).contains(&self.ingestion.batch_size) {
+            return Err(ConfigError::Invalid(
+                "ingestion.batch_size must be between 1 and 500".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.ingestion.batch_flush_ms) {
+            return Err(ConfigError::Invalid(
+                "ingestion.batch_flush_ms must be between 1 and 1000".into(),
+            ));
+        }
+        if self.ingestion.queue_capacity < self.ingestion.batch_size {
+            return Err(ConfigError::Invalid(
+                "ingestion.queue_capacity must be >= batch_size".into(),
             ));
         }
         if self.ingestion.retry_initial_ms == 0
