@@ -42,6 +42,8 @@ pub mod owner_approval;
 mod qq_open_platform;
 #[path = "infrastructure/qq_open_platform_mysql.rs"]
 mod qq_open_platform_mysql;
+#[path = "infrastructure/realtime_spool.rs"]
+mod realtime_spool;
 #[path = "infrastructure/recall.rs"]
 mod recall;
 #[path = "application/reply_reconcile_worker.rs"]
@@ -72,6 +74,10 @@ pub mod production {
         spawn_ingestion_worker,
     };
     pub use crate::napcat_directory::NapCatDirectorySource;
+    pub use crate::realtime_spool::{
+        RealtimeMessageSpool, RealtimeMessageSpoolConfig, RealtimeMessageSpoolError,
+        RealtimeMessageSpoolOpen, RealtimeMessageSpoolRecovery,
+    };
     pub use crate::recall::{
         RecallHandler, RecallQueue, RecallSpoolSnapshot, RecallSpoolTelemetry, spawn_recall_worker,
         spawn_recall_worker_with_telemetry,

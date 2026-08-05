@@ -91,6 +91,13 @@
 
 ## 最近事件
 
+- `2026-08-05 23:25（Asia/Shanghai）`：`GAP-007-IMPL-B` 文件适配器完成并通过 Codex 独立复核。
+  新增独立普通消息 AEAD WAL（不同于 Recall magic/key/路径）、实际分配量预算（活动 WAL 240 MiB、
+  compact 临时 240 MiB、quarantine 16 MiB、元数据 16 MiB，总计 512 MiB）、进程锁、最终不完整尾部
+  截断、完整帧认证/解码 fail-closed、generation 绑定 AAD、连续 checkpoint、compact 及 Windows
+  `MOVEFILE_WRITE_THROUGH` 替换。新增 9 个聚焦测试；`qqbot-server` 151 passed/2 ignored，严格
+  Clippy、all-targets check、fmt、diff check 与 workspace boundaries 24/24 通过。尚未接入 runtime、
+  MySQL replay 或健康 Worker。
 - `2026-08-05 23:03（Asia/Shanghai）`：`GAP-007-IMPL-A` Codex 独立复核完成。直接修复恢复端口
   缺少账号作用域与 fencing 的 P1：领取改为显式接收 `SourceAccountRef` 并返回携带 typed lease
   token 的 claim，`connecting`/`connected` 收口只能传递该 claim，后续 MySQL 实现必须事务内复验

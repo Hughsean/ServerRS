@@ -1,15 +1,15 @@
 # GAP-007 普通消息实时入站本地磁盘 Spool 决策
 
-> 最后修订：2026-08-05 23:03（Asia/Shanghai）
-> 状态：**GO；IMPL-A 领域/application 契约已通过 Codex 独立复核；尚无 Spool 适配器实现**
+> 最后修订：2026-08-05 23:25（Asia/Shanghai）
+> 状态：**GO；IMPL-A/B 已通过 Codex 独立复核；尚未接入 runtime 或 MySQL replay**
 > 范围：NapCat WebSocket 群聊/私聊普通消息的本地耐久接收边界
 
 ## 1. 结论
 
 **GO，架构决策已通过独立复核**。用户确认的五项决策、运行期 receipt 与跨重启 WAL 恢复边界、
 pending Gap 持久化、遗留 epoch 的崩溃收敛恢复顺序均已闭合。`GAP-007-IMPL-A` 的协议中立
-领域/application 契约与纯单元测试已通过 Codex 独立门禁；本规格不表示文件 Spool 适配器、配置、
-依赖、迁移、Worker 或 MySQL 恢复实现已存在。
+领域/application 契约与独立文件适配器已通过 Codex 独立门禁；本规格不表示 runtime、配置、迁移、
+Worker 或 MySQL 恢复实现已存在。
 
 所承诺的交付语义严格限于：正常运行期一条普通消息获得本地 `DurablySpooled` receipt 后，才允许
 进入 MySQL replay；重启恢复另以完整认证 WAL 帧为准。它不表示 NapCat/QQ 已确认、不表示平台会
@@ -240,8 +240,9 @@ pending-gap/reconciliation-pending 状态；不包含任何敏感业务标识或
    admission、运行期 durable receipt、WAL-based recovery eligibility、recoverable/fatal result、
    账号作用域且带 lease fencing 的遗留 epoch 分阶段恢复、checkpoint eligibility 与稳定 hook
    idempotency key 证明；本切片没有实现文件 WAL 或 runtime 接线。
-2. **GAP-007-IMPL-B，文件适配器**：独立 AEAD WAL、512 MiB 预算记账、独占 blocking writer、
-   Windows 同步协议、全局 fail-closed 恢复。
+2. **GAP-007-IMPL-B，文件适配器**：已完成并通过 Codex 独立复核。独立 AEAD WAL、512 MiB
+   实际分配预算、独占锁、最终尾部截断、完整帧全局 fail-closed、连续 checkpoint、compact 与
+   Windows 写穿替换均已实现；blocking writer 调度、runtime 接线和 MySQL replay 留在 IMPL-C。
 3. **GAP-007-IMPL-C，runtime/health**：reader/Heartbeat 并发、bounded admission、fatal 到
    connection loop、运行期 Gap 重试、启动前遗留 epoch reconciliation、pending-gap 健康状态和关闭期限。
 4. **GAP-007-IMPL-D，故障注入**：阻塞 writer 下 Heartbeat、公平性/队列边界、receipt 前崩溃、

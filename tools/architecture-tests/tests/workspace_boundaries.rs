@@ -241,6 +241,40 @@ fn qqbot_server_application_layer_is_protocol_and_infrastructure_neutral() {
 }
 
 #[test]
+fn realtime_message_spool_is_independent_and_uses_durable_sync() {
+    let source = fs::read_to_string(
+        workspace_root().join("apps/qqbot-server/src/infrastructure/realtime_spool.rs"),
+    )
+    .expect("read realtime message spool adapter");
+
+    for required in [
+        "WAL_MAGIC: &[u8; 4] = b\"QMWL\"",
+        "CHECKPOINT_MAGIC: &[u8; 4] = b\"QMCP\"",
+        "const TOTAL_BYTES: u64 = 512 * 1024 * 1024",
+        "MOVEFILE_WRITE_THROUGH",
+        ".sync_all()",
+    ] {
+        assert!(
+            source.contains(required),
+            "realtime message spool is missing required durability marker {required}"
+        );
+    }
+    for forbidden in [
+        "b\"RSPL\"",
+        "RecallWal",
+        "RecallWalConfig",
+        "QQBOT_RECALL",
+        ".sync_data()",
+        "crate::recall",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "realtime message spool shares or weakens a forbidden boundary: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn personal_secretary_backfill_is_protocol_neutral_and_no_send_calls() {
     let sources = rust_sources("crates/personal-secretary/src");
     // 回补领域与应用层不得出现任何发送/撤回调用或 HTTP/数据库实现。

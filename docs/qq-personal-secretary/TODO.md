@@ -19,14 +19,15 @@
   逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
   有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
   `EXTERNAL ENV-004`。
-- 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A` 已完成并通过 Codex 独立复核。领域/application
-  契约已覆盖 typed admission/receipt/fatal、WAL 恢复资格、连续 checkpoint、账号作用域遗留 epoch
-  领取及 typed lease fencing；当前仍没有文件 WAL、runtime 或 MySQL Spool 实现。普通消息 Spool
-  只承诺本地 durable receipt；启动以完整认证 WAL 帧恢复，遗留 `connected` epoch 必须先
-  replay/hook/checkpoint，再以 MySQL 原子事务结束 epoch 并创建 Gap。
+- 当前评估：`GAP-007-A/B/C`、`GAP-007-IMPL-A` 与 `GAP-007-IMPL-B` 已完成并通过 Codex 独立复核。
+  领域/application 契约与独立文件适配器已覆盖 typed admission/receipt/fatal、AEAD WAL、实际分配
+  预算、锁、尾部恢复、完整帧 fail-closed、连续 checkpoint、compact、账号作用域遗留 epoch 领取
+  及 typed lease fencing；尚未接入 runtime、MySQL replay 或健康 Worker。普通消息 Spool 只承诺
+  本地 durable receipt；启动以完整认证 WAL 帧恢复，遗留 `connected` epoch 必须先 replay/hook/
+  checkpoint，再以 MySQL 原子事务结束 epoch 并创建 Gap。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：先提交已复核的 `GAP-007-IMPL-A`，再进入 `GAP-007-IMPL-B` 文件适配器切片；不得提前
-  接入 WebSocket runtime 或新增 MySQL Spool 迁移。`EVT-007-NONMSG` 等待真实业务样本，
+- 下一步：先提交已复核的 `GAP-007-IMPL-B`，再进入 `GAP-007-IMPL-C` runtime/health 接线；不得
+  在 runtime 接线前宣称普通消息已获得 durable receipt。`EVT-007-NONMSG` 等待真实业务样本，
   `EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
@@ -352,8 +353,10 @@
   eligibility 与遗留 epoch 分阶段恢复端口。Codex 复核补齐账号作用域领取、typed lease token
   fencing、受控构造与紧凑枚举布局；Recall/Artifact 稳定效果键、恢复顺序和端口传递均有单元测试。
   `personal-secretary` 270/270、严格 Clippy、all-targets check、架构边界 23/23 与 diff 检查通过。
-- [ ] `GAP-007-IMPL-B` 实现独立 AEAD WAL、512 MiB 总预算、单一 blocking writer、锁、恢复、compact
-  和 Windows 同步协议；不得接入 WebSocket runtime。
+- [x] `GAP-007-IMPL-B` 实现独立 AEAD WAL、512 MiB 总预算（按平台实际分配量计账）、独占锁、
+  最终尾部截断、完整帧认证/解码 fail-closed、连续 checkpoint、compact 和 Windows 写穿替换协议；
+  普通消息与 Recall 使用独立 magic/key/路径/状态，未接入 WebSocket runtime。Spool 聚焦测试 9/9、
+  `qqbot-server` 151 passed/2 ignored、架构边界 24/24、严格 Clippy 与格式门禁通过。
 - [ ] `GAP-007-IMPL-C` 接入 reader/Heartbeat、bounded admission、fatal 传播、MySQL replay、运行期
   Gap 重试、启动恢复、健康快照和有界关闭。
 - [ ] `GAP-007-IMPL-D` 完成 writer 阻塞、receipt 前崩溃、关闭 deadline、尾部撕裂、完整帧损坏、
