@@ -41,6 +41,9 @@ link_id!(ThreadLinkReviewId, "thread_link_review_id");
 pub enum ThreadLinkSignalKind {
     ExplicitProjectId,
     ExactFileSourceKey,
+    ExplicitFileVersion,
+    ExactForwardSourceKey,
+    ExactRichContentKey,
     SharedActor,
     SimilarTopic,
     SameFileName,
@@ -51,6 +54,9 @@ impl ThreadLinkSignalKind {
         match self {
             Self::ExplicitProjectId => "explicit_project_id",
             Self::ExactFileSourceKey => "exact_file_source_key",
+            Self::ExplicitFileVersion => "explicit_file_version",
+            Self::ExactForwardSourceKey => "exact_forward_source_key",
+            Self::ExactRichContentKey => "exact_rich_content_key",
             Self::SharedActor => "shared_actor",
             Self::SimilarTopic => "similar_topic",
             Self::SameFileName => "same_file_name",
@@ -58,13 +64,23 @@ impl ThreadLinkSignalKind {
     }
 
     pub fn is_strong(self) -> bool {
-        matches!(self, Self::ExplicitProjectId | Self::ExactFileSourceKey)
+        matches!(
+            self,
+            Self::ExplicitProjectId
+                | Self::ExactFileSourceKey
+                | Self::ExplicitFileVersion
+                | Self::ExactForwardSourceKey
+                | Self::ExactRichContentKey
+        )
     }
 
     pub fn confidence_bps(self) -> u16 {
         match self {
             Self::ExplicitProjectId => 9500,
             Self::ExactFileSourceKey => 9000,
+            Self::ExplicitFileVersion => 9800,
+            Self::ExactForwardSourceKey => 9000,
+            Self::ExactRichContentKey => 8500,
             Self::SharedActor | Self::SimilarTopic | Self::SameFileName => 0,
         }
     }
@@ -357,9 +373,17 @@ mod tests {
 
     #[test]
     fn strong_signal_still_only_creates_a_proposed_candidate() {
-        let value = candidate(ThreadLinkSignalKind::ExplicitProjectId);
-        assert!(validate_thread_link_candidate(&value).is_ok());
-        assert_eq!(value.status, ThreadLinkCandidateStatus::Proposed);
+        for kind in [
+            ThreadLinkSignalKind::ExplicitProjectId,
+            ThreadLinkSignalKind::ExactFileSourceKey,
+            ThreadLinkSignalKind::ExplicitFileVersion,
+            ThreadLinkSignalKind::ExactForwardSourceKey,
+            ThreadLinkSignalKind::ExactRichContentKey,
+        ] {
+            let value = candidate(kind);
+            assert!(validate_thread_link_candidate(&value).is_ok());
+            assert_eq!(value.status, ThreadLinkCandidateStatus::Proposed);
+        }
     }
 
     #[test]

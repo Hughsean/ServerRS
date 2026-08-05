@@ -13,6 +13,7 @@
 
 use super::event::{MessageSegment, RichKind};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// 单段文本字符上限，超出截断（约束：有界摘录）。
 pub const MAX_SEGMENT_TEXT_CHARS: usize = 4_000;
@@ -100,8 +101,14 @@ fn segment_estimated_bytes(seg: &MessageSegment) -> usize {
             size: _,
         } => file.len() + name.as_ref().map(|n| n.len()).unwrap_or(0),
         Forward { id } => id.len(),
-        Rich { data, summary, .. } => {
+        Rich {
+            data,
+            content_sha256,
+            summary,
+            ..
+        } => {
             data.as_ref().map(|d| d.len()).unwrap_or(0)
+                + content_sha256.as_ref().map(|d| d.len()).unwrap_or(0)
                 + summary.as_ref().map(|s| s.len()).unwrap_or(0)
         }
         Unknown { seg_type, raw } => seg_type.len() + raw.as_ref().map(|r| r.len()).unwrap_or(0),
@@ -147,16 +154,19 @@ fn normalize_structured_segment(seg: OneBotSegment) -> MessageSegment {
         "json" => MessageSegment::Rich {
             kind: RichKind::Json,
             data: take_opt_bounded_string(&data, "data", MAX_META_CHARS),
+            content_sha256: content_digest(&data, "data", "json"),
             summary: take_opt_bounded_string(&data, "summary", MAX_META_CHARS),
         },
         "xml" => MessageSegment::Rich {
             kind: RichKind::Xml,
             data: take_opt_bounded_string(&data, "data", MAX_META_CHARS),
+            content_sha256: content_digest(&data, "data", "xml"),
             summary: take_opt_bounded_string(&data, "summary", MAX_META_CHARS),
         },
         "card" => MessageSegment::Rich {
             kind: RichKind::Card,
             data: take_opt_bounded_string(&data, "data", MAX_META_CHARS),
+            content_sha256: content_digest(&data, "data", "card"),
             summary: take_opt_bounded_string(&data, "summary", MAX_META_CHARS),
         },
         other => {
@@ -227,6 +237,33 @@ fn take_u64(data: &serde_json::Map<String, serde_json::Value>, key: &str) -> Opt
         serde_json::Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
+}
+
+fn content_digest(
+    data: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    kind: &str,
+) -> Option<String> {
+    let value = data.get(key)?;
+    let encoded = match value {
+        serde_json::Value::String(value) => value.as_bytes().to_vec(),
+        value => serde_json::to_vec(value).ok()?,
+    };
+    if encoded.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(encoded);
+    let digest = hasher.finalize();
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Some(encoded)
 }
 
 /// 按字符数截断，保证多字节内容稳定有界。
@@ -391,16 +428,67 @@ mod tests {
             segs[0],
             MessageSegment::Rich {
                 kind: RichKind::Json,
+                content_sha256: Some(ref digest),
                 ..
-            }
+            } if digest.len() == 64
         ));
         assert!(matches!(
             segs[1],
             MessageSegment::Rich {
                 kind: RichKind::Xml,
+                content_sha256: Some(ref digest),
                 ..
-            }
+            } if digest.len() == 64
         ));
+        let MessageSegment::Rich {
+            content_sha256: json_digest,
+            ..
+        } = &segs[0]
+        else {
+            unreachable!()
+        };
+        let MessageSegment::Rich {
+            content_sha256: xml_digest,
+            ..
+        } = &segs[1]
+        else {
+            unreachable!()
+        };
+        assert_ne!(json_digest, xml_digest, "rich kind domain-separates digest");
+    }
+
+    #[test]
+    fn rich_digest_covers_untruncated_payload() {
+        let common = "x".repeat(MAX_META_CHARS + 50);
+        let first = serde_json::json!([
+            {"type":"json","data":{"data": format!("{common}a")}}
+        ]);
+        let second = serde_json::json!([
+            {"type":"json","data":{"data": format!("{common}b")}}
+        ]);
+        let (first, _) = parse_structured_segments(first.as_array().unwrap());
+        let (second, _) = parse_structured_segments(second.as_array().unwrap());
+        let MessageSegment::Rich {
+            data: first_data,
+            content_sha256: first_digest,
+            ..
+        } = &first[0]
+        else {
+            panic!("expected rich segment")
+        };
+        let MessageSegment::Rich {
+            data: second_data,
+            content_sha256: second_digest,
+            ..
+        } = &second[0]
+        else {
+            panic!("expected rich segment")
+        };
+        assert_eq!(first_data, second_data, "bounded envelopes share a prefix");
+        assert_ne!(
+            first_digest, second_digest,
+            "digest covers the complete payload"
+        );
     }
 
     #[test]

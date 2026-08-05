@@ -82,20 +82,56 @@ impl ConservativeThreadLinkExtractor {
                     event,
                     ThreadLinkSignalKind::ExplicitProjectId,
                     value,
+                    HintValueNormalization::AsciiCaseInsensitive,
                 ));
             }
             for segment in &event.segments {
-                if let ContentSegment::Media {
-                    kind: MediaKind::File,
-                    source_key,
-                    ..
-                } = segment
-                {
-                    hints.push(make_hint(
+                match segment {
+                    ContentSegment::Media {
+                        kind: MediaKind::File,
+                        source_key,
+                        ..
+                    } => hints.push(make_hint(
                         event,
                         ThreadLinkSignalKind::ExactFileSourceKey,
                         source_key,
-                    ));
+                        // Preserve the already-deployed file-key fingerprint contract.
+                        HintValueNormalization::AsciiCaseInsensitive,
+                    )),
+                    ContentSegment::FileVersionReference {
+                        current_source_key,
+                        previous_source_key,
+                    } => {
+                        hints.push(make_hint(
+                            event,
+                            ThreadLinkSignalKind::ExactFileSourceKey,
+                            current_source_key,
+                            HintValueNormalization::AsciiCaseInsensitive,
+                        ));
+                        hints.push(make_hint(
+                            event,
+                            ThreadLinkSignalKind::ExplicitFileVersion,
+                            previous_source_key,
+                            HintValueNormalization::AsciiCaseInsensitive,
+                        ));
+                    }
+                    ContentSegment::Forward { source_key } => hints.push(make_hint(
+                        event,
+                        ThreadLinkSignalKind::ExactForwardSourceKey,
+                        source_key,
+                        HintValueNormalization::Exact,
+                    )),
+                    ContentSegment::Rich { source_key, .. }
+                        if is_content_digest_reference(source_key) =>
+                    {
+                        hints.push(make_hint(
+                            event,
+                            ThreadLinkSignalKind::ExactRichContentKey,
+                            source_key,
+                            HintValueNormalization::Exact,
+                        ));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -142,9 +178,18 @@ fn make_hint(
     event: &crate::ThreadLinkEvent,
     kind: ThreadLinkSignalKind,
     raw_value: &str,
+    normalization: HintValueNormalization,
 ) -> ThreadLinkHint {
-    let normalized = raw_value.trim().to_ascii_lowercase();
-    let digest = Sha256::digest(normalized.as_bytes());
+    let trimmed = raw_value.trim();
+    let normalized;
+    let value = match normalization {
+        HintValueNormalization::Exact => trimmed,
+        HintValueNormalization::AsciiCaseInsensitive => {
+            normalized = trimmed.to_ascii_lowercase();
+            normalized.as_str()
+        }
+    };
+    let digest = Sha256::digest(value.as_bytes());
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut fingerprint_sha256 = String::with_capacity(64);
     for byte in digest {
@@ -159,6 +204,19 @@ fn make_hint(
         kind,
         fingerprint_sha256,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HintValueNormalization {
+    Exact,
+    AsciiCaseInsensitive,
+}
+
+fn is_content_digest_reference(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub struct ThreadLinkUseCase {
@@ -303,25 +361,87 @@ mod tests {
     }
 
     #[test]
-    fn only_explicit_project_id_and_exact_file_source_key_are_extracted() {
+    fn explicit_and_structured_reference_signals_are_extracted() {
         let batch = batch(
             "项目ID:PAYMENT_V2\n讨论支付项目",
-            vec![ContentSegment::Media {
-                kind: MediaKind::File,
-                source_key: "exact-content-key".into(),
-                source_url: None,
-                display_name: Some("同名报价单.pdf".into()),
-            }],
+            vec![
+                ContentSegment::Media {
+                    kind: MediaKind::File,
+                    source_key: "exact-content-key".into(),
+                    source_url: None,
+                    display_name: Some("同名报价单.pdf".into()),
+                },
+                ContentSegment::FileVersionReference {
+                    current_source_key: "current-file-key".into(),
+                    previous_source_key: "previous-file-key".into(),
+                },
+                ContentSegment::Forward {
+                    source_key: "forward-reference".into(),
+                },
+                ContentSegment::Rich {
+                    kind: crate::RichContentKind::Json,
+                    source_key: format!("sha256:{}", "a".repeat(64)),
+                    summary: None,
+                },
+            ],
         );
         let hints = ConservativeThreadLinkExtractor.extract(&batch);
-        assert_eq!(hints.len(), 2);
+        assert_eq!(hints.len(), 6);
         assert!(hints.iter().all(|hint| hint.kind.is_strong()));
         assert!(hints.iter().all(|hint| hint.fingerprint_sha256.len() == 64));
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == ThreadLinkSignalKind::ExplicitFileVersion)
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == ThreadLinkSignalKind::ExactForwardSourceKey)
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == ThreadLinkSignalKind::ExactRichContentKey)
+        );
     }
 
     #[test]
     fn similar_topic_and_filename_without_source_key_do_not_become_hints() {
         let batch = batch("还是之前的支付项目", Vec::new());
         assert!(ConservativeThreadLinkExtractor.extract(&batch).is_empty());
+    }
+
+    #[test]
+    fn legacy_rich_kind_sentinels_are_not_strong_references() {
+        let batch = batch(
+            "",
+            vec![ContentSegment::Rich {
+                kind: crate::RichContentKind::Json,
+                source_key: "rich_json".into(),
+                summary: Some("相同摘要不能成为证据".into()),
+            }],
+        );
+        assert!(ConservativeThreadLinkExtractor.extract(&batch).is_empty());
+    }
+
+    #[test]
+    fn exact_forward_keys_remain_case_sensitive() {
+        let upper = batch(
+            "",
+            vec![ContentSegment::Forward {
+                source_key: "Forward-Aa".into(),
+            }],
+        );
+        let lower = batch(
+            "",
+            vec![ContentSegment::Forward {
+                source_key: "forward-aa".into(),
+            }],
+        );
+        assert_ne!(
+            ConservativeThreadLinkExtractor.extract(&upper)[0].fingerprint_sha256,
+            ConservativeThreadLinkExtractor.extract(&lower)[0].fingerprint_sha256
+        );
     }
 }

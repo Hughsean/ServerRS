@@ -249,6 +249,7 @@ mod tests {
         assert!(segment_has_rich_reference(&MessageSegment::Rich {
             kind: crate::napcat::RichKind::Json,
             data: None,
+            content_sha256: None,
             summary: None
         }));
         assert!(!segment_has_rich_reference(&MessageSegment::Text {

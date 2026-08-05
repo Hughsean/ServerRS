@@ -61,6 +61,9 @@ pub enum MessageSegment {
         kind: RichKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<String>,
+        /// SHA-256 of the complete, untruncated structured payload, domain-separated by kind.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_sha256: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
     },

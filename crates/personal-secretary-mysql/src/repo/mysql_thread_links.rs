@@ -210,6 +210,7 @@ SELECT cur.account_id, a.source_channel, a.platform_account_id,
        cc.platform_conversation_id AS current_platform_conversation_id,
        cur.source_event_id AS current_source_event_id,
        other.thread_id AS other_thread_id, other.conversation_id AS other_conversation_id,
+       other.signal_kind AS other_signal_kind,
        oc.conversation_kind AS other_conversation_kind,
        oc.platform_conversation_id AS other_platform_conversation_id,
        other.source_event_id AS other_source_event_id
@@ -218,10 +219,17 @@ JOIN secretary_accounts a ON a.id = cur.account_id
 JOIN secretary_conversations cc ON cc.id = cur.conversation_id
 JOIN secretary_thread_link_hints other
   ON other.account_id = cur.account_id
- AND other.signal_kind = cur.signal_kind
  AND other.fingerprint_sha256 = cur.fingerprint_sha256
  AND other.thread_id <> cur.thread_id
  AND other.conversation_id <> cur.conversation_id
+ AND (
+      (cur.signal_kind = 'explicit_file_version'
+       AND other.signal_kind = 'exact_file_source_key')
+      OR (cur.signal_kind = 'exact_file_source_key'
+          AND other.signal_kind IN ('exact_file_source_key', 'explicit_file_version'))
+      OR (cur.signal_kind NOT IN ('exact_file_source_key', 'explicit_file_version')
+          AND other.signal_kind = cur.signal_kind)
+ )
 JOIN secretary_conversations oc ON oc.id = other.conversation_id
 WHERE cur.source_event_id = ? AND cur.signal_kind = ? AND cur.fingerprint_sha256 = ?
 ORDER BY other.thread_id, other.source_event_id
@@ -236,6 +244,14 @@ ORDER BY other.thread_id, other.source_event_id
             .await
             .map_err(store_error)?;
             for matched in matches {
+                let candidate_kind = if hint.kind
+                    == crate::ThreadLinkSignalKind::ExplicitFileVersion
+                    || matched.other_signal_kind == "explicit_file_version"
+                {
+                    crate::ThreadLinkSignalKind::ExplicitFileVersion
+                } else {
+                    hint.kind
+                };
                 let (
                     left_thread,
                     right_thread,
@@ -294,10 +310,10 @@ ORDER BY other.thread_id, other.source_event_id
                     left_conversation,
                     right_conversation,
                     status: ThreadLinkCandidateStatus::Proposed,
-                    confidence_bps: hint.kind.confidence_bps(),
-                    reason_code: hint.kind.as_str().into(),
+                    confidence_bps: candidate_kind.confidence_bps(),
+                    reason_code: candidate_kind.as_str().into(),
                     evidence: ThreadLinkEvidence {
-                        kind: hint.kind,
+                        kind: candidate_kind,
                         fingerprint_sha256: hint.fingerprint_sha256.clone(),
                         left_source_event_id: SourceEventId::new(left_event.clone())?,
                         right_source_event_id: SourceEventId::new(right_event.clone())?,
@@ -322,10 +338,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?)
                             right_thread.into(),
                             left_conversation_id.into(),
                             right_conversation_id.into(),
-                            hint.kind.as_str().into(),
+                            candidate_kind.as_str().into(),
                             hint.fingerprint_sha256.clone().into(),
-                            hint.kind.confidence_bps().into(),
-                            hint.kind.as_str().into(),
+                            candidate_kind.confidence_bps().into(),
+                            candidate_kind.as_str().into(),
                             now.into(),
                             now.into(),
                         ],
@@ -342,7 +358,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?)
                         matched.account_id.into(),
                         candidate.left_thread_id.as_str().into(),
                         candidate.right_thread_id.as_str().into(),
-                        hint.kind.as_str().into(),
+                        candidate_kind.as_str().into(),
                         hint.fingerprint_sha256.clone().into(),
                     ],
                 ))
@@ -823,6 +839,7 @@ struct HintMatchRow {
     current_source_event_id: String,
     other_thread_id: String,
     other_conversation_id: u64,
+    other_signal_kind: String,
     other_conversation_kind: String,
     other_platform_conversation_id: String,
     other_source_event_id: String,

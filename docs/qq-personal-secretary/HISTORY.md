@@ -45,6 +45,12 @@
   隔离 MySQL recovery claim/fencing/finalize 1/1 通过。完整门禁还发现并修复 fake HTTP 未声明
   `Connection: close` 导致的并发能力探测不确定性。真实整机休眠、断网和 NapCat 进程退出仍由
   `EXTERNAL OPS-LIVE` 验收。
+- **本轮（THR-002，已完成）**：跨会话候选新增三类强证据：显式文件版本、精确 Forward 引用和
+  完整 Rich 载荷摘要。文件版本采用当前文件键指向上一版本键的显式关系，不从文件名、发送者或
+  相似正文推断；Forward 键大小写敏感，Rich 摘要覆盖未截断载荷并按 JSON/XML/Card 域分隔。
+  MySQL 只允许五类强 signal，文件版本提示与上一版本精确文件提示跨类型匹配，结果仍只到
+  `proposed`。NapCat 4.18.14 标准文件段未提供版本父指针，因此适配器 fail-closed，不猜测。
+  THR-002 隔离 MySQL 1/1、EVT-007 回归 20/20 及完整 Rust/架构门禁通过。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -103,6 +109,12 @@
 
 ## 最近事件
 
+- `2026-08-06 01:51（Asia/Shanghai）`：`THR-002` 完成。领域新增显式文件版本引用，关联提取器
+  支持精确 Forward 与完整 Rich 内容摘要；NapCat 富消息在协议边界计算未截断载荷摘要，缺少摘要
+  时继续保留 Artifact，但不形成强关联。MySQL 增量迁移扩展强信号 CHECK，文件版本通过跨类型
+  hint 匹配上一版本文件身份。真实 MySQL 覆盖账号隔离、弱信号拒绝、幂等与迁移重放 1/1，
+  EVT-007 20/20 回归通过且 schema 全部清理；`personal-secretary` 273/273、QQBot
+  57 + 10 + 3、`qqbot-server` 175 passed/2 ignored、架构边界 24/24。
 - `2026-08-06 00:38（Asia/Shanghai）`：`GAP-007-IMPL-D` 故障注入与 writer 隔离完成。专用 OS
   writer 线程避免同步文件 I/O 占用 Tokio blocking pool；关闭 deadline 超时 detach 并保留 WAL。
   WAL 创建、append、尾部 truncate、checkpoint、compact、替换后文件/父目录同步点均有注入恢复

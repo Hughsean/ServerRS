@@ -213,6 +213,12 @@ pub enum ContentSegment {
         source_url: Option<String>,
         display_name: Option<String>,
     },
+    /// Explicit, protocol-validated file lineage. The current and previous keys are opaque
+    /// source identities; display names and sender identity are never accepted as lineage.
+    FileVersionReference {
+        current_source_key: String,
+        previous_source_key: String,
+    },
     Forward {
         source_key: String,
     },
@@ -235,6 +241,25 @@ impl ContentSegment {
             } => require_non_empty("segment.reply.platform_message_id", platform_message_id),
             Self::Media { source_key, .. } => {
                 require_non_empty("segment.media.source_key", source_key)
+            }
+            Self::FileVersionReference {
+                current_source_key,
+                previous_source_key,
+            } => {
+                require_non_empty(
+                    "segment.file_version_reference.current_source_key",
+                    current_source_key,
+                )?;
+                require_non_empty(
+                    "segment.file_version_reference.previous_source_key",
+                    previous_source_key,
+                )?;
+                if current_source_key == previous_source_key {
+                    return Err(InboundIdentityError::Invalid(
+                        "file version current and previous source keys must differ".into(),
+                    ));
+                }
+                Ok(())
             }
             Self::Forward { source_key } => {
                 require_non_empty("segment.forward.source_key", source_key)
@@ -549,5 +574,27 @@ mod tests {
         );
         assert!(message.mentions_all());
         assert_eq!(message.reply_to_platform_message_id(), Some("message-1"));
+    }
+
+    #[test]
+    fn file_version_reference_requires_two_distinct_explicit_keys() {
+        let result = InboundMessageEnvelope::new(
+            SourceMessageRef::new(MessageSource::NapCat, "account-1", "message-3").unwrap(),
+            ConversationRef::new(ConversationKind::Group, "group-1").unwrap(),
+            VerifiedActor::new(VerifiedActorKind::External, "sender-1").unwrap(),
+            102,
+            "[文件]",
+            vec![ContentSegment::FileVersionReference {
+                current_source_key: "same-key".into(),
+                previous_source_key: "same-key".into(),
+            }],
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            InboundIdentityError::Invalid(
+                "file version current and previous source keys must differ".into()
+            )
+        );
     }
 }

@@ -177,23 +177,18 @@ fn map_segments(segments: Vec<NapCatMessageSegment>) -> Vec<ContentSegment> {
             NapCatMessageSegment::Rich {
                 kind,
                 data: _,
+                content_sha256,
                 summary,
             } => match kind {
-                qqbot::napcat::RichKind::Json => ContentSegment::Rich {
-                    kind: RichContentKind::Json,
-                    source_key: "rich_json".into(),
-                    summary,
-                },
-                qqbot::napcat::RichKind::Xml => ContentSegment::Rich {
-                    kind: RichContentKind::Xml,
-                    source_key: "rich_xml".into(),
-                    summary,
-                },
-                qqbot::napcat::RichKind::Card => ContentSegment::Rich {
-                    kind: RichContentKind::Card,
-                    source_key: "rich_card".into(),
-                    summary,
-                },
+                qqbot::napcat::RichKind::Json => {
+                    map_rich_segment(RichContentKind::Json, "rich_json", content_sha256, summary)
+                }
+                qqbot::napcat::RichKind::Xml => {
+                    map_rich_segment(RichContentKind::Xml, "rich_xml", content_sha256, summary)
+                }
+                qqbot::napcat::RichKind::Card => {
+                    map_rich_segment(RichContentKind::Card, "rich_card", content_sha256, summary)
+                }
                 qqbot::napcat::RichKind::Other => ContentSegment::Unknown {
                     protocol_value: "rich_other".into(),
                 },
@@ -203,6 +198,30 @@ fn map_segments(segments: Vec<NapCatMessageSegment>) -> Vec<ContentSegment> {
             },
         })
         .collect()
+}
+
+fn map_rich_segment(
+    kind: RichContentKind,
+    fallback_source_key: &str,
+    content_sha256: Option<String>,
+    summary: Option<String>,
+) -> ContentSegment {
+    match content_sha256 {
+        Some(digest)
+            if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            ContentSegment::Rich {
+                kind,
+                source_key: format!("sha256:{digest}"),
+                summary,
+            }
+        }
+        _ => ContentSegment::Rich {
+            kind,
+            source_key: fallback_source_key.into(),
+            summary,
+        },
+    }
 }
 
 fn map_identity_error(error: personal_secretary::InboundIdentityError) -> NapCatError {
@@ -280,6 +299,45 @@ mod tests {
         assert!(!serialized.contains("example.invalid"));
         assert!(!serialized.contains("secret-token"));
         assert!(!serialized.contains("message text"));
+    }
+
+    #[test]
+    fn rich_segment_uses_complete_payload_digest_as_structured_reference() {
+        let digest = "a".repeat(64);
+        let mapped = map_segments(vec![NapCatMessageSegment::Rich {
+            kind: qqbot::napcat::RichKind::Json,
+            data: Some("bounded preview".into()),
+            content_sha256: Some(digest.clone()),
+            summary: Some("摘要".into()),
+        }]);
+
+        assert_eq!(
+            mapped,
+            vec![ContentSegment::Rich {
+                kind: RichContentKind::Json,
+                source_key: format!("sha256:{digest}"),
+                summary: Some("摘要".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn rich_segment_without_complete_digest_keeps_artifact_but_not_strong_reference() {
+        let mapped = map_segments(vec![NapCatMessageSegment::Rich {
+            kind: qqbot::napcat::RichKind::Json,
+            data: Some("preview only".into()),
+            content_sha256: None,
+            summary: Some("相同摘要".into()),
+        }]);
+
+        assert_eq!(
+            mapped,
+            vec![ContentSegment::Rich {
+                kind: RichContentKind::Json,
+                source_key: "rich_json".into(),
+                summary: Some("相同摘要".into()),
+            }]
+        );
     }
 
     #[test]
