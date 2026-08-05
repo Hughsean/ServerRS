@@ -14,12 +14,13 @@
 
 ## 0. 当前状态
 
-- 当前分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
+- 当前分支：`Main`；`EVT-007-MSG` 原子提交 `1b4778f` 已从
+  `claude/qqbot-evt006-ingestion-backpressure-v1` 快进合并，尚未推送远端。
 - 当前状态：`EVT-007-MSG`（消息 Reply 子先父后解析）已完成实现、五轮 Codex 复核
   （15 个 P1 + 4 个 P2）全部修复，聚焦 MySQL 20/20 与既有回归全绿（Docker
-  `serverrs-qqbot-mysql`）；提交授权已获得，随本提交收口。`EVT-007-NONMSG` 未开始
+  `serverrs-qqbot-mysql`）；已随 `1b4778f` 提交并合并至 `Main`。`EVT-007-NONMSG` 未开始
   （见切片列表）。个人秘书核心与
-  QQBot 组合根已按洋葱方向重构并完成本地分批提交，尚未 push/merge/stash。
+  QQBot 组合根已按洋葱方向重构并完成本地分批提交与合并，尚未 push/stash。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
 - 下一切片：按 `EVT-009` 继续（EVT-007-MSG 已覆盖仅 NapCat 群/私聊消息 Reply 的延迟解析
   闭环，EVT-007-NONMSG 等待真实业务样本）。
