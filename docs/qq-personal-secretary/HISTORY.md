@@ -33,6 +33,10 @@
   遗留 `connected` epoch 必须保持可写完成 replay、hook 收敛与耐久 checkpoint，再由 MySQL 事务结束
   epoch、创建 Gap 和冻结证据；文件与数据库之间采用崩溃收敛协议，不宣称跨资源原子。遗留
   `connecting` epoch 有帧时 fail-closed。A/B/C 已完成，建立未完成的 IMPL-A/B/C/D；本轮只有 Markdown。
+- **本轮（GAP-007-IMPL-A/B/C/D，已完成）**：普通消息 Spool 已完成领域契约、独立 AEAD WAL、
+  runtime/health、MySQL recovery 与故障注入闭环。IMPL-D 将不可取消的文件同步移入专用 OS writer
+  线程，关闭超时仅 detach 并保留 WAL；同步点、预算、MySQL 离线与必需 hook 失败均验证不越过
+  checkpoint。真实 MySQL recovery 1/1、EVT-006 1/1、EVT-007 20/20 通过。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -91,6 +95,12 @@
 
 ## 最近事件
 
+- `2026-08-06 00:38（Asia/Shanghai）`：`GAP-007-IMPL-D` 故障注入与 writer 隔离完成。专用 OS
+  writer 线程避免同步文件 I/O 占用 Tokio blocking pool；关闭 deadline 超时 detach 并保留 WAL。
+  WAL 创建、append、尾部 truncate、checkpoint、compact、替换后文件/父目录同步点均有注入恢复
+  证据；MySQL 离线和必需 hook 失败不推进 checkpoint。`qqbot-server` 169 passed/2 ignored，
+  `personal-secretary` 270/270，架构边界 24/24；真实 MySQL recovery 1/1、EVT-006 1/1、
+  EVT-007 20/20 通过。
 - `2026-08-06 00:05（Asia/Shanghai）`：`GAP-007-IMPL-C` runtime/health 与 MySQL 恢复闭环完成。
   NapCat callback 改为 bounded admission，文件 I/O 由 blocking writer 执行；`sync_all` receipt 后才进入
   ingestion，MySQL commit 与必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。Spool fatal、队列满

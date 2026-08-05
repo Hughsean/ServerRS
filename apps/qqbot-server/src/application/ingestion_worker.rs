@@ -156,6 +156,23 @@ impl IngestionQueue {
             .record_enqueue(self.queue_capacity, &self.sender);
         Ok(())
     }
+
+    pub fn blocking_enqueue_spooled(
+        &self,
+        frame: RecoveredRealtimeSpoolFrame,
+    ) -> Result<(), IngestionEnqueueError> {
+        let wrapped = TimestampedEnvelope {
+            envelope: frame.message().clone(),
+            enqueued_at: Instant::now(),
+            spool_frame: Some(frame),
+        };
+        self.sender
+            .blocking_send(wrapped)
+            .map_err(|_| IngestionEnqueueError::Closed)?;
+        self.metrics
+            .record_enqueue(self.queue_capacity, &self.sender);
+        Ok(())
+    }
 }
 
 // ── 有界指标（仅内存，多线程安全）───────────────────────────────────────
@@ -1131,9 +1148,12 @@ mod tests {
 
     use async_trait::async_trait;
     use personal_secretary::{
-        ConnectionEndReason, ConversationKind, ConversationRef, InboundEventStoreT,
-        IngestionContinuityStoreT, IngestionGapId, MessageSource, SourceAccountRef, SourceEventId,
-        SourceMessageRef, VerifiedActor, VerifiedActorKind,
+        ClaimedRecallEvent, ConnectionEndReason, ConversationKind, ConversationRef,
+        InboundEventStoreT, IngestionContinuityStoreT, IngestionGapId, MessageSource,
+        RealtimeSpoolCheckpointPrefix, RealtimeSpoolGenerationId, RealtimeSpoolRecordId,
+        RecallCorrelationKey, RecallEvent, RecallFailureKind, RecallStoreError, RecallStoreT,
+        RecoveredRealtimeSpoolFrame, SourceAccountRef, SourceEventId, SourceMessageRef,
+        TombstoneRecord, TombstoneStatus, VerifiedActor, VerifiedActorKind,
     };
 
     use super::*;
@@ -1266,6 +1286,155 @@ mod tests {
         IngestMessageOutcome::Duplicate {
             source_event_id: SourceEventId::new(id).unwrap(),
         }
+    }
+
+    #[derive(Default)]
+    struct CountingCheckpoint {
+        advances: AtomicU64,
+    }
+
+    #[async_trait]
+    impl RealtimeSpoolCheckpointT for CountingCheckpoint {
+        async fn advance_checkpoint(
+            &self,
+            _prefix: RealtimeSpoolCheckpointPrefix,
+        ) -> Result<(), RealtimeSpoolFatal> {
+            self.advances.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingRecallStore {
+        calls: AtomicU64,
+    }
+
+    #[async_trait]
+    impl RecallStoreT for FailingRecallStore {
+        async fn record_recall(
+            &self,
+            _recall: &RecallEvent,
+        ) -> Result<TombstoneStatus, RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn apply_pending_tombstone(
+            &self,
+            _correlation: &RecallCorrelationKey,
+            _source_event_id: &str,
+        ) -> Result<Option<TombstoneRecord>, RecallStoreError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Err(RecallStoreError::Unavailable("injected".into()))
+        }
+
+        async fn list_pending_for_correlation(
+            &self,
+            _correlation: &RecallCorrelationKey,
+        ) -> Result<Vec<TombstoneRecord>, RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn is_recalled(
+            &self,
+            _account_id: u64,
+            _source_event_id: &str,
+        ) -> Result<bool, RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn list_recalled_event_ids(
+            &self,
+            _account_id: u64,
+        ) -> Result<Vec<String>, RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn enqueue_recall(&self, _recall: &RecallEvent) -> Result<(), RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn claim_recall(
+            &self,
+            _lease_secs: u64,
+        ) -> Result<Option<ClaimedRecallEvent>, RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn mark_recall_applied(
+            &self,
+            _recall_event_id: &str,
+            _lease_token: &str,
+        ) -> Result<(), RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+
+        async fn mark_recall_failed(
+            &self,
+            _recall_event_id: &str,
+            _lease_token: &str,
+            _error_code: &str,
+            _kind: RecallFailureKind,
+        ) -> Result<(), RecallStoreError> {
+            unreachable!("not used by this test")
+        }
+    }
+
+    #[tokio::test]
+    async fn required_hook_failure_never_advances_spool_checkpoint() {
+        let store = Arc::new(BatchStore {
+            results: Mutex::new(VecDeque::from([vec![accepted("evt-hook")]])),
+            errors: Mutex::new(VecDeque::new()),
+            insert_attempts: AtomicU64::new(0),
+        });
+        let recall_store = Arc::new(FailingRecallStore::default());
+        let recall_port: Arc<dyn RecallStoreT> = recall_store.clone();
+        let recall = Arc::new(RecallUseCase::new(recall_port));
+        let checkpoint = Arc::new(CountingCheckpoint::default());
+        let checkpoint_port: Arc<dyn RealtimeSpoolCheckpointT> = checkpoint.clone();
+        let epoch = ConnectionEpochId::new("epoch-hook").unwrap();
+        let config = IngestionConfig {
+            queue_capacity: 2,
+            batch_size: 1,
+            batch_flush_ms: 1,
+            retry_initial_ms: 1,
+            retry_max_ms: 2,
+            shutdown_drain_timeout_secs: 1,
+        };
+        let store_port: Arc<dyn PersonalSecretaryStoreT> = store;
+        let (queue, worker) = spawn_spooled_ingestion_worker(
+            store_port,
+            epoch.clone(),
+            config,
+            Some(recall),
+            None,
+            0,
+            None,
+            None,
+            checkpoint_port,
+            mpsc::unbounded_channel().0,
+        );
+        let observed = message("message-hook").observed_in(epoch.clone());
+        let frame = RecoveredRealtimeSpoolFrame::new(
+            RealtimeSpoolGenerationId::new("generation-hook").unwrap(),
+            RealtimeSpoolRecordId::new("record-hook").unwrap(),
+            epoch,
+            observed,
+        )
+        .unwrap();
+
+        queue.enqueue_spooled(frame).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while recall_store.calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(recall_store.calls.load(Ordering::Acquire) > 0);
+        assert_eq!(checkpoint.advances.load(Ordering::Acquire), 0);
+        worker.abort();
+        let _ = worker.await;
     }
 
     #[tokio::test]

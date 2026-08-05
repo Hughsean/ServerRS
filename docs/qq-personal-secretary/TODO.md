@@ -19,14 +19,15 @@
   逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
   有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
   `EXTERNAL ENV-004`。
-- 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A/B/C` 已完成并通过 Codex 独立复核。普通消息
+- 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A/B/C/D` 已完成并通过 Codex 独立复核。普通消息
   callback 只做 bounded admission，blocking writer 在 `sync_all` 后产生 durable receipt，再进入统一
   MySQL ingestion；必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。fatal 与关闭超时保留开放
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `GAP-007-IMPL-D` 故障注入，验证阻塞 writer、receipt 崩溃窗口、关闭 deadline、
-  MySQL 离线和 Windows 同步点。`EVT-007-NONMSG` 等待真实业务样本，`EVT-009` 已按产品决策取消。
+- 下一步：进入 `GAP-008` 本地可自动化的关机/休眠、NapCat 离线和 MySQL 离线演练；需要真实
+  环境配合的部分继续留在 `EXTERNAL-TEST`。`EVT-007-NONMSG` 等待真实业务样本，`EVT-009`
+  已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -360,8 +361,12 @@
   MySQL recovery claim 使用账号作用域、typed token、未过期复验与续租；真实 MySQL 1/1、
   `personal-secretary` 270/270、`qqbot-server` 159 passed/2 ignored、架构边界 24/24、严格 Clippy、
   workspace all-targets check、fmt 与 diff check 通过。
-- [ ] `GAP-007-IMPL-D` 完成 writer 阻塞、receipt 前崩溃、关闭 deadline、尾部撕裂、完整帧损坏、
-  遗留 epoch、预算、MySQL 离线、幂等 effect 与 Windows 同步点的故障注入验证。
+- [x] `GAP-007-IMPL-D` 完成专用 OS writer 线程、bounded admission、阻塞 writer 下 Tokio timer
+  公平性、receipt 前完整帧恢复、关闭 deadline detach 并保留 WAL、尾部撕裂/完整帧损坏、活动 WAL
+  预算、MySQL 离线不推进 checkpoint、必需 hook 失败不推进 checkpoint，以及 WAL 创建、append、
+  truncate、checkpoint、compact、原子替换后文件/父目录同步点故障注入。`personal-secretary` 270/270、
+  `qqbot-server` 169 passed/2 ignored、架构边界 24/24；真实 MySQL recovery 1/1、EVT-006 1/1、
+  EVT-007 20/20 通过。
 - [ ] `GAP-008` 分别演练电脑关机/休眠、NapCat 离线和 MySQL 离线；属于需要环境配合的部分移入
   `EXTERNAL-TEST`，本地可完成的故障注入仍可先做。
 

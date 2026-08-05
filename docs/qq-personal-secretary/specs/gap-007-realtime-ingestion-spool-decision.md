@@ -229,8 +229,10 @@ pending-gap/reconciliation-pending 状态；不包含任何敏感业务标识或
 | compact | 写临时 WAL 并 `sync_all`，保留旧 WAL，原子替换，验证新文件与元数据持久化后才清理旧文件 | 保留旧文件，停止 admission，fail-closed |
 | 父目录和原子替换 | 使用能证明 Windows 原子替换与父目录持久化的原语；标准库不足时先提交独立平台设计 | 不执行 compact/checkpoint 替换 |
 
-`GAP-007-IMPL-D` 的未来故障注入必须覆盖 append 文件长度、truncate、checkpoint、临时文件、
-原子替换和父目录/元数据在断电等价点的恢复；未通过前，Windows 不得以 Spool 宣称 durable。
+`GAP-007-IMPL-D` 已通过可控故障点覆盖 WAL 创建、append、truncate、checkpoint、compact 临时文件、
+原子替换前后目标文件同步和父目录/Windows 写穿边界。测试分别证明替换前失败保留旧权威文件、替换后
+失败由新权威文件在重启时收敛；同步失败不产生运行期 receipt。该结论限定于仓库实现与本地 Windows
+文件系统故障等价点，不替代真实断电硬件验证。
 
 ## 8. 实现切片边界
 
@@ -247,9 +249,9 @@ pending-gap/reconciliation-pending 状态；不包含任何敏感业务标识或
    admission；blocking writer 同步成功后把 durable frame 交给统一 ingestion。MySQL commit 与必需
    hook 收敛后推进连续 checkpoint；fatal/关闭超时保留开放 epoch 与 WAL，启动恢复使用账号作用域
    typed lease、续租和 fencing，完成后原子创建/复用 uncertain Gap。健康快照不暴露业务标识或路径。
-4. **GAP-007-IMPL-D，故障注入**：阻塞 writer 下 Heartbeat、公平性/队列边界、receipt 前崩溃、
-   关闭 deadline、尾部撕裂、全局损坏、遗留 epoch 回收、预算、MySQL 离线、幂等 effect、Windows
-   各同步点与崩溃恢复。
+4. **GAP-007-IMPL-D，故障注入**：已完成并通过 Codex 独立复核。专用 OS writer 线程与有界
+   admission 保持 Tokio timer 公平；receipt 前完整帧、关闭 deadline、尾部撕裂、全局损坏、遗留
+   epoch、预算、MySQL 离线、必需 hook effect 和 Windows 各同步点均有恢复或 fail-closed 证据。
 
 `EVT-009-CANCELLED` 保持取消；本规格不恢复数据库正文加密、密钥轮换、迁移或相关 Worker。
 官方 QQ Open Platform send_text、当前 WebSocket 入站行为、Heartbeat 和 Directory 均未修改。

@@ -1,6 +1,7 @@
 //! Runtime bridge between the non-blocking NapCat reader, blocking durable Spool and MySQL replay.
 
 use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
 
 use personal_secretary::{
     ConnectionEpochId, ConnectionEpochStatus, InboundMessageEnvelope,
@@ -10,7 +11,6 @@ use personal_secretary::{
     SourceAccountRef, checkpointable_prefix,
 };
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::ingestion_worker::{IngestionQueue, fire_post_hooks, required_hook_keys};
@@ -50,7 +50,7 @@ pub enum RealtimeSpoolAdmissionError {
 
 #[derive(Clone)]
 pub struct RealtimeSpoolAdmissionQueue {
-    sender: mpsc::Sender<RealtimeSpoolAdmission>,
+    sender: std_mpsc::SyncSender<RealtimeSpoolAdmission>,
     connection_epoch_id: ConnectionEpochId,
     fatal_sender: mpsc::UnboundedSender<RealtimeSpoolFatal>,
 }
@@ -68,13 +68,13 @@ impl RealtimeSpoolAdmissionQueue {
                 .map_err(|_| RealtimeSpoolAdmissionError::Invalid)?;
         match self.sender.try_send(admission) {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(std_mpsc::TrySendError::Full(_)) => {
                 let _ = self.fatal_sender.send(RealtimeSpoolFatal::new(
                     RealtimeSpoolFatalKind::CapacityExhausted,
                 ));
                 Err(RealtimeSpoolAdmissionError::Full)
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(std_mpsc::TrySendError::Disconnected(_)) => {
                 let _ = self.fatal_sender.send(RealtimeSpoolFatal::new(
                     RealtimeSpoolFatalKind::WriterStopped,
                 ));
@@ -89,55 +89,74 @@ pub struct RealtimeSpoolWriterReport {
     pub durable_receipts: u64,
 }
 
+pub struct RealtimeSpoolWriterHandle {
+    completion: tokio::sync::oneshot::Receiver<RealtimeSpoolWriterReport>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RealtimeSpoolWriterHandle {
+    pub async fn wait(&mut self) -> Result<RealtimeSpoolWriterReport, ()> {
+        let report = (&mut self.completion).await.map_err(|_| ())?;
+        if let Some(thread) = self.thread.take() {
+            thread.join().map_err(|_| ())?;
+        }
+        Ok(report)
+    }
+
+    pub fn detach(&mut self) {
+        self.thread.take();
+    }
+}
+
 pub fn spawn_realtime_spool_writer(
     spool: Arc<RealtimeMessageSpool>,
     ingestion: IngestionQueue,
     connection_epoch_id: ConnectionEpochId,
     admission_capacity: usize,
     fatal_sender: mpsc::UnboundedSender<RealtimeSpoolFatal>,
-) -> (
-    RealtimeSpoolAdmissionQueue,
-    JoinHandle<RealtimeSpoolWriterReport>,
-) {
-    let (sender, receiver) = mpsc::channel(admission_capacity);
+) -> (RealtimeSpoolAdmissionQueue, RealtimeSpoolWriterHandle) {
+    let (sender, receiver) = std_mpsc::sync_channel(admission_capacity);
     let queue = RealtimeSpoolAdmissionQueue {
         sender,
         connection_epoch_id,
         fatal_sender: fatal_sender.clone(),
     };
-    let worker = tokio::spawn(run_writer(spool, ingestion, receiver, fatal_sender));
-    (queue, worker)
+    let (completion_sender, completion) = tokio::sync::oneshot::channel();
+    let writer_fatal_sender = fatal_sender.clone();
+    let thread = std::thread::Builder::new()
+        .name("qqbot-realtime-spool-writer".into())
+        .spawn(move || {
+            let report = run_writer(spool, ingestion, receiver, writer_fatal_sender);
+            let _ = completion_sender.send(report);
+        });
+    let thread = match thread {
+        Ok(thread) => Some(thread),
+        Err(_) => {
+            let _ = fatal_sender.send(RealtimeSpoolFatal::new(
+                RealtimeSpoolFatalKind::WriterStopped,
+            ));
+            None
+        }
+    };
+    (queue, RealtimeSpoolWriterHandle { completion, thread })
 }
 
-async fn run_writer(
+fn run_writer(
     spool: Arc<RealtimeMessageSpool>,
     ingestion: IngestionQueue,
-    mut receiver: mpsc::Receiver<RealtimeSpoolAdmission>,
+    receiver: std_mpsc::Receiver<RealtimeSpoolAdmission>,
     fatal_sender: mpsc::UnboundedSender<RealtimeSpoolFatal>,
 ) -> RealtimeSpoolWriterReport {
     let mut report = RealtimeSpoolWriterReport::default();
-    while let Some(admission) = receiver.recv().await {
-        let append_spool = Arc::clone(&spool);
-        let append_admission = admission.clone();
-        let receipt =
-            match tokio::task::spawn_blocking(move || append_spool.append(&append_admission)).await
-            {
-                Ok(Ok(receipt)) => receipt,
-                Ok(Err(error)) => {
-                    spool.telemetry().mark_fatal(error.kind);
-                    let _ = fatal_sender.send(RealtimeSpoolFatal::new(error.kind));
-                    break;
-                }
-                Err(_) => {
-                    spool
-                        .telemetry()
-                        .mark_fatal(RealtimeSpoolFatalKind::WriterStopped);
-                    let _ = fatal_sender.send(RealtimeSpoolFatal::new(
-                        RealtimeSpoolFatalKind::WriterStopped,
-                    ));
-                    break;
-                }
-            };
+    while let Ok(admission) = receiver.recv() {
+        let receipt = match spool.append(&admission) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                spool.telemetry().mark_fatal(error.kind);
+                let _ = fatal_sender.send(RealtimeSpoolFatal::new(error.kind));
+                break;
+            }
+        };
         if receipt.admission_id != *admission.admission_id() {
             spool
                 .telemetry()
@@ -164,7 +183,7 @@ async fn run_writer(
                 break;
             }
         };
-        if ingestion.enqueue_spooled(frame).await.is_err() {
+        if ingestion.blocking_enqueue_spooled(frame).is_err() {
             spool
                 .telemetry()
                 .mark_fatal(RealtimeSpoolFatalKind::WriterStopped);
@@ -369,6 +388,13 @@ mod tests {
     }
 
     fn open_spool(temp: &TempDir) -> Arc<RealtimeMessageSpool> {
+        open_spool_with_delay(temp, std::time::Duration::ZERO)
+    }
+
+    fn open_spool_with_delay(
+        temp: &TempDir,
+        append_delay: std::time::Duration,
+    ) -> Arc<RealtimeMessageSpool> {
         let key_env = format!("QQBOT_TEST_SPOOL_KEY_{}", Uuid::new_v4().simple());
         unsafe {
             std::env::set_var(
@@ -376,16 +402,14 @@ mod tests {
                 base64::engine::general_purpose::STANDARD.encode([7_u8; 32]),
             );
         }
-        Arc::new(
-            RealtimeMessageSpool::open(crate::realtime_spool::RealtimeMessageSpoolConfig::new(
-                temp.path().join("message.wal"),
-                temp.path().join("message.checkpoint"),
-                temp.path().join("quarantine"),
-                key_env,
-            ))
-            .unwrap()
-            .spool,
-        )
+        let mut config = crate::realtime_spool::RealtimeMessageSpoolConfig::new(
+            temp.path().join("message.wal"),
+            temp.path().join("message.checkpoint"),
+            temp.path().join("quarantine"),
+            key_env,
+        );
+        config.append_delay = append_delay;
+        Arc::new(RealtimeMessageSpool::open(config).unwrap().spool)
     }
 
     fn account() -> SourceAccountRef {
@@ -403,9 +427,18 @@ mod tests {
         )
     }
 
-    #[derive(Default)]
     struct FakeIngestionStore {
         inserted: Mutex<u64>,
+        unavailable: bool,
+    }
+
+    impl Default for FakeIngestionStore {
+        fn default() -> Self {
+            Self {
+                inserted: Mutex::new(0),
+                unavailable: false,
+            }
+        }
     }
 
     #[async_trait]
@@ -415,6 +448,9 @@ mod tests {
             _message: &InboundMessageEnvelope,
         ) -> Result<IngestMessageOutcome, InboundEventStoreError> {
             *self.inserted.lock().unwrap() += 1;
+            if self.unavailable {
+                return Err(InboundEventStoreError::Unavailable);
+            }
             Ok(IngestMessageOutcome::Accepted {
                 source_event_id: SourceEventId::new("source-event-1").unwrap(),
                 reply_to_event_id: None,
@@ -509,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn admission_full_is_fatal_without_waiting_for_writer() {
-        let (sender, _receiver) = mpsc::channel(1);
+        let (sender, _receiver) = std_mpsc::sync_channel(1);
         let (fatal_sender, mut fatal_receiver) = mpsc::unbounded_channel();
         let queue = RealtimeSpoolAdmissionQueue {
             sender,
@@ -532,7 +568,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let spool = open_spool(&temp);
         let (fatal_sender, mut fatal_receiver) = mpsc::unbounded_channel();
-        let (queue, worker) = spawn_realtime_spool_writer(
+        let (queue, mut worker) = spawn_realtime_spool_writer(
             Arc::clone(&spool),
             IngestionQueue::for_test(),
             ConnectionEpochId::new("epoch-1").unwrap(),
@@ -541,7 +577,7 @@ mod tests {
         );
         queue.try_admit(message("message-1")).unwrap();
         drop(queue);
-        worker.await.unwrap();
+        worker.wait().await.unwrap();
         assert_eq!(
             fatal_receiver.recv().await.unwrap().kind,
             RealtimeSpoolFatalKind::WriterStopped
@@ -647,5 +683,98 @@ mod tests {
 
         assert_eq!(*ingestion.inserted.lock().unwrap(), 0);
         assert_eq!(*recovery.finalized_connected.lock().unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocked_writer_does_not_starve_runtime_timers() {
+        let temp = TempDir::new().unwrap();
+        let spool = open_spool_with_delay(&temp, std::time::Duration::from_millis(250));
+        let (fatal_sender, _fatal_receiver) = mpsc::unbounded_channel();
+        let (queue, mut worker) = spawn_realtime_spool_writer(
+            spool,
+            IngestionQueue::for_test(),
+            ConnectionEpochId::new("epoch-1").unwrap(),
+            2,
+            fatal_sender,
+        );
+        queue.try_admit(message("message-1")).unwrap();
+        let timer = tokio::time::timeout(
+            std::time::Duration::from_millis(80),
+            tokio::time::sleep(std::time::Duration::from_millis(20)),
+        )
+        .await;
+        assert!(
+            timer.is_ok(),
+            "blocking writer must not starve runtime timers"
+        );
+        drop(queue);
+        worker.wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_deadline_detaches_writer_and_retains_synced_wal() {
+        let temp = TempDir::new().unwrap();
+        let spool = open_spool_with_delay(&temp, std::time::Duration::from_millis(150));
+        let (fatal_sender, _fatal_receiver) = mpsc::unbounded_channel();
+        let (queue, mut worker) = spawn_realtime_spool_writer(
+            Arc::clone(&spool),
+            IngestionQueue::for_test(),
+            ConnectionEpochId::new("epoch-1").unwrap(),
+            2,
+            fatal_sender,
+        );
+        queue.try_admit(message("message-1")).unwrap();
+        drop(queue);
+        assert!(
+            !crate::runtime::connection_loop::drain_spool_writer(
+                &mut worker,
+                std::time::Duration::from_millis(20),
+            )
+            .await
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+        assert_eq!(spool.recover_pending().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mysql_unavailable_never_advances_checkpoint() {
+        let temp = TempDir::new().unwrap();
+        let spool = open_spool(&temp);
+        let store = Arc::new(FakeIngestionStore {
+            inserted: Mutex::new(0),
+            unavailable: true,
+        });
+        let epoch = ConnectionEpochId::new("epoch-1").unwrap();
+        let config = crate::config::IngestionConfig {
+            queue_capacity: 4,
+            batch_size: 1,
+            batch_flush_ms: 1,
+            retry_initial_ms: 1,
+            retry_max_ms: 2,
+            ..Default::default()
+        };
+        let (fatal_sender, _fatal_receiver) = mpsc::unbounded_channel();
+        let (ingestion, ingestion_worker) = crate::ingestion_worker::spawn_spooled_ingestion_worker(
+            store.clone(),
+            epoch.clone(),
+            config,
+            None,
+            None,
+            0,
+            None,
+            None,
+            checkpoint_adapter(Arc::clone(&spool)),
+            fatal_sender.clone(),
+        );
+        let (queue, mut writer) =
+            spawn_realtime_spool_writer(Arc::clone(&spool), ingestion, epoch, 2, fatal_sender);
+        queue.try_admit(message("message-1")).unwrap();
+        drop(queue);
+        writer.wait().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(*store.inserted.lock().unwrap() > 0);
+        ingestion_worker.abort();
+        let _ = ingestion_worker.await;
+        assert_eq!(spool.recover_pending().unwrap().len(), 1);
     }
 }

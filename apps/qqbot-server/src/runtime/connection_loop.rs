@@ -345,11 +345,11 @@ async fn persist_spool_fatal_gap(
     }
 }
 
-async fn drain_spool_writer(
-    worker: &mut tokio::task::JoinHandle<super::realtime_spool_runtime::RealtimeSpoolWriterReport>,
+pub(super) async fn drain_spool_writer(
+    worker: &mut super::realtime_spool_runtime::RealtimeSpoolWriterHandle,
     timeout: Duration,
 ) -> bool {
-    match tokio::time::timeout(timeout, &mut *worker).await {
+    match tokio::time::timeout(timeout, worker.wait()).await {
         Ok(Ok(report)) => {
             tracing::debug!(
                 durable_receipts = report.durable_receipts,
@@ -369,8 +369,7 @@ async fn drain_spool_writer(
                 timeout_ms = timeout.as_millis(),
                 "普通消息 Spool writer 未在期限内排空，保留未 checkpoint WAL"
             );
-            worker.abort();
-            let _ = worker.await;
+            worker.detach();
             false
         }
     }

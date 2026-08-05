@@ -53,6 +53,10 @@ pub struct RealtimeMessageSpoolConfig {
     pub quarantine_dir: PathBuf,
     pub key_env: String,
     pub max_frame_plaintext: usize,
+    #[cfg(test)]
+    pub(crate) append_delay: std::time::Duration,
+    #[cfg(test)]
+    pub(crate) fail_stage: Option<&'static str>,
 }
 
 impl RealtimeMessageSpoolConfig {
@@ -68,6 +72,10 @@ impl RealtimeMessageSpoolConfig {
             quarantine_dir,
             key_env: key_env.into(),
             max_frame_plaintext: DEFAULT_MAX_FRAME_PLAINTEXT,
+            #[cfg(test)]
+            append_delay: std::time::Duration::ZERO,
+            #[cfg(test)]
+            fail_stage: None,
         }
     }
 
@@ -384,6 +392,10 @@ impl RealtimeMessageSpool {
             .operation_lock
             .lock()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::WriterStopped, "operation_lock"))?;
+        #[cfg(test)]
+        if !self.config.append_delay.is_zero() {
+            std::thread::sleep(self.config.append_delay);
+        }
         let record_uuid = Uuid::new_v4();
         let record_id = RealtimeSpoolRecordId::new(record_uuid.to_string()).map_err(|_| {
             spool_error(
@@ -413,6 +425,11 @@ impl RealtimeMessageSpool {
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::AppendFailed, "append_open"))?;
         file.write_all(&frame)
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::AppendFailed, "append_write"))?;
+        inject_failure(
+            &self.config,
+            "append_sync",
+            RealtimeSpoolFatalKind::SyncFailed,
+        )?;
         file.sync_all()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "append_sync"))?;
         self.telemetry.record_append(
@@ -533,11 +550,23 @@ impl RealtimeMessageSpool {
             })?;
             copy_exact(&mut source, &mut temp, frame.encoded_len, &mut buffer)?;
         }
+        inject_failure(
+            &self.config,
+            "compact_sync",
+            RealtimeSpoolFatalKind::SyncFailed,
+        )?;
         temp.sync_all()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "compact_sync"))?;
         drop(source);
         drop(temp);
-        durable_replace(&temp_path, &self.config.wal_path)?;
+        durable_replace(
+            &temp_path,
+            &self.config.wal_path,
+            &self.config,
+            "compact_replace",
+            "compact_replace_sync",
+            "compact_parent_sync",
+        )?;
         self.scan_locked(false)?;
         self.verify_budget_locked()
     }
@@ -611,7 +640,7 @@ impl RealtimeMessageSpool {
         while offset < file_len {
             let remaining = file_len - offset;
             if remaining < FRAME_HEADER_LEN as u64 {
-                truncate_final_tail(&mut file, offset, repair_tail)?;
+                truncate_final_tail(&mut file, offset, repair_tail, &self.config)?;
                 truncated_final_tail = true;
                 break;
             }
@@ -626,7 +655,7 @@ impl RealtimeMessageSpool {
                 parse_frame_header(&header, &self.key_id, self.config.max_frame_plaintext)?;
             let encoded_len = FRAME_HEADER_LEN as u64 + encrypted_len as u64;
             if remaining < encoded_len {
-                truncate_final_tail(&mut file, offset, repair_tail)?;
+                truncate_final_tail(&mut file, offset, repair_tail, &self.config)?;
                 truncated_final_tail = true;
                 break;
             }
@@ -858,10 +887,22 @@ impl RealtimeMessageSpool {
             .map_err(|_| {
                 spool_error(RealtimeSpoolFatalKind::CheckpointFailed, "checkpoint_write")
             })?;
+        inject_failure(
+            &self.config,
+            "checkpoint_sync",
+            RealtimeSpoolFatalKind::SyncFailed,
+        )?;
         file.sync_all()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "checkpoint_sync"))?;
         drop(file);
-        durable_replace(&temp_path, &self.config.checkpoint_path)?;
+        durable_replace(
+            &temp_path,
+            &self.config.checkpoint_path,
+            &self.config,
+            "checkpoint_replace",
+            "checkpoint_replace_sync",
+            "checkpoint_parent_sync",
+        )?;
         self.verify_budget_locked()
     }
 
@@ -978,8 +1019,18 @@ fn initialize_or_read_wal(
                 )
             })?;
         write_wal_header(&mut file, key_id, generation, None)?;
+        inject_failure(
+            config,
+            "wal_header_sync",
+            RealtimeSpoolFatalKind::SyncFailed,
+        )?;
         file.sync_all()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "wal_header_sync"))?;
+        inject_failure(
+            config,
+            "wal_parent_sync",
+            RealtimeSpoolFatalKind::SyncFailed,
+        )?;
         sync_parent(&config.wal_path)?;
         let generation_id =
             RealtimeSpoolGenerationId::new(generation.to_string()).map_err(|_| {
@@ -1192,6 +1243,7 @@ fn truncate_final_tail(
     file: &mut File,
     offset: u64,
     repair_tail: bool,
+    config: &RealtimeMessageSpoolConfig,
 ) -> Result<(), RealtimeMessageSpoolError> {
     if !repair_tail {
         return Err(spool_error(
@@ -1205,6 +1257,7 @@ fn truncate_final_tail(
             "tail_truncate",
         )
     })?;
+    inject_failure(config, "tail_sync", RealtimeSpoolFatalKind::SyncFailed)?;
     file.sync_all()
         .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "tail_sync"))
 }
@@ -1388,15 +1441,58 @@ fn allocated_file_bytes(path: &Path) -> Result<u64, RealtimeMessageSpoolError> {
     file_len(path)
 }
 
-fn durable_replace(source: &Path, target: &Path) -> Result<(), RealtimeMessageSpoolError> {
+fn durable_replace(
+    source: &Path,
+    target: &Path,
+    config: &RealtimeMessageSpoolConfig,
+    replace_stage: &'static str,
+    replace_sync_stage: &'static str,
+    parent_sync_stage: &'static str,
+) -> Result<(), RealtimeMessageSpoolError> {
+    inject_failure(
+        config,
+        replace_stage,
+        RealtimeSpoolFatalKind::CheckpointFailed,
+    )?;
     durable_replace_platform(source, target)?;
+    inject_failure(
+        config,
+        replace_sync_stage,
+        RealtimeSpoolFatalKind::SyncFailed,
+    )?;
     OpenOptions::new()
         .read(true)
         .write(true)
         .open(target)
         .and_then(|file| file.sync_all())
         .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "replace_sync"))?;
+    inject_failure(
+        config,
+        parent_sync_stage,
+        RealtimeSpoolFatalKind::SyncFailed,
+    )?;
     sync_parent(target)
+}
+
+#[cfg(test)]
+fn inject_failure(
+    config: &RealtimeMessageSpoolConfig,
+    stage: &'static str,
+    kind: RealtimeSpoolFatalKind,
+) -> Result<(), RealtimeMessageSpoolError> {
+    if config.fail_stage == Some(stage) {
+        return Err(spool_error(kind, stage));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn inject_failure(
+    _config: &RealtimeMessageSpoolConfig,
+    _stage: &'static str,
+    _kind: RealtimeSpoolFatalKind,
+) -> Result<(), RealtimeMessageSpoolError> {
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -1485,6 +1581,16 @@ mod tests {
             temp.path().join("message-quarantine"),
             key_env,
         )
+    }
+
+    fn config_with_failure(
+        temp: &TempDir,
+        key_env: &str,
+        stage: &'static str,
+    ) -> RealtimeMessageSpoolConfig {
+        let mut config = config(temp, key_env);
+        config.fail_stage = Some(stage);
+        config
     }
 
     fn admission(id: &str, text: &str) -> RealtimeSpoolAdmission {
@@ -1706,5 +1812,177 @@ mod tests {
 
         assert_eq!(error.kind, RealtimeSpoolFatalKind::CapacityExhausted);
         assert_eq!(std::fs::metadata(&config.wal_path).unwrap().len(), before);
+    }
+
+    #[test]
+    fn append_sync_failure_returns_no_receipt_but_complete_frame_remains_recoverable() {
+        let temp = TempDir::new().unwrap();
+        let key_env = "QQBOT_TEST_MESSAGE_SPOOL_KEY_10";
+        install_key(key_env, 11);
+        let failed_config = config_with_failure(&temp, key_env, "append_sync");
+        let opened = RealtimeMessageSpool::open(failed_config).unwrap();
+
+        let error = opened
+            .spool
+            .append(&admission("message-1", "one"))
+            .unwrap_err();
+        assert_eq!(error.kind, RealtimeSpoolFatalKind::SyncFailed);
+        assert_eq!(error.stage, "append_sync");
+        drop(opened);
+
+        let reopened = RealtimeMessageSpool::open(config(&temp, key_env)).unwrap();
+        assert_eq!(reopened.spool.recover_pending().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn wal_creation_sync_failures_reopen_without_reinitializing_generation() {
+        for (index, stage) in ["wal_header_sync", "wal_parent_sync"]
+            .into_iter()
+            .enumerate()
+        {
+            let temp = TempDir::new().unwrap();
+            let key_env = format!("QQBOT_TEST_MESSAGE_SPOOL_KEY_WAL_{index}");
+            install_key(&key_env, 20 + index as u8);
+            let failed_config = config_with_failure(&temp, &key_env, stage);
+
+            let error = RealtimeMessageSpool::open(failed_config).err().unwrap();
+            assert_eq!(error.kind, RealtimeSpoolFatalKind::SyncFailed);
+            assert_eq!(error.stage, stage);
+
+            let reopened = RealtimeMessageSpool::open(config(&temp, &key_env)).unwrap();
+            assert!(reopened.spool.recover_pending().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn tail_sync_failure_stays_fail_closed_and_next_open_converges() {
+        let temp = TempDir::new().unwrap();
+        let key_env = "QQBOT_TEST_MESSAGE_SPOOL_KEY_11";
+        install_key(key_env, 12);
+        let base_config = config(&temp, key_env);
+        let opened = RealtimeMessageSpool::open(base_config.clone()).unwrap();
+        opened.spool.append(&admission("message-1", "one")).unwrap();
+        drop(opened);
+        OpenOptions::new()
+            .append(true)
+            .open(&base_config.wal_path)
+            .unwrap()
+            .write_all(b"partial")
+            .unwrap();
+
+        let error = RealtimeMessageSpool::open(config_with_failure(&temp, key_env, "tail_sync"))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, RealtimeSpoolFatalKind::SyncFailed);
+        assert_eq!(error.stage, "tail_sync");
+
+        let reopened = RealtimeMessageSpool::open(base_config).unwrap();
+        assert_eq!(reopened.spool.recover_pending().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn checkpoint_sync_failures_preserve_a_recoverable_prefix_state() {
+        let stages = [
+            ("checkpoint_sync", 1),
+            ("checkpoint_replace", 1),
+            ("checkpoint_replace_sync", 0),
+            ("checkpoint_parent_sync", 0),
+        ];
+        for (index, (stage, expected_pending)) in stages.into_iter().enumerate() {
+            let temp = TempDir::new().unwrap();
+            let key_env = format!("QQBOT_TEST_MESSAGE_SPOOL_KEY_CHECKPOINT_{index}");
+            install_key(&key_env, 30 + index as u8);
+            let opened =
+                RealtimeMessageSpool::open(config_with_failure(&temp, &key_env, stage)).unwrap();
+            opened.spool.append(&admission("message-1", "one")).unwrap();
+            let recovered = opened.spool.recover_pending().unwrap();
+            let progress = RealtimeSpoolReplayProgress::pending(recovered[0].clone(), [])
+                .with_ingestion(personal_secretary::IngestMessageOutcome::Duplicate {
+                    source_event_id: personal_secretary::SourceEventId::new("event-1").unwrap(),
+                });
+            let prefix = checkpointable_prefix(opened.spool.generation_id().clone(), &[progress]);
+
+            let error = opened.spool.advance_checkpoint(&prefix).unwrap_err();
+            assert_eq!(error.stage, stage);
+            drop(opened);
+
+            let reopened = RealtimeMessageSpool::open(config(&temp, &key_env)).unwrap();
+            assert_eq!(
+                reopened.spool.recover_pending().unwrap().len(),
+                expected_pending,
+                "checkpoint failure stage {stage} must converge after restart"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_sync_failures_never_lose_the_uncheckpointed_suffix() {
+        for (index, stage) in [
+            "compact_sync",
+            "compact_replace",
+            "compact_replace_sync",
+            "compact_parent_sync",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let temp = TempDir::new().unwrap();
+            let key_env = format!("QQBOT_TEST_MESSAGE_SPOOL_KEY_COMPACT_{index}");
+            install_key(&key_env, 40 + index as u8);
+            let opened =
+                RealtimeMessageSpool::open(config_with_failure(&temp, &key_env, stage)).unwrap();
+            opened.spool.append(&admission("message-1", "one")).unwrap();
+            opened.spool.append(&admission("message-2", "two")).unwrap();
+            let recovered = opened.spool.recover_pending().unwrap();
+            let first = RealtimeSpoolReplayProgress::pending(recovered[0].clone(), [])
+                .with_ingestion(personal_secretary::IngestMessageOutcome::Duplicate {
+                    source_event_id: personal_secretary::SourceEventId::new("event-1").unwrap(),
+                });
+            let prefix = checkpointable_prefix(opened.spool.generation_id().clone(), &[first]);
+            opened.spool.advance_checkpoint(&prefix).unwrap();
+
+            let error = opened.spool.compact().unwrap_err();
+            assert_eq!(error.stage, stage);
+            drop(opened);
+
+            let reopened = RealtimeMessageSpool::open(config(&temp, &key_env)).unwrap();
+            let pending = reopened.spool.recover_pending().unwrap();
+            assert_eq!(pending.len(), 1, "compact failure stage {stage}");
+            assert_eq!(pending[0].record_id(), recovered[1].record_id());
+        }
+    }
+
+    #[test]
+    fn active_wal_budget_rejects_without_overwriting_existing_bytes() {
+        let temp = TempDir::new().unwrap();
+        let key_env = "QQBOT_TEST_MESSAGE_SPOOL_KEY_12";
+        install_key(key_env, 13);
+        let spool_config = config(&temp, key_env);
+        let opened = RealtimeMessageSpool::open(spool_config.clone()).unwrap();
+        opened.spool.append(&admission("message-1", "one")).unwrap();
+        let prefix = std::fs::read(&spool_config.wal_path).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&spool_config.wal_path)
+            .unwrap()
+            .set_len(ACTIVE_WAL_BYTES)
+            .unwrap();
+
+        let error = opened
+            .spool
+            .append(&admission("message-2", "two"))
+            .unwrap_err();
+        assert_eq!(error.kind, RealtimeSpoolFatalKind::CapacityExhausted);
+        assert_eq!(error.stage, "active_wal_partition");
+        let mut after_prefix = vec![0_u8; prefix.len()];
+        File::open(&spool_config.wal_path)
+            .unwrap()
+            .read_exact(&mut after_prefix)
+            .unwrap();
+        assert_eq!(after_prefix, prefix);
+        assert_eq!(
+            std::fs::metadata(&spool_config.wal_path).unwrap().len(),
+            ACTIVE_WAL_BYTES
+        );
     }
 }

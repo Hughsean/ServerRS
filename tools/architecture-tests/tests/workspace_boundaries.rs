@@ -507,7 +507,8 @@ fn napcat_callback_does_not_wait_for_mysql() {
     assert!(!callback.contains("RealtimeMessageSpool"));
     assert!(!callback.contains("sync_all"));
     assert!(spool_runtime.contains("spawn_realtime_spool_writer"));
-    assert!(spool_runtime.contains("spawn_blocking"));
+    assert!(spool_runtime.contains("std::thread::Builder"));
+    assert!(spool_runtime.contains("std_mpsc::sync_channel"));
     assert!(worker.contains("mpsc::channel"));
     assert!(worker.contains("insert_message_if_absent"));
     assert!(worker.contains("RealtimeSpoolCheckpointT"));
