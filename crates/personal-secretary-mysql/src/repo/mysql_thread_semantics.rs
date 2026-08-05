@@ -49,8 +49,8 @@ WHERE (s.thread_id IS NULL OR s.lease_token IS NULL OR s.lease_expires_at < ?)
       JOIN secretary_conversations c ON c.id = e.conversation_id
       JOIN secretary_message_contents mc ON mc.source_event_id = e.source_event_id
       WHERE te.thread_id = t.thread_id
-        AND c.memory_mode IN ('normal', 'local_only')
-        AND mc.content_mode IN ('normal', 'local_only')
+        AND c.memory_mode = 'normal'
+        AND mc.content_mode = 'normal'
         AND (s.last_added_at IS NULL
              OR te.added_at > s.last_added_at
              OR (te.added_at = s.last_added_at AND te.source_event_id > s.last_source_event_id))
@@ -110,8 +110,8 @@ JOIN secretary_accounts a ON a.id = e.account_id
 JOIN secretary_conversations c ON c.id = e.conversation_id
 JOIN secretary_message_contents mc ON mc.source_event_id = e.source_event_id
 WHERE te.thread_id = ?
-  AND c.memory_mode IN ('normal', 'local_only')
-  AND mc.content_mode IN ('normal', 'local_only')
+  AND c.memory_mode = 'normal'
+  AND mc.content_mode = 'normal'
   AND (? IS NULL
        OR te.added_at > ?
        OR (te.added_at = ? AND te.source_event_id > ?))

@@ -15,8 +15,8 @@
 ## 0. 当前状态
 
 - 当前分支：`Main`；`GAP-003-A/B/C`、`GAP-007`、`GAP-008-LOCAL`、`THR-002`、`THR-004`、
-  `THR-005`、`THR-006`、`THR-008` 已随各自切片提交收口；工作树仅保留用户未跟踪的
-  `.mcp.json`。
+  `THR-005`、`THR-006`、`THR-008` 已随各自切片提交收口；本轮 `THR-009` 改动已完成验证，
+  等待提交；用户未跟踪的 `.mcp.json` 未读取或触碰。
 - 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。2026-08-06 双账号 NapCat 4.18.14
   实测确认 `reverseOrder=true` 才是向更旧读取，响应数组仍为旧到新；客户端已在协议边界归一化为
   新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。空页原因、跨重启覆盖和
@@ -27,7 +27,7 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `THR-009` 跨会话检索授权过滤与既有派生状态失效。`GAP-008-LOCAL` 已完成；
+- 下一步：进入 `THR-010` 已确认语义的人工迁移/重新确认以及话题重新打开流程。`GAP-008-LOCAL` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
   业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -417,7 +417,12 @@
   QQ 开放平台投递继续属于外部验收。领域 285/285、`qqbot-server` 176 passed/2 ignored、架构
   24/24、THR-008 MySQL 1/1、Action Planner MySQL 6/6 通过，严格 Clippy、check、fmt 与 diff
   check 全绿；无迁移或 schema 变更。
-- [ ] `THR-009` 完成跨会话检索授权过滤、受限内容的既有派生状态失效与必要防泄露测试。
+- [x] `THR-009` 完成跨会话检索授权过滤、受限内容的既有派生状态失效与必要防泄露测试。检索候选、
+  因果上下文、回复父事件、参与者、按名解析、记忆候选及旧 Action/Owner 草稿均执行来源授权；
+  `local_only` 仅允许显式本地模型授权，`OwnerCommand` 只保留信封。会话降级同事务失效语义、
+  线程链接、记忆候选/事实、旧 Planner 租约和已持久化草稿。领域 285/285、`qqbot-server` 176
+  passed/2 ignored、架构 24/24；THR-009、Action Planner、Project/Commitment、THR-004、
+  THR-005、THR-008 MySQL 隔离回归通过，严格 Clippy 与 workspace check 通过；无迁移或 schema 变更。
 - [ ] `THR-010` 完成已确认语义的人工迁移/重新确认以及话题重新打开流程。
 
 ## 4. Owner 控制面与通知

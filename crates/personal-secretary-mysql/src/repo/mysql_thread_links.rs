@@ -51,8 +51,8 @@ JOIN secretary_accounts a ON a.id = e.account_id
 JOIN secretary_conversations c ON c.id = e.conversation_id
 JOIN secretary_message_contents mc ON mc.source_event_id = e.source_event_id
 LEFT JOIN secretary_thread_link_scan_state s ON s.source_event_id = e.source_event_id
-WHERE c.memory_mode IN ('normal', 'local_only')
-  AND mc.content_mode IN ('normal', 'local_only')
+WHERE c.memory_mode = 'normal'
+  AND mc.content_mode = 'normal'
   AND (s.source_event_id IS NULL
        OR (s.completed_at IS NULL AND (s.lease_token IS NULL OR s.lease_expires_at < ?)))
 ORDER BY te.added_at ASC, e.source_event_id ASC
@@ -646,8 +646,8 @@ JOIN secretary_source_events e ON e.source_event_id = source.source_event_id
 JOIN secretary_conversations c ON c.id = e.conversation_id
 JOIN secretary_message_contents mc ON mc.source_event_id = e.source_event_id
 WHERE source.candidate_id = ?
-  AND c.memory_mode IN ('normal', 'local_only')
-  AND mc.content_mode IN ('normal', 'local_only')
+  AND c.memory_mode = 'normal'
+  AND mc.content_mode = 'normal'
 ORDER BY e.occurred_at_unix_secs, e.source_event_id
 "#,
             [candidate_id.into()],
@@ -686,6 +686,23 @@ JOIN secretary_accounts account ON account.id = candidate.account_id
 JOIN secretary_conversations lc ON lc.id = candidate.left_conversation_id
 JOIN secretary_conversations rc ON rc.id = candidate.right_conversation_id
 WHERE account.source_channel = ? AND account.platform_account_id = ?
+  AND EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source0
+      WHERE source0.candidate_id = candidate.candidate_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source
+      LEFT JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+      LEFT JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+      LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+      LEFT JOIN secretary_message_tombstones tombstone
+        ON tombstone.source_event_id = event.source_event_id
+       AND tombstone.account_id = event.account_id AND tombstone.status = 'applied'
+      WHERE source.candidate_id = candidate.candidate_id
+        AND (event.source_event_id IS NULL OR conversation.memory_mode <> 'normal'
+             OR content.source_event_id IS NULL OR content.content_mode <> 'normal'
+             OR tombstone.source_event_id IS NOT NULL)
+  )
   AND (candidate.created_at > ?
        OR (candidate.created_at = ? AND candidate.candidate_id > ?))
 ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
@@ -704,6 +721,23 @@ JOIN secretary_accounts account ON account.id = candidate.account_id
 JOIN secretary_conversations lc ON lc.id = candidate.left_conversation_id
 JOIN secretary_conversations rc ON rc.id = candidate.right_conversation_id
 WHERE account.source_channel = ? AND account.platform_account_id = ?
+  AND EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source0
+      WHERE source0.candidate_id = candidate.candidate_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source
+      LEFT JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+      LEFT JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+      LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+      LEFT JOIN secretary_message_tombstones tombstone
+        ON tombstone.source_event_id = event.source_event_id
+       AND tombstone.account_id = event.account_id AND tombstone.status = 'applied'
+      WHERE source.candidate_id = candidate.candidate_id
+        AND (event.source_event_id IS NULL OR conversation.memory_mode <> 'normal'
+             OR content.source_event_id IS NULL OR content.content_mode <> 'normal'
+             OR tombstone.source_event_id IS NOT NULL)
+  )
 ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
 LIMIT ?
 "#
@@ -724,6 +758,23 @@ JOIN secretary_conversations lc ON lc.id = candidate.left_conversation_id
 JOIN secretary_conversations rc ON rc.id = candidate.right_conversation_id
 WHERE account.source_channel = ? AND account.platform_account_id = ?
   AND candidate.status = 'proposed'
+  AND EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source0
+      WHERE source0.candidate_id = candidate.candidate_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source
+      LEFT JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+      LEFT JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+      LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+      LEFT JOIN secretary_message_tombstones tombstone
+        ON tombstone.source_event_id = event.source_event_id
+       AND tombstone.account_id = event.account_id AND tombstone.status = 'applied'
+      WHERE source.candidate_id = candidate.candidate_id
+        AND (event.source_event_id IS NULL OR conversation.memory_mode <> 'normal'
+             OR content.source_event_id IS NULL OR content.content_mode <> 'normal'
+             OR tombstone.source_event_id IS NOT NULL)
+  )
 ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
 LIMIT ?
 "#
@@ -754,7 +805,24 @@ JOIN secretary_owner_bindings binding
  AND binding.command_account_id = command.account_id
  AND binding.owner_actor_id = command.actor_platform_id
  AND binding.status = 'active'
-WHERE candidate.candidate_id = ?{suffix}
+WHERE candidate.candidate_id = ?
+  AND EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source0
+      WHERE source0.candidate_id = candidate.candidate_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM secretary_thread_link_candidate_sources source
+      LEFT JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+      LEFT JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+      LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+      LEFT JOIN secretary_message_tombstones tombstone
+        ON tombstone.source_event_id = event.source_event_id
+       AND tombstone.account_id = event.account_id AND tombstone.status = 'applied'
+      WHERE source.candidate_id = candidate.candidate_id
+        AND (event.source_event_id IS NULL OR conversation.memory_mode <> 'normal'
+             OR content.source_event_id IS NULL OR content.content_mode <> 'normal'
+             OR tombstone.source_event_id IS NOT NULL)
+  ){suffix}
 "#
     );
     ReviewContextRow::find_by_statement(Statement::from_sql_and_values(

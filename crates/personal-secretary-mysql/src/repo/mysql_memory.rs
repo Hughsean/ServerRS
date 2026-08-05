@@ -5,12 +5,13 @@ use sea_orm::{
     TransactionTrait,
 };
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use crate::{
-    ContentTrustLevel, ConversationMemoryModeInput, ConversationMemoryModeReceipt,
-    InboundEventStoreError, MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactId,
-    MemoryFactStatus, MemoryFactView, MemorySourceExcerpt, MemoryStoreT, MemoryWriteReceipt,
-    SourceAccountRef, SourceEventId, validate_memory_fact,
+    ContentTrustLevel, ConversationDerivedStateInvalidation, ConversationMemoryModeInput,
+    ConversationMemoryModeReceipt, InboundEventStoreError, MemoryDeleteInput, MemoryDeleteReceipt,
+    MemoryFact, MemoryFactId, MemoryFactStatus, MemoryFactView, MemorySourceExcerpt, MemoryStoreT,
+    MemoryWriteReceipt, SourceAccountRef, SourceEventId, validate_memory_fact,
 };
 
 use super::mysql_inbound::store_error;
@@ -220,6 +221,29 @@ impl MemoryStoreT for MySqlMemoryStore {
                WHERE account.source_channel = ? AND account.platform_account_id = ?
                  AND fact.fact_status IN ('proposed', 'confirmed')
                  AND (fact.valid_until_unix_secs IS NULL OR fact.valid_until_unix_secs > ?)
+                 AND EXISTS (SELECT 1 FROM secretary_memory_fact_sources source0
+                             WHERE source0.fact_id = fact.fact_id)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_memory_fact_sources source
+                     LEFT JOIN secretary_source_events event
+                       ON event.source_event_id = source.source_event_id
+                     LEFT JOIN secretary_conversations conversation
+                       ON conversation.id = event.conversation_id
+                     LEFT JOIN secretary_message_contents content
+                       ON content.source_event_id = event.source_event_id
+                     LEFT JOIN secretary_message_tombstones tombstone
+                       ON tombstone.source_event_id = event.source_event_id
+                      AND tombstone.account_id = event.account_id
+                      AND tombstone.status = 'applied'
+                     WHERE source.fact_id = fact.fact_id
+                       AND (event.source_event_id IS NULL
+                            OR (event.message_role <> 'owner_command'
+                                AND (event.account_id <> fact.account_id
+                                     OR conversation.memory_mode <> 'normal'
+                                     OR content.source_event_id IS NULL
+                                     OR content.content_mode <> 'normal'))
+                            OR tombstone.source_event_id IS NOT NULL)
+                 )
                ORDER BY fact.updated_at DESC, fact.fact_id DESC LIMIT ?"#,
             [
                 account.channel.as_str().into(),
@@ -300,8 +324,10 @@ impl MemoryStoreT for MySqlMemoryStore {
             DatabaseBackend::MySql,
             r#"SELECT event.source_event_id, conversation.conversation_kind,
                       conversation.platform_conversation_id, event.actor_platform_id,
-                      event.occurred_at_unix_secs, content.normalized_text,
+                      event.occurred_at_unix_secs, COALESCE(content.normalized_text, '') AS normalized_text,
                       CASE
+                        WHEN event.message_role = 'owner_command'
+                          THEN 'envelope_only'
                         WHEN conversation.memory_mode = 'local_only'
                           OR content.content_mode = 'local_only'
                         THEN 'local_only'
@@ -310,10 +336,12 @@ impl MemoryStoreT for MySqlMemoryStore {
                FROM secretary_memory_fact_sources source
                JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
                JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
-               JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+               LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
                WHERE source.fact_id = ?
-                 AND conversation.memory_mode IN ('normal', 'local_only')
-                 AND content.content_mode IN ('normal', 'local_only')
+                 AND (conversation.memory_mode = 'normal'
+                      OR event.message_role = 'owner_command')
+                 AND (event.message_role = 'owner_command'
+                      OR (conversation.memory_mode = 'normal' AND content.content_mode = 'normal'))
                  -- CMD-009 目标 C：冲突回读的“来源有效”必须排除已撤回消息；
                  -- 任一关键来源失效即 fail-closed，不把旧事实呈现为有效。
                  AND NOT EXISTS (
@@ -330,21 +358,30 @@ impl MemoryStoreT for MySqlMemoryStore {
         .map_err(store_error)?
         .into_iter()
         .map(|source| {
+            let trust = parse_content_trust_level(&source.content_trust_level)?;
             Ok(MemorySourceExcerpt {
                 source_event_id: SourceEventId::new(source.source_event_id)?,
                 conversation_kind: source.conversation_kind,
                 conversation_id: source.platform_conversation_id,
                 actor_id: source.actor_platform_id,
                 occurred_at_unix_secs: source.occurred_at_unix_secs,
-                excerpt: source
-                    .normalized_text
-                    .chars()
-                    .take(max_excerpt_chars as usize)
-                    .collect(),
-                content_trust_level: parse_content_trust_level(&source.content_trust_level)?,
+                excerpt: filter_memory_excerpt(
+                    source.normalized_text.chars().take(max_excerpt_chars as usize).collect(),
+                    trust,
+                ),
+                content_trust_level: trust,
             })
         })
         .collect::<Result<Vec<_>, InboundEventStoreError>>()?;
+        let all_sources_visible = sources.len() == fact.source_event_ids.len()
+            && fact.source_event_ids.iter().all(|expected| {
+                sources
+                    .iter()
+                    .any(|source| &source.source_event_id == expected)
+            });
+        if !all_sources_visible {
+            return Ok(None);
+        }
         debug!(
             fact_id = fact_id.as_str(),
             sources = sources.len(),
@@ -450,7 +487,8 @@ impl MemoryStoreT for MySqlMemoryStore {
         let context =
             ConversationModeContextRow::find_by_statement(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
-                r#"SELECT conversation.id AS conversation_row_id,
+                r#"SELECT managed.id AS account_row_id,
+                          conversation.id AS conversation_row_id,
                           conversation.memory_mode, command.message_role
                    FROM secretary_accounts managed
                    JOIN secretary_conversations conversation
@@ -496,6 +534,7 @@ impl MemoryStoreT for MySqlMemoryStore {
                 changed: false,
                 previous_mode,
                 current_mode: input.mode,
+                invalidated: ConversationDerivedStateInvalidation::default(),
             });
         }
         transaction
@@ -509,18 +548,391 @@ impl MemoryStoreT for MySqlMemoryStore {
             ))
             .await
             .map_err(store_error)?;
+        let invalidated = reconcile_conversation_visibility_in_txn(
+            &transaction,
+            context.account_row_id,
+            context.conversation_row_id,
+            input.mode,
+        )
+        .await?;
         transaction.commit().await.map_err(store_error)?;
         info!(
             conversation_kind = input.conversation.kind.as_str(),
             memory_mode = input.mode.as_str(),
+            invalidated = invalidated.total(),
             "conversation memory mode updated by authorized owner command"
         );
         Ok(ConversationMemoryModeReceipt {
             changed: true,
             previous_mode,
             current_mode: input.mode,
+            invalidated,
         })
     }
+}
+
+async fn reconcile_conversation_visibility_in_txn(
+    transaction: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    conversation_id: u64,
+    mode: ContentTrustLevel,
+) -> Result<ConversationDerivedStateInvalidation, InboundEventStoreError> {
+    let mut report = ConversationDerivedStateInvalidation::default();
+
+    report.revoked_worker_leases = execute_affected(
+        transaction,
+        r#"DELETE state FROM secretary_thread_semantic_state state
+           WHERE EXISTS (
+               SELECT 1 FROM secretary_effective_thread_events te
+               JOIN secretary_source_events event ON event.source_event_id = te.source_event_id
+               WHERE te.thread_id = state.thread_id AND event.conversation_id = ?
+           )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.revoked_worker_leases = report.revoked_worker_leases.saturating_add(
+        execute_affected(
+            transaction,
+            r#"DELETE scan FROM secretary_thread_link_scan_state scan
+               JOIN secretary_source_events event ON event.source_event_id = scan.source_event_id
+               WHERE event.conversation_id = ?"#,
+            [conversation_id.into()],
+        )
+        .await?,
+    );
+    report.revoked_worker_leases = report.revoked_worker_leases.saturating_add(
+        execute_affected(
+            transaction,
+            "DELETE FROM secretary_memory_candidate_processing_state WHERE account_id = ?",
+            [account_id.into()],
+        )
+        .await?,
+    );
+
+    if mode == ContentTrustLevel::Normal {
+        return Ok(report);
+    }
+
+    report.revoked_action_runs = execute_affected(
+        transaction,
+        r#"UPDATE secretary_action_runs run
+           SET run.status = 'failed', run.lease_token = NULL, run.lease_expires_at = NULL,
+               run.worker_id = NULL, run.last_error = 'source_content_restricted',
+               run.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE run.account_id = ? AND run.status IN ('pending', 'running', 'suspended')
+             AND EXISTS (
+                 SELECT 1 FROM secretary_source_events event
+                 WHERE event.conversation_id = ?
+                   AND JSON_SEARCH(
+                       run.recent_events_json, 'one', event.source_event_id,
+                       NULL, '$[*].source_event_id'
+                   ) IS NOT NULL
+             )"#,
+        [account_id.into(), conversation_id.into()],
+    )
+    .await?;
+
+    report.owner_response_drafts = execute_affected(
+        transaction,
+        r#"UPDATE secretary_action_responses response
+           JOIN secretary_action_runs run ON run.run_id = response.run_id
+           SET response.invalidated = 1,
+               response.response_json = JSON_SET(response.response_json, '$.invalidated', TRUE)
+           WHERE run.account_id = ? AND response.invalidated = 0
+             AND EXISTS (
+                 SELECT 1 FROM JSON_TABLE(CAST(response.response_json AS CHAR), '$.source_event_ids[*]'
+                     COLUMNS (source_event_id VARCHAR(191) PATH '$')) source_ref
+                 JOIN secretary_source_events event
+                   ON event.source_event_id = source_ref.source_event_id
+                 WHERE event.conversation_id = ?
+             )"#,
+        [account_id.into(), conversation_id.into()],
+    )
+    .await?;
+    execute_affected(
+        transaction,
+        r#"UPDATE secretary_action_runs run
+           SET run.response_draft_json = JSON_SET(run.response_draft_json, '$.invalidated', TRUE),
+               run.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE run.account_id = ? AND run.response_draft_json IS NOT NULL
+             AND EXISTS (
+                 SELECT 1 FROM JSON_TABLE(CAST(run.response_draft_json AS CHAR), '$.source_event_ids[*]'
+                     COLUMNS (source_event_id VARCHAR(191) PATH '$')) source_ref
+                 JOIN secretary_source_events event
+                   ON event.source_event_id = source_ref.source_event_id
+                 WHERE event.conversation_id = ?
+             )"#,
+        [account_id.into(), conversation_id.into()],
+    )
+    .await?;
+
+    report.semantic_claims = execute_affected(
+        transaction,
+        r#"UPDATE secretary_thread_claims claim
+           SET claim.status = 'withdrawn', claim.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE claim.status IN ('proposed', 'contested', 'confirmed')
+             AND EXISTS (
+                 SELECT 1 FROM secretary_thread_claim_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.claim_id = claim.claim_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.semantic_decisions = execute_affected(
+        transaction,
+        r#"UPDATE secretary_thread_decisions decision_row
+           SET decision_row.status = 'revoked', decision_row.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE decision_row.status IN ('proposed', 'confirmed')
+             AND EXISTS (
+                 SELECT 1 FROM secretary_thread_decision_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.decision_id = decision_row.decision_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.open_questions = execute_affected(
+        transaction,
+        r#"UPDATE secretary_thread_open_questions question
+           SET question.status = 'dismissed', question.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE question.status = 'open'
+             AND EXISTS (
+                 SELECT 1 FROM secretary_thread_question_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.question_id = question.question_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.response_expectations = execute_affected(
+        transaction,
+        r#"UPDATE secretary_response_expectations expectation
+           SET expectation.expectation_status = 'dismissed',
+               expectation.source_version = expectation.source_version + 1,
+               expectation.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE expectation.expectation_status = 'active'
+             AND EXISTS (
+                 SELECT 1 FROM secretary_thread_question_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.question_id = expectation.source_question_id
+                   AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.thread_link_candidates = execute_affected(
+        transaction,
+        r#"UPDATE secretary_thread_link_candidates candidate
+           SET candidate.status = 'expired', candidate.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE candidate.status = 'proposed'
+             AND EXISTS (
+                 SELECT 1 FROM secretary_thread_link_candidate_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.candidate_id = candidate.candidate_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.memory_candidates = execute_affected(
+        transaction,
+        r#"UPDATE secretary_memory_candidates candidate
+           SET candidate.candidate_status = 'invalidated',
+               candidate.candidate_version = candidate.candidate_version + 1,
+               candidate.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE candidate.candidate_status = 'proposed'
+             AND EXISTS (
+                 SELECT 1 FROM secretary_memory_candidate_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.candidate_id = candidate.candidate_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.follow_ups = execute_affected(
+        transaction,
+        r#"UPDATE secretary_follow_up_items item
+           SET item.status = 'superseded', item.source_version = item.source_version + 1,
+               item.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE item.status = 'scheduled'
+             AND EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.fact_id = item.source_memory_fact_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.notification_outbox = execute_affected(
+        transaction,
+        r#"UPDATE secretary_notification_outbox notification
+           SET notification.delivery_status = 'suppressed', notification.lease_token = NULL,
+               notification.lease_expires_at = NULL,
+               notification.last_error_code = 'source_content_restricted'
+           WHERE notification.delivery_status IN ('pending', 'failed')
+             AND (
+                 EXISTS (
+                     SELECT 1 FROM secretary_follow_up_items item
+                     JOIN secretary_memory_fact_sources source
+                       ON source.fact_id = item.source_memory_fact_id
+                     JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                     WHERE item.follow_up_id = notification.follow_up_id
+                       AND event.conversation_id = ?
+                 )
+                 OR EXISTS (
+                     SELECT 1 FROM secretary_notification_candidates candidate
+                     JOIN secretary_response_expectations expectation
+                       ON candidate.source_kind = 'response_expectation'
+                      AND candidate.source_id = expectation.expectation_id
+                     JOIN secretary_thread_question_sources source
+                       ON source.question_id = expectation.source_question_id
+                     JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                     WHERE candidate.notification_candidate_id = notification.notification_candidate_id
+                       AND event.conversation_id = ?
+                 )
+             )"#,
+        [conversation_id.into(), conversation_id.into()],
+    )
+    .await?;
+    report.memory_facts = execute_affected(
+        transaction,
+        r#"UPDATE secretary_memory_facts fact
+           SET fact.fact_status = 'expired', fact.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE fact.fact_status IN ('proposed', 'confirmed')
+             AND EXISTS (
+                 SELECT 1 FROM secretary_memory_fact_sources source
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE source.fact_id = fact.fact_id AND event.conversation_id = ?
+             )"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.participant_observations = execute_affected(
+        transaction,
+        r#"UPDATE secretary_participant_conversation_observations observation
+           SET observation.invalidated = 1,
+               observation.invalidation_reason = 'source_content_restricted',
+               observation.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE observation.conversation_id = ? AND observation.invalidated = 0"#,
+        [conversation_id.into()],
+    )
+    .await?;
+    report.participant_profiles = execute_affected(
+        transaction,
+        r#"UPDATE secretary_participant_profiles profile
+           SET profile.invalidated = 1,
+               profile.invalidation_reason = 'source_content_restricted',
+               profile.updated_at = CURRENT_TIMESTAMP(6)
+           WHERE profile.account_id = ? AND profile.invalidated = 0
+             AND (
+                 EXISTS (
+                     SELECT 1 FROM secretary_source_events event
+                     WHERE event.source_event_id = profile.established_by_event_id
+                       AND event.conversation_id = ?
+                 )
+                 OR EXISTS (
+                     SELECT 1
+                     FROM JSON_TABLE(profile.source_event_ids_json, '$[*]'
+                         COLUMNS (source_event_id CHAR(36) PATH '$')) source_ref
+                     JOIN secretary_source_events event
+                       ON event.source_event_id = source_ref.source_event_id
+                     WHERE event.conversation_id = ?
+                 )
+             )"#,
+        [
+            account_id.into(),
+            conversation_id.into(),
+            conversation_id.into(),
+        ],
+    )
+    .await?;
+    report.reopened_threads =
+        reopen_threads_with_restricted_resolution_sources(transaction, conversation_id).await?;
+
+    Ok(report)
+}
+
+async fn reopen_threads_with_restricted_resolution_sources(
+    transaction: &sea_orm::DatabaseTransaction,
+    conversation_id: u64,
+) -> Result<u64, InboundEventStoreError> {
+    let rows = AffectedThreadRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT thread.thread_id
+           FROM secretary_event_threads thread
+           WHERE thread.status = 'resolved'
+             AND EXISTS (
+                 SELECT 1
+                 FROM secretary_thread_status_history history
+                 JOIN secretary_thread_status_sources source ON source.change_id = history.change_id
+                 JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+                 WHERE history.thread_id = thread.thread_id
+                   AND history.change_id = (
+                       SELECT latest.change_id FROM secretary_thread_status_history latest
+                       WHERE latest.thread_id = thread.thread_id
+                       ORDER BY latest.created_at DESC, latest.change_id DESC LIMIT 1
+                   )
+                   AND history.to_status = 'resolved'
+                   AND history.authority = 'evidence_derived'
+                   AND event.conversation_id = ?
+             )
+           FOR UPDATE"#,
+        [conversation_id.into()],
+    ))
+    .all(transaction)
+    .await
+    .map_err(store_error)?;
+    let now = Utc::now().naive_utc();
+    let mut reopened = 0_u64;
+    for row in rows {
+        let updated = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "UPDATE secretary_event_threads SET status = 'reopened', updated_at = ? WHERE thread_id = ? AND status = 'resolved'",
+                [now.into(), row.thread_id.clone().into()],
+            ))
+            .await
+            .map_err(store_error)?;
+        if updated.rows_affected() != 1 {
+            return Err(InboundEventStoreError::LeaseLost);
+        }
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"INSERT INTO secretary_thread_status_history
+                   (change_id, thread_id, from_status, to_status, authority, reason, created_at)
+                   VALUES (?, ?, 'resolved', 'reopened', 'system_recovery',
+                           'resolution source became restricted', ?)"#,
+                [
+                    Uuid::new_v4().to_string().into(),
+                    row.thread_id.into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        reopened = reopened.saturating_add(1);
+    }
+    Ok(reopened)
+}
+
+async fn execute_affected<I>(
+    transaction: &sea_orm::DatabaseTransaction,
+    sql: &str,
+    values: I,
+) -> Result<u64, InboundEventStoreError>
+where
+    I: IntoIterator<Item = sea_orm::Value>,
+{
+    Ok(transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            sql,
+            values,
+        ))
+        .await
+        .map_err(store_error)?
+        .rows_affected())
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -586,9 +998,15 @@ struct MemoryDeletionRow {
 
 #[derive(Debug, FromQueryResult)]
 struct ConversationModeContextRow {
+    account_row_id: u64,
     conversation_row_id: u64,
     memory_mode: String,
     message_role: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct AffectedThreadRow {
+    thread_id: String,
 }
 
 fn parse_content_trust_level(value: &str) -> Result<ContentTrustLevel, InboundEventStoreError> {
@@ -600,6 +1018,13 @@ fn parse_content_trust_level(value: &str) -> Result<ContentTrustLevel, InboundEv
         _ => Err(InboundEventStoreError::InvalidData(format!(
             "stored conversation memory mode is invalid: {value}"
         ))),
+    }
+}
+
+fn filter_memory_excerpt(text: String, trust: ContentTrustLevel) -> String {
+    match trust {
+        ContentTrustLevel::Normal | ContentTrustLevel::LocalOnly => text,
+        ContentTrustLevel::EnvelopeOnly | ContentTrustLevel::NeverLongTerm => String::new(),
     }
 }
 

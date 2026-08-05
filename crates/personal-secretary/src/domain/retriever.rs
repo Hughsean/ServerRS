@@ -127,6 +127,34 @@ pub struct ThreadSearchResult {
     pub match_rank: ThreadSearchMatchRank,
 }
 
+/// 存储层检索可见性。调用方不能分别拼接内容策略；所有候选、排序和 LIMIT
+/// 都必须在数据库内先按该范围过滤，避免受限内容影响可见结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetrievalVisibility {
+    /// 非模型内部读取：允许返回 envelope/never 的无正文元数据。
+    InternalMetadata,
+    NormalOnly,
+    NormalAndLocalOnly,
+}
+
+impl RetrievalVisibility {
+    pub fn for_model(is_local_loopback: bool, allow_local_only_to_loopback_llm: bool) -> Self {
+        if is_local_loopback && allow_local_only_to_loopback_llm {
+            Self::NormalAndLocalOnly
+        } else {
+            Self::NormalOnly
+        }
+    }
+
+    pub fn includes_local_only(self) -> bool {
+        matches!(self, Self::NormalAndLocalOnly)
+    }
+
+    pub fn includes_internal_metadata(self) -> bool {
+        matches!(self, Self::InternalMetadata)
+    }
+}
+
 /// 线程检索的确定性文本相关性。数值只在 MySQL 适配器内部映射，领域层不接受任意分数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ThreadSearchMatchRank {
@@ -870,6 +898,7 @@ pub trait RetrieverStoreT: Send + Sync {
     async fn search_events(
         &self,
         query: &EventQuery,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<EventSearchResult>, InboundEventStoreError>;
 
     /// 列出账号最近的 N 条事件证据视图，包含发送者、@、Reply、Thread 和内容策略。
@@ -879,13 +908,15 @@ pub trait RetrieverStoreT: Send + Sync {
         &self,
         account: &SourceAccountRef,
         limit: u16,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<AgentEventView>, InboundEventStoreError>;
 
-    /// 读取单条事件详情。account 限定，envelope_only 返回空正文。
+    /// 读取单条事件详情。授权必须在 SQL 候选阶段执行，不能先读取正文再过滤。
     async fn read_source_event(
         &self,
         event_id: &SourceEventId,
         account: &SourceAccountRef,
+        visibility: RetrievalVisibility,
     ) -> Result<Option<SourceEventDetail>, InboundEventStoreError>;
 
     /// 按关键词搜索线程。
@@ -894,7 +925,7 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         query_text: &str,
         limit: u16,
-        include_local_only: bool,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError>;
 
     /// 查找指代解析候选。Store 只返回候选集合，不判定唯一/歧义。

@@ -300,11 +300,8 @@ WHERE source.candidate_id = ? FOR UPDATE
                 "candidate source actor does not match the authoritative source event actor".into(),
             ));
         }
-        if !matches!(source.memory_mode.as_deref(), Some("normal" | "local_only"))
-            || !matches!(
-                source.content_mode.as_deref(),
-                Some("normal" | "local_only")
-            )
+        if source.memory_mode.as_deref() != Some("normal")
+            || source.content_mode.as_deref() != Some("normal")
         {
             return Err(MemoryCandidateControlStoreError::InvalidData(
                 "candidate source event, conversation, or content projection is missing \

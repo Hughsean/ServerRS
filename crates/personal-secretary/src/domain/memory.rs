@@ -260,6 +260,48 @@ pub struct ConversationMemoryModeReceipt {
     pub changed: bool,
     pub previous_mode: ContentTrustLevel,
     pub current_mode: ContentTrustLevel,
+    pub invalidated: ConversationDerivedStateInvalidation,
+}
+
+/// 会话可见性收紧时在同一事务内失效的派生状态计数。原始 SourceEvent
+/// 和正文投影不删除；计数仅用于有界审计与 Owner 回执。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationDerivedStateInvalidation {
+    pub semantic_claims: u64,
+    pub semantic_decisions: u64,
+    pub open_questions: u64,
+    pub response_expectations: u64,
+    pub thread_link_candidates: u64,
+    pub memory_candidates: u64,
+    pub memory_facts: u64,
+    pub follow_ups: u64,
+    pub notification_outbox: u64,
+    pub participant_profiles: u64,
+    pub participant_observations: u64,
+    pub owner_response_drafts: u64,
+    pub revoked_action_runs: u64,
+    pub reopened_threads: u64,
+    pub revoked_worker_leases: u64,
+}
+
+impl ConversationDerivedStateInvalidation {
+    pub fn total(&self) -> u64 {
+        self.semantic_claims
+            .saturating_add(self.semantic_decisions)
+            .saturating_add(self.open_questions)
+            .saturating_add(self.response_expectations)
+            .saturating_add(self.thread_link_candidates)
+            .saturating_add(self.memory_candidates)
+            .saturating_add(self.memory_facts)
+            .saturating_add(self.follow_ups)
+            .saturating_add(self.notification_outbox)
+            .saturating_add(self.participant_profiles)
+            .saturating_add(self.participant_observations)
+            .saturating_add(self.owner_response_drafts)
+            .saturating_add(self.revoked_action_runs)
+            .saturating_add(self.reopened_threads)
+            .saturating_add(self.revoked_worker_leases)
+    }
 }
 
 pub fn validate_memory_delete(input: &MemoryDeleteInput) -> Result<(), MemoryFactError> {

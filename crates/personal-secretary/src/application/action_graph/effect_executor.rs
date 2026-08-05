@@ -883,7 +883,11 @@ impl SecretaryActionEffectExecutor {
             }
             SecretaryAction::ReadSourceEvent { source_event_id } => {
                 let detail = retriever
-                    .read_source_event(source_event_id, &self.account)
+                    .read_source_event_for_model(
+                        source_event_id,
+                        &self.account,
+                        self.is_local_loopback,
+                    )
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
                 let (summary, event_ids, typed_events) = match detail {
@@ -960,7 +964,11 @@ impl SecretaryActionEffectExecutor {
                 if !resolution.ambiguous {
                     for event_id in resolution.resolved_event_ids.iter().take(20) {
                         if let Some(detail) = retriever
-                            .read_source_event(event_id, &self.account)
+                            .read_source_event_for_model(
+                                event_id,
+                                &self.account,
+                                self.is_local_loopback,
+                            )
                             .await
                             .map_err(|e| {
                                 EffectError::new(EffectErrorKind::Transient, e.to_string())

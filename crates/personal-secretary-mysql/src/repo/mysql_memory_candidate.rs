@@ -832,9 +832,9 @@ WHERE candidate.account_id = ?
                 event.source_event_id IS NULL
                 OR event.account_id <> candidate.account_id
                 OR conversation.id IS NULL
-                OR conversation.memory_mode NOT IN ('normal', 'local_only')
+                OR conversation.memory_mode <> 'normal'
                 OR content.source_event_id IS NULL
-                OR content.content_mode NOT IN ('normal', 'local_only')
+                OR content.content_mode <> 'normal'
                 OR EXISTS (
                     SELECT 1 FROM secretary_message_tombstones tombstone
                     WHERE tombstone.source_event_id = event.source_event_id
@@ -889,6 +889,24 @@ SELECT candidate.candidate_id, candidate.candidate_kind, candidate.subject_key,
        ) AS conflicts_with_active_fact
 FROM secretary_memory_candidates candidate
 WHERE candidate.account_id = ?
+  AND EXISTS (
+      SELECT 1 FROM secretary_memory_candidate_sources source0
+      WHERE source0.candidate_id = candidate.candidate_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM secretary_memory_candidate_sources source
+      LEFT JOIN secretary_source_events event ON event.source_event_id = source.source_event_id
+      LEFT JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+      LEFT JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+      LEFT JOIN secretary_message_tombstones tombstone
+        ON tombstone.source_event_id = event.source_event_id
+       AND tombstone.account_id = event.account_id AND tombstone.status = 'applied'
+      WHERE source.candidate_id = candidate.candidate_id
+        AND (event.source_event_id IS NULL OR event.account_id <> candidate.account_id
+             OR conversation.memory_mode <> 'normal'
+             OR content.source_event_id IS NULL OR content.content_mode <> 'normal'
+             OR tombstone.source_event_id IS NOT NULL)
+  )
 "#,
         );
         let mut params: Vec<sea_orm::Value> = vec![account_id.into()];

@@ -155,10 +155,11 @@ pub use inbound::{
     RichContentKind, SourceAccountRef, SourceMessageRef, VerifiedActor, VerifiedActorKind,
 };
 pub use memory::{
-    CommitmentMemory, CommitmentStatus, ConversationMemoryModeInput, ConversationMemoryModeReceipt,
-    MemoryDeleteInput, MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId,
-    MemoryFactStatus, MemoryFactView, MemoryPayload, MemorySourceExcerpt, MemoryWriteReceipt,
-    PersonMemory, ProjectMemberRef, ProjectMemory, validate_memory_delete, validate_memory_fact,
+    CommitmentMemory, CommitmentStatus, ConversationDerivedStateInvalidation,
+    ConversationMemoryModeInput, ConversationMemoryModeReceipt, MemoryDeleteInput,
+    MemoryDeleteReceipt, MemoryFact, MemoryFactError, MemoryFactId, MemoryFactStatus,
+    MemoryFactView, MemoryPayload, MemorySourceExcerpt, MemoryWriteReceipt, PersonMemory,
+    ProjectMemberRef, ProjectMemory, validate_memory_delete, validate_memory_fact,
     validate_memory_payload,
 };
 pub use memory_candidate::{
@@ -234,8 +235,8 @@ pub use retriever::{
     ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
     ParticipantRef, PendingOwnerWorkItem, PlatformIdentityKind, ProjectContextView,
     ProjectMemorySummary, ReferenceCandidate, ReferenceContext, ReferenceResolution,
-    RetrieverError, RetrieverStoreT, SecretaryStatusView, SourceEventDetail, ThreadActorSummary,
-    ThreadClaimSummary, ThreadContextView, ThreadDecisionRevisionCursor,
+    RetrievalVisibility, RetrieverError, RetrieverStoreT, SecretaryStatusView, SourceEventDetail,
+    ThreadActorSummary, ThreadClaimSummary, ThreadContextView, ThreadDecisionRevisionCursor,
     ThreadDecisionRevisionPage, ThreadDecisionSummary, ThreadQuestionSummary,
     ThreadSearchMatchRank, ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
     check_participant_permission_boundary, filter_for_model, grants_owner_authority,

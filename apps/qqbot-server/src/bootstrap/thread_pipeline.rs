@@ -121,8 +121,8 @@ pub(crate) async fn assemble_thread_workers(
         tracing::info!("跨会话线程关联候选已禁用（thread_links.enabled=false）");
     }
 
-    // 结构化记忆候选提取：独立持久游标 Worker（normal 总是进入；local_only 仅当
-    // 本地端点已验证回环；envelope_only/never_long_term 与已撤回事件不进入模型）。
+    // 结构化记忆候选会跨会话持久化，因此生产 Worker 只处理 normal 来源。
+    // local_only 即使模型端点在本机也不得重新生成跨会话派生。
     if config.memory_candidates.enabled {
         let extractor: Arc<dyn MemoryCandidateExtractorT> = if config.llm.enabled {
             let client = Arc::new(
@@ -162,7 +162,7 @@ pub(crate) async fn assemble_thread_workers(
                 config.memory_candidates.max_event_chars,
                 config.memory_candidates.max_total_input_chars,
                 config.memory_candidates.lease_secs,
-                config.llm_endpoint_verified_loopback(),
+                false,
             )
             .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );

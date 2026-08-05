@@ -18,11 +18,11 @@ use crate::{
     MAX_PARTICIPANT_ALIASES, MAX_PARTICIPANT_ATTRIBUTES, MAX_RELATION_SOURCES, MessageRole,
     ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
     PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
-    RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId,
-    ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView, ThreadDecisionId,
-    ThreadDecisionRevisionCursor, ThreadDecisionRevisionPage, ThreadDecisionSummary,
-    ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem, VerifiedActor,
-    VerifiedActorKind,
+    RetrievalVisibility, RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail,
+    SourceEventId, ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
+    ThreadDecisionId, ThreadDecisionRevisionCursor, ThreadDecisionRevisionPage,
+    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem,
+    VerifiedActor, VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
@@ -248,6 +248,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
     async fn search_events(
         &self,
         query: &EventQuery,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<EventSearchResult>, InboundEventStoreError> {
         crate::validate_event_query(query)
             .map_err(|e| InboundEventStoreError::InvalidData(e.to_string()))?;
@@ -273,6 +274,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
                WHERE e.account_id = ?
+               AND (
+                   (c.memory_mode = 'normal' AND m.content_mode = 'normal')
+                   OR (? AND c.memory_mode IN ('normal', 'local_only')
+                           AND m.content_mode IN ('normal', 'local_only'))
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM secretary_message_tombstones t
                    WHERE t.source_event_id = e.source_event_id
@@ -280,7 +286,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                      AND t.status = 'applied'
                )"#,
         );
-        let mut params: Vec<sea_orm::Value> = vec![EXCERPT_MAX_CHARS.into(), account_id.into()];
+        let mut params: Vec<sea_orm::Value> = vec![
+            EXCERPT_MAX_CHARS.into(),
+            account_id.into(),
+            visibility.includes_local_only().into(),
+        ];
 
         if let Some(conv) = &query.conversation {
             sql.push_str(" AND c.platform_conversation_id = ? AND c.conversation_kind = ?");
@@ -346,6 +356,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         &self,
         event_id: &SourceEventId,
         account: &SourceAccountRef,
+        visibility: RetrievalVisibility,
     ) -> Result<Option<SourceEventDetail>, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
         let row = EventDetailRow::find_by_statement(Statement::from_sql_and_values(
@@ -369,6 +380,12 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
                LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
                WHERE e.source_event_id = ? AND e.account_id = ?
+               AND (
+                   (c.memory_mode = 'normal' AND m.content_mode = 'normal')
+                   OR (? AND c.memory_mode IN ('normal', 'local_only')
+                           AND m.content_mode IN ('normal', 'local_only'))
+                   OR ?
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM secretary_message_tombstones t
                    WHERE t.source_event_id = e.source_event_id
@@ -379,6 +396,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                 EXCERPT_MAX_CHARS.into(),
                 event_id.as_str().into(),
                 account_id.into(),
+                visibility.includes_local_only().into(),
+                visibility.includes_internal_metadata().into(),
             ],
         ))
         .one(&self.db)
@@ -392,7 +411,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         account: &SourceAccountRef,
         query_text: &str,
         limit: u16,
-        include_local_only: bool,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
         let escaped = escape_like_pattern(query_text.trim());
@@ -470,7 +489,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             [
                 account_id.into(),
                 account_id.into(),
-                include_local_only.into(),
+                visibility.includes_local_only().into(),
                 query_text.trim().into(),
                 prefix.clone().into(),
                 query_text.trim().into(),
@@ -612,6 +631,22 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                WHERE f.account_id = ?
                  AND f.fact_kind = 'commitment'
                  AND f.fact_status = 'confirmed'
+                 AND EXISTS (SELECT 1 FROM secretary_memory_fact_sources fs0
+                             WHERE fs0.fact_id = f.fact_id)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_memory_fact_sources fs
+                     LEFT JOIN secretary_source_events se
+                       ON se.source_event_id = fs.source_event_id AND se.account_id = f.account_id
+                     LEFT JOIN secretary_conversations c ON c.id = se.conversation_id
+                     LEFT JOIN secretary_message_contents mc ON mc.source_event_id = se.source_event_id
+                     LEFT JOIN secretary_message_tombstones mt
+                       ON mt.source_event_id = se.source_event_id
+                      AND mt.account_id = se.account_id AND mt.status = 'applied'
+                     WHERE fs.fact_id = f.fact_id
+                       AND (se.source_event_id IS NULL OR c.memory_mode <> 'normal'
+                            OR mc.source_event_id IS NULL OR mc.content_mode <> 'normal'
+                            OR mt.source_event_id IS NOT NULL)
+                 )
                  AND JSON_EXTRACT(fact_json, '$.due_at_unix_secs') IS NOT NULL
                  AND CAST(JSON_EXTRACT(fact_json, '$.due_at_unix_secs') AS SIGNED) BETWEEN ? AND ?
                ORDER BY due_at_unix_secs ASC"#,
@@ -764,10 +799,33 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let Some(overview) = ThreadOverviewRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT t.thread_id, t.status,
-                          (SELECT COUNT(*) FROM secretary_thread_events te
-                           WHERE te.thread_id = t.thread_id) AS event_count
+                          (SELECT COUNT(*)
+                           FROM secretary_effective_thread_events te
+                           JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+                           JOIN secretary_conversations c ON c.id = e.conversation_id
+                           JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                           WHERE te.thread_id = t.thread_id
+                             AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM secretary_message_tombstones mt
+                                 WHERE mt.source_event_id = e.source_event_id
+                                   AND mt.account_id = e.account_id AND mt.status = 'applied'
+                             )) AS event_count
                    FROM secretary_event_threads t
-                   WHERE t.thread_id = ? AND t.account_id = ?"#,
+                   WHERE t.thread_id = ? AND t.account_id = ?
+                     AND EXISTS (
+                         SELECT 1
+                         FROM secretary_effective_thread_events te
+                         JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+                         JOIN secretary_conversations c ON c.id = e.conversation_id
+                         JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                         WHERE te.thread_id = t.thread_id
+                           AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM secretary_message_tombstones mt
+                               WHERE mt.source_event_id = e.source_event_id
+                                 AND mt.account_id = e.account_id AND mt.status = 'applied'
+                           ))"#,
             [thread_id.as_str().into(), account_id.into()],
         ))
         .one(&self.db)
@@ -780,9 +838,17 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let actors = ThreadActorRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT e.actor_kind, e.actor_platform_id, COUNT(*) AS event_count
-               FROM secretary_thread_events te
+               FROM secretary_effective_thread_events te
                INNER JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+               INNER JOIN secretary_conversations c ON c.id = e.conversation_id
+               INNER JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
                WHERE te.thread_id = ? AND e.account_id = ?
+                 AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_message_tombstones mt
+                     WHERE mt.source_event_id = e.source_event_id
+                       AND mt.account_id = e.account_id AND mt.status = 'applied'
+                 )
                GROUP BY e.actor_kind, e.actor_platform_id
                ORDER BY event_count DESC, e.actor_platform_id
                LIMIT 10"#,
@@ -810,6 +876,21 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                         AS source_event_ids
                FROM secretary_thread_claims c
                WHERE c.thread_id = ?
+                 AND EXISTS (SELECT 1 FROM secretary_thread_claim_sources s0
+                             WHERE s0.claim_id = c.claim_id)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_thread_claim_sources s
+                     LEFT JOIN secretary_source_events e ON e.source_event_id = s.source_event_id
+                     LEFT JOIN secretary_conversations cv ON cv.id = e.conversation_id
+                     LEFT JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                     LEFT JOIN secretary_message_tombstones mt
+                       ON mt.source_event_id = e.source_event_id
+                      AND mt.account_id = e.account_id AND mt.status = 'applied'
+                     WHERE s.claim_id = c.claim_id
+                       AND (e.source_event_id IS NULL OR cv.memory_mode <> 'normal'
+                            OR m.source_event_id IS NULL OR m.content_mode <> 'normal'
+                            OR mt.source_event_id IS NOT NULL)
+                 )
                ORDER BY c.created_at DESC, c.claim_id DESC LIMIT 5"#,
             [thread_id.as_str().into()],
         ))
@@ -831,6 +912,21 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                         AS source_event_ids
                FROM secretary_thread_decisions d
                WHERE d.thread_id = ?
+                 AND EXISTS (SELECT 1 FROM secretary_thread_decision_sources s0
+                             WHERE s0.decision_id = d.decision_id)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_thread_decision_sources s
+                     LEFT JOIN secretary_source_events e ON e.source_event_id = s.source_event_id
+                     LEFT JOIN secretary_conversations cv ON cv.id = e.conversation_id
+                     LEFT JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                     LEFT JOIN secretary_message_tombstones mt
+                       ON mt.source_event_id = e.source_event_id
+                      AND mt.account_id = e.account_id AND mt.status = 'applied'
+                     WHERE s.decision_id = d.decision_id
+                       AND (e.source_event_id IS NULL OR cv.memory_mode <> 'normal'
+                            OR m.source_event_id IS NULL OR m.content_mode <> 'normal'
+                            OR mt.source_event_id IS NOT NULL)
+                 )
                ORDER BY d.created_at DESC, d.decision_id DESC LIMIT 5"#,
             [thread_id.as_str().into()],
         ))
@@ -851,6 +947,21 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                             AS source_event_ids
                    FROM secretary_thread_open_questions q
                    WHERE q.thread_id = ? AND q.status = 'open'
+                     AND EXISTS (SELECT 1 FROM secretary_thread_question_sources s0
+                                 WHERE s0.question_id = q.question_id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM secretary_thread_question_sources s
+                         LEFT JOIN secretary_source_events e ON e.source_event_id = s.source_event_id
+                         LEFT JOIN secretary_conversations cv ON cv.id = e.conversation_id
+                         LEFT JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                         LEFT JOIN secretary_message_tombstones mt
+                           ON mt.source_event_id = e.source_event_id
+                          AND mt.account_id = e.account_id AND mt.status = 'applied'
+                         WHERE s.question_id = q.question_id
+                           AND (e.source_event_id IS NULL OR cv.memory_mode <> 'normal'
+                                OR m.source_event_id IS NULL OR m.content_mode <> 'normal'
+                                OR mt.source_event_id IS NOT NULL)
+                     )
                    ORDER BY q.created_at DESC, q.question_id DESC LIMIT 5"#,
                 [thread_id.as_str().into()],
             ),
@@ -905,6 +1016,21 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                    FROM secretary_thread_decisions d
                    INNER JOIN secretary_event_threads t ON t.thread_id = d.thread_id
                    WHERE d.thread_id = ? AND t.account_id = ?
+                     AND EXISTS (SELECT 1 FROM secretary_thread_decision_sources s0
+                                 WHERE s0.decision_id = d.decision_id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM secretary_thread_decision_sources s
+                         LEFT JOIN secretary_source_events e ON e.source_event_id = s.source_event_id
+                         LEFT JOIN secretary_conversations c ON c.id = e.conversation_id
+                         LEFT JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                         LEFT JOIN secretary_message_tombstones mt
+                           ON mt.source_event_id = e.source_event_id
+                          AND mt.account_id = e.account_id AND mt.status = 'applied'
+                         WHERE s.decision_id = d.decision_id
+                           AND (e.source_event_id IS NULL OR c.memory_mode <> 'normal'
+                                OR m.source_event_id IS NULL OR m.content_mode <> 'normal'
+                                OR mt.source_event_id IS NOT NULL)
+                     )
                      AND (d.created_at < TIMESTAMPADD(MICROSECOND, ?, '1970-01-01 00:00:00')
                           OR (d.created_at = TIMESTAMPADD(MICROSECOND, ?, '1970-01-01 00:00:00')
                               AND d.decision_id < ?))
@@ -930,6 +1056,21 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                    FROM secretary_thread_decisions d
                    INNER JOIN secretary_event_threads t ON t.thread_id = d.thread_id
                    WHERE d.thread_id = ? AND t.account_id = ?
+                     AND EXISTS (SELECT 1 FROM secretary_thread_decision_sources s0
+                                 WHERE s0.decision_id = d.decision_id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM secretary_thread_decision_sources s
+                         LEFT JOIN secretary_source_events e ON e.source_event_id = s.source_event_id
+                         LEFT JOIN secretary_conversations c ON c.id = e.conversation_id
+                         LEFT JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                         LEFT JOIN secretary_message_tombstones mt
+                           ON mt.source_event_id = e.source_event_id
+                          AND mt.account_id = e.account_id AND mt.status = 'applied'
+                         WHERE s.decision_id = d.decision_id
+                           AND (e.source_event_id IS NULL OR c.memory_mode <> 'normal'
+                                OR m.source_event_id IS NULL OR m.content_mode <> 'normal'
+                                OR mt.source_event_id IS NOT NULL)
+                     )
                    ORDER BY d.created_at DESC, d.decision_id DESC
                    LIMIT ?"#,
                 vec![
@@ -988,10 +1129,19 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind,
                       e.reply_to_event_id, p.display_name
                FROM secretary_source_events e
+               JOIN secretary_conversations c ON c.id = e.conversation_id
+               JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
                LEFT JOIN secretary_participant_profiles p
                  ON p.account_id = e.account_id AND p.actor_platform_id = e.actor_platform_id
-                    AND p.current = 1
-               WHERE e.source_event_id = ? AND e.account_id = ?"#,
+                    AND p.current = 1 AND p.invalidated = 0
+               WHERE e.source_event_id = ? AND e.account_id = ?
+                 AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM secretary_message_tombstones tombstone
+                     WHERE tombstone.source_event_id = e.source_event_id
+                       AND tombstone.account_id = e.account_id
+                       AND tombstone.status = 'applied'
+                 )"#,
             [source_event_id.as_str().into(), account_id.into()],
         ))
         .one(&self.db)
@@ -1021,8 +1171,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
 
         // 结构关系从可重建 VIEW（secretary_event_relations）读取：sent_by / mentions /
         // replies_to / member_of_thread / thread_root_by，全部账号强制。
-        let structural =
+        let mut structural =
             load_structural_relations(&self.db, account, account_id, source_event_id).await?;
+        if event.reply_to_event_id.is_some() && reply_parent.is_none() {
+            structural.retain(|relation| relation.kind != EventRelationKind::RepliesTo);
+        }
 
         // 已确认要求者：线程上 status=confirmed 的 request 声明（Requester 必须带来源）。
         let confirmed_requesters =
@@ -1193,7 +1346,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         }
         let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
         let profile = profiles.pop();
-        if profile.is_none() && event_kind.is_none() {
+        if event_kind.is_none() {
             return Ok(None);
         }
         // 身份种类优先取档案行（档案键的一部分），无档案时由最近事件恢复。
@@ -1229,7 +1382,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let profile =
             load_current_profile_by_kind(&self.db, account_id, identity_kind, actor_id).await?;
         let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
-        if profile.is_none() && event_kind.is_none() {
+        if event_kind.is_none() {
             return Ok(None);
         }
         self.participant_context_impl(
@@ -1280,12 +1433,12 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             trust: String,
         }
         // 来源有效性门与 source_refs_valid 语义一致：档案/观察的来源事件必须存在、
-        // 无 applied 撤回、会话与事件均非 never_long_term、正文投影存在，且列表非空。
+        // 无 applied 撤回、会话与事件均为 normal、正文投影存在，且列表非空。
         // 属性级建立来源门（P0-2）：档案显示名、观察群名片、每个别名各自携带
         // established_by_event_id / source_event_id 指向其建立事件；该事件被挤出
         // 10 条有界来源窗口或被撤回/降级后，对应属性不得再支撑 by-name 命中。
         // 单事件有效性用派生表驱动（MySQL 8.4 支持相关派生表），语义与
-        // single_event_valid 完全一致：事件缺失/撤回/never_long_term/无投影即失效。
+        // single_event_valid 完全一致：事件缺失/撤回/非 normal/无投影即失效。
         let rows = CandidateRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT p.actor_platform_id, p.platform_identity_kind, p.trust
@@ -1297,7 +1450,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                     AND o.invalidated = 0
                     -- 无会话参数（NULL）时观察不参与 JOIN，群名片绝不跨群匹配。
                     AND (? IS NOT NULL AND o.conversation_id = ?)
-               WHERE p.account_id = ? AND p.current = 1
+               WHERE p.account_id = ? AND p.current = 1 AND p.invalidated = 0
                  AND JSON_LENGTH(p.source_event_ids_json) > 0
                  AND NOT EXISTS (
                      SELECT 1 FROM JSON_TABLE(CAST(p.source_event_ids_json AS CHAR), '$[*]'
@@ -1310,8 +1463,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                        ON t.source_event_id = jt.sid AND t.status = 'applied'
                      WHERE e.source_event_id IS NULL
                         OR t.source_event_id IS NOT NULL
-                        OR c.memory_mode = 'never_long_term'
-                        OR m.content_mode = 'never_long_term'
+                        OR c.memory_mode <> 'normal'
+                        OR m.content_mode <> 'normal'
                         OR m.source_event_id IS NULL
                  )
                  AND (
@@ -1328,8 +1481,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                            ON td.source_event_id = r.sid AND td.status = 'applied'
                          WHERE ed.source_event_id IS NULL
                             OR td.source_event_id IS NOT NULL
-                            OR cd.memory_mode = 'never_long_term'
-                            OR md.content_mode = 'never_long_term'
+                            OR cd.memory_mode <> 'normal'
+                            OR md.content_mode <> 'normal'
                             OR md.source_event_id IS NULL
                      )
                      -- 别名分支：命中的别名必须携带自身来源事件且该来源独立有效，
@@ -1348,8 +1501,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                                  ON ta.source_event_id = r2.sid AND ta.status = 'applied'
                                WHERE ea.source_event_id IS NULL
                                   OR ta.source_event_id IS NOT NULL
-                                  OR ca.memory_mode = 'never_long_term'
-                                  OR ma.content_mode = 'never_long_term'
+                                  OR ca.memory_mode <> 'normal'
+                                  OR ma.content_mode <> 'normal'
                                   OR ma.source_event_id IS NULL
                            ))
                      OR (o.observation_id IS NOT NULL
@@ -1367,8 +1520,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                                ON tz.source_event_id = r3.sid AND tz.status = 'applied'
                              WHERE eo.source_event_id IS NULL
                                 OR tz.source_event_id IS NOT NULL
-                                OR co.memory_mode = 'never_long_term'
-                                OR mo.content_mode = 'never_long_term'
+                                OR co.memory_mode <> 'normal'
+                                OR mo.content_mode <> 'normal'
                                 OR mo.source_event_id IS NULL
                          )
                          AND NOT EXISTS (
@@ -1382,8 +1535,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                                ON t2.source_event_id = jo.sid AND t2.status = 'applied'
                              WHERE e2.source_event_id IS NULL
                                 OR t2.source_event_id IS NOT NULL
-                                OR c2.memory_mode = 'never_long_term'
-                                OR m2.content_mode = 'never_long_term'
+                                OR c2.memory_mode <> 'normal'
+                                OR m2.content_mode <> 'normal'
                                 OR m2.source_event_id IS NULL
                          ))
                  )
@@ -1432,6 +1585,7 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         &self,
         account: &SourceAccountRef,
         limit: u16,
+        visibility: RetrievalVisibility,
     ) -> Result<Vec<AgentEventView>, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
         let sql = format!(
@@ -1458,6 +1612,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                LEFT JOIN secretary_effective_thread_events te
                    ON te.source_event_id = e.source_event_id
                WHERE e.account_id = ?
+               AND (
+                   (c.memory_mode = 'normal' AND m.content_mode = 'normal')
+                   OR (? AND c.memory_mode IN ('normal', 'local_only')
+                           AND m.content_mode IN ('normal', 'local_only'))
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM secretary_message_tombstones t
                    WHERE t.source_event_id = e.source_event_id
@@ -1471,7 +1630,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let mut rows = RecentEventViewRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             &sql,
-            vec![account_id.into(), (limit as u64).into()],
+            vec![
+                account_id.into(),
+                visibility.includes_local_only().into(),
+                (limit as u64).into(),
+            ],
         ))
         .all(&self.db)
         .await
@@ -1514,8 +1677,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                    WHERE fs.fact_id = f.fact_id
                      AND (se.source_event_id IS NULL
                           OR t.source_event_id IS NOT NULL
-                          OR c.memory_mode IS NULL OR c.memory_mode IN ('never_long_term', 'envelope_only')
-                          OR mc.content_mode IS NULL OR mc.content_mode IN ('never_long_term', 'envelope_only')
+                          OR c.memory_mode IS NULL OR c.memory_mode <> 'normal'
+                          OR mc.content_mode IS NULL OR mc.content_mode <> 'normal'
                           OR mc.source_event_id IS NULL)
                  )
                ORDER BY f.updated_at DESC, f.fact_id DESC
@@ -1624,8 +1787,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                    WHERE fs.fact_id = fs0.fact_id
                      AND (se.source_event_id IS NULL
                           OR t.source_event_id IS NOT NULL
-                          OR c.memory_mode IS NULL OR c.memory_mode IN ('never_long_term', 'envelope_only')
-                          OR mc.content_mode IS NULL OR mc.content_mode IN ('never_long_term', 'envelope_only')
+                          OR c.memory_mode IS NULL OR c.memory_mode <> 'normal'
+                          OR mc.content_mode IS NULL OR mc.content_mode <> 'normal'
                           OR mc.source_event_id IS NULL)
                  )
                LIMIT 1"#,
@@ -1765,8 +1928,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                    WHERE fs.fact_id = f.fact_id
                      AND (se.source_event_id IS NULL
                           OR t.source_event_id IS NOT NULL
-                          OR c.memory_mode IS NULL OR c.memory_mode = 'never_long_term'
-                          OR mc.content_mode IS NULL OR mc.content_mode = 'never_long_term'
+                          OR c.memory_mode IS NULL OR c.memory_mode <> 'normal'
+                          OR mc.content_mode IS NULL OR mc.content_mode <> 'normal'
                           OR mc.source_event_id IS NULL)
                  ){status_clause}{promisor_clause}{beneficiary_clause}{due_since_clause}{due_until_clause}
                ORDER BY f.updated_at DESC, f.fact_id DESC
@@ -2489,10 +2652,19 @@ async fn load_reply_parent(
         r#"SELECT p.source_event_id, p.actor_platform_id, p.actor_kind,
                   p.reply_to_event_id, pp.display_name
            FROM secretary_source_events p
+           JOIN secretary_conversations c ON c.id = p.conversation_id
+           JOIN secretary_message_contents m ON m.source_event_id = p.source_event_id
            LEFT JOIN secretary_participant_profiles pp
              ON pp.account_id = p.account_id AND pp.actor_platform_id = p.actor_platform_id
-                AND pp.current = 1
-           WHERE p.source_event_id = ? AND p.account_id = ?"#,
+                AND pp.current = 1 AND pp.invalidated = 0
+           WHERE p.source_event_id = ? AND p.account_id = ?
+             AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_message_tombstones tombstone
+                 WHERE tombstone.source_event_id = p.source_event_id
+                   AND tombstone.account_id = p.account_id
+                   AND tombstone.status = 'applied'
+             )"#,
         [parent_id.into(), account_id.into()],
     ))
     .one(db)
@@ -2543,10 +2715,19 @@ async fn load_effective_thread(
            JOIN secretary_event_threads t ON t.thread_id = ev.thread_id
            JOIN secretary_source_events e ON e.source_event_id = ev.source_event_id
            JOIN secretary_source_events r ON r.source_event_id = t.root_event_id
+           JOIN secretary_conversations rc ON rc.id = r.conversation_id
+           JOIN secretary_message_contents rm ON rm.source_event_id = r.source_event_id
            LEFT JOIN secretary_participant_profiles rp
              ON rp.account_id = t.account_id AND rp.actor_platform_id = r.actor_platform_id
-                AND rp.current = 1
+                AND rp.current = 1 AND rp.invalidated = 0
            WHERE ev.source_event_id = ? AND e.account_id = ? AND t.account_id = ?
+             AND rc.memory_mode = 'normal' AND rm.content_mode = 'normal'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_message_tombstones tombstone
+                 WHERE tombstone.source_event_id = r.source_event_id
+                   AND tombstone.account_id = r.account_id
+                   AND tombstone.status = 'applied'
+             )
            LIMIT 1"#,
         [
             source_event_id.as_str().into(),
@@ -2632,11 +2813,13 @@ async fn load_thread_participants(
                   p.display_name, o.group_role
            FROM secretary_effective_thread_events te
            JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
+           JOIN secretary_conversations c ON c.id = e.conversation_id
+           JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
            LEFT JOIN secretary_participant_profiles p
              ON p.account_id = e.account_id
                 AND p.platform_identity_kind = e.actor_kind
                 AND p.actor_platform_id = e.actor_platform_id
-                AND p.current = 1
+                AND p.current = 1 AND p.invalidated = 0
            LEFT JOIN secretary_participant_conversation_observations o
              ON o.account_id = e.account_id
                 AND o.conversation_id = e.conversation_id
@@ -2644,6 +2827,13 @@ async fn load_thread_participants(
                 AND o.actor_platform_id = e.actor_platform_id
                 AND o.invalidated = 0
            WHERE te.thread_id = ? AND e.account_id = ?
+             AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_message_tombstones tombstone
+                 WHERE tombstone.source_event_id = e.source_event_id
+                   AND tombstone.account_id = e.account_id
+                   AND tombstone.status = 'applied'
+             )
            GROUP BY e.actor_platform_id, e.actor_kind, p.display_name, o.group_role
            ORDER BY event_count DESC, e.actor_platform_id
            LIMIT ?"#,
@@ -2775,6 +2965,26 @@ async fn load_confirmed_requesters(
            JOIN secretary_thread_claim_sources s ON s.claim_id = c.claim_id
            WHERE c.thread_id = ? AND t.account_id = ?
              AND c.claim_kind = 'request' AND c.status = 'confirmed'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_thread_claim_sources source_check
+                 LEFT JOIN secretary_source_events event_check
+                   ON event_check.source_event_id = source_check.source_event_id
+                 LEFT JOIN secretary_conversations conversation_check
+                   ON conversation_check.id = event_check.conversation_id
+                 LEFT JOIN secretary_message_contents content_check
+                   ON content_check.source_event_id = event_check.source_event_id
+                 LEFT JOIN secretary_message_tombstones tombstone_check
+                   ON tombstone_check.source_event_id = event_check.source_event_id
+                  AND tombstone_check.account_id = event_check.account_id
+                  AND tombstone_check.status = 'applied'
+                 WHERE source_check.claim_id = c.claim_id
+                   AND (event_check.source_event_id IS NULL
+                        OR event_check.account_id <> t.account_id
+                        OR conversation_check.memory_mode <> 'normal'
+                        OR content_check.source_event_id IS NULL
+                        OR content_check.content_mode <> 'normal'
+                        OR tombstone_check.source_event_id IS NOT NULL)
+             )
            GROUP BY c.claim_id, c.claimant_actor_id, c.claim_kind, c.status
            LIMIT 5"#,
         [thread.thread_id.as_str().into(), account_id.into()],
@@ -2838,8 +3048,8 @@ async fn load_confirmed_commitments(
                  LEFT JOIN secretary_message_contents m2
                    ON m2.source_event_id = fs2.source_event_id
                  WHERE fs2.fact_id = f.fact_id
-                   AND (c2.memory_mode IN ('envelope_only', 'never_long_term')
-                        OR m2.content_mode IN ('envelope_only', 'never_long_term')
+                   AND (c2.memory_mode <> 'normal'
+                        OR m2.content_mode <> 'normal'
                         OR m2.source_event_id IS NULL)
              )
              AND NOT EXISTS (
@@ -3041,7 +3251,7 @@ async fn resolve_thread_conversation_id(
 
 /// 单个建立事件的独立有效性（P0：当前值必须由建立事件支撑，不受有界来源列表
 /// 淘汰影响）。语义与 source_refs_valid 一致：事件必须存在、无撤回、非
-/// never_long_term、正文投影存在。
+/// normal，且正文投影存在。
 async fn single_event_valid(
     db: &DatabaseConnection,
     account_id: u64,
@@ -3052,7 +3262,7 @@ async fn single_event_valid(
 }
 
 /// 来源有效性（fail-closed）：来源事件消失、已被撤回、正文投影缺失或会话/事件为
-/// never_long_term 时，该档案/观察不得作为长期事实返回。来源列表为空视为无效。
+/// 非 normal 时，该档案/观察不得作为跨会话事实返回。来源列表为空视为无效。
 async fn source_refs_valid(
     db: &DatabaseConnection,
     account_id: u64,
@@ -3084,8 +3294,8 @@ async fn source_refs_valid(
                ON t.source_event_id = jt.sid AND t.status = 'applied'
              WHERE e.source_event_id IS NULL
                 OR t.source_event_id IS NOT NULL
-                OR c.memory_mode = 'never_long_term'
-                OR m.content_mode = 'never_long_term'
+                OR c.memory_mode <> 'normal'
+                OR m.content_mode <> 'normal'
                 OR m.source_event_id IS NULL
            ) AS valid"#,
         [source_json.into(), account_id.into()],
@@ -3108,10 +3318,19 @@ async fn load_actor_kind_from_events(
 ) -> Result<Option<String>, InboundEventStoreError> {
     let row = ActorKindRow::find_by_statement(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
-        r#"SELECT actor_kind
-           FROM secretary_source_events
-           WHERE account_id = ? AND actor_platform_id = ?
-           ORDER BY occurred_at_unix_secs DESC, source_event_id DESC
+        r#"SELECT e.actor_kind
+           FROM secretary_source_events e
+           JOIN secretary_conversations c ON c.id = e.conversation_id
+           JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+           WHERE e.account_id = ? AND e.actor_platform_id = ?
+             AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_message_tombstones tombstone
+                 WHERE tombstone.source_event_id = e.source_event_id
+                   AND tombstone.account_id = e.account_id
+                   AND tombstone.status = 'applied'
+             )
+           ORDER BY e.occurred_at_unix_secs DESC, e.source_event_id DESC
            LIMIT 1"#,
         [account_id.into(), actor_id.into()],
     ))
@@ -3133,10 +3352,19 @@ async fn load_related_event_ids(
 ) -> Result<Vec<SourceEventId>, InboundEventStoreError> {
     let rows = RecentEventIdRow::find_by_statement(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
-        r#"SELECT source_event_id
-           FROM secretary_source_events
-           WHERE account_id = ? AND actor_platform_id = ?
-           ORDER BY occurred_at_unix_secs DESC, source_event_id DESC
+        r#"SELECT e.source_event_id
+           FROM secretary_source_events e
+           JOIN secretary_conversations c ON c.id = e.conversation_id
+           JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+           WHERE e.account_id = ? AND e.actor_platform_id = ?
+             AND c.memory_mode = 'normal' AND m.content_mode = 'normal'
+             AND NOT EXISTS (
+                 SELECT 1 FROM secretary_message_tombstones tombstone
+                 WHERE tombstone.source_event_id = e.source_event_id
+                   AND tombstone.account_id = e.account_id
+                   AND tombstone.status = 'applied'
+             )
+           ORDER BY e.occurred_at_unix_secs DESC, e.source_event_id DESC
            LIMIT 10"#,
         [account_id.into(), actor_id.into()],
     ))
@@ -3180,8 +3408,8 @@ async fn load_confirmed_person_memory(
                  LEFT JOIN secretary_message_contents m2
                    ON m2.source_event_id = fs2.source_event_id
                  WHERE fs2.fact_id = f.fact_id
-                   AND (c2.memory_mode IN ('envelope_only', 'never_long_term')
-                        OR m2.content_mode IN ('envelope_only', 'never_long_term')
+                   AND (c2.memory_mode <> 'normal'
+                        OR m2.content_mode <> 'normal'
                         OR m2.source_event_id IS NULL)
              )
              AND NOT EXISTS (

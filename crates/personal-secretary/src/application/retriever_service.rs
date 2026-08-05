@@ -11,11 +11,12 @@ use crate::{
     AccountScopedParticipantRef, Clock, CommitmentQuery, CommitmentSummary, ContentTrustLevel,
     ConversationRef, EventCausalContextView, EventQuery, EventSearchResult, EventThreadId,
     InboundEventStoreError, ParticipantContextView, PendingOwnerWorkItem, ProjectContextView,
-    ProjectMemorySummary, ReferenceContext, ReferenceResolution, RetrieverError, RetrieverStoreT,
-    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, SystemClock,
-    ThreadContextView, ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
-    check_participant_permission_boundary, filter_for_model, resolve_reference_from_candidates,
-    validate_causal_context, validate_event_query, validate_participant_context,
+    ProjectMemorySummary, ReferenceContext, ReferenceResolution, RetrievalVisibility,
+    RetrieverError, RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail,
+    SourceEventId, SystemClock, ThreadContextView, ThreadSearchResult, UpcomingItem,
+    check_causal_role_strictness, check_participant_permission_boundary,
+    resolve_reference_from_candidates, validate_causal_context, validate_event_query,
+    validate_participant_context,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,17 +108,14 @@ impl RetrieverUseCase {
         limit: u16,
         is_local_loopback: bool,
     ) -> Result<Vec<AgentEventView>, RetrieverUseCaseError> {
-        let views = self.store.list_recent_event_views(account, limit).await?;
-        Ok(views
-            .into_iter()
-            .filter(|v| {
-                crate::is_allowed_for_model(
-                    v.content_trust_level,
-                    is_local_loopback,
-                    self.policy.allow_local_only_to_loopback_llm,
-                )
-            })
-            .collect())
+        let visibility = RetrievalVisibility::for_model(
+            is_local_loopback,
+            self.policy.allow_local_only_to_loopback_llm,
+        );
+        Ok(self
+            .store
+            .list_recent_event_views(account, limit, visibility)
+            .await?)
     }
 
     /// 检索事件并按内容策略过滤。
@@ -128,12 +126,11 @@ impl RetrieverUseCase {
         is_local_loopback: bool,
     ) -> Result<Vec<EventSearchResult>, RetrieverUseCaseError> {
         validate_event_query(query).map_err(RetrieverUseCaseError::Domain)?;
-        let results = self.store.search_events(query).await?;
-        Ok(filter_for_model(
-            results,
+        let visibility = RetrievalVisibility::for_model(
             is_local_loopback,
             self.policy.allow_local_only_to_loopback_llm,
-        ))
+        );
+        Ok(self.store.search_events(query, visibility).await?)
     }
 
     pub async fn read_source_event(
@@ -141,7 +138,28 @@ impl RetrieverUseCase {
         event_id: &crate::SourceEventId,
         account: &SourceAccountRef,
     ) -> Result<Option<SourceEventDetail>, RetrieverUseCaseError> {
-        Ok(self.store.read_source_event(event_id, account).await?)
+        Ok(self
+            .store
+            .read_source_event(event_id, account, RetrievalVisibility::InternalMetadata)
+            .await?)
+    }
+
+    /// 读取允许进入当前模型边界的单条事件。`local_only` 例外只对已验证的
+    /// 本地 loopback 模型开放，授权在数据库查询正文前完成。
+    pub async fn read_source_event_for_model(
+        &self,
+        event_id: &crate::SourceEventId,
+        account: &SourceAccountRef,
+        is_local_loopback: bool,
+    ) -> Result<Option<SourceEventDetail>, RetrieverUseCaseError> {
+        let visibility = RetrievalVisibility::for_model(
+            is_local_loopback,
+            self.policy.allow_local_only_to_loopback_llm,
+        );
+        Ok(self
+            .store
+            .read_source_event(event_id, account, visibility)
+            .await?)
     }
 
     pub async fn search_threads(
@@ -162,7 +180,7 @@ impl RetrieverUseCase {
         }
         Ok(self
             .store
-            .search_threads(account, query_text, limit, false)
+            .search_threads(account, query_text, limit, RetrievalVisibility::NormalOnly)
             .await?)
     }
 
@@ -185,10 +203,13 @@ impl RetrieverUseCase {
                 "limit must be in 1..=100".into(),
             ));
         }
-        let include_local_only = is_local_loopback && self.policy.allow_local_only_to_loopback_llm;
+        let visibility = RetrievalVisibility::for_model(
+            is_local_loopback,
+            self.policy.allow_local_only_to_loopback_llm,
+        );
         let results = self
             .store
-            .search_threads(account, query_text, limit, include_local_only)
+            .search_threads(account, query_text, limit, visibility)
             .await?;
         Ok(results)
     }
@@ -436,7 +457,11 @@ impl RetrieverUseCase {
                 }
                 let detail = self
                     .store
-                    .read_source_event(&event.source_event_id, &context.account)
+                    .read_source_event(
+                        &event.source_event_id,
+                        &context.account,
+                        RetrievalVisibility::NormalOnly,
+                    )
                     .await?;
                 if let Some(detail) = detail
                     && &detail.conversation == current_conversation
@@ -621,13 +646,26 @@ mod tests {
         async fn search_events(
             &self,
             _query: &EventQuery,
+            visibility: RetrievalVisibility,
         ) -> Result<Vec<EventSearchResult>, InboundEventStoreError> {
-            Ok(self.events.lock().unwrap().clone())
+            Ok(self
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    matches!(event.content_trust_level, ContentTrustLevel::Normal)
+                        || (visibility.includes_local_only()
+                            && matches!(event.content_trust_level, ContentTrustLevel::LocalOnly))
+                })
+                .cloned()
+                .collect())
         }
         async fn list_recent_event_views(
             &self,
             _account: &SourceAccountRef,
             _limit: u16,
+            _visibility: RetrievalVisibility,
         ) -> Result<Vec<AgentEventView>, InboundEventStoreError> {
             Ok(Vec::new())
         }
@@ -635,6 +673,7 @@ mod tests {
             &self,
             event_id: &SourceEventId,
             _account: &SourceAccountRef,
+            _visibility: RetrievalVisibility,
         ) -> Result<Option<SourceEventDetail>, InboundEventStoreError> {
             Ok(self
                 .details
@@ -649,7 +688,7 @@ mod tests {
             _account: &SourceAccountRef,
             _query_text: &str,
             _limit: u16,
-            _include_local_only: bool,
+            _visibility: RetrievalVisibility,
         ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError> {
             Ok(self.threads.lock().unwrap().clone())
         }

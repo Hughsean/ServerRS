@@ -45,6 +45,11 @@
   隔离 MySQL recovery claim/fencing/finalize 1/1 通过。完整门禁还发现并修复 fake HTTP 未声明
   `Connection: close` 导致的并发能力探测不确定性。真实整机休眠、断网和 NapCat 进程退出仍由
   `EXTERNAL OPS-LIVE` 验收。
+- **本轮（THR-009，已完成）**：跨会话检索在 SQL 候选阶段执行来源授权过滤，受限来源不能通过按
+  ID、因果、参与者、按名解析、记忆候选或旧 Action/Owner 草稿旁路读取正文。`local_only` 仅对显式
+  授权的本地模型开放；会话降级在同一事务内失效语义、线程链接、记忆派生、Planner 租约和草稿。
+  领域 285/285、`qqbot-server` 176 passed/2 ignored、架构 24/24，THR-009 及既有 MySQL 回归
+  通过；无迁移或 schema 变更。
 - **本轮（THR-002，已完成）**：跨会话候选新增三类强证据：显式文件版本、精确 Forward 引用和
   完整 Rich 载荷摘要。文件版本采用当前文件键指向上一版本键的显式关系，不从文件名、发送者或
   相似正文推断；Forward 键大小写敏感，Rich 摘要覆盖未截断载荷并按 JSON/XML/Card 域分隔。
