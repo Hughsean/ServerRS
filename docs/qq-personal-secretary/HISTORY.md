@@ -125,6 +125,12 @@
 
 ## 最近事件
 
+- `2026-08-06 03:37（Asia/Shanghai）`：`THR-008` 完成。新增只读线程关联候选 Action，MySQL
+  按账号直接过滤并有界展示 `proposed`；置信度分档只控制“低置信度/中等置信度/强证据”确认话术，所有
+  候选都明确要求 Owner 接受或拒绝且不自动合并。响应草稿携带两侧有界来源摘录和精确来源事件，
+  在本地 MySQL 持久化完成后即构成本切片产物，不依赖 QQ 开放平台投递。领域 285/285、
+  `qqbot-server` 176 passed/2 ignored、架构 24/24；THR-008 1/1 与 Action Planner 6/6 隔离
+  MySQL 通过，严格 Clippy、workspace check、fmt 与 diff check 全绿。
 - `2026-08-06 03:18（Asia/Shanghai）`：`THR-006` 完成。新增封闭的
   `ThreadResolutionEvidenceKind` 与显式文本分类器，自动解决只对本批完整来源事件生成
   `open/waiting/reopened -> resolved`；OwnerCommand 产生 owner authority，其他明确陈述为

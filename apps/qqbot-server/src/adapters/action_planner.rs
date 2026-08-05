@@ -109,6 +109,7 @@ read_memory_fact_sources, correct_memory_fact, delete_memory_fact, set_memory_fa
 set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, get_event_causal_context, get_participant_context,
 get_participant_context_by_name,
+list_thread_link_candidates,
 confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
@@ -804,6 +805,9 @@ fn build_action(
         "list_memory_candidates" => Ok(SecretaryAction::ListMemoryCandidates {
             status: raw.candidate_status,
             kind: raw.candidate_kind,
+            limit: raw.limit.unwrap_or(10),
+        }),
+        "list_thread_link_candidates" => Ok(SecretaryAction::ListThreadLinkCandidates {
             limit: raw.limit.unwrap_or(10),
         }),
         "approve_memory_candidate" => Ok(SecretaryAction::ApproveMemoryCandidate {
@@ -1708,6 +1712,7 @@ fn tool_kind_display_name(kind: personal_secretary::SecretaryToolKind) -> &'stat
         ListMemoryCandidates => "列出记忆候选",
         ApproveMemoryCandidate => "批准记忆候选",
         RejectMemoryCandidate => "拒绝记忆候选",
+        ListThreadLinkCandidates => "列出待确认线程关联候选",
         ListProjects => "列出项目",
         QueryProject => "查询项目",
         ListCommitments => "列出承诺",
@@ -3290,5 +3295,30 @@ mod tests {
             result.is_ok(),
             "L0 只读动作不需要 command evidence: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn low_confidence_thread_link_query_maps_to_local_read_only_action() {
+        let (planner, _client) = planner_with_response(json!({
+            "kind": "proposal",
+            "tool": "list_thread_link_candidates",
+            "rationale": "列出需要 Owner 确认的关联候选",
+            "evidence": [],
+            "limit": 10
+        }));
+        let output = planner.plan(&input()).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => {
+                assert_eq!(
+                    proposal.action,
+                    SecretaryAction::ListThreadLinkCandidates { limit: 10 }
+                );
+                assert_eq!(
+                    proposal.action.kind().policy().risk,
+                    personal_secretary::SecretaryRiskLevel::L0ReadOnly
+                );
+            }
+            other => panic!("expected thread-link query proposal, got {other:?}"),
+        }
     }
 }

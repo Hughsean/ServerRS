@@ -472,6 +472,9 @@ fn non_query_tools_not_replan_eligible() {
     assert!(!is_replan_observation_tool(
         SecretaryToolKind::ApproveMemoryCandidate
     ));
+    assert!(!is_replan_observation_tool(
+        SecretaryToolKind::ListThreadLinkCandidates
+    ));
 }
 
 // ===== CTX-004-VERIFY：全 Graph Replan 闭环集成测试 =====

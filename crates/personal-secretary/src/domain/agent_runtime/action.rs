@@ -78,6 +78,7 @@ pub enum SecretaryToolKind {
     ListMemoryCandidates,
     ApproveMemoryCandidate,
     RejectMemoryCandidate,
+    ListThreadLinkCandidates,
     ListProjects,
     QueryProject,
     ListCommitments,
@@ -112,6 +113,7 @@ impl SecretaryToolKind {
             | Self::ListMemoryFacts
             | Self::ReadMemoryFactSources
             | Self::ListMemoryCandidates
+            | Self::ListThreadLinkCandidates
             | Self::ListProjects
             | Self::QueryProject
             | Self::ListCommitments => SecretaryToolPolicy {
@@ -504,6 +506,11 @@ pub enum SecretaryAction {
         kind: Option<MemoryCandidateKind>,
         limit: u16,
     },
+    /// 列出当前账号待 Owner 确认的跨会话线程关联候选。所有候选保持
+    /// `proposed`；置信度只用于确认话术，绝不自动合并线程。
+    ListThreadLinkCandidates {
+        limit: u16,
+    },
     /// 批准一个记忆候选：候选 proposal -> approved（版本精确 +1），并原子写入
     /// Confirmed MemoryFact 与精确来源。没有自动撤销入口。
     /// expected_candidate_version 必须来自 ListMemoryCandidates 展示的版本 N。
@@ -616,6 +623,7 @@ impl SecretaryAction {
             Self::ListMemoryCandidates { .. } => SecretaryToolKind::ListMemoryCandidates,
             Self::ApproveMemoryCandidate { .. } => SecretaryToolKind::ApproveMemoryCandidate,
             Self::RejectMemoryCandidate { .. } => SecretaryToolKind::RejectMemoryCandidate,
+            Self::ListThreadLinkCandidates { .. } => SecretaryToolKind::ListThreadLinkCandidates,
             Self::ListProjects { .. } => SecretaryToolKind::ListProjects,
             Self::QueryProject { .. } => SecretaryToolKind::QueryProject,
             Self::ListCommitments { .. } => SecretaryToolKind::ListCommitments,

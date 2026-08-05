@@ -137,6 +137,7 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | DismissResponseExpectation { .. }
             | DismissResponseExpectations { .. }
             | ListMemoryCandidates { .. }
+            | ListThreadLinkCandidates { .. }
             | ApproveMemoryCandidate { .. }
             | RejectMemoryCandidate { .. }
             | ListProjects { .. }

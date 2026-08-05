@@ -40,6 +40,26 @@ fn read_only_action_executes_without_suspension() {
 }
 
 #[test]
+fn pending_thread_link_candidates_are_read_only_and_bounded() {
+    let result = gate_secretary_action(proposal(
+        SecretaryAction::ListThreadLinkCandidates { limit: 20 },
+        None,
+    ))
+    .unwrap();
+    assert!(matches!(result, NodeResult::Continue { .. }));
+    assert_eq!(result.effects().len(), 1);
+
+    let error = SecretaryActionProposal::new(
+        SecretaryAction::ListThreadLinkCandidates { limit: 21 },
+        "列出候选",
+        Vec::new(),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("limit"));
+}
+
+#[test]
 fn external_side_effect_always_suspends_without_effect() {
     let result = gate_secretary_action(proposal(
         SecretaryAction::SendOwnerMessage {

@@ -11,6 +11,7 @@ use personal_secretary::{
     MemoryCandidateUseCase, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
     PlannerOutput, PlannerUseCase, ResponseExpectationControlUseCase, RetrieverPolicy,
     RetrieverUseCase, SecretaryAgentState, SourceAccountRef, SystemClock, ThreadControlUseCase,
+    ThreadLinkReviewUseCase,
 };
 use personal_secretary_mysql::{
     build_mysql_action_checkpoint_store_factory, build_mysql_action_store,
@@ -18,7 +19,7 @@ use personal_secretary_mysql::{
     build_mysql_memory_candidate_control_store, build_mysql_memory_candidate_store,
     build_mysql_memory_store, build_mysql_notification_policy_store,
     build_mysql_response_expectation_control_store, build_mysql_retriever_store,
-    build_mysql_thread_control_store,
+    build_mysql_thread_control_store, build_mysql_thread_link_store,
 };
 use sea_orm::DatabaseConnection;
 
@@ -119,6 +120,9 @@ pub(crate) async fn assemble_action_planner(
     let memory_candidate_control = Arc::new(MemoryCandidateControlUseCase::new(
         build_mysql_memory_candidate_control_store(db.clone()),
     ));
+    let thread_link_review = Arc::new(ThreadLinkReviewUseCase::new(build_mysql_thread_link_store(
+        db.clone(),
+    )));
     let use_case = Arc::new(
         PlannerUseCase::new(
             action_store,
@@ -135,6 +139,7 @@ pub(crate) async fn assemble_action_planner(
         .with_response_expectation_control(response_expectation_control)
         .with_memory_candidate(memory_candidate)
         .with_memory_candidate_control(memory_candidate_control)
+        .with_thread_link_review(thread_link_review)
         .with_loopback(is_loopback)
         .with_checkpoint_store_factory(build_mysql_action_checkpoint_store_factory(db)),
     );

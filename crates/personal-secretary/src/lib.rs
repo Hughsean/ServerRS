@@ -256,11 +256,11 @@ pub use thread_link_service::{
 };
 pub use thread_links::{
     ClaimedThreadLinkBatch, ThreadLinkCandidate, ThreadLinkCandidateCursor, ThreadLinkCandidateId,
-    ThreadLinkCandidateStatus, ThreadLinkCandidateView, ThreadLinkError, ThreadLinkEvent,
-    ThreadLinkEvidence, ThreadLinkHint, ThreadLinkLeaseToken, ThreadLinkReviewAction,
-    ThreadLinkReviewCommand, ThreadLinkReviewContext, ThreadLinkReviewId, ThreadLinkSignalKind,
-    ThreadLinkSourceExcerpt, ValidatedThreadLinkReview, validate_thread_link_candidate,
-    validate_thread_link_review,
+    ThreadLinkCandidateStatus, ThreadLinkCandidateView, ThreadLinkConfidenceBand, ThreadLinkError,
+    ThreadLinkEvent, ThreadLinkEvidence, ThreadLinkHint, ThreadLinkLeaseToken,
+    ThreadLinkReviewAction, ThreadLinkReviewCommand, ThreadLinkReviewContext, ThreadLinkReviewId,
+    ThreadLinkSignalKind, ThreadLinkSourceExcerpt, ValidatedThreadLinkReview,
+    validate_thread_link_candidate, validate_thread_link_review,
 };
 pub use thread_mutation_service::{
     ThreadMutationApprovalNode, ThreadMutationDecisionNode, ThreadMutationEffectExecutor,

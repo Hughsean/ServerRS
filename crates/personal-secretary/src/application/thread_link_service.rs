@@ -41,6 +41,21 @@ pub trait ThreadLinkStoreT: Send + Sync {
         limit: u32,
     ) -> Result<Vec<ThreadLinkCandidateView>, InboundEventStoreError>;
 
+    /// 只返回仍处于 `proposed` 的待确认候选。适配器应在存储查询中完成过滤，
+    /// 避免大量历史审核行遮蔽新的待确认项。
+    async fn list_pending_link_candidates(
+        &self,
+        account: &SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<ThreadLinkCandidateView>, InboundEventStoreError> {
+        Ok(self
+            .list_link_candidates(account, None, limit)
+            .await?
+            .into_iter()
+            .filter(|view| view.status == ThreadLinkCandidateStatus::Proposed)
+            .collect())
+    }
+
     async fn load_link_review_context(
         &self,
         candidate_id: &ThreadLinkCandidateId,
@@ -301,6 +316,24 @@ impl ThreadLinkReviewUseCase {
         Ok(self
             .store
             .list_link_candidates(account, cursor, limit)
+            .await?)
+    }
+
+    /// 有界列出仍待 Owner 确认的候选。生产适配器在数据库查询中直接过滤
+    /// `proposed`，避免历史审核行遮蔽新的待确认项。
+    pub async fn list_pending(
+        &self,
+        account: &SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<ThreadLinkCandidateView>, ThreadLinkUseCaseError> {
+        if limit == 0 || limit > 20 {
+            return Err(ThreadLinkUseCaseError::InvalidConfiguration(
+                "pending thread link candidate limit must be between 1 and 20".into(),
+            ));
+        }
+        Ok(self
+            .store
+            .list_pending_link_candidates(account, limit)
             .await?)
     }
 

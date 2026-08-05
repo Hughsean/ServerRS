@@ -86,6 +86,37 @@ impl ThreadLinkSignalKind {
     }
 }
 
+/// 面向 Owner 确认话术的置信度分档。所有跨会话候选都必须人工确认；
+/// 分档只决定文案强度，绝不改变 `proposed` 状态或触发自动合并。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadLinkConfidenceBand {
+    Low,
+    Moderate,
+    Strong,
+}
+
+impl ThreadLinkConfidenceBand {
+    pub fn from_bps(confidence_bps: u16) -> Result<Self, ThreadLinkError> {
+        match confidence_bps {
+            1..=8_999 => Ok(Self::Low),
+            9_000..=9_499 => Ok(Self::Moderate),
+            9_500..=10_000 => Ok(Self::Strong),
+            _ => Err(ThreadLinkError::InvalidData(
+                "confidence_bps must be between 1 and 10000".into(),
+            )),
+        }
+    }
+
+    pub fn owner_label(self) -> &'static str {
+        match self {
+            Self::Low => "低置信度候选",
+            Self::Moderate => "中等置信度候选",
+            Self::Strong => "强证据候选",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadLinkCandidateStatus {
@@ -236,6 +267,12 @@ pub struct ThreadLinkCandidateView {
     pub cursor: ThreadLinkCandidateCursor,
 }
 
+impl ThreadLinkCandidateView {
+    pub fn confidence_band(&self) -> Result<ThreadLinkConfidenceBand, ThreadLinkError> {
+        ThreadLinkConfidenceBand::from_bps(self.confidence_bps)
+    }
+}
+
 pub fn validate_thread_link_review(
     context: &ThreadLinkReviewContext,
     action: ThreadLinkReviewAction,
@@ -384,6 +421,28 @@ mod tests {
             assert!(validate_thread_link_candidate(&value).is_ok());
             assert_eq!(value.status, ThreadLinkCandidateStatus::Proposed);
         }
+    }
+
+    #[test]
+    fn confidence_bands_are_bounded_and_do_not_imply_auto_acceptance() {
+        assert_eq!(
+            ThreadLinkConfidenceBand::from_bps(8_999).unwrap(),
+            ThreadLinkConfidenceBand::Low
+        );
+        assert_eq!(
+            ThreadLinkConfidenceBand::from_bps(9_000).unwrap(),
+            ThreadLinkConfidenceBand::Moderate
+        );
+        assert_eq!(
+            ThreadLinkConfidenceBand::from_bps(9_500).unwrap(),
+            ThreadLinkConfidenceBand::Strong
+        );
+        assert!(ThreadLinkConfidenceBand::from_bps(0).is_err());
+        assert!(ThreadLinkConfidenceBand::from_bps(10_001).is_err());
+        assert_eq!(
+            candidate(ThreadLinkSignalKind::ExactRichContentKey).status,
+            ThreadLinkCandidateStatus::Proposed
+        );
     }
 
     #[test]

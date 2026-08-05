@@ -400,6 +400,11 @@ impl AgentNode<SecretaryAgentState> for BuildResponseNode {
         }
         let draft = if let Some(receipt) = business.last_receipt() {
             if let Ok(q) = serde_json::from_str::<crate::QueryEffectResultV1>(&receipt.result_ref) {
+                for id in q.source_event_ids {
+                    if !source_ids.contains(&id) {
+                        source_ids.push(id);
+                    }
+                }
                 let bounded: String = q.summary.chars().take(500).collect();
                 crate::OwnerResponseDraft::new(
                     vec![crate::ResponseSegment::Summary {

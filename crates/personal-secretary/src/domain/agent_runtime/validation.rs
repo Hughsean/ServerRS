@@ -426,6 +426,13 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 ));
             }
         }
+        SecretaryAction::ListThreadLinkCandidates { limit } => {
+            if !(1..=20).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "thread link candidate list limit must be in 1..=20".into(),
+                ));
+            }
+        }
         SecretaryAction::ApproveMemoryCandidate {
             candidate_id,
             expected_candidate_version,

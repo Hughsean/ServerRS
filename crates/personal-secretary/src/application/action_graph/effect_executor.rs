@@ -21,6 +21,7 @@ use crate::{
     ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
     SecretaryActionReceipt, SecretaryToolKind, SourceAccountRef, SourceEventId,
     ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
+    ThreadLinkReviewUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -42,6 +43,7 @@ pub struct SecretaryActionEffectExecutor {
     response_expectation_control: Option<Arc<ResponseExpectationControlUseCase>>,
     memory_candidate: Option<Arc<MemoryCandidateUseCase>>,
     memory_candidate_control: Option<Arc<MemoryCandidateControlUseCase>>,
+    thread_link_review: Option<Arc<ThreadLinkReviewUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     recent_events: Vec<RecentEventRef>,
     account: SourceAccountRef,
@@ -71,6 +73,7 @@ impl SecretaryActionEffectExecutor {
             response_expectation_control: None,
             memory_candidate: None,
             memory_candidate_control: None,
+            thread_link_review: None,
             command_source_event_id: None,
             recent_events: Vec::new(),
             account,
@@ -168,6 +171,14 @@ impl SecretaryActionEffectExecutor {
     ) -> Self {
         self.memory_candidate_control = Some(memory_candidate_control);
         self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    pub fn with_thread_link_review(
+        mut self,
+        thread_link_review: Arc<ThreadLinkReviewUseCase>,
+    ) -> Self {
+        self.thread_link_review = Some(thread_link_review);
         self
     }
 
@@ -694,6 +705,25 @@ impl SecretaryActionEffectExecutor {
                 SecretaryToolKind::ListUpcomingItems,
                 &summary,
                 &[],
+                Vec::new(),
+            );
+        }
+        if let SecretaryAction::ListThreadLinkCandidates { limit } = action {
+            let review = self.thread_link_review.as_ref().ok_or_else(|| {
+                EffectError::new(
+                    EffectErrorKind::Permanent,
+                    "ThreadLinkReviewUseCase 未注入，无法列出线程关联候选",
+                )
+            })?;
+            let views = review
+                .list_pending(&self.account, u32::from(*limit))
+                .await
+                .map_err(|error| EffectError::new(EffectErrorKind::Transient, error.to_string()))?;
+            let (summary, source_event_ids) = format_thread_link_candidates(&views)?;
+            return query_effect_json(
+                SecretaryToolKind::ListThreadLinkCandidates,
+                &summary,
+                &source_event_ids,
                 Vec::new(),
             );
         }
@@ -1467,6 +1497,66 @@ fn format_memory_candidates(views: &[crate::MemoryCandidateView]) -> String {
     output
 }
 
+/// 线程关联候选的确定性确认话术。置信度只影响标签；所有候选都明确要求
+/// Owner 确认，并保持 `proposed`，不会暗示已经合并或已经投递到 QQ。
+fn format_thread_link_candidates(
+    views: &[crate::ThreadLinkCandidateView],
+) -> Result<(String, Vec<SourceEventId>), EffectError> {
+    if views.is_empty() {
+        return Ok(("当前没有待确认的跨会话线程关联候选。".into(), Vec::new()));
+    }
+    let mut output = format!(
+        "当前有 {} 个待确认的跨会话线程关联候选。系统不会自动合并，请逐项确认是否接受或拒绝：",
+        views.len()
+    );
+    let mut source_event_ids = Vec::new();
+    for view in views.iter().take(8) {
+        if view.status != crate::ThreadLinkCandidateStatus::Proposed {
+            continue;
+        }
+        let band = view
+            .confidence_band()
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        let confidence = format!(
+            "{}.{:02}%",
+            view.confidence_bps / 100,
+            view.confidence_bps % 100
+        );
+        let line = format!(
+            "\n候选 {} | {}（{}）| {} 与 {}。请确认接受或拒绝；未确认前不会合并。",
+            view.candidate_id.as_str(),
+            band.owner_label(),
+            confidence,
+            view.left_conversation.kind.as_str(),
+            view.right_conversation.kind.as_str(),
+        );
+        if output.chars().count() + line.chars().count() > 480 {
+            output.push_str("\n其余候选已省略，请缩小查询范围。");
+            break;
+        }
+        output.push_str(&line);
+        let excerpts = view
+            .sources
+            .iter()
+            .take(2)
+            .map(|source| source.excerpt.chars().take(60).collect::<String>())
+            .filter(|excerpt| !excerpt.trim().is_empty())
+            .collect::<Vec<_>>();
+        if !excerpts.is_empty() {
+            let evidence_line = format!("\n来源摘录：{}", excerpts.join("；"));
+            if output.chars().count() + evidence_line.chars().count() <= 480 {
+                output.push_str(&evidence_line);
+            }
+        }
+        for source in &view.sources {
+            if !source_event_ids.contains(&source.source_event_id) {
+                source_event_ids.push(source.source_event_id.clone());
+            }
+        }
+    }
+    Ok((output, source_event_ids))
+}
+
 /// 格式化项目列表摘要（MEM-003）。
 fn format_project_list(summaries: &[crate::ProjectMemorySummary]) -> String {
     if summaries.is_empty() {
@@ -2084,7 +2174,9 @@ fn build_query_effect_json(
 mod tests {
     use super::*;
     use crate::{
-        ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId, ThreadSearchMatchRank,
+        ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
+        ThreadLinkCandidateCursor, ThreadLinkCandidateId, ThreadLinkCandidateStatus,
+        ThreadLinkCandidateView, ThreadLinkSourceExcerpt, ThreadSearchMatchRank,
         ThreadSearchResult, ThreadStatus, VerifiedActor, VerifiedActorKind,
     };
 
@@ -2120,5 +2212,41 @@ mod tests {
         assert_eq!(parsed.typed_events[0].occurred_at_unix_secs, 122);
         assert_eq!(parsed.typed_events[0].excerpt, "部署窗口已确认");
         assert!(!parsed.summary.contains("actor-1"));
+    }
+
+    #[test]
+    fn low_confidence_thread_link_candidate_uses_confirmation_wording() {
+        let source_event_id = SourceEventId::new("source-low-confidence").unwrap();
+        let candidate_id = ThreadLinkCandidateId::new("candidate-low-confidence").unwrap();
+        let view = ThreadLinkCandidateView {
+            candidate_id: candidate_id.clone(),
+            left_thread_id: EventThreadId::new("thread-a").unwrap(),
+            right_thread_id: EventThreadId::new("thread-b").unwrap(),
+            left_conversation: ConversationRef::new(ConversationKind::Group, "group-a").unwrap(),
+            right_conversation: ConversationRef::new(ConversationKind::Private, "private-b")
+                .unwrap(),
+            status: ThreadLinkCandidateStatus::Proposed,
+            confidence_bps: 8_500,
+            reason_code: "exact_rich_content_key".into(),
+            sources: vec![ThreadLinkSourceExcerpt {
+                source_event_id: source_event_id.clone(),
+                conversation: ConversationRef::new(ConversationKind::Group, "group-a").unwrap(),
+                actor_id: "actor-a".into(),
+                occurred_at_unix_secs: 123,
+                excerpt: "同一结构化卡片来源".into(),
+            }],
+            cursor: ThreadLinkCandidateCursor {
+                created_at_unix_micros: 123_000_000,
+                candidate_id,
+            },
+        };
+
+        let (text, sources) = format_thread_link_candidates(&[view]).unwrap();
+        assert!(text.contains("低置信度候选"));
+        assert!(text.contains("请确认接受或拒绝"));
+        assert!(text.contains("未确认前不会合并"));
+        assert!(!text.contains("已发送"));
+        assert!(!text.contains("投递成功"));
+        assert_eq!(sources, vec![source_event_id]);
     }
 }

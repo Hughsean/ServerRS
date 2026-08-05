@@ -455,44 +455,23 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?)
                 ],
             )
         };
-        let rows = CandidateViewRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::MySql,
-            sql,
-            values,
-        ))
-        .all(&self.db)
+        self.load_candidate_views(sql, values).await
+    }
+
+    async fn list_pending_link_candidates(
+        &self,
+        account: &SourceAccountRef,
+        limit: u32,
+    ) -> Result<Vec<ThreadLinkCandidateView>, InboundEventStoreError> {
+        self.load_candidate_views(
+            pending_candidate_view_sql(),
+            vec![
+                account.channel.as_str().into(),
+                account.account_id.clone().into(),
+                limit.into(),
+            ],
+        )
         .await
-        .map_err(store_error)?;
-        let mut views = Vec::with_capacity(rows.len());
-        for row in rows {
-            let sources = self.load_candidate_sources(&row.candidate_id).await?;
-            let candidate_id = ThreadLinkCandidateId::new(row.candidate_id.clone())
-                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
-            views.push(ThreadLinkCandidateView {
-                candidate_id: candidate_id.clone(),
-                left_thread_id: EventThreadId::new(row.left_thread_id)
-                    .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
-                right_thread_id: EventThreadId::new(row.right_thread_id)
-                    .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
-                left_conversation: conversation(
-                    &row.left_conversation_kind,
-                    &row.left_platform_conversation_id,
-                )?,
-                right_conversation: conversation(
-                    &row.right_conversation_kind,
-                    &row.right_platform_conversation_id,
-                )?,
-                status: parse_candidate_status(&row.status)?,
-                confidence_bps: row.confidence_bps,
-                reason_code: row.reason_code,
-                sources,
-                cursor: ThreadLinkCandidateCursor {
-                    created_at_unix_micros: row.created_at.and_utc().timestamp_micros(),
-                    candidate_id,
-                },
-            });
-        }
-        Ok(views)
     }
 
     async fn load_link_review_context(
@@ -608,6 +587,51 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?)
 }
 
 impl MySqlThreadLinkStore {
+    async fn load_candidate_views(
+        &self,
+        sql: &str,
+        values: Vec<sea_orm::Value>,
+    ) -> Result<Vec<ThreadLinkCandidateView>, InboundEventStoreError> {
+        let rows = CandidateViewRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            sql,
+            values,
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        let mut views = Vec::with_capacity(rows.len());
+        for row in rows {
+            let sources = self.load_candidate_sources(&row.candidate_id).await?;
+            let candidate_id = ThreadLinkCandidateId::new(row.candidate_id.clone())
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+            views.push(ThreadLinkCandidateView {
+                candidate_id: candidate_id.clone(),
+                left_thread_id: EventThreadId::new(row.left_thread_id)
+                    .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+                right_thread_id: EventThreadId::new(row.right_thread_id)
+                    .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+                left_conversation: conversation(
+                    &row.left_conversation_kind,
+                    &row.left_platform_conversation_id,
+                )?,
+                right_conversation: conversation(
+                    &row.right_conversation_kind,
+                    &row.right_platform_conversation_id,
+                )?,
+                status: parse_candidate_status(&row.status)?,
+                confidence_bps: row.confidence_bps,
+                reason_code: row.reason_code,
+                sources,
+                cursor: ThreadLinkCandidateCursor {
+                    created_at_unix_micros: row.created_at.and_utc().timestamp_micros(),
+                    candidate_id,
+                },
+            });
+        }
+        Ok(views)
+    }
+
     async fn load_candidate_sources(
         &self,
         candidate_id: &str,
@@ -684,6 +708,25 @@ ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
 LIMIT ?
 "#
     }
+}
+
+fn pending_candidate_view_sql() -> &'static str {
+    r#"
+SELECT candidate.candidate_id, candidate.left_thread_id, candidate.right_thread_id,
+       lc.conversation_kind AS left_conversation_kind,
+       lc.platform_conversation_id AS left_platform_conversation_id,
+       rc.conversation_kind AS right_conversation_kind,
+       rc.platform_conversation_id AS right_platform_conversation_id,
+       candidate.status, candidate.confidence_bps, candidate.reason_code, candidate.created_at
+FROM secretary_thread_link_candidates candidate
+JOIN secretary_accounts account ON account.id = candidate.account_id
+JOIN secretary_conversations lc ON lc.id = candidate.left_conversation_id
+JOIN secretary_conversations rc ON rc.id = candidate.right_conversation_id
+WHERE account.source_channel = ? AND account.platform_account_id = ?
+  AND candidate.status = 'proposed'
+ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
+LIMIT ?
+"#
 }
 
 async fn load_review_context_row<C: ConnectionTrait>(
