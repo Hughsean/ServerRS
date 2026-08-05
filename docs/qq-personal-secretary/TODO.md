@@ -27,7 +27,8 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `FUP-007` 的本地送达回执、租约 fencing 与 unknown_commit 收敛。`GAP-008-LOCAL` 已完成；
+- 下一步：进入 `CMD-002` 的 QQ 开放平台真实联机与 Gateway Resume 外部验收。`FUP-007` 本地
+  送达回执、租约 fencing、重试和 `unknown_commit` 已完成；`GAP-008-LOCAL` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
   业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -431,8 +432,8 @@
 
 ## 4. Owner 控制面与通知
 
-- [ ] `FUP-007` 本地继续维护账号隔离、租约 fencing、重试、送达回执和 `unknown_commit`；真实
-  Owner QQ 投递仅在轮换凭据后验收。
+- [x] `FUP-007` 本地已完成账号隔离、租约 fencing、重试、送达回执和 `unknown_commit`；真实
+  Owner QQ 投递仍属于 `EXTERNAL`，仅在轮换凭据后验收。
 - [ ] `CMD-002` 完成 QQ 开放平台真实联机、Gateway Resume 和 Owner 回执验收；执行前必须通知
   用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。
 - [ ] `CMD-003` 将剩余写命令逐项接入统一 OwnerBinding、同账号、Resume 与 Effect 复验边界。

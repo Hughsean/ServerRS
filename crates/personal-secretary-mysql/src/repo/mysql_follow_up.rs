@@ -971,7 +971,8 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                 r#"UPDATE secretary_notification_outbox
                SET delivery_status = 'delivered', platform_message_id = ?,
                    delivered_at = UTC_TIMESTAMP(6), lease_token = NULL, lease_expires_at = NULL
-               WHERE notification_id = ? AND delivery_status = 'claimed' AND lease_token = ?"#,
+               WHERE notification_id = ? AND delivery_status = 'claimed' AND lease_token = ?
+                 AND lease_expires_at > UTC_TIMESTAMP(6)"#,
                 [
                     platform_message_id.into(),
                     notification_id.as_str().into(),
@@ -1008,7 +1009,8 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                    scheduled_at_unix_secs = UNIX_TIMESTAMP(UTC_TIMESTAMP())
                      + LEAST(3600, 30 * POW(2, LEAST(attempts, 7) - 1)),
                    lease_token = NULL, lease_expires_at = NULL
-               WHERE notification_id = ? AND delivery_status = 'claimed' AND lease_token = ?"#
+               WHERE notification_id = ? AND delivery_status = 'claimed' AND lease_token = ?
+                 AND lease_expires_at > UTC_TIMESTAMP(6)"#
         } else {
             r#"UPDATE secretary_notification_outbox
                SET delivery_status = ?, last_error_code = ?, lease_token = NULL, lease_expires_at = NULL

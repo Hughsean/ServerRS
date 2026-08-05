@@ -50,6 +50,13 @@
   授权的本地模型开放；会话降级在同一事务内失效语义、线程链接、记忆派生、Planner 租约和草稿。
   领域 285/285、`qqbot-server` 176 passed/2 ignored、架构 24/24，THR-009 及既有 MySQL 回归
   通过；无迁移或 schema 变更。
+- **本轮（FUP-007，本地部分已完成）**：FollowUp 通知 Outbox 的领取按 managed account
+  隔离，送达/失败回执同时复验 notification、lease token、`claimed` 状态和未过期租约；
+  Retryable 使用有界指数退避，Permanent/UnknownCommit 分别进入终态，正确回执保存平台消息
+  ID，过期租约由后续领取收敛为 `unknown_commit`。新增真实隔离 MySQL 状态机测试 1/1，
+  Project/Commitment 回归 3/3；领域 286/286、服务器 177 passed/2 ignored、架构 24/24、
+  workspace check、严格 Clippy、fmt 和 diff check 全绿。真实 Owner QQ 投递仍是 EXTERNAL，
+  未伪造联机验收。
 - **本轮（THR-010，已完成）**：线程逻辑迁移后的旧语义不再永久失效；新增
   `reconfirm_thread_semantics` 类型化 L2 Owner Action 与不可变重新确认边界，事务内复验 OwnerBinding、
   Action lease 和账号/线程归属后清除语义状态，允许 Worker 重新计算。Split 撤销在同一事务内关闭
