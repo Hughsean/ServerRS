@@ -582,11 +582,17 @@ mod tests {
     #[tokio::test]
     async fn nonempty_short_group_page_returns_real_next_and_empty_page_is_unproven() {
         let client = Arc::new(FakeHistoryClient::default());
+        let mut newest = message("10001", "20001");
+        newest.message_id = "newer-message".into();
+        newest.message_seq = "11".into();
+        let mut oldest = message("10001", "20001");
+        oldest.message_id = "older-message".into();
+        oldest.message_seq = "10".into();
         client
             .group_pages
             .lock()
             .unwrap()
-            .push_back(Ok(vec![message("10001", "20001")]));
+            .push_back(Ok(vec![newest, oldest]));
         client.group_pages.lock().unwrap().push_back(Ok(Vec::new()));
         let source = source(client.clone());
         let scope = scope(account("10001"), "20001");
@@ -599,8 +605,16 @@ mod tests {
             BackfillContinuation::Next(cursor) => cursor,
             other => panic!("short nonempty page must continue, got {other:?}"),
         };
-        assert_eq!(next.anchor.message_id, "message");
-        assert_eq!(next.anchor.message_seq, "sequence");
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|item| item.anchor.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newer-message", "older-message"]
+        );
+        assert_eq!(next.anchor.message_id, "older-message");
+        assert_eq!(next.anchor.message_seq, "10");
 
         let second = source
             .fetch_page(
@@ -617,10 +631,7 @@ mod tests {
             client.group_queries.lock().unwrap().as_slice(),
             [
                 (None, HistoryReadDirection::TowardOlder),
-                (
-                    Some("sequence".to_owned()),
-                    HistoryReadDirection::TowardOlder
-                ),
+                (Some("10".to_owned()), HistoryReadDirection::TowardOlder),
             ]
         );
         assert!(!source.history_start_evidence_proven());

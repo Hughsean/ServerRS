@@ -132,7 +132,10 @@ fn real_napcat_response(action: &str) -> String {
         "get_group_msg_history" | "get_friend_msg_history" => serde_json::json!({
             "status": "ok",
             "retcode": 0,
-            "data": {"messages": []}
+            "data": {"messages": [
+                {"message_id": "older", "message_seq": "10"},
+                {"message_id": "newer", "message_seq": "11"}
+            ]}
         })
         .to_string(),
         _ => serde_json::json!({"status": "ok", "retcode": 0, "data": null}).to_string(),
@@ -225,14 +228,14 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
     client.get_friend_list().await.unwrap();
     client.get_group_list().await.unwrap();
     client.get_recent_contact().await.unwrap();
-    client
+    let group_toward_older = client
         .get_group_msg_history(
             &GroupHistoryQuery::new("group-scope", None, 20, HistoryReadDirection::TowardOlder)
                 .unwrap(),
         )
         .await
         .unwrap();
-    client
+    let group_toward_newer = client
         .get_group_msg_history(
             &GroupHistoryQuery::new(
                 "group-scope",
@@ -244,14 +247,14 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
         )
         .await
         .unwrap();
-    client
+    let friend_toward_older = client
         .get_friend_msg_history(
             &FriendHistoryQuery::new("friend-scope", None, 20, HistoryReadDirection::TowardOlder)
                 .unwrap(),
         )
         .await
         .unwrap();
-    client
+    let friend_toward_newer = client
         .get_friend_msg_history(
             &FriendHistoryQuery::new(
                 "friend-scope",
@@ -263,6 +266,25 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
         )
         .await
         .unwrap();
+
+    for messages in [&group_toward_older, &friend_toward_older] {
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newer", "older"]
+        );
+    }
+    for messages in [&group_toward_newer, &friend_toward_newer] {
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["older", "newer"]
+        );
+    }
 
     let requests = requests.lock().unwrap();
     let actions = requests
@@ -294,7 +316,7 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
             "group_id": "group-scope",
             "message_seq": "0",
             "count": 20,
-            "reverseOrder": false,
+            "reverseOrder": true,
         })
     );
     assert_eq!(
@@ -303,7 +325,7 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
             "group_id": "group-scope",
             "message_seq": "opaque/group+cursor",
             "count": 100,
-            "reverseOrder": true,
+            "reverseOrder": false,
         })
     );
     assert_eq!(
@@ -312,7 +334,7 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
             "user_id": "friend-scope",
             "message_seq": "0",
             "count": 20,
-            "reverseOrder": false,
+            "reverseOrder": true,
         })
     );
     assert_eq!(
@@ -321,7 +343,7 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
             "user_id": "friend-scope",
             "message_seq": "opaque friend cursor",
             "count": 1,
-            "reverseOrder": true,
+            "reverseOrder": false,
         })
     );
     for forbidden in [

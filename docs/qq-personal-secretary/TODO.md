@@ -1,6 +1,6 @@
 # 个人 QQ 智能秘书执行看板
 
-> 最后整理：2026-08-05（Asia/Shanghai）
+> 最后整理：2026-08-06（Asia/Shanghai）
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
@@ -15,10 +15,10 @@
 ## 0. 当前状态
 
 - 当前分支：`Main`；`GAP-003-A/B/C` 已由独立提交 `7278677` 收口，尚未推送远端。
-- 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。历史分页使用三态 continuation，
-  逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
-  有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
-  `EXTERNAL ENV-004`。
+- 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。2026-08-06 双账号 NapCat 4.18.14
+  实测确认 `reverseOrder=true` 才是向更旧读取，响应数组仍为旧到新；客户端已在协议边界归一化为
+  新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。空页原因、跨重启覆盖和
+  PacketBackend 行为仍属于 `EXTERNAL ENV-004`，完成前只能有界恢复候选事件，不能完成 Scope。
 - 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A/B/C/D` 已完成并通过 Codex 独立复核。普通消息
   callback 只做 bounded admission，blocking writer 在 `sync_all` 后产生 durable receipt，再进入统一
   MySQL ingestion；必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。fatal 与关闭超时保留开放
@@ -408,8 +408,9 @@
 - [ ] `EXTERNAL ENV-002` 轮换已经暴露的 QQ 开放平台 Secret，并通过本地环境变量或忽略文件配置。
 - [ ] `EXTERNAL ENV-003` NapCat 实机确认免打扰消息、自身消息上报和一条新消息完整派生链。
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
-  PacketBackend 兼容。真实分页方向、空页语义和 PacketBackend 行为尚未验证，
-  不得由 Fake/HTTP 切片测试推导为已完成。
+  PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
+  为旧到新且 cursor 受账号主体约束；空页语义、跨重启覆盖和 PacketBackend 行为尚未验证，
+  不得由本次方向证据或 Fake/HTTP 测试推导为已完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
   runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。

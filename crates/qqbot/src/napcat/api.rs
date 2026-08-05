@@ -243,8 +243,8 @@ impl HistoryReadDirection {
     /// OneBot 协议字段映射仅在本模块内可见。
     const fn onebot_reverse_order(self) -> bool {
         match self {
-            Self::TowardOlder => false,
-            Self::TowardNewer => true,
+            Self::TowardOlder => true,
+            Self::TowardNewer => false,
         }
     }
 }
@@ -519,7 +519,7 @@ impl NapCatHistoryReadT for NapCatReadOnlyClient {
                 }),
             )
             .await?;
-        parse_history_page(response, "group")
+        parse_history_page(response, "group", query.direction)
     }
 
     async fn get_friend_msg_history(
@@ -538,7 +538,7 @@ impl NapCatHistoryReadT for NapCatReadOnlyClient {
                 }),
             )
             .await?;
-        parse_history_page(response, "friend")
+        parse_history_page(response, "friend", query.direction)
     }
 }
 
@@ -559,9 +559,15 @@ fn validate_history_query(field: &str, value: &str, count: u32) -> Result<(), Na
 fn parse_history_page(
     response: OneBotResponse,
     kind: &str,
+    direction: HistoryReadDirection,
 ) -> Result<Vec<HistoryMessage>, NapCatError> {
-    let page: HistoryPage = serde_json::from_value(response.data.unwrap_or_default())
+    let mut page: HistoryPage = serde_json::from_value(response.data.unwrap_or_default())
         .map_err(|_| NapCatError::Protocol(format!("parse {kind} history response data failed")))?;
+    // NapCat 4.18.x returns every history page oldest-to-newest. Keep that
+    // protocol detail inside this adapter and expose messages in the requested direction.
+    if direction == HistoryReadDirection::TowardOlder {
+        page.messages.reverse();
+    }
     Ok(page.messages)
 }
 
@@ -641,6 +647,41 @@ mod tests {
                 HistoryReadDirection::TowardNewer,
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn history_page_is_normalized_into_the_requested_direction() {
+        fn response() -> OneBotResponse {
+            OneBotResponse {
+                retcode: 0,
+                data: Some(serde_json::json!({
+                    "messages": [
+                        {"message_id": "older", "message_seq": "10"},
+                        {"message_id": "newer", "message_seq": "11"}
+                    ]
+                })),
+            }
+        }
+
+        let toward_older =
+            parse_history_page(response(), "group", HistoryReadDirection::TowardOlder).unwrap();
+        assert_eq!(
+            toward_older
+                .iter()
+                .map(|message| message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newer", "older"]
+        );
+
+        let toward_newer =
+            parse_history_page(response(), "group", HistoryReadDirection::TowardNewer).unwrap();
+        assert_eq!(
+            toward_newer
+                .iter()
+                .map(|message| message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["older", "newer"]
         );
     }
 

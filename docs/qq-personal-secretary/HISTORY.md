@@ -27,7 +27,9 @@
   `Duplicate` 为到达证据且不写入页内更旧消息。Codex 复核进一步分离请求方向与响应页序
   证据：NapCat 在外部验证前可有界恢复候选，但不能完成 Scope 或据页内位置跳过事件。
   NapCat 空页与 OwnerControl 只产生 `UnprovenStop`，错误详情脱敏。无数据库迁移；Rust 门禁、
-  GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过，未连接真实 NapCat。
+  GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过。2026-08-06 双账号 NapCat 4.18.14 实测推翻
+  原布尔映射：`reverseOrder=true` 才向更旧读取，响应仍按旧到新返回；客户端已在私有协议边界
+  校正映射并归一化页序，账号间 cursor 不可复用。空页、跨重启与 PacketBackend 仍待验证。
 - **本轮（GAP-007-A/B/C，已通过）**：普通消息本地磁盘 Spool 的架构决策经三轮 Codex 复核收口。
   receipt 只驱动运行期 replay，启动恢复以完整认证 WAL 帧为准；pending Gap 不能只驻留内存。
   遗留 `connected` epoch 必须保持可写完成 replay、hook 收敛与耐久 checkpoint，再由 MySQL 事务结束
