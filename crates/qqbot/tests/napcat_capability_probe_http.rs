@@ -71,7 +71,7 @@ fn handle_one_request(
 
     let body = responder(&action);
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );
@@ -211,7 +211,7 @@ fn handle_recorded_request(stream: TcpStream, requests: Arc<Mutex<Vec<RecordedRe
 
     let body = real_napcat_response(&action);
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );

@@ -296,18 +296,25 @@ pub(super) async fn run_connection_loop(
         }
 
         tracing::info!(backoff_secs = backoff, "等待后重新连接 NapCat");
-        tokio::select! {
-            _ = shutdown_source.wait() => {
-                abort_probe(&mut probe_handle).await;
-                let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
-                handles_to_shutdown.shutdown_all().await;
-                return Ok(());
-            }
-            _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+        if wait_for_reconnect_or_shutdown(shutdown_source, Duration::from_secs(backoff)).await {
+            abort_probe(&mut probe_handle).await;
+            let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+            handles_to_shutdown.shutdown_all().await;
+            return Ok(());
         }
         backoff = backoff
             .saturating_mul(2)
             .min(config.napcat.reconnect_max_secs);
+    }
+}
+
+async fn wait_for_reconnect_or_shutdown(
+    shutdown_source: &mut ShutdownSource,
+    backoff: Duration,
+) -> bool {
+    tokio::select! {
+        _ = shutdown_source.wait() => true,
+        _ = tokio::time::sleep(backoff) => false,
     }
 }
 
@@ -423,5 +430,37 @@ async fn drain_ingestion_worker(
             let _ = worker.await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_interrupts_long_napcat_offline_backoff() {
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        let mut shutdown = ShutdownSource::Watch(receiver);
+        let waiter = tokio::spawn(async move {
+            wait_for_reconnect_or_shutdown(&mut shutdown, Duration::from_secs(60)).await
+        });
+
+        tokio::task::yield_now().await;
+        sender.send(true).unwrap();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), waiter)
+                .await
+                .expect("shutdown must preempt reconnect backoff")
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_backoff_expires_without_shutdown() {
+        let (_sender, receiver) = tokio::sync::watch::channel(false);
+        let mut shutdown = ShutdownSource::Watch(receiver);
+
+        assert!(!wait_for_reconnect_or_shutdown(&mut shutdown, Duration::from_millis(10)).await);
     }
 }

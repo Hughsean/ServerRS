@@ -51,3 +51,36 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn watch_ignores_false_changes_until_true() {
+        let (sender, receiver) = watch::channel(false);
+        let mut source = ShutdownSource::Watch(receiver);
+        let waiter = tokio::spawn(async move { source.wait().await });
+
+        sender.send(false).unwrap();
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        sender.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_millis(200), waiter)
+            .await
+            .expect("true shutdown must be observed")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropped_watch_sender_requests_shutdown() {
+        let (sender, receiver) = watch::channel(false);
+        let mut source = ShutdownSource::Watch(receiver);
+        drop(sender);
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), source.wait())
+            .await
+            .expect("dropping the shutdown owner must not hang");
+    }
+}

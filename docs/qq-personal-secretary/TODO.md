@@ -25,9 +25,9 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `GAP-008` 本地可自动化的关机/休眠、NapCat 离线和 MySQL 离线演练；需要真实
-  环境配合的部分继续留在 `EXTERNAL-TEST`。`EVT-007-NONMSG` 等待真实业务样本，`EVT-009`
-  已按产品决策取消。
+- 下一步：进入 `THR-002` 文件版本和非 Reply 结构化引用入口。`GAP-008-LOCAL` 已完成；真实整机
+  休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实业务样本，
+  `EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -367,8 +367,11 @@
   truncate、checkpoint、compact、原子替换后文件/父目录同步点故障注入。`personal-secretary` 270/270、
   `qqbot-server` 169 passed/2 ignored、架构边界 24/24；真实 MySQL recovery 1/1、EVT-006 1/1、
   EVT-007 20/20 通过。
-- [ ] `GAP-008` 分别演练电脑关机/休眠、NapCat 离线和 MySQL 离线；属于需要环境配合的部分移入
-  `EXTERNAL-TEST`，本地可完成的故障注入仍可先做。
+- [x] `GAP-008-LOCAL` 完成本地可重复故障演练：NapCat 连接中断快速返回类型化错误且不泄露
+  URL/Token；长重连退避可被 shutdown 抢占；watch false 变化不误关、sender 丢失不挂死；MySQL
+  持续不可用不推进 Spool checkpoint；writer 关闭超时保留已同步 WAL；隔离 MySQL recovery
+  claim/fencing/finalize 1/1 通过。真实关机/休眠、断网和 NapCat 进程退出恢复继续由
+  `EXTERNAL OPS-LIVE` 承担。
 
 ## 3. 线程语义与跨会话关联
 

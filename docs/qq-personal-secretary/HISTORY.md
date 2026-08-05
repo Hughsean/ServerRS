@@ -39,6 +39,12 @@
   runtime/health、MySQL recovery 与故障注入闭环。IMPL-D 将不可取消的文件同步移入专用 OS writer
   线程，关闭超时仅 detach 并保留 WAL；同步点、预算、MySQL 离线与必需 hook 失败均验证不越过
   checkpoint。真实 MySQL recovery 1/1、EVT-006 1/1、EVT-007 20/20 通过。
+- **本轮（GAP-008-LOCAL，已完成）**：补齐可自动化的离线与关闭演练。NapCat 传输中断在有界
+  时间内返回脱敏连接错误，重连退避可被 shutdown 立即抢占；watch 关闭通道忽略 false 变化并在
+  sender 丢失时结束。既有故障注入复验 MySQL 离线不推进 checkpoint、writer 超时保留已同步 WAL。
+  隔离 MySQL recovery claim/fencing/finalize 1/1 通过。完整门禁还发现并修复 fake HTTP 未声明
+  `Connection: close` 导致的并发能力探测不确定性。真实整机休眠、断网和 NapCat 进程退出仍由
+  `EXTERNAL OPS-LIVE` 验收。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，

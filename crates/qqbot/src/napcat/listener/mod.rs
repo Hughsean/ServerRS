@@ -60,12 +60,10 @@ impl NapCatListener {
     /// 普通 WebSocket 文本流量不能错误掩盖已启用的 Heartbeat 超时。
     pub async fn run_forward(&self) -> Result<(), NapCatError> {
         self.heartbeat.validate().map_err(NapCatError::Protocol)?;
-        info!(url = %self.ws_url, "正在通过 WebSocket 连接 NapCat");
+        info!("正在通过 WebSocket 连接 NapCat");
         let (mut stream, _) = tokio_tungstenite::connect_async(self.ws_url.as_str())
             .await
-            .map_err(|error| {
-                NapCatError::Connection(format!("WebSocket connect failed: {error}"))
-            })?;
+            .map_err(|_| NapCatError::Connection("WebSocket connect failed".into()))?;
 
         if let Some(observer) = &self.connection_observer {
             observer.connected().await?;

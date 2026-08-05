@@ -9,6 +9,7 @@
 //! 层的端到端验证，不依赖实机 NapCat。
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -108,4 +109,29 @@ async fn run_forward_returns_ok_when_disabled_and_server_closes() {
         result.is_ok(),
         "disabled heartbeat + server close should return Ok"
     );
+}
+
+#[tokio::test]
+async fn offline_endpoint_fails_quickly_without_leaking_url_or_token() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+
+    let ws_url = format!("ws://{addr}/onebot?access_token=offline-secret");
+    let handler: Arc<dyn NapCatEventHandler> = Arc::new(NoopHandler);
+    let napcat = NapCatListener::new(ws_url.clone(), 10001, handler);
+
+    let error = tokio::time::timeout(Duration::from_secs(2), napcat.run_forward())
+        .await
+        .expect("offline endpoint must fail without hanging")
+        .unwrap_err();
+    assert!(matches!(error, NapCatError::Connection(_)));
+    let detail = error.to_string();
+    assert!(!detail.contains(&ws_url));
+    assert!(!detail.contains("offline-secret"));
+    assert!(!detail.contains(&addr.to_string()));
+    server.await.unwrap();
 }
