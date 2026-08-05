@@ -281,9 +281,11 @@ pub use thread_semantic_service::{
 };
 pub use thread_semantics::{
     ClaimKind, ClaimedThreadSemanticBatch, LifecycleAuthority, OpenQuestionCandidate,
-    ThreadClaimCandidate, ThreadDecisionCandidate, ThreadLifecycleChange, ThreadSemanticCursor,
-    ThreadSemanticError, ThreadSemanticEvent, ThreadSemanticLeaseToken, ThreadSemanticPatch,
-    ThreadStatusChangeId, validate_semantic_patch, validate_thread_transition,
+    ThreadClaimCandidate, ThreadDecisionCandidate, ThreadLifecycleChange,
+    ThreadResolutionEvidenceKind, ThreadSemanticCursor, ThreadSemanticError, ThreadSemanticEvent,
+    ThreadSemanticLeaseToken, ThreadSemanticPatch, ThreadStatusChangeId,
+    classify_thread_resolution_evidence, derive_evidence_based_resolution, validate_semantic_patch,
+    validate_thread_transition,
 };
 pub use thread_service::{
     ThreadProjectionError, ThreadProjectionRun, ThreadProjectionStoreT, ThreadProjectionUseCase,

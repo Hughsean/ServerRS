@@ -63,6 +63,10 @@
   MySQL 按账号归属与 `(created_at DESC, decision_id DESC)` 读取，不使用 OFFSET、不改写 revision；
   既有线程索引被原子重建为可重放的分页前缀。隔离 MySQL 证明同微秒稳定排序、三页无重无漏、
   跨账号/跨线程 fail-closed、迁移重放和读取前后修订快照完全一致。
+- **本轮（THR-006，已完成）**：自动 `resolved` 收敛为三类显式来源证据：明确完成、明确已解决、
+  明确无需继续处理。领域门逐条复验来源属于领取批次、正文未省略、类型与固定 reason 一致；开放
+  问题或同批新增问题阻断结束。application 在任意语义提取器之后运行同一确定性派生器，不读取时间
+  或静默状态，含糊表达不会结束线程。MySQL 事务沿用既有 status history/source 审计，无新迁移。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -121,6 +125,12 @@
 
 ## 最近事件
 
+- `2026-08-06 03:18（Asia/Shanghai）`：`THR-006` 完成。新增封闭的
+  `ThreadResolutionEvidenceKind` 与显式文本分类器，自动解决只对本批完整来源事件生成
+  `open/waiting/reopened -> resolved`；OwnerCommand 产生 owner authority，其他明确陈述为
+  evidence-derived。开放问题、含糊“应该解决了”和静默时间均不触发。领域 282/282、
+  `qqbot-server` 175 passed/2 ignored、架构 24/24；THR-006 1/1、EVT-007 20/20 隔离 MySQL
+  通过，严格 Clippy、workspace check、fmt 与 diff check 全绿。
 - `2026-08-06 02:53（Asia/Shanghai）`：`THR-005` 完成。新增绑定 Thread 的强类型修订游标与
   `1..=50` 页面边界；MySQL 以 `(created_at, decision_id)` 逆序 keyset 分页并强制账号归属，返回
   confidence、supersedes、创建时间和来源。迁移原子重建既有索引为

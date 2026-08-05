@@ -6,7 +6,8 @@ use thiserror::Error;
 use crate::{
     ClaimKind, ClaimedThreadSemanticBatch, InboundEventStoreError, OpenQuestionCandidate,
     OpenQuestionId, ThreadClaimCandidate, ThreadClaimId, ThreadDecisionCandidate, ThreadDecisionId,
-    ThreadSemanticError, ThreadSemanticLeaseToken, ThreadSemanticPatch, validate_semantic_patch,
+    ThreadSemanticError, ThreadSemanticLeaseToken, ThreadSemanticPatch,
+    derive_evidence_based_resolution, validate_semantic_patch,
 };
 
 #[async_trait]
@@ -97,7 +98,7 @@ impl ThreadSemanticUseCase {
         else {
             return Ok(None);
         };
-        let patch = match self.extractor.extract(&batch).await {
+        let mut patch = match self.extractor.extract(&batch).await {
             Ok(patch) => patch,
             Err(error) => {
                 let _ = self
@@ -107,6 +108,9 @@ impl ThreadSemanticUseCase {
                 return Err(error.into());
             }
         };
+        if patch.lifecycle_change.is_none() && patch.questions.is_empty() {
+            patch.lifecycle_change = derive_evidence_based_resolution(&batch);
+        }
         if let Err(error) = validate_semantic_patch(&batch, &patch) {
             let _ = self
                 .store

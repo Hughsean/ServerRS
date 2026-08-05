@@ -67,6 +67,26 @@ pub enum LifecycleAuthority {
     SystemRecovery,
 }
 
+/// 自动进入 `resolved` 时允许的显式来源证据。不存在“静默超时”种类；
+/// 时间流逝、长时间无人发言或模型主观判断都不能构造生命周期变更。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadResolutionEvidenceKind {
+    ExplicitCompletion,
+    ExplicitResolution,
+    ExplicitNoFurtherAction,
+}
+
+impl ThreadResolutionEvidenceKind {
+    pub fn as_reason_code(self) -> &'static str {
+        match self {
+            Self::ExplicitCompletion => "explicit_completion_evidence",
+            Self::ExplicitResolution => "explicit_resolution_evidence",
+            Self::ExplicitNoFurtherAction => "explicit_no_further_action_evidence",
+        }
+    }
+}
+
 impl LifecycleAuthority {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -186,6 +206,9 @@ pub struct ThreadLifecycleChange {
     pub from: ThreadStatus,
     pub to: ThreadStatus,
     pub authority: LifecycleAuthority,
+    /// 仅 `to=resolved` 使用；其他转换必须为 None。
+    #[serde(default)]
+    pub resolution_evidence: Option<ThreadResolutionEvidenceKind>,
     pub reason: String,
     pub source_event_ids: Vec<SourceEventId>,
 }
@@ -289,6 +312,49 @@ pub fn validate_semantic_patch(
         validate_thread_transition(change.from, change.to)?;
         require_text_with_max("lifecycle.reason", &change.reason, 1000)?;
         require_sources(&event_ids, &change.source_event_ids)?;
+        if change.to == ThreadStatus::Resolved {
+            let evidence = change
+                .resolution_evidence
+                .ok_or(ThreadSemanticError::ResolveRequiresExplicitEvidence)?;
+            if !matches!(
+                change.authority,
+                LifecycleAuthority::EvidenceDerived | LifecycleAuthority::OwnerConfirmed
+            ) {
+                return Err(ThreadSemanticError::InvalidResolutionAuthority);
+            }
+            if !batch.open_question_ids.is_empty() || !patch.questions.is_empty() {
+                return Err(ThreadSemanticError::ResolveWithOpenQuestions);
+            }
+            if change.reason != evidence.as_reason_code() {
+                return Err(ThreadSemanticError::ResolutionEvidenceMismatch);
+            }
+            let mut cited_events = Vec::with_capacity(change.source_event_ids.len());
+            for source in &change.source_event_ids {
+                let Some(event) = batch
+                    .events
+                    .iter()
+                    .find(|event| event.source_event_id == *source)
+                else {
+                    return Err(ThreadSemanticError::ResolutionEvidenceMismatch);
+                };
+                cited_events.push(event);
+            }
+            if cited_events.iter().any(|event| {
+                event.content_omitted
+                    || classify_thread_resolution_evidence(&event.normalized_text) != Some(evidence)
+            }) {
+                return Err(ThreadSemanticError::ResolutionEvidenceMismatch);
+            }
+            if change.authority == LifecycleAuthority::OwnerConfirmed
+                && !cited_events
+                    .iter()
+                    .any(|event| event.role == MessageRole::OwnerCommand)
+            {
+                return Err(ThreadSemanticError::InvalidResolutionAuthority);
+            }
+        } else if change.resolution_evidence.is_some() {
+            return Err(ThreadSemanticError::ResolutionEvidenceOnNonResolvedTransition);
+        }
         if change.to == ThreadStatus::Closed {
             if change.authority != LifecycleAuthority::OwnerConfirmed {
                 return Err(ThreadSemanticError::CloseRequiresOwnerConfirmation);
@@ -306,6 +372,77 @@ pub fn validate_semantic_patch(
         }
     }
     Ok(())
+}
+
+/// 从当前领取批次中派生一个保守的自动解决变更。只消费明确、完整的文本证据；
+/// 不读取 wall clock，也不根据无新消息、空批次或闲置时长推断完成。
+pub fn derive_evidence_based_resolution(
+    batch: &ClaimedThreadSemanticBatch,
+) -> Option<ThreadLifecycleChange> {
+    if !matches!(
+        batch.current_status,
+        ThreadStatus::Open | ThreadStatus::Waiting | ThreadStatus::Reopened
+    ) || !batch.open_question_ids.is_empty()
+    {
+        return None;
+    }
+    let event = batch.events.last()?;
+    if event.content_omitted {
+        return None;
+    }
+    let evidence = classify_thread_resolution_evidence(&event.normalized_text)?;
+    Some(ThreadLifecycleChange {
+        change_id: ThreadStatusChangeId::generate(),
+        thread_id: batch.thread_id.clone(),
+        from: batch.current_status,
+        to: ThreadStatus::Resolved,
+        authority: if event.role == MessageRole::OwnerCommand {
+            LifecycleAuthority::OwnerConfirmed
+        } else {
+            LifecycleAuthority::EvidenceDerived
+        },
+        resolution_evidence: Some(evidence),
+        reason: evidence.as_reason_code().into(),
+        source_event_ids: vec![event.source_event_id.clone()],
+    })
+}
+
+pub fn classify_thread_resolution_evidence(text: &str) -> Option<ThreadResolutionEvidenceKind> {
+    let text = text.trim();
+    if matches!(text, "已完成" | "任务已完成" | "处理完成")
+        || has_nonempty_detail(text, &["完成确认：", "完成确认:", "已完成：", "已完成:"])
+    {
+        return Some(ThreadResolutionEvidenceKind::ExplicitCompletion);
+    }
+    if matches!(text, "已解决" | "问题已解决")
+        || has_nonempty_detail(
+            text,
+            &["解决确认：", "解决确认:", "问题已解决：", "问题已解决:"],
+        )
+    {
+        return Some(ThreadResolutionEvidenceKind::ExplicitResolution);
+    }
+    if matches!(text, "无需继续处理" | "不用再处理" | "不需要继续处理")
+        || has_nonempty_detail(
+            text,
+            &[
+                "无需继续处理：",
+                "无需继续处理:",
+                "不用再处理：",
+                "不用再处理:",
+            ],
+        )
+    {
+        return Some(ThreadResolutionEvidenceKind::ExplicitNoFurtherAction);
+    }
+    None
+}
+
+fn has_nonempty_detail(text: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|prefix| {
+        text.strip_prefix(prefix)
+            .is_some_and(|detail| !detail.trim().is_empty())
+    })
 }
 
 pub fn validate_thread_transition(
@@ -422,6 +559,16 @@ pub enum ThreadSemanticError {
     CloseRequiresOwnerConfirmation,
     #[error("a thread with open questions cannot be closed")]
     CloseWithOpenQuestions,
+    #[error("resolving a thread requires typed explicit source evidence")]
+    ResolveRequiresExplicitEvidence,
+    #[error("a thread with open questions cannot be resolved automatically")]
+    ResolveWithOpenQuestions,
+    #[error("resolution evidence does not match the cited source events")]
+    ResolutionEvidenceMismatch,
+    #[error("resolution authority is not valid for the cited evidence")]
+    InvalidResolutionAuthority,
+    #[error("resolution evidence is only valid on a transition to resolved")]
+    ResolutionEvidenceOnNonResolvedTransition,
 }
 
 #[cfg(test)]
@@ -504,6 +651,7 @@ mod tests {
                 from: ThreadStatus::Resolved,
                 to: ThreadStatus::Closed,
                 authority: LifecycleAuthority::OwnerConfirmed,
+                resolution_evidence: None,
                 reason: "Owner 确认关闭".into(),
                 source_event_ids: vec![SourceEventId::new("event").unwrap()],
             }),
@@ -527,5 +675,67 @@ mod tests {
     fn closed_thread_can_only_reopen() {
         assert!(validate_thread_transition(ThreadStatus::Closed, ThreadStatus::Reopened).is_ok());
         assert!(validate_thread_transition(ThreadStatus::Closed, ThreadStatus::Open).is_err());
+    }
+
+    #[test]
+    fn explicit_completion_is_the_only_automatic_resolution_input() {
+        let mut batch = batch(ThreadStatus::Open, MessageRole::ExternalObservation);
+        for ambiguous in [
+            "三天没人发言",
+            "应该已经解决了",
+            "差不多完成了",
+            "已完成了吗？",
+            "完成确认：",
+        ] {
+            batch.events[0].normalized_text = ambiguous.into();
+            assert!(derive_evidence_based_resolution(&batch).is_none());
+        }
+
+        batch.events[0].normalized_text = "已完成：报价已发送".into();
+        let change = derive_evidence_based_resolution(&batch).expect("explicit completion");
+        assert_eq!(change.to, ThreadStatus::Resolved);
+        assert_eq!(change.authority, LifecycleAuthority::EvidenceDerived);
+        assert_eq!(
+            change.resolution_evidence,
+            Some(ThreadResolutionEvidenceKind::ExplicitCompletion)
+        );
+        assert_eq!(
+            change.source_event_ids,
+            vec![batch.events[0].source_event_id.clone()]
+        );
+        let patch = ThreadSemanticPatch {
+            lifecycle_change: Some(change),
+            ..ThreadSemanticPatch::default()
+        };
+        assert!(validate_semantic_patch(&batch, &patch).is_ok());
+
+        let mut contradiction = batch.events[0].clone();
+        contradiction.source_event_id = SourceEventId::new("later-event").unwrap();
+        contradiction.normalized_text = "还没完成，需要继续处理".into();
+        batch.events.push(contradiction);
+        assert!(
+            derive_evidence_based_resolution(&batch).is_none(),
+            "a later non-completion event must prevent looking back to stale completion evidence"
+        );
+    }
+
+    #[test]
+    fn automatic_resolution_rejects_open_questions_and_mismatched_evidence() {
+        let mut batch = batch(ThreadStatus::Waiting, MessageRole::ExternalObservation);
+        batch.events[0].normalized_text = "问题已解决：已恢复服务".into();
+        batch.open_question_ids = vec![OpenQuestionId::new("open-question").unwrap()];
+        assert!(derive_evidence_based_resolution(&batch).is_none());
+
+        batch.open_question_ids.clear();
+        let mut change = derive_evidence_based_resolution(&batch).unwrap();
+        change.resolution_evidence = Some(ThreadResolutionEvidenceKind::ExplicitCompletion);
+        let patch = ThreadSemanticPatch {
+            lifecycle_change: Some(change),
+            ..ThreadSemanticPatch::default()
+        };
+        assert_eq!(
+            validate_semantic_patch(&batch, &patch),
+            Err(ThreadSemanticError::ResolutionEvidenceMismatch)
+        );
     }
 }
