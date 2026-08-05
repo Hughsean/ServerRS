@@ -130,12 +130,30 @@ pub struct BackfillBudget {
     pub retry_max_ms: u64,
 }
 
-/// 单页历史读取结果。`next_cursor` 为 `None` 表示已到达会话历史起点（无可继续翻页的
-/// 真实锚点）；`items` 为空且 `next_cursor` 为 `None` 表示空页，由用例判定为歧义。
+/// 历史回补的唯一读取方向：从最新位置向更旧消息翻页。
+///
+/// 该类型是协议无关的领域契约；OneBot/NapCat 如何表达这个方向由外层私有映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfillReadDirection {
+    NewestToOldest,
+}
+
+/// 单页之后的继续证据。三种状态互斥，不再用 `Option<Cursor>` 混淆起点与无证据停止。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackfillContinuation {
+    /// 存在由当前页真实锚点产生的稳定下一页游标。
+    Next(BackfillCursor),
+    /// 确定性来源明确证明已到历史起点。真实 NapCat 不得产生此证据。
+    ProvenHistoryStart,
+    /// 来源无法继续翻页，但也不能证明已到历史起点。
+    UnprovenStop,
+}
+
+/// 单页历史读取结果。页内顺序固定为“新到旧”。
 #[derive(Debug, Clone)]
 pub struct BackfillPage {
     pub items: Vec<BackfillHistoryItem>,
-    pub next_cursor: Option<BackfillCursor>,
+    pub continuation: BackfillContinuation,
 }
 
 /// 协议无关的历史消息 DTO：携带统一信封和该消息在当前账号视角下的真实锚点。
@@ -231,14 +249,34 @@ impl BackfillScopeStatus {
 pub enum BackfillAnomaly {
     /// 成功返回但无消息，无法区分无历史、缓存未加载、权限限制或后端暂时不可用。
     EmptyPage,
+    /// 来源停止翻页，但未提供到达历史起点的证据。
+    UnprovenStop,
     /// 本页所有锚点均已在上一页出现，分页未推进。
     DuplicatePage,
     /// 下一游标与当前游标相同，分页未推进。
     NoCursorAdvance,
+    /// 当前或下一游标与 Scope 的账号主体不同。
+    CursorAccountMismatch,
+    /// 页内消息信封与 Scope 的账号或会话不同。
+    MessageScopeMismatch,
+    /// 消息或分页游标缺少稳定 `message_id`/`message_seq` 锚点。
+    EmptyAnchor,
+    /// 同一页内出现重复锚点。
+    DuplicateAnchor,
+    /// `Next` 游标不是当前“新到旧”页的最后一个真实锚点。
+    InvalidContinuation,
     /// 上一页返回的锚点在本页消失，锚点链断裂。
     AnchorDisappeared,
     /// 排序方向或顺序与之前页面冲突，无法形成连续链。
     SortConflict,
+    /// 冻结边界消息经幂等入口返回 `Accepted`，表明边界快照与存储状态不一致。
+    BoundaryStateMismatch,
+    /// 来源证明到达历史起点，但仍未命中冻结边界。
+    BoundaryNotFound,
+    /// 非确定性来源返回了“已到历史起点”证据。
+    UntrustedHistoryStart,
+    /// 来源只能表达请求方向，尚不能证明响应页确实按“新到旧”排序。
+    UntrustedPageOrder,
     /// 协议错误（HTTP/OneBot retcode 非 0、解析失败等），按可恢复处理。
     ProtocolError { detail: String },
     /// 权限不足，无法读取该会话历史。

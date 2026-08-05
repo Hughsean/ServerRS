@@ -229,7 +229,24 @@ struct HistoryQuery {
     scope_id: String,
     message_seq: Option<String>,
     count: u32,
-    reverse_order: bool,
+    direction: HistoryReadDirection,
+}
+
+/// 历史查询的类型化读取方向。调用者不能直接传递 OneBot `reverseOrder` 布尔值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryReadDirection {
+    TowardOlder,
+    TowardNewer,
+}
+
+impl HistoryReadDirection {
+    /// OneBot 协议字段映射仅在本模块内可见。
+    const fn onebot_reverse_order(self) -> bool {
+        match self {
+            Self::TowardOlder => false,
+            Self::TowardNewer => true,
+        }
+    }
 }
 
 impl HistoryQuery {
@@ -238,7 +255,7 @@ impl HistoryQuery {
         scope_id: impl Into<String>,
         message_seq: Option<String>,
         count: u32,
-        reverse_order: bool,
+        direction: HistoryReadDirection,
     ) -> Result<Self, NapCatError> {
         let scope_id = scope_id.into();
         validate_history_query(scope_kind, &scope_id, count)?;
@@ -246,7 +263,7 @@ impl HistoryQuery {
             scope_id,
             message_seq,
             count,
-            reverse_order,
+            direction,
         })
     }
 }
@@ -260,9 +277,17 @@ impl GroupHistoryQuery {
         group_id: impl Into<String>,
         message_seq: Option<String>,
         count: u32,
-        reverse_order: bool,
+        direction: HistoryReadDirection,
     ) -> Result<Self, NapCatError> {
-        HistoryQuery::new("group_id", group_id, message_seq, count, reverse_order).map(Self)
+        HistoryQuery::new("group_id", group_id, message_seq, count, direction).map(Self)
+    }
+
+    pub fn message_seq(&self) -> Option<&str> {
+        self.0.message_seq.as_deref()
+    }
+
+    pub fn direction(&self) -> HistoryReadDirection {
+        self.0.direction
     }
 }
 
@@ -275,9 +300,17 @@ impl FriendHistoryQuery {
         user_id: impl Into<String>,
         message_seq: Option<String>,
         count: u32,
-        reverse_order: bool,
+        direction: HistoryReadDirection,
     ) -> Result<Self, NapCatError> {
-        HistoryQuery::new("user_id", user_id, message_seq, count, reverse_order).map(Self)
+        HistoryQuery::new("user_id", user_id, message_seq, count, direction).map(Self)
+    }
+
+    pub fn message_seq(&self) -> Option<&str> {
+        self.0.message_seq.as_deref()
+    }
+
+    pub fn direction(&self) -> HistoryReadDirection {
+        self.0.direction
     }
 }
 
@@ -482,7 +515,7 @@ impl NapCatHistoryReadT for NapCatReadOnlyClient {
                     "group_id": &query.scope_id,
                     "message_seq": query.message_seq.as_deref().unwrap_or("0"),
                     "count": query.count,
-                    "reverseOrder": query.reverse_order,
+                    "reverseOrder": query.direction.onebot_reverse_order(),
                 }),
             )
             .await?;
@@ -501,7 +534,7 @@ impl NapCatHistoryReadT for NapCatReadOnlyClient {
                     "user_id": &query.scope_id,
                     "message_seq": query.message_seq.as_deref().unwrap_or("0"),
                     "count": query.count,
-                    "reverseOrder": query.reverse_order,
+                    "reverseOrder": query.direction.onebot_reverse_order(),
                 }),
             )
             .await?;
@@ -595,10 +628,20 @@ mod tests {
 
     #[test]
     fn history_query_rejects_unbounded_or_identity_free_reads() {
-        assert!(GroupHistoryQuery::new("", None, 20, false).is_err());
-        assert!(GroupHistoryQuery::new("1", None, 0, false).is_err());
-        assert!(FriendHistoryQuery::new("1", None, 101, false).is_err());
-        assert!(GroupHistoryQuery::new("1", Some("opaque".into()), 100, true).is_ok());
+        assert!(GroupHistoryQuery::new("", None, 20, HistoryReadDirection::TowardOlder).is_err());
+        assert!(GroupHistoryQuery::new("1", None, 0, HistoryReadDirection::TowardOlder).is_err());
+        assert!(
+            FriendHistoryQuery::new("1", None, 101, HistoryReadDirection::TowardOlder).is_err()
+        );
+        assert!(
+            GroupHistoryQuery::new(
+                "1",
+                Some("opaque".into()),
+                100,
+                HistoryReadDirection::TowardNewer,
+            )
+            .is_ok()
+        );
     }
 
     // P0-1 实测：真实 NapCat `get_recent_contact` 返回的 peerUin/msgTime 为 JSON **字符串**，

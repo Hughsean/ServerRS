@@ -1563,9 +1563,18 @@ impl personal_secretary::HistoryBackfillSourceT for FakeBackfillSource {
         &self,
         _scope: &personal_secretary::BackfillScope,
         _cursor: Option<&personal_secretary::BackfillCursor>,
+        _direction: personal_secretary::BackfillReadDirection,
         _page_size: u32,
     ) -> Result<personal_secretary::BackfillPage, personal_secretary::BackfillSourceError> {
         Ok(self.page.clone())
+    }
+
+    fn history_start_evidence_proven(&self) -> bool {
+        true
+    }
+
+    fn page_order_evidence_proven(&self) -> bool {
+        true
     }
 
     fn account_conversation_set_proven(&self) -> bool {
@@ -1646,7 +1655,7 @@ async fn backfill_use_case_resolves_delayed_reply() {
         let source = Arc::new(FakeBackfillSource {
             page: personal_secretary::BackfillPage {
                 items: vec![parent_item],
-                next_cursor: None,
+                continuation: personal_secretary::BackfillContinuation::ProvenHistoryStart,
             },
         });
         let budget = BackfillBudget {

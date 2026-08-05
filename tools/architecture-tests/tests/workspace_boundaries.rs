@@ -272,6 +272,88 @@ fn personal_secretary_backfill_is_protocol_neutral_and_no_send_calls() {
 }
 
 #[test]
+fn gap003_backfill_contract_is_typed_and_protocol_neutral() {
+    let root = workspace_root();
+    let domain = fs::read_to_string(root.join("crates/personal-secretary/src/domain/backfill.rs"))
+        .expect("backfill domain source must be readable");
+    let application = fs::read_to_string(
+        root.join("crates/personal-secretary/src/application/backfill_service.rs"),
+    )
+    .expect("backfill application source must be readable");
+    let sources = format!("{domain}\n{application}");
+
+    for required in [
+        "BackfillReadDirection",
+        "NewestToOldest",
+        "BackfillContinuation",
+        "ProvenHistoryStart",
+        "UnprovenStop",
+        "page_order_evidence_proven",
+        "UntrustedPageOrder",
+        "HistoryBackfillSourceT",
+    ] {
+        assert!(
+            sources.contains(required),
+            "typed GAP-003 contract is missing {required}"
+        );
+    }
+    assert!(
+        !domain.contains("next_cursor: Option<BackfillCursor>"),
+        "backfill page must not conflate end evidence with Option<Cursor>"
+    );
+    for forbidden in [
+        "use qqbot::",
+        "use qq_open_platform::",
+        "use reqwest",
+        "use sea_orm",
+        "DatabaseConnection",
+        "sqlx::",
+    ] {
+        assert!(
+            !sources.contains(forbidden),
+            "backfill domain/application depends on outer protocol or storage marker {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn napcat_readonly_action_whitelist_is_exactly_seven_and_history_consumer_uses_only_port() {
+    let root = workspace_root();
+    let api = fs::read_to_string(root.join("crates/qqbot/src/napcat/api.rs"))
+        .expect("NapCat API source must be readable");
+    let as_path = api
+        .split("const fn as_path")
+        .nth(1)
+        .and_then(|tail| tail.split("#[derive(Debug, Clone)]").next())
+        .expect("ReadOnlyAction::as_path body must exist");
+    let expected = [
+        "get_version_info",
+        "get_status",
+        "get_friend_list",
+        "get_group_list",
+        "get_recent_contact",
+        "get_group_msg_history",
+        "get_friend_msg_history",
+    ];
+    assert_eq!(as_path.matches("=> \"").count(), expected.len());
+    for action in expected {
+        assert_eq!(
+            as_path.matches(&format!("=> \"{action}\"")).count(),
+            1,
+            "read-only action {action} must appear exactly once in the private path mapping"
+        );
+    }
+
+    let adapter =
+        fs::read_to_string(root.join("apps/qqbot-server/src/adapters/napcat_history_source.rs"))
+            .expect("NapCat history adapter source must be readable");
+    assert!(adapter.contains("client: Arc<dyn NapCatHistoryReadT>"));
+    assert!(!adapter.contains("client: Arc<NapCatReadOnlyClient>"));
+    assert!(!adapter.contains("reverse_order"));
+    assert!(adapter.contains("HistoryReadDirection::TowardOlder"));
+}
+
+#[test]
 fn qqbot_does_not_depend_on_personal_secretary_or_database() {
     let qq_manifest = manifest("crates/qqbot/Cargo.toml");
     let deps = dependencies(&qq_manifest);

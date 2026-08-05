@@ -16,12 +16,13 @@
 
 - 当前分支：`Main`；`EVT-007-MSG` 原子提交 `1b4778f` 已从
   `claude/qqbot-evt006-ingestion-backpressure-v1` 快进合并，尚未推送远端。
-- 当前状态：`EVT-010-A/B/C` 已完成实现与 Codex 独立复核。NapCat HTTP action 已收敛为
-  7 项封闭只读白名单，消费者按 Capability/Directory/History 持有最小端口，fake HTTP 与
-  架构门禁已固化；当前工作树尚未提交。`EVT-007-NONMSG` 未开始（见切片列表）。
+- 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。历史分页使用三态 continuation，
+  逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
+  有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
+  `EXTERNAL ENV-004`；当前工作树尚未提交。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一切片：提交 `EVT-010-A/B/C` 后按 `GAP-003` 继续；`EVT-007-NONMSG` 等待真实业务
-  样本，`EVT-009` 已按产品决策取消。
+- 下一步：提交 `GAP-003-A/B/C` 后按 `GAP-007` 继续；`EVT-007-NONMSG` 等待真实业务样本，
+  `EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -323,7 +324,18 @@
 - [x] `EVT-010-C` 固化编译边界和 fake HTTP 负向测试，持续禁止 NapCat 写接口；Codex 独立
   复核后 `qqbot` 55 单元 + 10 fake HTTP + 2 heartbeat、`qqbot-server` 138/138（2 ignored）及
   workspace boundaries 21/21 通过，严格 Clippy、全工作区 check、fmt 与 diff check 通过。
-- [ ] `GAP-003` 补历史多页方向、边界和完整性证据；NapCat 无法证明完整时必须保持 uncertain。
+- [x] `GAP-003-A` 领域/application 层固定从最新向
+  更旧读取，以互斥的 `Next` / `ProvenHistoryStart` / `UnprovenStop` 替代
+  `Option<Cursor>`；QQBot 公开查询只接受类型化方向，OneBot 布尔映射保持私有。
+- [x] `GAP-003-B` 逐页校验账号/会话/锚点/
+  continuation 和单锚点重叠连续性；只有冻结边界返回 `Duplicate` 才命中，
+  边界后更旧消息不写入；请求方向不充当响应页序证据，未验证来源只能恢复候选并保持
+  `Unprovable`；复用现有租约、fencing、`last_cursor` 和原子 finalize。
+- [x] `GAP-003-C` NapCat 非空页只从真实末锚点
+  构造 `Next`，空页/OwnerControl 只能 `UnprovenStop`，短页不终止，opaque
+  `message_seq` 原样传递，身份错误与底层响应详情脱敏。Codex 独立验证：领域 262/262、
+  `qqbot-server` 142 passed（2 ignored）、QQBot 55 单元 + 10 fake HTTP + 2 heartbeat、
+  workspace boundaries 23/23、GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过。
 - [ ] `GAP-007` 仅评估“普通消息实时入站”的本地磁盘 Spool。Recall Spool 已完成，不得把两者
   混写为同一任务；若引入，必须先定义加密、容量、锁、恢复和健康告警。
 - [ ] `GAP-008` 分别演练电脑关机/休眠、NapCat 离线和 MySQL 离线；属于需要环境配合的部分移入
@@ -366,7 +378,9 @@
 
 - [ ] `EXTERNAL ENV-002` 轮换已经暴露的 QQ 开放平台 Secret，并通过本地环境变量或忽略文件配置。
 - [ ] `EXTERNAL ENV-003` NapCat 实机确认免打扰消息、自身消息上报和一条新消息完整派生链。
-- [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和 PacketBackend 兼容。
+- [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
+  PacketBackend 兼容。真实分页方向、空页语义和 PacketBackend 行为尚未验证，
+  不得由 Fake/HTTP 切片测试推导为已完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
   runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。

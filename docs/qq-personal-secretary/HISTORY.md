@@ -21,6 +21,13 @@
   OneBot 原始响应和旧 `NapCatApiClient` 均不再进入公共 API。fake HTTP 覆盖全部 action、参数、
   1 MiB 流式限流、超时与错误脱敏，架构测试约束消费者最小能力和写 action 禁区。Codex 独立
   复核修复私有 action 枚举的严格 Clippy 告警后，全部受影响门禁通过；无数据库或外部系统操作。
+- **本轮（GAP-003-A/B/C，未提交）**：回补契约改为固定“新到旧”与
+  `Next` / `ProvenHistoryStart` / `UnprovenStop` 三态证据；用例在写入前校验账号、
+  会话、锚点、单页唯一性、单锚点重叠和 continuation，冻结边界只以幂等入口
+  `Duplicate` 为到达证据且不写入页内更旧消息。Codex 复核进一步分离请求方向与响应页序
+  证据：NapCat 在外部验证前可有界恢复候选，但不能完成 Scope 或据页内位置跳过事件。
+  NapCat 空页与 OwnerControl 只产生 `UnprovenStop`，错误详情脱敏。无数据库迁移；Rust 门禁、
+  GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过，未连接真实 NapCat。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -78,6 +85,16 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-05 21:17（Asia/Shanghai）`：GAP-003-A/B/C Codex 独立复核完成。修复未验证的
+  NapCat 响应方向被误当完整性证据的问题，新增 `UntrustedPageOrder` 与独立来源能力门；
+  全部 Rust 门禁、隔离 MySQL 1/1 及 EVT-007 回归 20/20 通过，schema 全部清理。
+
+- `2026-08-05 20:43（Asia/Shanghai）`：GAP-003-A/B/C 实现切片完成。新增协议无关的
+  方向/continuation 契约，多页连续性与冻结边界幂等判定，类型化 QQBot 方向及
+  NapCat 空页无证据停止/脱敏边界。测试代码覆盖 Fake 多页、HTTP JSON、适配器、
+  架构和 ignored 随机隔离 MySQL 租约恢复。未执行任何编译或测试，不声称真实
+  NapCat 分页方向、空页原因或 PacketBackend 行为已验证；等待 Codex 独立门禁。
 
 - `2026-08-05 15:31（Asia/Shanghai）`：EVT-007-MSG 第五轮 Codex 复核完成。迁移原先用
   `SELECT CASE ... HAVING` 返回零行，执行器会忽略结果并错误登记成功；现改为单语句条件性多行

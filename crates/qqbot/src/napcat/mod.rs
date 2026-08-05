@@ -11,8 +11,9 @@ pub mod segments;
 
 pub use api::{
     FriendHistoryQuery, FriendInfoData, GroupHistoryQuery, GroupInfoData, HistoryMessage,
-    HistorySender, MAX_RESPONSE_BYTES, NapCatCapabilityReadT, NapCatDirectoryReadT,
-    NapCatHistoryReadT, NapCatReadOnlyClient, RecentContactData, StatusData, VersionInfoData,
+    HistoryReadDirection, HistorySender, MAX_RESPONSE_BYTES, NapCatCapabilityReadT,
+    NapCatDirectoryReadT, NapCatHistoryReadT, NapCatReadOnlyClient, RecentContactData, StatusData,
+    VersionInfoData,
 };
 pub use capabilities::{ApiAvailability, CapabilitySnapshot};
 pub use error::NapCatError;

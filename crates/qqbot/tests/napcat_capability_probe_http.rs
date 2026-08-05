@@ -17,8 +17,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use qqbot::napcat::{
-    CapabilitySnapshot, FriendHistoryQuery, GroupHistoryQuery, NapCatCapabilityReadT,
-    NapCatDirectoryReadT, NapCatHistoryReadT, NapCatReadOnlyClient,
+    CapabilitySnapshot, FriendHistoryQuery, GroupHistoryQuery, HistoryReadDirection,
+    NapCatCapabilityReadT, NapCatDirectoryReadT, NapCatHistoryReadT, NapCatReadOnlyClient,
 };
 
 /// 启动一个本地 HTTP/1.1 服务器，根据请求路径返回固定的 OneBot 响应。
@@ -152,7 +152,7 @@ fn start_recording_napcat_http_server() -> (SocketAddr, Arc<Mutex<Vec<RecordedRe
     let requests_clone = Arc::clone(&requests);
 
     std::thread::spawn(move || {
-        for _ in 0..7 {
+        for _ in 0..9 {
             let (stream, _) = listener.accept().unwrap();
             let requests = Arc::clone(&requests_clone);
             std::thread::spawn(move || handle_recorded_request(stream, requests));
@@ -227,7 +227,26 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
     client.get_recent_contact().await.unwrap();
     client
         .get_group_msg_history(
-            &GroupHistoryQuery::new("group-scope", Some("opaque/group+cursor".into()), 100, true)
+            &GroupHistoryQuery::new("group-scope", None, 20, HistoryReadDirection::TowardOlder)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    client
+        .get_group_msg_history(
+            &GroupHistoryQuery::new(
+                "group-scope",
+                Some("opaque/group+cursor".into()),
+                100,
+                HistoryReadDirection::TowardNewer,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    client
+        .get_friend_msg_history(
+            &FriendHistoryQuery::new("friend-scope", None, 20, HistoryReadDirection::TowardOlder)
                 .unwrap(),
         )
         .await
@@ -238,7 +257,7 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
                 "friend-scope",
                 Some("opaque friend cursor".into()),
                 1,
-                false,
+                HistoryReadDirection::TowardNewer,
             )
             .unwrap(),
         )
@@ -259,6 +278,8 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
             "get_group_list",
             "get_recent_contact",
             "get_group_msg_history",
+            "get_group_msg_history",
+            "get_friend_msg_history",
             "get_friend_msg_history",
         ]
     );
@@ -271,18 +292,36 @@ async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_param
         requests[5].params,
         serde_json::json!({
             "group_id": "group-scope",
+            "message_seq": "0",
+            "count": 20,
+            "reverseOrder": false,
+        })
+    );
+    assert_eq!(
+        requests[6].params,
+        serde_json::json!({
+            "group_id": "group-scope",
             "message_seq": "opaque/group+cursor",
             "count": 100,
             "reverseOrder": true,
         })
     );
     assert_eq!(
-        requests[6].params,
+        requests[7].params,
+        serde_json::json!({
+            "user_id": "friend-scope",
+            "message_seq": "0",
+            "count": 20,
+            "reverseOrder": false,
+        })
+    );
+    assert_eq!(
+        requests[8].params,
         serde_json::json!({
             "user_id": "friend-scope",
             "message_seq": "opaque friend cursor",
             "count": 1,
-            "reverseOrder": false,
+            "reverseOrder": true,
         })
     );
     for forbidden in [

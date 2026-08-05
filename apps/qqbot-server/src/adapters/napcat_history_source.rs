@@ -14,12 +14,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use personal_secretary::{
-    BackfillAnchor, BackfillCursor, BackfillHistoryItem, BackfillPage, BackfillScope,
-    BackfillSourceError, ConversationKind, HistoryBackfillSourceT, SourceAccountRef,
+    BackfillAnchor, BackfillContinuation, BackfillCursor, BackfillHistoryItem, BackfillPage,
+    BackfillReadDirection, BackfillScope, BackfillSourceError, ConversationKind,
+    HistoryBackfillSourceT, SourceAccountRef,
 };
 use qqbot::napcat::{
-    FriendHistoryQuery, GroupHistoryQuery, HistoryMessage, MessageSegment as NapCatMessageSegment,
-    NapCatError, NapCatHistoryReadT,
+    FriendHistoryQuery, GroupHistoryQuery, HistoryMessage, HistoryReadDirection,
+    MessageSegment as NapCatMessageSegment, NapCatError, NapCatHistoryReadT,
 };
 
 use crate::inbound::map_core;
@@ -51,11 +52,18 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
         &self,
         scope: &BackfillScope,
         cursor: Option<&BackfillCursor>,
+        direction: BackfillReadDirection,
         page_size: u32,
     ) -> Result<BackfillPage, BackfillSourceError> {
+        let BackfillReadDirection::NewestToOldest = direction;
         if scope.account != self.account {
             return Err(BackfillSourceError::Protocol(
                 "history scope belongs to a different account subject".into(),
+            ));
+        }
+        if self.account.account_id != self.self_qq_id.to_string() {
+            return Err(BackfillSourceError::Protocol(
+                "history adapter account identity is inconsistent".into(),
             ));
         }
         // 锚点必须绑定当前账号视角；外部传入的游标若属于其它账号则视为协议错误。
@@ -66,16 +74,23 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
                 "history cursor belongs to a different account subject".into(),
             ));
         }
+        if let Some(cursor) = cursor
+            && (cursor.anchor.message_id.trim().is_empty()
+                || cursor.anchor.message_seq.trim().is_empty())
+        {
+            return Err(BackfillSourceError::Protocol(
+                "history cursor does not contain a stable anchor".into(),
+            ));
+        }
 
         let message_seq = cursor.map(|cursor| cursor.anchor.message_seq.as_str());
-        let reverse_order = false;
         let messages = match scope.conversation.kind {
             ConversationKind::Group => {
                 let query = GroupHistoryQuery::new(
                     scope.conversation.id.clone(),
                     message_seq.map(str::to_owned),
                     page_size,
-                    reverse_order,
+                    HistoryReadDirection::TowardOlder,
                 )
                 .map_err(map_source_error)?;
                 self.client.get_group_msg_history(&query).await
@@ -85,7 +100,7 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
                     scope.conversation.id.clone(),
                     message_seq.map(str::to_owned),
                     page_size,
-                    reverse_order,
+                    HistoryReadDirection::TowardOlder,
                 )
                 .map_err(map_source_error)?;
                 self.client.get_friend_msg_history(&query).await
@@ -94,7 +109,7 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
                 // 历史回补不覆盖官方 Bot 控制会话（其事件由开放平台驱动）。
                 return Ok(BackfillPage {
                     items: Vec::new(),
-                    next_cursor: None,
+                    continuation: BackfillContinuation::UnprovenStop,
                 });
             }
         }
@@ -114,8 +129,9 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
             }
             let anchor =
                 BackfillAnchor::new(message.message_id.clone(), message.message_seq.clone());
-            let envelope = map_history_message(&message, scope, self.self_qq_id)
-                .map_err(|error| BackfillSourceError::Protocol(error.to_string()))?;
+            let envelope = map_history_message(&message, scope, self.self_qq_id).map_err(|_| {
+                BackfillSourceError::Protocol("history response could not be mapped safely".into())
+            })?;
             items.push(BackfillHistoryItem {
                 envelope,
                 anchor: anchor.clone(),
@@ -123,12 +139,29 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
             last_anchor = Some(anchor);
         }
 
-        // 下一页游标：基于本页最后一条消息的真实锚点。若本页为空或无锚点，
-        // 则无下一页（由用例判定为空页歧义或到达起点）。
-        let next_cursor =
-            last_anchor.map(|anchor| BackfillCursor::new(self.account.clone(), anchor));
+        // NapCat 无法证明空页是历史起点。非空页（包括短页）始终仅从
+        // 最后一条真实返回消息构造 Next，不根据页长推断终止。
+        let continuation = match last_anchor {
+            Some(anchor) => {
+                BackfillContinuation::Next(BackfillCursor::new(self.account.clone(), anchor))
+            }
+            None => BackfillContinuation::UnprovenStop,
+        };
 
-        Ok(BackfillPage { items, next_cursor })
+        Ok(BackfillPage {
+            items,
+            continuation,
+        })
+    }
+
+    fn history_start_evidence_proven(&self) -> bool {
+        false
+    }
+
+    fn page_order_evidence_proven(&self) -> bool {
+        // ENV-004 完成前，请求参数只表达期望方向，不能证明具体 NapCat/PacketBackend
+        // 响应确实按新到旧排列。
+        false
     }
 
     fn account_conversation_set_proven(&self) -> bool {
@@ -138,26 +171,42 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
     }
 }
 
-/// 校验 NapCat 响应仍属于请求的账号主体和会话。空 `self_id`/`group_id` 兼容部分旧响应，
-/// 但一旦接口提供了身份字段就必须与请求一致，禁止把跨账号或跨群响应写入当前 Scope。
+/// 校验 NapCat 响应仍属于请求的账号主体和群/私聊会话。身份字段缺失或
+/// 不一致都 fail closed，禁止把跨账号或跨会话响应写入当前 Scope。
 fn validate_history_identity(
     message: &HistoryMessage,
     scope: &BackfillScope,
     account: &SourceAccountRef,
 ) -> Result<(), BackfillSourceError> {
-    if !message.self_id.trim().is_empty() && message.self_id != account.account_id {
+    if message.self_id.trim().is_empty() || message.self_id != account.account_id {
         return Err(BackfillSourceError::Protocol(
             "history response self_id differs from the requested account subject".into(),
         ));
     }
-    if scope.conversation.kind == ConversationKind::Group
-        && let Some(group_id) = message.group_id.as_deref()
-        && !group_id.trim().is_empty()
-        && group_id != scope.conversation.id
-    {
-        return Err(BackfillSourceError::Protocol(
-            "history response group_id differs from the requested conversation".into(),
-        ));
+    match scope.conversation.kind {
+        ConversationKind::Group => {
+            if message.message_type != "group"
+                || message.group_id.as_deref() != Some(scope.conversation.id.as_str())
+            {
+                return Err(BackfillSourceError::Protocol(
+                    "history response does not match the requested group conversation".into(),
+                ));
+            }
+        }
+        ConversationKind::Private => {
+            let peer_matches =
+                message.user_id == account.account_id || message.user_id == scope.conversation.id;
+            if message.message_type != "private" || !peer_matches {
+                return Err(BackfillSourceError::Protocol(
+                    "history response does not match the requested private conversation".into(),
+                ));
+            }
+        }
+        ConversationKind::OwnerControl => {
+            return Err(BackfillSourceError::Protocol(
+                "owner-control history is not supported".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -222,8 +271,12 @@ fn map_history_message(
 
 fn map_source_error(error: NapCatError) -> BackfillSourceError {
     match error {
-        NapCatError::Connection(detail) => BackfillSourceError::Unavailable(detail),
-        NapCatError::Protocol(detail) => BackfillSourceError::Protocol(detail),
+        NapCatError::Connection(_) => {
+            BackfillSourceError::Unavailable("NapCat history transport unavailable".into())
+        }
+        NapCatError::Protocol(_) => {
+            BackfillSourceError::Protocol("NapCat history protocol error".into())
+        }
         NapCatError::Api {
             action,
             code,
@@ -236,15 +289,18 @@ fn map_source_error(error: NapCatError) -> BackfillSourceError {
             if message.contains("权限") || message.to_ascii_lowercase().contains("permission") {
                 BackfillSourceError::PermissionDenied
             } else {
-                BackfillSourceError::Protocol(format!(
-                    "NapCat API {action} failed: code={code}, {message}"
-                ))
+                let _ = action;
+                BackfillSourceError::Protocol(format!("NapCat history API failed: code={code}"))
             }
         }
-        NapCatError::Handler(detail) => BackfillSourceError::Unavailable(detail),
+        NapCatError::Handler(_) => {
+            BackfillSourceError::Unavailable("NapCat history handler unavailable".into())
+        }
         // Heartbeat 超时只影响实时监听连接，不发生在历史回补的只读 API 调用路径；
         // 若误入此处，视为暂时性不可用以便重试。
-        NapCatError::HeartbeatTimeout(detail) => BackfillSourceError::Unavailable(detail),
+        NapCatError::HeartbeatTimeout(_) => {
+            BackfillSourceError::Unavailable("NapCat history transport unavailable".into())
+        }
     }
 }
 
@@ -406,6 +462,9 @@ fn truncate_utf8_safe(value: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
     use super::*;
     use personal_secretary::{ConversationRef, MessageSource};
 
@@ -424,7 +483,7 @@ mod tests {
     fn message(self_id: &str, group_id: &str) -> HistoryMessage {
         HistoryMessage {
             self_id: self_id.into(),
-            user_id: "sender".into(),
+            user_id: "30001".into(),
             time: 0,
             message_id: "message".into(),
             message_seq: "sequence".into(),
@@ -433,6 +492,60 @@ mod tests {
             raw_message: String::new(),
             message: serde_json::json!([]),
             sender: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeHistoryClient {
+        group_pages: Mutex<VecDeque<Result<Vec<HistoryMessage>, NapCatError>>>,
+        private_pages: Mutex<VecDeque<Result<Vec<HistoryMessage>, NapCatError>>>,
+        group_queries: Mutex<Vec<(Option<String>, HistoryReadDirection)>>,
+        private_queries: Mutex<Vec<(Option<String>, HistoryReadDirection)>>,
+    }
+
+    #[async_trait]
+    impl NapCatHistoryReadT for FakeHistoryClient {
+        async fn get_group_msg_history(
+            &self,
+            query: &GroupHistoryQuery,
+        ) -> Result<Vec<HistoryMessage>, NapCatError> {
+            self.group_queries
+                .lock()
+                .unwrap()
+                .push((query.message_seq().map(str::to_owned), query.direction()));
+            self.group_pages
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted group page")
+        }
+
+        async fn get_friend_msg_history(
+            &self,
+            query: &FriendHistoryQuery,
+        ) -> Result<Vec<HistoryMessage>, NapCatError> {
+            self.private_queries
+                .lock()
+                .unwrap()
+                .push((query.message_seq().map(str::to_owned), query.direction()));
+            self.private_pages
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted private page")
+        }
+    }
+
+    fn source(client: Arc<FakeHistoryClient>) -> NapCatHistorySource {
+        let port: Arc<dyn NapCatHistoryReadT> = client;
+        NapCatHistorySource::new(port, account("10001"), 10001)
+    }
+
+    fn private_scope() -> BackfillScope {
+        BackfillScope {
+            account: account("10001"),
+            conversation: ConversationRef::new(ConversationKind::Private, "30001").unwrap(),
+            boundary_cursor: None,
         }
     }
 
@@ -464,6 +577,165 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn nonempty_short_group_page_returns_real_next_and_empty_page_is_unproven() {
+        let client = Arc::new(FakeHistoryClient::default());
+        client
+            .group_pages
+            .lock()
+            .unwrap()
+            .push_back(Ok(vec![message("10001", "20001")]));
+        client.group_pages.lock().unwrap().push_back(Ok(Vec::new()));
+        let source = source(client.clone());
+        let scope = scope(account("10001"), "20001");
+
+        let first = source
+            .fetch_page(&scope, None, BackfillReadDirection::NewestToOldest, 100)
+            .await
+            .unwrap();
+        let next = match first.continuation {
+            BackfillContinuation::Next(cursor) => cursor,
+            other => panic!("short nonempty page must continue, got {other:?}"),
+        };
+        assert_eq!(next.anchor.message_id, "message");
+        assert_eq!(next.anchor.message_seq, "sequence");
+
+        let second = source
+            .fetch_page(
+                &scope,
+                Some(&next),
+                BackfillReadDirection::NewestToOldest,
+                100,
+            )
+            .await
+            .unwrap();
+        assert!(second.items.is_empty());
+        assert_eq!(second.continuation, BackfillContinuation::UnprovenStop);
+        assert_eq!(
+            client.group_queries.lock().unwrap().as_slice(),
+            [
+                (None, HistoryReadDirection::TowardOlder),
+                (
+                    Some("sequence".to_owned()),
+                    HistoryReadDirection::TowardOlder
+                ),
+            ]
+        );
+        assert!(!source.history_start_evidence_proven());
+        assert!(!source.page_order_evidence_proven());
+        assert!(!source.account_conversation_set_proven());
+    }
+
+    #[tokio::test]
+    async fn private_history_preserves_opaque_cursor_and_uses_toward_older_direction() {
+        let client = Arc::new(FakeHistoryClient::default());
+        let mut private_message = message("10001", "");
+        private_message.message_type = "private".into();
+        private_message.group_id = None;
+        private_message.message_seq = "opaque/private+seq".into();
+        client
+            .private_pages
+            .lock()
+            .unwrap()
+            .push_back(Ok(vec![private_message]));
+        client
+            .private_pages
+            .lock()
+            .unwrap()
+            .push_back(Ok(Vec::new()));
+        let source = source(client.clone());
+        let scope = private_scope();
+
+        let first = source
+            .fetch_page(&scope, None, BackfillReadDirection::NewestToOldest, 10)
+            .await
+            .unwrap();
+        let next = match first.continuation {
+            BackfillContinuation::Next(cursor) => cursor,
+            other => panic!("private nonempty page must continue, got {other:?}"),
+        };
+        source
+            .fetch_page(
+                &scope,
+                Some(&next),
+                BackfillReadDirection::NewestToOldest,
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            client.private_queries.lock().unwrap().as_slice(),
+            [
+                (None, HistoryReadDirection::TowardOlder),
+                (
+                    Some("opaque/private+seq".to_owned()),
+                    HistoryReadDirection::TowardOlder
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_control_never_fabricates_history_start_evidence() {
+        let client = Arc::new(FakeHistoryClient::default());
+        let source = source(client);
+        let owner_scope = BackfillScope {
+            account: account("10001"),
+            conversation: ConversationRef::new(ConversationKind::OwnerControl, "owner").unwrap(),
+            boundary_cursor: None,
+        };
+        let page = source
+            .fetch_page(
+                &owner_scope,
+                None,
+                BackfillReadDirection::NewestToOldest,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.continuation, BackfillContinuation::UnprovenStop);
+    }
+
+    #[test]
+    fn identity_and_protocol_errors_are_redacted() {
+        let requested_account = account("10001");
+        let requested_scope = scope(requested_account.clone(), "20001");
+        let identity_error = validate_history_identity(
+            &message("sensitive-account-9988", "sensitive-group-7766"),
+            &requested_scope,
+            &requested_account,
+        )
+        .unwrap_err()
+        .to_string();
+
+        let protocol_error = map_source_error(NapCatError::Api {
+            action: "get_group_msg_history".into(),
+            code: 500,
+            message: "account=9988 qq=8877 group=7766 message_id=mid-secret \
+                      message_seq=seq-secret body-secret token-secret \
+                      https://secret.invalid response-data-secret"
+                .into(),
+        })
+        .to_string();
+
+        for error in [identity_error, protocol_error] {
+            for secret in [
+                "9988",
+                "8877",
+                "7766",
+                "mid-secret",
+                "seq-secret",
+                "body-secret",
+                "token-secret",
+                "secret.invalid",
+                "response-data-secret",
+            ] {
+                assert!(!error.contains(secret), "error leaked {secret}: {error}");
+            }
+        }
     }
 
     // 评审 P1-2：历史 Unknown 段截断必须按 UTF-8 字符边界，不能 panic。

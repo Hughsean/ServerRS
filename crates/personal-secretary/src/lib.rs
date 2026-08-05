@@ -292,12 +292,12 @@ pub use threading::{
 };
 
 pub use backfill::{
-    BackfillAnchor, BackfillAnomaly, BackfillBudget, BackfillConfigError, BackfillCursor,
-    BackfillError, BackfillEvidence, BackfillHistoryItem, BackfillLease, BackfillLeaseToken,
-    BackfillOutcome, BackfillPage, BackfillRunId, BackfillRunProgress, BackfillRunStatus,
-    BackfillScope, BackfillScopeStatus, BackfillSourceError, ClaimedGap, GapTransitionError,
-    HistoryCompleteness, KnownScope, ReclaimPolicy, ScopeEvidence, ScopeProgress,
-    validate_gap_transition,
+    BackfillAnchor, BackfillAnomaly, BackfillBudget, BackfillConfigError, BackfillContinuation,
+    BackfillCursor, BackfillError, BackfillEvidence, BackfillHistoryItem, BackfillLease,
+    BackfillLeaseToken, BackfillOutcome, BackfillPage, BackfillReadDirection, BackfillRunId,
+    BackfillRunProgress, BackfillRunStatus, BackfillScope, BackfillScopeStatus,
+    BackfillSourceError, ClaimedGap, GapTransitionError, HistoryCompleteness, KnownScope,
+    ReclaimPolicy, ScopeEvidence, ScopeProgress, validate_gap_transition,
 };
 pub use backfill_service::{
     BackfillGapUseCase, BackfillStateStoreT, BackfillStateStoreWithIngestionT,

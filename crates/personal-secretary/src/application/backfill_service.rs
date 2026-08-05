@@ -14,18 +14,18 @@
 //! 关键不变量：历史和实时消息最终调用同一个 `insert_message_if_absent`；重连不等于
 //! 已补齐；只有充分证据（含账号会话集合可证完整）才能 `verified_complete`。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::{
-    BackfillAnchor, BackfillAnomaly, BackfillBudget, BackfillCursor, BackfillError,
-    BackfillEvidence, BackfillLease, BackfillLeaseToken, BackfillOutcome, BackfillPage,
-    BackfillRunId, BackfillScope, BackfillScopeStatus, BackfillSourceError, ClaimedGap,
-    HistoryCompleteness, InboundEventStoreError, InboundEventStoreT, IngestMessageOutcome,
-    IngestionGapId, IngestionGapStatus, KnownScope, ScopeEvidence, ScopeProgress,
-    validate_gap_transition,
+    BackfillAnchor, BackfillAnomaly, BackfillBudget, BackfillContinuation, BackfillCursor,
+    BackfillError, BackfillEvidence, BackfillLease, BackfillLeaseToken, BackfillOutcome,
+    BackfillPage, BackfillReadDirection, BackfillRunId, BackfillScope, BackfillScopeStatus,
+    BackfillSourceError, ClaimedGap, HistoryCompleteness, InboundEventStoreError,
+    InboundEventStoreT, IngestMessageOutcome, IngestionGapId, IngestionGapStatus, KnownScope,
+    ScopeEvidence, ScopeProgress, validate_gap_transition,
 };
 
 /// 历史回补来源端口：外层 NapCat 适配器实现，按账号视角分页返回协议无关历史消息。
@@ -34,16 +34,23 @@ use crate::{
 /// 真实锚点，禁止用数值加减生成下一锚点。
 #[async_trait]
 pub trait HistoryBackfillSourceT: Send + Sync {
-    /// 读取一页历史消息。`cursor` 为 `None` 表示从最新一页开始。
-    ///
-    /// 返回的 [`BackfillPage::next_cursor`] 为 `None` 表示已到达会话历史起点。空页
-    /// （`items` 为空且 `next_cursor` 为 `None`）由用例判定为歧义，不视为完整。
+    /// 按 [`BackfillReadDirection::NewestToOldest`] 读取一页历史消息。
+    /// `cursor` 为 `None` 表示从最新位置开始；后续游标必须原样来自前页真实锚点。
     async fn fetch_page(
         &self,
         scope: &BackfillScope,
         cursor: Option<&BackfillCursor>,
+        direction: BackfillReadDirection,
         page_size: u32,
     ) -> Result<BackfillPage, BackfillSourceError>;
+
+    /// 该来源是否有权产生 [`BackfillContinuation::ProvenHistoryStart`]。
+    /// 只有确定性 Fake 可返回 `true`；真实协议适配器必须返回 `false`。
+    fn history_start_evidence_proven(&self) -> bool;
+
+    /// 该来源是否已证明响应页遵循 [`BackfillReadDirection::NewestToOldest`]。
+    /// 请求方向本身不是响应顺序证据；真实 NapCat 在外部验证完成前必须返回 `false`。
+    fn page_order_evidence_proven(&self) -> bool;
 
     /// 该来源是否能证明账号级会话集合完整。
     ///
@@ -281,8 +288,21 @@ impl BackfillGapUseCase {
     ) -> Result<bool, BackfillError> {
         progress.status = BackfillScopeStatus::Backfilling;
         let mut cursor = progress.last_cursor.clone();
-        let mut session_chain: Vec<BackfillAnchor> = Vec::new();
+        let mut session_chain: HashSet<BackfillAnchor> = HashSet::new();
         let mut budget_exhausted = false;
+
+        if let Some(boundary) = &scope.boundary_cursor {
+            if boundary.account != scope.account {
+                progress
+                    .anomalies
+                    .push(BackfillAnomaly::CursorAccountMismatch);
+                return Ok(false);
+            }
+            if boundary.anchor.message_id.trim().is_empty() {
+                progress.anomalies.push(BackfillAnomaly::EmptyAnchor);
+                return Ok(false);
+            }
+        }
 
         loop {
             // 页数预算检查。
@@ -298,6 +318,19 @@ impl BackfillGapUseCase {
                 break;
             }
 
+            if let Some(current) = &cursor {
+                if current.account != scope.account {
+                    progress
+                        .anomalies
+                        .push(BackfillAnomaly::CursorAccountMismatch);
+                    break;
+                }
+                if !anchor_is_stable(&current.anchor) {
+                    progress.anomalies.push(BackfillAnomaly::EmptyAnchor);
+                    break;
+                }
+            }
+
             // 在发起远程读取前先持久化当前进度并刷新租约。这既避免长请求前租约过期，
             // 也让已被其它 Worker 接管的旧持有者在调用 NapCat 前被 fencing token 拒绝。
             self.store
@@ -306,37 +339,57 @@ impl BackfillGapUseCase {
 
             let page = self
                 .history_source
-                .fetch_page(scope, cursor.as_ref(), self.budget.page_size)
+                .fetch_page(
+                    scope,
+                    cursor.as_ref(),
+                    BackfillReadDirection::NewestToOldest,
+                    self.budget.page_size,
+                )
                 .await?;
 
             progress.pages_read += 1;
 
-            // 空页歧义：成功返回但无消息，无法证明已完整覆盖。
-            if page.items.is_empty() && page.next_cursor.is_none() {
-                progress.anomalies.push(BackfillAnomaly::EmptyPage);
+            let page_order_proven = self.history_source.page_order_evidence_proven();
+            let page_anomalies = validate_page(
+                scope,
+                cursor.as_ref(),
+                &page,
+                &session_chain,
+                page_order_proven,
+            );
+            if !page_anomalies.is_empty() {
+                progress.anomalies.extend(page_anomalies);
+                if matches!(&page.continuation, BackfillContinuation::UnprovenStop) {
+                    progress.anomalies.push(BackfillAnomaly::UnprovenStop);
+                }
+                if matches!(&page.continuation, BackfillContinuation::ProvenHistoryStart)
+                    && !self.history_source.history_start_evidence_proven()
+                {
+                    progress
+                        .anomalies
+                        .push(BackfillAnomaly::UntrustedHistoryStart);
+                }
+                if matches!(&page.continuation, BackfillContinuation::ProvenHistoryStart)
+                    && scope.boundary_cursor.is_some()
+                {
+                    progress.anomalies.push(BackfillAnomaly::BoundaryNotFound);
+                }
                 break;
             }
+            if !page_order_proven {
+                push_unique(&mut progress.anomalies, BackfillAnomaly::UntrustedPageOrder);
+            }
 
-            // 重复页：本页所有锚点都已在本次会话中见过，分页未推进。
-            if !page.items.is_empty()
-                && page
-                    .items
-                    .iter()
-                    .all(|item| session_chain.contains(&item.anchor))
+            if matches!(&page.continuation, BackfillContinuation::ProvenHistoryStart)
+                && !self.history_source.history_start_evidence_proven()
             {
-                progress.anomalies.push(BackfillAnomaly::DuplicatePage);
+                progress
+                    .anomalies
+                    .push(BackfillAnomaly::UntrustedHistoryStart);
                 break;
             }
 
-            // 无推进：下一游标与当前游标相同。
-            if let Some(next) = &page.next_cursor
-                && cursor.as_ref() == Some(next)
-            {
-                progress.anomalies.push(BackfillAnomaly::NoCursorAdvance);
-                break;
-            }
-
-            let mut hit_boundary = false;
+            let mut stop_at_boundary = false;
             for item in &page.items {
                 if *total_events >= self.budget.max_events_per_run {
                     progress.anomalies.push(BackfillAnomaly::BudgetExhausted);
@@ -346,19 +399,28 @@ impl BackfillGapUseCase {
                 *total_events += 1;
                 progress.events_read += 1;
 
+                // 请求方向本身不能证明具体协议实现的响应顺序。顺序未验证时仍可
+                // 有界恢复候选事件，但不能用页内位置完成 Scope 或跳过后续事件。
+                let is_boundary = page_order_proven
+                    && scope.boundary_cursor.as_ref().is_some_and(|boundary| {
+                        item.anchor.message_id == boundary.anchor.message_id
+                    });
+
                 match self.store.insert_message_if_absent(&item.envelope).await {
                     Ok(IngestMessageOutcome::Accepted { .. }) => {
                         progress.accepted += 1;
+                        if is_boundary {
+                            progress
+                                .anomalies
+                                .push(BackfillAnomaly::BoundaryStateMismatch);
+                            stop_at_boundary = true;
+                        }
                     }
                     Ok(IngestMessageOutcome::Duplicate { .. }) => {
                         progress.duplicates += 1;
-                        // 命中空窗前稳定边界 => 回读到回补前状态，连续性可证。
-                        // 按平台消息 ID 匹配（账号作用域内唯一）；message_seq 仅用于分页锚点，
-                        // 不参与边界身份判定，避免边界快照缺少 message_seq 时永不命中。
-                        if let Some(boundary) = &scope.boundary_cursor
-                            && item.anchor.message_id == boundary.anchor.message_id
-                        {
-                            hit_boundary = true;
+                        if is_boundary {
+                            progress.reached_boundary = true;
+                            stop_at_boundary = true;
                         }
                     }
                     Err(error) => {
@@ -367,28 +429,38 @@ impl BackfillGapUseCase {
                     }
                 }
 
-                if !session_chain.contains(&item.anchor) {
-                    session_chain.push(item.anchor.clone());
+                session_chain.insert(item.anchor.clone());
+                if stop_at_boundary || budget_exhausted {
+                    // 页内顺序为新到旧；边界及预算停止点之后的更旧消息不得写入。
+                    break;
                 }
             }
 
-            if hit_boundary {
-                progress.reached_boundary = true;
+            if stop_at_boundary || budget_exhausted {
+                break;
             }
 
-            cursor = page.next_cursor.clone();
-            progress.last_cursor = cursor.clone();
-
-            // 到达会话历史起点；若无边界游标，则视为回读到起点 = 边界。
-            if page.next_cursor.is_none() {
-                if scope.boundary_cursor.is_none() {
-                    progress.reached_boundary = true;
+            match page.continuation {
+                BackfillContinuation::Next(next) => {
+                    cursor = Some(next);
+                    progress.last_cursor = cursor.clone();
                 }
-                break;
-            }
-
-            if progress.reached_boundary || budget_exhausted {
-                break;
+                BackfillContinuation::ProvenHistoryStart => {
+                    progress.last_cursor = None;
+                    if scope.boundary_cursor.is_none() {
+                        if page_order_proven {
+                            progress.reached_boundary = true;
+                        }
+                    } else {
+                        progress.anomalies.push(BackfillAnomaly::BoundaryNotFound);
+                    }
+                    break;
+                }
+                BackfillContinuation::UnprovenStop => {
+                    progress.last_cursor = None;
+                    progress.anomalies.push(BackfillAnomaly::UnprovenStop);
+                    break;
+                }
             }
 
             // 持久化进度并刷新租约，支持崩溃恢复。
@@ -423,6 +495,100 @@ impl BackfillGapUseCase {
         };
         self.store.finalize_run(&outcome, lease_token).await?;
         Ok(outcome)
+    }
+}
+
+fn anchor_is_stable(anchor: &BackfillAnchor) -> bool {
+    !anchor.message_id.trim().is_empty() && !anchor.message_seq.trim().is_empty()
+}
+
+/// 在任何 ingestion 前校验整页，避免部分写入后才发现身份或 continuation 非法。
+fn validate_page(
+    scope: &BackfillScope,
+    current: Option<&BackfillCursor>,
+    page: &BackfillPage,
+    session_chain: &HashSet<BackfillAnchor>,
+    page_order_proven: bool,
+) -> Vec<BackfillAnomaly> {
+    let mut anomalies = Vec::new();
+    if page.items.is_empty() {
+        anomalies.push(BackfillAnomaly::EmptyPage);
+    }
+
+    let mut page_anchors = HashSet::new();
+    for item in &page.items {
+        if !anchor_is_stable(&item.anchor)
+            || item.envelope.source.message_id.trim().is_empty()
+            || item.envelope.source.message_id != item.anchor.message_id
+        {
+            push_unique(&mut anomalies, BackfillAnomaly::EmptyAnchor);
+        }
+        if item.envelope.source.account_ref() != scope.account
+            || item.envelope.conversation != scope.conversation
+        {
+            push_unique(&mut anomalies, BackfillAnomaly::MessageScopeMismatch);
+        }
+        if !page_anchors.insert(item.anchor.clone()) {
+            push_unique(&mut anomalies, BackfillAnomaly::DuplicateAnchor);
+        }
+    }
+
+    if !page.items.is_empty()
+        && page
+            .items
+            .iter()
+            .all(|item| session_chain.contains(&item.anchor))
+    {
+        push_unique(&mut anomalies, BackfillAnomaly::DuplicatePage);
+    }
+
+    if let Some(current) = current {
+        let current_position = page
+            .items
+            .iter()
+            .position(|item| item.anchor == current.anchor);
+        match current_position {
+            None => push_unique(&mut anomalies, BackfillAnomaly::AnchorDisappeared),
+            Some(0) => {}
+            Some(_) if page_order_proven => {
+                push_unique(&mut anomalies, BackfillAnomaly::SortConflict)
+            }
+            Some(_) => {}
+        }
+        if page_order_proven
+            && page
+                .items
+                .iter()
+                .any(|item| session_chain.contains(&item.anchor) && item.anchor != current.anchor)
+        {
+            push_unique(&mut anomalies, BackfillAnomaly::SortConflict);
+        }
+    }
+
+    if let BackfillContinuation::Next(next) = &page.continuation {
+        if next.account != scope.account {
+            push_unique(&mut anomalies, BackfillAnomaly::CursorAccountMismatch);
+        }
+        if !anchor_is_stable(&next.anchor) {
+            push_unique(&mut anomalies, BackfillAnomaly::EmptyAnchor);
+        }
+        if !page_anchors.contains(&next.anchor)
+            || (page_order_proven
+                && page.items.last().map(|item| &item.anchor) != Some(&next.anchor))
+        {
+            push_unique(&mut anomalies, BackfillAnomaly::InvalidContinuation);
+        }
+        if current == Some(next) {
+            push_unique(&mut anomalies, BackfillAnomaly::NoCursorAdvance);
+        }
+    }
+
+    anomalies
+}
+
+fn push_unique(anomalies: &mut Vec<BackfillAnomaly>, anomaly: BackfillAnomaly) {
+    if !anomalies.contains(&anomaly) {
+        anomalies.push(anomaly);
     }
 }
 
@@ -543,8 +709,11 @@ mod tests {
         }
     }
 
-    fn page(items: Vec<BackfillHistoryItem>, next_cursor: Option<BackfillCursor>) -> BackfillPage {
-        BackfillPage { items, next_cursor }
+    fn page(items: Vec<BackfillHistoryItem>, continuation: BackfillContinuation) -> BackfillPage {
+        BackfillPage {
+            items,
+            continuation,
+        }
     }
 
     /// 幂等写入 + 回补状态的内存实现，用于验证用例编排。
@@ -586,6 +755,15 @@ mod tests {
 
         fn unique_events(&self) -> usize {
             self.state.lock().unwrap().unique_events
+        }
+
+        fn has_message(&self, account_id: &str, msg_id: &str, conv_id: &str) -> bool {
+            let key = hist_item(account_id, msg_id, "probe", conv_id)
+                .envelope
+                .idempotency_key()
+                .as_str()
+                .to_owned();
+            self.state.lock().unwrap().inserted.contains_key(&key)
         }
     }
 
@@ -694,6 +872,7 @@ mod tests {
     struct FakeSource {
         pages: Mutex<VecDeque<BackfillPage>>,
         proven: bool,
+        page_order_proven: bool,
         fetch_log: Mutex<Vec<Option<BackfillCursor>>>,
     }
 
@@ -702,6 +881,16 @@ mod tests {
             Self {
                 pages: Mutex::new(VecDeque::new()),
                 proven,
+                page_order_proven: true,
+                fetch_log: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_unproven_page_order(proven: bool) -> Self {
+            Self {
+                pages: Mutex::new(VecDeque::new()),
+                proven,
+                page_order_proven: false,
                 fetch_log: Mutex::new(Vec::new()),
             }
         }
@@ -721,14 +910,24 @@ mod tests {
             &self,
             _scope: &BackfillScope,
             cursor: Option<&BackfillCursor>,
+            direction: BackfillReadDirection,
             _page_size: u32,
         ) -> Result<BackfillPage, BackfillSourceError> {
+            assert_eq!(direction, BackfillReadDirection::NewestToOldest);
             self.fetch_log.lock().unwrap().push(cursor.cloned());
             self.pages
                 .lock()
                 .unwrap()
                 .pop_front()
                 .ok_or_else(|| BackfillSourceError::Unavailable("no scripted page".into()))
+        }
+
+        fn history_start_evidence_proven(&self) -> bool {
+            true
+        }
+
+        fn page_order_evidence_proven(&self) -> bool {
+            self.page_order_proven
         }
 
         fn account_conversation_set_proven(&self) -> bool {
@@ -766,7 +965,7 @@ mod tests {
                 hist_item("acc-1", "mid", "s-mid", "g1"),
                 hist_item("acc-1", "old", "seed", "g1"),
             ],
-            None,
+            BackfillContinuation::ProvenHistoryStart,
         ));
 
         let outcome = build(store.clone(), source, budget())
@@ -808,7 +1007,7 @@ mod tests {
                 hist_item("acc-1", "new", "s-new", "g1"),
                 hist_item("acc-1", "old", "seed", "g1"),
             ],
-            None,
+            BackfillContinuation::ProvenHistoryStart,
         ));
 
         let outcome = build(store, source, budget())
@@ -847,9 +1046,12 @@ mod tests {
                 hist_item("acc-1", "m1", "s1", "g1"),
                 hist_item("acc-1", "m2", "s2", "g1"),
             ],
-            Some(cursor("acc-1", "m2", "s2")),
+            BackfillContinuation::Next(cursor("acc-1", "m2", "s2")),
         ));
-        source.queue(page(vec![hist_item("acc-1", "m3", "seed", "g1")], None));
+        source.queue(page(
+            vec![hist_item("acc-1", "m3", "seed", "g1")],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
 
         let mut bounded = budget();
         bounded.max_pages_per_scope = 1;
@@ -878,12 +1080,12 @@ mod tests {
         let stall = cursor("acc-1", "m1", "s1");
         source.queue(page(
             vec![hist_item("acc-1", "m1", "s1", "g1")],
-            Some(stall.clone()),
+            BackfillContinuation::Next(stall.clone()),
         ));
         // 第二页返回相同游标，分页未推进。
         source.queue(page(
             vec![hist_item("acc-1", "m2", "s2", "g1")],
-            Some(stall),
+            BackfillContinuation::Next(stall),
         ));
 
         let outcome = build(store, source, budget())
@@ -940,7 +1142,13 @@ mod tests {
             .reclaimed
             .push(claimed_gap_resume("run-1", "gap-1", "acc-1"));
         // 仅 Scope B 需要继续读取，且从持久化的 X 开始。
-        source.queue(page(vec![hist_item("acc-1", "bb", "seed", "gb")], None));
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "mid-b", "smid", "gb"),
+                hist_item("acc-1", "bb", "seed", "gb"),
+            ],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
 
         let use_case = build(store, source.clone(), budget());
         let claimed = use_case.reclaim_expired(1).await.unwrap();
@@ -1030,7 +1238,10 @@ mod tests {
             .push_back(claimed_gap("run-1", "gap-1", "acc-1"));
         let source = Arc::new(FakeSource::new(true));
         // 历史后到：同一条 M 经统一幂等入口返回 Duplicate，不产生新 SourceEvent。
-        source.queue(page(vec![hist_item("acc-1", "M", "seed", "g1")], None));
+        source.queue(page(
+            vec![hist_item("acc-1", "M", "seed", "g1")],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
 
         let outcome = build(store.clone(), source, budget())
             .run_one()
@@ -1067,6 +1278,450 @@ mod tests {
 
         assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
         assert_eq!(outcome.gap_target_status, IngestionGapStatus::Uncertain);
+    }
+
+    #[tokio::test]
+    async fn multipage_overlap_hits_frozen_boundary_and_skips_older_items() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.seed_message("acc-1", "boundary", "g1").await;
+        store.state.lock().unwrap().known_scopes = vec![known_scope(
+            "g1",
+            Some(cursor("acc-1", "boundary", "boundary-seq")),
+        )];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-overlap",
+            "gap-overlap",
+            "acc-1",
+        ));
+
+        let overlap = cursor("acc-1", "overlap", "opaque-overlap");
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "new-1", "opaque-new-1", "g1"),
+                hist_item("acc-1", "new-2", "opaque-new-2", "g1"),
+                hist_item("acc-1", "overlap", "opaque-overlap", "g1"),
+            ],
+            BackfillContinuation::Next(overlap.clone()),
+        ));
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "overlap", "opaque-overlap", "g1"),
+                hist_item("acc-1", "new-3", "opaque-new-3", "g1"),
+                hist_item("acc-1", "boundary", "boundary-seq", "g1"),
+                hist_item("acc-1", "must-not-write", "opaque-older", "g1"),
+            ],
+            BackfillContinuation::Next(cursor("acc-1", "must-not-write", "opaque-older")),
+        ));
+
+        let outcome = build(store.clone(), source.clone(), budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(outcome.completeness, HistoryCompleteness::ProvenComplete);
+        assert!(outcome.evidence.scopes[0].reached_boundary);
+        assert_eq!(outcome.evidence.scopes[0].accepted, 4);
+        assert_eq!(outcome.evidence.scopes[0].duplicates, 2);
+        assert!(!store.has_message("acc-1", "must-not-write", "g1"));
+        assert_eq!(source.fetch_log(), vec![None, Some(overlap)]);
+    }
+
+    #[tokio::test]
+    async fn accepted_frozen_boundary_is_inconsistent_and_skips_older_items() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope(
+            "g1",
+            Some(cursor("acc-1", "boundary", "boundary-seq")),
+        )];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-accepted",
+            "gap-accepted",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "new", "opaque-new", "g1"),
+                hist_item("acc-1", "boundary", "boundary-seq", "g1"),
+                hist_item("acc-1", "must-not-write", "opaque-older", "g1"),
+            ],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+
+        let outcome = build(store.clone(), source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert!(!outcome.evidence.scopes[0].reached_boundary);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::BoundaryStateMismatch)
+        );
+        assert!(!store.has_message("acc-1", "must-not-write", "g1"));
+    }
+
+    #[tokio::test]
+    async fn proven_history_start_before_frozen_boundary_is_unprovable() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.seed_message("acc-1", "missing-boundary", "g1").await;
+        store.state.lock().unwrap().known_scopes = vec![known_scope(
+            "g1",
+            Some(cursor("acc-1", "missing-boundary", "boundary-seq")),
+        )];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-missing",
+            "gap-missing",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![hist_item("acc-1", "only-history", "opaque", "g1")],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+
+        let outcome = build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::BoundaryNotFound)
+        );
+    }
+
+    async fn run_without_boundary(account_set_proven: bool) -> BackfillOutcome {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(account_set_proven));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-start",
+            "gap-start",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![hist_item("acc-1", "oldest", "opaque-oldest", "g1")],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+        build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn no_boundary_and_proven_start_requires_proven_account_set_for_complete_gap() {
+        let proven = run_without_boundary(true).await;
+        assert_eq!(proven.completeness, HistoryCompleteness::ProvenComplete);
+
+        let account_set_unproven = run_without_boundary(false).await;
+        assert_eq!(
+            account_set_unproven.completeness,
+            HistoryCompleteness::KnownScopesComplete
+        );
+        assert_eq!(
+            account_set_unproven.gap_target_status,
+            IngestionGapStatus::Uncertain
+        );
+    }
+
+    #[tokio::test]
+    async fn unproven_page_order_recovers_candidates_without_completing_scope() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::with_unproven_page_order(true));
+        store.seed_message("acc-1", "boundary", "g1").await;
+        store.state.lock().unwrap().known_scopes = vec![known_scope(
+            "g1",
+            Some(cursor("acc-1", "boundary", "boundary-seq")),
+        )];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-untrusted-order",
+            "gap-untrusted-order",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "boundary", "boundary-seq", "g1"),
+                hist_item("acc-1", "gap-message", "opaque-gap", "g1"),
+            ],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+
+        let outcome = build(store.clone(), source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert!(!outcome.evidence.scopes[0].reached_boundary);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::UntrustedPageOrder)
+        );
+        assert!(store.has_message("acc-1", "gap-message", "g1"));
+    }
+
+    #[tokio::test]
+    async fn unproven_page_order_without_boundary_reports_only_the_order_gap() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::with_unproven_page_order(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-untrusted-start",
+            "gap-untrusted-start",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![hist_item("acc-1", "oldest", "opaque-oldest", "g1")],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+
+        let outcome = build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        let anomalies = &outcome.evidence.scopes[0].anomalies;
+        assert!(anomalies.contains(&BackfillAnomaly::UntrustedPageOrder));
+        assert!(!anomalies.contains(&BackfillAnomaly::BoundaryNotFound));
+    }
+
+    #[tokio::test]
+    async fn empty_page_and_unproven_stop_are_both_anomalies() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-empty",
+            "gap-empty",
+            "acc-1",
+        ));
+        source.queue(page(Vec::new(), BackfillContinuation::UnprovenStop));
+
+        let outcome = build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        let anomalies = &outcome.evidence.scopes[0].anomalies;
+        assert!(anomalies.contains(&BackfillAnomaly::EmptyPage));
+        assert!(anomalies.contains(&BackfillAnomaly::UnprovenStop));
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+    }
+
+    #[tokio::test]
+    async fn nonempty_unproven_stop_never_proves_scope_complete() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store
+            .state
+            .lock()
+            .unwrap()
+            .claimable
+            .push_back(claimed_gap("run-stop", "gap-stop", "acc-1"));
+        source.queue(page(
+            vec![hist_item("acc-1", "one", "opaque-one", "g1")],
+            BackfillContinuation::UnprovenStop,
+        ));
+
+        let outcome = build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::UnprovenStop)
+        );
+    }
+
+    #[tokio::test]
+    async fn short_page_with_next_continues_until_explicit_start_evidence() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-short",
+            "gap-short",
+            "acc-1",
+        ));
+        let opaque = cursor("acc-1", "short-anchor", "not-a-number");
+        source.queue(page(
+            vec![hist_item("acc-1", "short-anchor", "not-a-number", "g1")],
+            BackfillContinuation::Next(opaque.clone()),
+        ));
+        source.queue(page(
+            vec![
+                hist_item("acc-1", "short-anchor", "not-a-number", "g1"),
+                hist_item("acc-1", "oldest", "opaque-oldest", "g1"),
+            ],
+            BackfillContinuation::ProvenHistoryStart,
+        ));
+
+        let outcome = build(store, source.clone(), budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.fetch_log(), vec![None, Some(opaque)]);
+        assert_eq!(outcome.completeness, HistoryCompleteness::ProvenComplete);
+    }
+
+    #[tokio::test]
+    async fn duplicate_page_and_same_cursor_produce_typed_anomalies() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(true));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-repeat",
+            "gap-repeat",
+            "acc-1",
+        ));
+        let same = cursor("acc-1", "b", "opaque-b");
+        let repeated = vec![
+            hist_item("acc-1", "a", "opaque-a", "g1"),
+            hist_item("acc-1", "b", "opaque-b", "g1"),
+        ];
+        source.queue(page(
+            repeated.clone(),
+            BackfillContinuation::Next(same.clone()),
+        ));
+        source.queue(page(repeated, BackfillContinuation::Next(same)));
+
+        let outcome = build(store, source, budget())
+            .run_one()
+            .await
+            .unwrap()
+            .unwrap();
+        let anomalies = &outcome.evidence.scopes[0].anomalies;
+        assert!(anomalies.contains(&BackfillAnomaly::DuplicatePage));
+        assert!(anomalies.contains(&BackfillAnomaly::NoCursorAdvance));
+        assert!(anomalies.contains(&BackfillAnomaly::SortConflict));
+    }
+
+    #[tokio::test]
+    async fn illegal_next_cursor_cross_account_cursor_and_empty_anchor_are_rejected() {
+        async fn run_case(
+            run_id: &str,
+            page_value: BackfillPage,
+            persisted_cursor: Option<BackfillCursor>,
+        ) -> BackfillOutcome {
+            let store = Arc::new(FakeStore::default());
+            let source = Arc::new(FakeSource::new(true));
+            store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+            store
+                .state
+                .lock()
+                .unwrap()
+                .reclaimed
+                .push(claimed_gap_resume(run_id, "gap-invalid", "acc-1"));
+            if let Some(last_cursor) = persisted_cursor {
+                store.set_progress(
+                    run_id,
+                    ScopeProgress {
+                        conversation: ConversationRef::new(ConversationKind::Group, "g1").unwrap(),
+                        status: BackfillScopeStatus::Backfilling,
+                        last_cursor: Some(last_cursor),
+                        ..fresh()
+                    },
+                );
+            }
+            source.queue(page_value);
+            let use_case = build(store, source, budget());
+            let claimed = use_case.reclaim_expired(1).await.unwrap().remove(0);
+            use_case.resume_claimed(claimed).await.unwrap()
+        }
+
+        let invalid_next = run_case(
+            "run-invalid-next",
+            page(
+                vec![hist_item("acc-1", "actual", "opaque-actual", "g1")],
+                BackfillContinuation::Next(cursor("acc-1", "fabricated", "opaque-fake")),
+            ),
+            None,
+        )
+        .await;
+        assert!(
+            invalid_next.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::InvalidContinuation)
+        );
+
+        let cross_account_next = run_case(
+            "run-cross-account-next",
+            page(
+                vec![hist_item("acc-1", "actual", "opaque-actual", "g1")],
+                BackfillContinuation::Next(cursor("other-account", "actual", "opaque-actual")),
+            ),
+            None,
+        )
+        .await;
+        assert!(
+            cross_account_next.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::CursorAccountMismatch)
+        );
+
+        let cross_account = run_case(
+            "run-cross-account",
+            page(Vec::new(), BackfillContinuation::UnprovenStop),
+            Some(cursor("other-account", "cursor", "opaque")),
+        )
+        .await;
+        assert!(
+            cross_account.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::CursorAccountMismatch)
+        );
+
+        let empty_anchor = run_case(
+            "run-empty-anchor",
+            page(
+                vec![hist_item("acc-1", "message", "", "g1")],
+                BackfillContinuation::UnprovenStop,
+            ),
+            None,
+        )
+        .await;
+        assert!(
+            empty_anchor.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::EmptyAnchor)
+        );
+
+        let wrong_message_scope = run_case(
+            "run-wrong-message-scope",
+            page(
+                vec![hist_item(
+                    "other-account",
+                    "message",
+                    "opaque-message",
+                    "g1",
+                )],
+                BackfillContinuation::ProvenHistoryStart,
+            ),
+            None,
+        )
+        .await;
+        assert!(
+            wrong_message_scope.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::MessageScopeMismatch)
+        );
     }
 
     fn fresh() -> ScopeProgress {
