@@ -21,7 +21,7 @@
 
 use std::time::Duration;
 
-use super::api::NapCatApiClient;
+use super::api::NapCatCapabilityReadT;
 use super::event::MessageSegment;
 
 /// 探测整体超时上限（评审 P0-2：3~5 秒，取 5 秒）。
@@ -88,7 +88,7 @@ impl CapabilitySnapshot {
     ///   在 B4 会话同步流程首次调用时确认可达性，不在此处下载完整数组。
     /// - 超时后未完成的探测分支标记为 [`ApiAvailability::Unknown`]，立即返回。
     /// - 探测结果仅用于日志与未来健康状态（B7），不影响实时入站路径。
-    pub async fn probe(client: &NapCatApiClient) -> Self {
+    pub async fn probe(client: &dyn NapCatCapabilityReadT) -> Self {
         let probe_fut = async {
             let (version_r, status_r) = tokio::join!(probe_version(client), probe_status(client),);
             (version_r, status_r)
@@ -182,7 +182,7 @@ fn non_empty(s: String) -> Option<String> {
 
 /// 探测 version_info：返回版本信息与 Heartbeat 能力（保守未知，需运行时验证）。
 async fn probe_version(
-    client: &NapCatApiClient,
+    client: &dyn NapCatCapabilityReadT,
 ) -> (
     Option<String>,
     Option<String>,
@@ -211,7 +211,7 @@ async fn probe_version(
 }
 
 /// 探测 get_status，返回 online 字段。
-async fn probe_status(client: &NapCatApiClient) -> Option<bool> {
+async fn probe_status(client: &dyn NapCatCapabilityReadT) -> Option<bool> {
     match client.get_status().await {
         Ok(s) => s.online,
         Err(_) => None,

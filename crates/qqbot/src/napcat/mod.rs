@@ -1,6 +1,6 @@
 //! NapCat/OneBot 11 协议适配。
 
-pub mod api;
+mod api;
 pub mod capabilities;
 mod error;
 pub mod event;
@@ -10,8 +10,9 @@ pub mod message_parser;
 pub mod segments;
 
 pub use api::{
-    FriendInfoData, HistoryMessage, HistorySender, MAX_RESPONSE_BYTES, NapCatApiClient,
-    RecentContactData, StatusData, VersionInfoData,
+    FriendHistoryQuery, FriendInfoData, GroupHistoryQuery, GroupInfoData, HistoryMessage,
+    HistorySender, MAX_RESPONSE_BYTES, NapCatCapabilityReadT, NapCatDirectoryReadT,
+    NapCatHistoryReadT, NapCatReadOnlyClient, RecentContactData, StatusData, VersionInfoData,
 };
 pub use capabilities::{ApiAvailability, CapabilitySnapshot};
 pub use error::NapCatError;

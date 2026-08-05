@@ -16,6 +16,11 @@
   unresolved 候选、事务内父子回填、Duplicate/Backfill 共用幂等入口、后台 reconciliation、
   线程投影与语义租约 fencing、终态线程边界及迁移 fail-closed 均已闭合；非消息 Reply 继续
   拆分为等待真实样本的 `EVT-007-NONMSG`。Docker 隔离 MySQL 20/20 与常规门禁全绿，随本提交收口。
+- **本轮（EVT-010-A/B/C，未提交）**：NapCat HTTP 客户端收敛为 7 项封闭、类型化的只读
+  action 白名单，公开能力拆为 Capability/Directory/History 三个最小端口；任意 action/path、
+  OneBot 原始响应和旧 `NapCatApiClient` 均不再进入公共 API。fake HTTP 覆盖全部 action、参数、
+  1 MiB 流式限流、超时与错误脱敏，架构测试约束消费者最小能力和写 action 禁区。Codex 独立
+  复核修复私有 action 枚举的严格 Clippy 告警后，全部受影响门禁通过；无数据库或外部系统操作。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，

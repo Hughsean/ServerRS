@@ -1,7 +1,7 @@
 //! NapCat 只读历史来源适配器：实现 [`HistoryBackfillSourceT`]。
 //!
 //! 职责：
-//! - 调用 `NapCatApiClient` 的群/私聊历史只读接口；
+//! - 调用 `NapCatHistoryReadT` 的群/私聊历史只读接口；
 //! - 把 `HistoryMessage` 转换成协议无关回补 DTO（[`BackfillHistoryItem`]）；
 //! - 复用 [`crate::inbound::map_core`]，使历史消息与实时消息使用同一套身份、角色和
 //!   消息段规则；
@@ -18,21 +18,22 @@ use personal_secretary::{
     BackfillSourceError, ConversationKind, HistoryBackfillSourceT, SourceAccountRef,
 };
 use qqbot::napcat::{
-    HistoryMessage, MessageSegment as NapCatMessageSegment, NapCatApiClient, NapCatError,
+    FriendHistoryQuery, GroupHistoryQuery, HistoryMessage, MessageSegment as NapCatMessageSegment,
+    NapCatError, NapCatHistoryReadT,
 };
 
 use crate::inbound::map_core;
 
-/// 账号视角的只读历史来源。所有历史读取都经过 `NapCatApiClient` 的只读方法。
+/// 账号视角的只读历史来源。所有历史读取都经过最小历史读取端口。
 pub(crate) struct NapCatHistorySource {
-    client: Arc<NapCatApiClient>,
+    client: Arc<dyn NapCatHistoryReadT>,
     account: SourceAccountRef,
     self_qq_id: i64,
 }
 
 impl NapCatHistorySource {
     pub(crate) fn new(
-        client: Arc<NapCatApiClient>,
+        client: Arc<dyn NapCatHistoryReadT>,
         account: SourceAccountRef,
         self_qq_id: i64,
     ) -> Self {
@@ -70,24 +71,24 @@ impl HistoryBackfillSourceT for NapCatHistorySource {
         let reverse_order = false;
         let messages = match scope.conversation.kind {
             ConversationKind::Group => {
-                self.client
-                    .get_group_msg_history(
-                        &scope.conversation.id,
-                        message_seq,
-                        page_size,
-                        reverse_order,
-                    )
-                    .await
+                let query = GroupHistoryQuery::new(
+                    scope.conversation.id.clone(),
+                    message_seq.map(str::to_owned),
+                    page_size,
+                    reverse_order,
+                )
+                .map_err(map_source_error)?;
+                self.client.get_group_msg_history(&query).await
             }
             ConversationKind::Private => {
-                self.client
-                    .get_friend_msg_history(
-                        &scope.conversation.id,
-                        message_seq,
-                        page_size,
-                        reverse_order,
-                    )
-                    .await
+                let query = FriendHistoryQuery::new(
+                    scope.conversation.id.clone(),
+                    message_seq.map(str::to_owned),
+                    page_size,
+                    reverse_order,
+                )
+                .map_err(map_source_error)?;
+                self.client.get_friend_msg_history(&query).await
             }
             ConversationKind::OwnerControl => {
                 // 历史回补不覆盖官方 Bot 控制会话（其事件由开放平台驱动）。
@@ -168,20 +169,16 @@ fn map_history_message(
     self_qq_id: i64,
 ) -> Result<personal_secretary::InboundMessageEnvelope, NapCatError> {
     let conversation_kind = scope.conversation.kind;
-    let conversation_id: i64 = scope.conversation.id.parse().map_err(|_| {
-        NapCatError::Protocol(format!(
-            "history conversation id is not an integer: {}",
-            scope.conversation.id
-        ))
-    })?;
+    let conversation_id: i64 =
+        scope.conversation.id.parse().map_err(|_| {
+            NapCatError::Protocol("history conversation id is not an integer".into())
+        })?;
 
     let is_self = message.user_id == self_qq_id.to_string();
-    let protocol_actor_id: i64 = message.user_id.parse().map_err(|_| {
-        NapCatError::Protocol(format!(
-            "history user_id is not an integer: {}",
-            message.user_id
-        ))
-    })?;
+    let protocol_actor_id: i64 = message
+        .user_id
+        .parse()
+        .map_err(|_| NapCatError::Protocol("history user_id is not an integer".into()))?;
     let actor_id = if is_self {
         self_qq_id
     } else {

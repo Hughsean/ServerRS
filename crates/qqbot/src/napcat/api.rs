@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -52,14 +53,10 @@ fn deserialize_string_or_number<'de, D: serde::Deserializer<'de>>(
     Ok(deserialize_opt_string_or_number(deserializer)?.unwrap_or_default())
 }
 
-/// OneBot API response.
 #[derive(Debug, Clone, Deserialize)]
-pub struct OneBotResponse {
-    pub status: String,
-    pub retcode: i32,
-    pub data: Option<Value>,
-    #[serde(default)]
-    pub echo: Option<String>,
+struct OneBotResponse {
+    retcode: i32,
+    data: Option<Value>,
 }
 
 /// NapCat 历史接口返回的发送者资料。
@@ -73,7 +70,7 @@ pub struct HistorySender {
     pub role: Option<String>,
 }
 
-/// 群/私聊历史与 `get_msg` 共用的只读消息表示。
+/// 群/私聊历史共用的只读消息表示。
 #[derive(Debug, Clone, Deserialize)]
 pub struct HistoryMessage {
     #[serde(default, deserialize_with = "deserialize_string_or_number")]
@@ -104,34 +101,13 @@ struct HistoryPage {
     messages: Vec<HistoryMessage>,
 }
 
-/// Data returned by get_login_info.
-#[derive(Debug, Clone, Deserialize)]
-pub struct LoginInfoData {
-    pub user_id: i64,
-    pub nickname: String,
-}
-
-/// Data returned by get_group_info.
+/// Data returned by get_group_list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GroupInfoData {
     pub group_id: i64,
     pub group_name: String,
     pub member_count: Option<i32>,
     pub max_member_count: Option<i32>,
-}
-
-/// Data returned by get_group_member_info.
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct GroupMemberInfoData {
-    pub group_id: i64,
-    pub user_id: i64,
-    pub nickname: String,
-    pub card: Option<String>,
-    pub role: Option<String>,
-    pub title: Option<String>,
-    pub join_time: Option<i64>,
-    pub last_sent_time: Option<i64>,
 }
 
 /// Data returned by get_status.
@@ -212,38 +188,171 @@ const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// 评审第五轮：`pub` 使集成测试可构造恰好等于上限的响应验证边界条件。
 pub const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadOnlyAction {
+    VersionInfo,
+    Status,
+    FriendList,
+    GroupList,
+    RecentContact,
+    GroupMessageHistory,
+    FriendMessageHistory,
+}
+
+impl ReadOnlyAction {
+    #[cfg(test)]
+    const ALL: [Self; 7] = [
+        Self::VersionInfo,
+        Self::Status,
+        Self::FriendList,
+        Self::GroupList,
+        Self::RecentContact,
+        Self::GroupMessageHistory,
+        Self::FriendMessageHistory,
+    ];
+
+    const fn as_path(self) -> &'static str {
+        match self {
+            Self::VersionInfo => "get_version_info",
+            Self::Status => "get_status",
+            Self::FriendList => "get_friend_list",
+            Self::GroupList => "get_group_list",
+            Self::RecentContact => "get_recent_contact",
+            Self::GroupMessageHistory => "get_group_msg_history",
+            Self::FriendMessageHistory => "get_friend_msg_history",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HistoryQuery {
+    scope_id: String,
+    message_seq: Option<String>,
+    count: u32,
+    reverse_order: bool,
+}
+
+impl HistoryQuery {
+    fn new(
+        scope_kind: &str,
+        scope_id: impl Into<String>,
+        message_seq: Option<String>,
+        count: u32,
+        reverse_order: bool,
+    ) -> Result<Self, NapCatError> {
+        let scope_id = scope_id.into();
+        validate_history_query(scope_kind, &scope_id, count)?;
+        Ok(Self {
+            scope_id,
+            message_seq,
+            count,
+            reverse_order,
+        })
+    }
+}
+
+/// Validated parameters for one group history read.
+#[derive(Debug, Clone)]
+pub struct GroupHistoryQuery(HistoryQuery);
+
+impl GroupHistoryQuery {
+    pub fn new(
+        group_id: impl Into<String>,
+        message_seq: Option<String>,
+        count: u32,
+        reverse_order: bool,
+    ) -> Result<Self, NapCatError> {
+        HistoryQuery::new("group_id", group_id, message_seq, count, reverse_order).map(Self)
+    }
+}
+
+/// Validated parameters for one friend history read.
+#[derive(Debug, Clone)]
+pub struct FriendHistoryQuery(HistoryQuery);
+
+impl FriendHistoryQuery {
+    pub fn new(
+        user_id: impl Into<String>,
+        message_seq: Option<String>,
+        count: u32,
+        reverse_order: bool,
+    ) -> Result<Self, NapCatError> {
+        HistoryQuery::new("user_id", user_id, message_seq, count, reverse_order).map(Self)
+    }
+}
+
+#[async_trait]
+pub trait NapCatCapabilityReadT: Send + Sync {
+    async fn get_version_info(&self) -> Result<VersionInfoData, NapCatError>;
+    async fn get_status(&self) -> Result<StatusData, NapCatError>;
+}
+
+#[async_trait]
+pub trait NapCatDirectoryReadT: Send + Sync {
+    async fn get_friend_list(&self) -> Result<Vec<FriendInfoData>, NapCatError>;
+    async fn get_group_list(&self) -> Result<Vec<GroupInfoData>, NapCatError>;
+    async fn get_recent_contact(&self) -> Result<Vec<RecentContactData>, NapCatError>;
+}
+
+#[async_trait]
+pub trait NapCatHistoryReadT: Send + Sync {
+    async fn get_group_msg_history(
+        &self,
+        query: &GroupHistoryQuery,
+    ) -> Result<Vec<HistoryMessage>, NapCatError>;
+    async fn get_friend_msg_history(
+        &self,
+        query: &FriendHistoryQuery,
+    ) -> Result<Vec<HistoryMessage>, NapCatError>;
+}
+
 /// NapCat 只读 HTTP 客户端。个人秘书不得通过本类型执行发送、撤回或群管理操作。
-pub struct NapCatApiClient {
+pub struct NapCatReadOnlyClient {
     /// Base URL for OneBot HTTP API, e.g. "http://127.0.0.1:3000".
     base_url: String,
     http_client: reqwest::Client,
 }
 
-impl NapCatApiClient {
+impl NapCatReadOnlyClient {
     pub fn new(base_url: String) -> Self {
+        Self::with_timeout(base_url, HTTP_REQUEST_TIMEOUT)
+    }
+
+    fn with_timeout(base_url: String, timeout: std::time::Duration) -> Self {
         Self {
             base_url,
             http_client: reqwest::Client::builder()
-                .timeout(HTTP_REQUEST_TIMEOUT)
-                .connect_timeout(HTTP_REQUEST_TIMEOUT)
+                .timeout(timeout)
+                .connect_timeout(timeout)
                 .build()
                 .expect("NapCat HTTP client uses a statically valid timeout configuration"),
         }
     }
 
-    async fn call_api(&self, action: &str, params: Value) -> Result<OneBotResponse, NapCatError> {
-        let url = format!("{}/{}", self.base_url, action);
+    async fn request(
+        &self,
+        action: ReadOnlyAction,
+        params: Value,
+    ) -> Result<OneBotResponse, NapCatError> {
+        let action_path = action.as_path();
+        let url = format!("{}/{}", self.base_url, action_path);
         let resp = self
             .http_client
             .post(&url)
             .json(&params)
             .send()
             .await
-            .map_err(|e| NapCatError::Connection(format!("HTTP request failed: {e}")))?;
+            .map_err(|error| {
+                if error.is_timeout() {
+                    NapCatError::Connection(format!("NapCat {action_path} request timed out"))
+                } else {
+                    NapCatError::Connection(format!("NapCat {action_path} request failed"))
+                }
+            })?;
 
         if !resp.status().is_success() {
             return Err(NapCatError::Api {
-                action: action.into(),
+                action: action_path.into(),
                 code: resp.status().as_u16() as i32,
                 message: format!("HTTP {}", resp.status()),
             });
@@ -259,7 +368,7 @@ impl NapCatApiClient {
         {
             return Err(NapCatError::Protocol(format!(
                 "NapCat {} Content-Length {} exceeds {} bytes; rejected before reading body",
-                action, len, MAX_RESPONSE_BYTES
+                action_path, len, MAX_RESPONSE_BYTES
             )));
         }
 
@@ -267,21 +376,27 @@ impl NapCatApiClient {
         let mut stream = resp.bytes_stream();
         use futures_util::StreamExt;
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| NapCatError::Protocol(format!("read response chunk failed: {e}")))?;
+            let chunk = chunk_result.map_err(|_| {
+                NapCatError::Protocol(format!("read {action_path} response failed"))
+            })?;
             // 在追加当前 chunk 前检查累计大小，保证已分配内存严格有界。
             let next_len = body_bytes.len().saturating_add(chunk.len());
             if next_len > MAX_RESPONSE_BYTES {
                 return Err(NapCatError::Protocol(format!(
                     "NapCat {} response exceeds {} bytes during stream read (got {}); aborted",
-                    action, MAX_RESPONSE_BYTES, next_len
+                    action_path, MAX_RESPONSE_BYTES, next_len
                 )));
             }
             body_bytes.extend_from_slice(&chunk);
         }
 
-        let body: OneBotResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| NapCatError::Protocol(format!("parse response failed: {e}")))?;
+        let body: OneBotResponse = serde_json::from_slice(&body_bytes).map_err(|error| {
+            NapCatError::Protocol(format!(
+                "parse {action_path} response failed at line {}, column {}",
+                error.line(),
+                error.column()
+            ))
+        })?;
 
         if body.retcode != 0 {
             // 错误响应 data 可能包含消息、联系人或其它敏感载荷。只记录其存在性，禁止
@@ -292,152 +407,105 @@ impl NapCatApiClient {
                 .map(|_| "; data_present=true")
                 .unwrap_or_default();
             return Err(NapCatError::Api {
-                action: action.into(),
+                action: action_path.into(),
                 code: body.retcode,
-                message: format!("{}{}", body.status, data_detail),
+                message: format!("OneBot action failed{data_detail}"),
             });
         }
 
         Ok(body)
     }
+}
 
-    pub async fn get_login_info(&self) -> Result<LoginInfoData, NapCatError> {
+#[async_trait]
+impl NapCatDirectoryReadT for NapCatReadOnlyClient {
+    async fn get_group_list(&self) -> Result<Vec<GroupInfoData>, NapCatError> {
         let resp = self
-            .call_api("get_login_info", serde_json::json!({}))
-            .await?;
-        serde_json::from_value(resp.data.unwrap_or_default())
-            .map_err(|e| NapCatError::Protocol(format!("parse login_info: {e}")))
-    }
-
-    pub async fn get_group_info(&self, group_id: i64) -> Result<GroupInfoData, NapCatError> {
-        let params = serde_json::json!({"group_id": group_id, "no_cache": false});
-        let resp = self.call_api("get_group_info", params).await?;
-        serde_json::from_value(resp.data.unwrap_or_default())
-            .map_err(|e| NapCatError::Protocol(format!("parse group_info: {e}")))
-    }
-
-    pub async fn get_group_member_info(
-        &self,
-        group_id: i64,
-        user_id: i64,
-    ) -> Result<GroupMemberInfoData, NapCatError> {
-        let params =
-            serde_json::json!({"group_id": group_id, "user_id": user_id, "no_cache": false});
-        let resp = self.call_api("get_group_member_info", params).await?;
-        serde_json::from_value(resp.data.unwrap_or_default())
-            .map_err(|e| NapCatError::Protocol(format!("parse group_member_info: {e}")))
-    }
-
-    pub async fn get_group_list(&self) -> Result<Vec<GroupInfoData>, NapCatError> {
-        let resp = self
-            .call_api("get_group_list", serde_json::json!({}))
+            .request(ReadOnlyAction::GroupList, serde_json::json!({}))
             .await?;
         let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
         serde_json::from_value(data)
-            .map_err(|e| NapCatError::Protocol(format!("parse group_list: {e}")))
-    }
-
-    pub async fn get_group_member_list(
-        &self,
-        group_id: i64,
-    ) -> Result<Vec<GroupMemberInfoData>, NapCatError> {
-        let params = serde_json::json!({"group_id": group_id, "no_cache": false});
-        let resp = self.call_api("get_group_member_list", params).await?;
-        let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
-        serde_json::from_value(data)
-            .map_err(|e| NapCatError::Protocol(format!("parse group_member_list: {e}")))
-    }
-
-    pub async fn get_status(&self) -> Result<StatusData, NapCatError> {
-        let resp = self.call_api("get_status", serde_json::json!({})).await?;
-        serde_json::from_value(resp.data.unwrap_or_default())
-            .map_err(|e| NapCatError::Protocol(format!("parse status: {e}")))
-    }
-
-    /// 只读探测 NapCat/OneBot 实现与版本（B5）。不调用任何写接口。
-    pub async fn get_version_info(&self) -> Result<VersionInfoData, NapCatError> {
-        let resp = self
-            .call_api("get_version_info", serde_json::json!({}))
-            .await?;
-        serde_json::from_value(resp.data.unwrap_or_default())
-            .map_err(|e| NapCatError::Protocol(format!("parse version_info: {e}")))
+            .map_err(|_| NapCatError::Protocol("parse group_list response data failed".into()))
     }
 
     /// 只读获取好友列表（B4 会话发现）。字段缺失时保留默认值。
-    pub async fn get_friend_list(&self) -> Result<Vec<FriendInfoData>, NapCatError> {
+    async fn get_friend_list(&self) -> Result<Vec<FriendInfoData>, NapCatError> {
         let resp = self
-            .call_api("get_friend_list", serde_json::json!({}))
+            .request(ReadOnlyAction::FriendList, serde_json::json!({}))
             .await?;
         let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
         serde_json::from_value(data)
-            .map_err(|e| NapCatError::Protocol(format!("parse friend_list: {e}")))
+            .map_err(|_| NapCatError::Protocol("parse friend_list response data failed".into()))
     }
 
     /// 只读获取最近会话列表（B4 会话发现）。NapCat 专有接口，可能不存在。
-    pub async fn get_recent_contact(&self) -> Result<Vec<RecentContactData>, NapCatError> {
+    async fn get_recent_contact(&self) -> Result<Vec<RecentContactData>, NapCatError> {
         let resp = self
-            .call_api("get_recent_contact", serde_json::json!({}))
+            .request(ReadOnlyAction::RecentContact, serde_json::json!({}))
             .await?;
         let data = resp.data.unwrap_or(serde_json::Value::Array(vec![]));
         serde_json::from_value(data)
-            .map_err(|e| NapCatError::Protocol(format!("parse recent_contact: {e}")))
+            .map_err(|_| NapCatError::Protocol("parse recent_contact response data failed".into()))
+    }
+}
+
+#[async_trait]
+impl NapCatCapabilityReadT for NapCatReadOnlyClient {
+    async fn get_status(&self) -> Result<StatusData, NapCatError> {
+        let resp = self
+            .request(ReadOnlyAction::Status, serde_json::json!({}))
+            .await?;
+        serde_json::from_value(resp.data.unwrap_or_default())
+            .map_err(|_| NapCatError::Protocol("parse status response data failed".into()))
     }
 
-    pub async fn get_group_msg_history(
+    async fn get_version_info(&self) -> Result<VersionInfoData, NapCatError> {
+        let resp = self
+            .request(ReadOnlyAction::VersionInfo, serde_json::json!({}))
+            .await?;
+        serde_json::from_value(resp.data.unwrap_or_default())
+            .map_err(|_| NapCatError::Protocol("parse version_info response data failed".into()))
+    }
+}
+
+#[async_trait]
+impl NapCatHistoryReadT for NapCatReadOnlyClient {
+    async fn get_group_msg_history(
         &self,
-        group_id: &str,
-        message_seq: Option<&str>,
-        count: u32,
-        reverse_order: bool,
+        query: &GroupHistoryQuery,
     ) -> Result<Vec<HistoryMessage>, NapCatError> {
-        validate_history_query("group_id", group_id, count)?;
+        let query = &query.0;
         let response = self
-            .call_api(
-                "get_group_msg_history",
+            .request(
+                ReadOnlyAction::GroupMessageHistory,
                 serde_json::json!({
-                    "group_id": group_id,
-                    "message_seq": message_seq.unwrap_or("0"),
-                    "count": count,
-                    "reverseOrder": reverse_order,
+                    "group_id": &query.scope_id,
+                    "message_seq": query.message_seq.as_deref().unwrap_or("0"),
+                    "count": query.count,
+                    "reverseOrder": query.reverse_order,
                 }),
             )
             .await?;
         parse_history_page(response, "group")
     }
 
-    pub async fn get_friend_msg_history(
+    async fn get_friend_msg_history(
         &self,
-        user_id: &str,
-        message_seq: Option<&str>,
-        count: u32,
-        reverse_order: bool,
+        query: &FriendHistoryQuery,
     ) -> Result<Vec<HistoryMessage>, NapCatError> {
-        validate_history_query("user_id", user_id, count)?;
+        let query = &query.0;
         let response = self
-            .call_api(
-                "get_friend_msg_history",
+            .request(
+                ReadOnlyAction::FriendMessageHistory,
                 serde_json::json!({
-                    "user_id": user_id,
-                    "message_seq": message_seq.unwrap_or("0"),
-                    "count": count,
-                    "reverseOrder": reverse_order,
+                    "user_id": &query.scope_id,
+                    "message_seq": query.message_seq.as_deref().unwrap_or("0"),
+                    "count": query.count,
+                    "reverseOrder": query.reverse_order,
                 }),
             )
             .await?;
         parse_history_page(response, "friend")
-    }
-
-    pub async fn get_msg(&self, message_id: &str) -> Result<HistoryMessage, NapCatError> {
-        if message_id.trim().is_empty() {
-            return Err(NapCatError::Protocol(
-                "get_msg requires a non-empty message_id".into(),
-            ));
-        }
-        let response = self
-            .call_api("get_msg", serde_json::json!({"message_id": message_id}))
-            .await?;
-        serde_json::from_value(response.data.unwrap_or_default())
-            .map_err(|error| NapCatError::Protocol(format!("parse get_msg data: {error}")))
     }
 }
 
@@ -460,13 +528,55 @@ fn parse_history_page(
     kind: &str,
 ) -> Result<Vec<HistoryMessage>, NapCatError> {
     let page: HistoryPage = serde_json::from_value(response.data.unwrap_or_default())
-        .map_err(|error| NapCatError::Protocol(format!("parse {kind} history data: {error}")))?;
+        .map_err(|_| NapCatError::Protocol(format!("parse {kind} history response data failed")))?;
     Ok(page.messages)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readonly_action_paths_are_exact_and_unique() {
+        let paths = ReadOnlyAction::ALL.map(ReadOnlyAction::as_path);
+        assert_eq!(
+            paths,
+            [
+                "get_version_info",
+                "get_status",
+                "get_friend_list",
+                "get_group_list",
+                "get_recent_contact",
+                "get_group_msg_history",
+                "get_friend_msg_history",
+            ]
+        );
+
+        let unique = paths.into_iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), ReadOnlyAction::ALL.len());
+    }
+
+    #[tokio::test]
+    async fn request_timeout_returns_typed_error_without_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        });
+        let base_url = format!("http://{addr}");
+        let client = NapCatReadOnlyClient::with_timeout(
+            base_url.clone(),
+            std::time::Duration::from_millis(20),
+        );
+
+        let error = client.get_status().await.unwrap_err();
+        assert!(matches!(&error, NapCatError::Connection(_)));
+        let detail = error.to_string();
+        assert!(detail.contains("get_status"));
+        assert!(detail.contains("timed out"));
+        assert!(!detail.contains(&base_url));
+    }
 
     #[test]
     fn history_ids_accept_numbers_and_strings_without_precision_loss() {
@@ -485,10 +595,10 @@ mod tests {
 
     #[test]
     fn history_query_rejects_unbounded_or_identity_free_reads() {
-        assert!(validate_history_query("group_id", "", 20).is_err());
-        assert!(validate_history_query("group_id", "1", 0).is_err());
-        assert!(validate_history_query("group_id", "1", 101).is_err());
-        assert!(validate_history_query("group_id", "1", 100).is_ok());
+        assert!(GroupHistoryQuery::new("", None, 20, false).is_err());
+        assert!(GroupHistoryQuery::new("1", None, 0, false).is_err());
+        assert!(FriendHistoryQuery::new("1", None, 101, false).is_err());
+        assert!(GroupHistoryQuery::new("1", Some("opaque".into()), 100, true).is_ok());
     }
 
     // P0-1 实测：真实 NapCat `get_recent_contact` 返回的 peerUin/msgTime 为 JSON **字符串**，

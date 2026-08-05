@@ -16,7 +16,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use qqbot::napcat::{CapabilitySnapshot, NapCatApiClient};
+use qqbot::napcat::{
+    CapabilitySnapshot, FriendHistoryQuery, GroupHistoryQuery, NapCatCapabilityReadT,
+    NapCatDirectoryReadT, NapCatHistoryReadT, NapCatReadOnlyClient,
+};
 
 /// 启动一个本地 HTTP/1.1 服务器，根据请求路径返回固定的 OneBot 响应。
 /// 记录收到的 action 请求，供测试断言探测覆盖了所有 API。
@@ -126,7 +129,170 @@ fn real_napcat_response(action: &str) -> String {
             ]
         })
         .to_string(),
+        "get_group_msg_history" | "get_friend_msg_history" => serde_json::json!({
+            "status": "ok",
+            "retcode": 0,
+            "data": {"messages": []}
+        })
+        .to_string(),
         _ => serde_json::json!({"status": "ok", "retcode": 0, "data": null}).to_string(),
+    }
+}
+
+#[derive(Debug)]
+struct RecordedRequest {
+    action: String,
+    params: serde_json::Value,
+}
+
+fn start_recording_napcat_http_server() -> (SocketAddr, Arc<Mutex<Vec<RecordedRequest>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let requests_clone = Arc::clone(&requests);
+
+    std::thread::spawn(move || {
+        for _ in 0..7 {
+            let (stream, _) = listener.accept().unwrap();
+            let requests = Arc::clone(&requests_clone);
+            std::thread::spawn(move || handle_recorded_request(stream, requests));
+        }
+    });
+
+    (addr, requests)
+}
+
+fn handle_recorded_request(stream: TcpStream, requests: Arc<Mutex<Vec<RecordedRequest>>>) {
+    let mut stream = stream;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut request = Vec::new();
+    let mut buf = [0u8; 1024];
+    let header_end = loop {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0, "request ended before headers were complete");
+        request.extend_from_slice(&buf[..n]);
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    while request.len() - header_end < content_length {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0, "request ended before body was complete");
+        request.extend_from_slice(&buf[..n]);
+    }
+
+    let action = headers
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_owned();
+    let params = serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+    requests.lock().unwrap().push(RecordedRequest {
+        action: action.clone(),
+        params,
+    });
+
+    let body = real_napcat_response(&action);
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).unwrap();
+}
+
+#[tokio::test]
+async fn readonly_client_emits_exactly_the_seven_allowed_actions_and_typed_params() {
+    let (addr, requests) = start_recording_napcat_http_server();
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
+
+    client.get_version_info().await.unwrap();
+    client.get_status().await.unwrap();
+    client.get_friend_list().await.unwrap();
+    client.get_group_list().await.unwrap();
+    client.get_recent_contact().await.unwrap();
+    client
+        .get_group_msg_history(
+            &GroupHistoryQuery::new("group-scope", Some("opaque/group+cursor".into()), 100, true)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    client
+        .get_friend_msg_history(
+            &FriendHistoryQuery::new(
+                "friend-scope",
+                Some("opaque friend cursor".into()),
+                1,
+                false,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let requests = requests.lock().unwrap();
+    let actions = requests
+        .iter()
+        .map(|request| request.action.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actions,
+        [
+            "get_version_info",
+            "get_status",
+            "get_friend_list",
+            "get_group_list",
+            "get_recent_contact",
+            "get_group_msg_history",
+            "get_friend_msg_history",
+        ]
+    );
+    assert!(
+        requests[..5]
+            .iter()
+            .all(|request| request.params == serde_json::json!({}))
+    );
+    assert_eq!(
+        requests[5].params,
+        serde_json::json!({
+            "group_id": "group-scope",
+            "message_seq": "opaque/group+cursor",
+            "count": 100,
+            "reverseOrder": true,
+        })
+    );
+    assert_eq!(
+        requests[6].params,
+        serde_json::json!({
+            "user_id": "friend-scope",
+            "message_seq": "opaque friend cursor",
+            "count": 1,
+            "reverseOrder": false,
+        })
+    );
+    for forbidden in [
+        "send_msg",
+        "delete_msg",
+        "group_poke",
+        "set_group_kick",
+        "upload_group_file",
+    ] {
+        assert!(!actions.contains(&forbidden));
     }
 }
 
@@ -140,11 +306,37 @@ fn unavailable_response(_action: &str) -> String {
     .to_string()
 }
 
+fn sensitive_error_response(_action: &str) -> String {
+    serde_json::json!({
+        "status": "sensitive response status",
+        "retcode": 1200,
+        "data": {
+            "message": "sensitive message body",
+            "account_id": "sensitive account id"
+        }
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn nonzero_retcode_error_does_not_expose_response_data() {
+    let (addr, _) = start_mock_napcat_http_server(sensitive_error_response);
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
+
+    let error = client.get_status().await.unwrap_err().to_string();
+    assert!(error.contains("get_status"));
+    assert!(error.contains("1200"));
+    assert!(error.contains("data_present=true"));
+    assert!(!error.contains("sensitive response status"));
+    assert!(!error.contains("sensitive message body"));
+    assert!(!error.contains("sensitive account id"));
+}
+
 #[tokio::test]
 async fn capability_probe_parses_real_napcat_dto_shapes() {
     let (addr, actions) = start_mock_napcat_http_server(real_napcat_response);
     let base_url = format!("http://{addr}");
-    let client = NapCatApiClient::new(base_url);
+    let client = NapCatReadOnlyClient::new(base_url);
 
     let snapshot = CapabilitySnapshot::probe(&client).await;
 
@@ -215,7 +407,7 @@ async fn recent_contact_dto_roundtrips_real_napcat_string_fields() {
     // 直接验证 DTO 反序列化与真实响应一致，不经过探测。
     let (addr, _) = start_mock_napcat_http_server(real_napcat_response);
     let base_url = format!("http://{addr}");
-    let client = NapCatApiClient::new(base_url);
+    let client = NapCatReadOnlyClient::new(base_url);
 
     let contacts = client.get_recent_contact().await.unwrap();
     assert_eq!(contacts.len(), 1);
@@ -235,7 +427,7 @@ async fn capability_probe_marks_unavailable_api_as_unavailable() {
     use qqbot::napcat::ApiAvailability;
     let (addr, _) = start_mock_napcat_http_server(unavailable_response);
     let base_url = format!("http://{addr}");
-    let client = NapCatApiClient::new(base_url);
+    let client = NapCatReadOnlyClient::new(base_url);
     let snapshot = CapabilitySnapshot::probe(&client).await;
 
     // 探测完成（version_info + status 都返回了 1404，不算超时）。
@@ -283,7 +475,7 @@ async fn capability_probe_completes_within_timeout_when_server_hangs() {
     });
 
     let base_url = format!("http://{addr}");
-    let client = NapCatApiClient::new(base_url);
+    let client = NapCatReadOnlyClient::new(base_url);
     let start = std::time::Instant::now();
     let snapshot = CapabilitySnapshot::probe(&client).await;
     let elapsed = start.elapsed();
@@ -302,7 +494,7 @@ async fn capability_probe_completes_within_timeout_when_server_hangs() {
 }
 
 // ===== 评审第四轮 P1 + 第五轮收尾：流式响应字节上限测试 =====
-// 验证 call_api 不会因 resp.bytes() 缓冲整个响应而造成无界内存分配。
+// 验证私有 HTTP 请求实现不会因 resp.bytes() 缓冲整个响应而造成无界内存分配。
 // 应先检查 Content-Length，再用 bytes_stream() 分块累计，超限立即停止。
 //
 // 评审第五轮要求测试通过可观察副作用证明流式行为，而非仅断言错误消息：
@@ -412,7 +604,7 @@ async fn content_length_over_limit_rejects_without_reading_body() {
     // 关键：客户端因 Content-Length 检查立即关闭，服务器 write 失败，body_sent 远小于完整大小。
     let addr =
         start_tracked_http_server(big, Some(2 * 1024 * 1024), false, 5, Arc::clone(&body_sent));
-    let client = NapCatApiClient::new(format!("http://{addr}"));
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
     let start = std::time::Instant::now();
     let result = client.get_status().await;
     let elapsed = start.elapsed();
@@ -452,7 +644,7 @@ async fn chunked_response_over_limit_aborts_mid_stream() {
     let body_sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // 每块 1024 字节，间隔 5ms，使客户端中止可被观察。
     let addr = start_tracked_http_server(big, None, true, 5, Arc::clone(&body_sent));
-    let client = NapCatApiClient::new(format!("http://{addr}"));
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
     let result = client.get_status().await;
     let err = result.unwrap_err();
     assert!(
@@ -515,7 +707,7 @@ async fn response_at_exact_limit_is_accepted() {
         0,
         Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     );
-    let client = NapCatApiClient::new(format!("http://{addr}"));
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
     let status = client
         .get_status()
         .await
@@ -540,7 +732,7 @@ async fn normal_small_response_succeeds() {
         0,
         Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     );
-    let client = NapCatApiClient::new(format!("http://{addr}"));
+    let client = NapCatReadOnlyClient::new(format!("http://{addr}"));
     let status = client.get_status().await.unwrap();
     assert_eq!(status.online, Some(true));
     assert_eq!(status.good, Some(true));

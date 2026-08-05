@@ -17,7 +17,7 @@ use personal_secretary_mysql::{
     build_mysql_reply_reconcile_store, build_mysql_thread_link_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
-use qqbot::napcat::NapCatApiClient;
+use qqbot::napcat::{NapCatDirectoryReadT, NapCatHistoryReadT, NapCatReadOnlyClient};
 use sea_orm::DatabaseConnection;
 
 use crate::backfill::spawn_backfill_worker;
@@ -178,7 +178,9 @@ pub(crate) async fn assemble_thread_workers(
     // 分页算法、Gap 完整性判定和 SQL 不在 runtime 内，而分别在领域层与 MySQL 仓储。
     if config.backfill.enabled {
         let backfill_store = build_mysql_backfill_store(db.clone(), config.backfill.lease_secs);
-        let napcat_readonly = Arc::new(NapCatApiClient::new(config.napcat.http_base_url.clone()));
+        let napcat_readonly: Arc<dyn NapCatHistoryReadT> = Arc::new(NapCatReadOnlyClient::new(
+            config.napcat.http_base_url.clone(),
+        ));
         let history_source = Arc::new(crate::napcat_history_source::NapCatHistorySource::new(
             napcat_readonly,
             account.clone(),
@@ -233,7 +235,9 @@ pub(crate) async fn assemble_thread_workers(
     // 1 MiB 上限拒绝时保持 uncertain，不提高上限、不转空数组。
     if config.directory_sync.enabled {
         let directory_store = personal_secretary_mysql::build_mysql_directory_store(db.clone());
-        let napcat_readonly = Arc::new(NapCatApiClient::new(config.napcat.http_base_url.clone()));
+        let napcat_readonly: Arc<dyn NapCatDirectoryReadT> = Arc::new(NapCatReadOnlyClient::new(
+            config.napcat.http_base_url.clone(),
+        ));
         let directory_source = Arc::new(crate::napcat_directory::NapCatDirectorySource::new(
             napcat_readonly,
         ));

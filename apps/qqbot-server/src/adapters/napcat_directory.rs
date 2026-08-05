@@ -7,15 +7,15 @@ use personal_secretary::{
     DirectoryListEntry, DirectorySourceError, DirectorySourceT, ScopeBoundary, ScopeKind,
     SourceAccountRef,
 };
-use qqbot::napcat::{NapCatApiClient, NapCatError};
+use qqbot::napcat::{NapCatDirectoryReadT, NapCatError};
 
 /// 把 NapCat 只读列表结果转换为协议无关目录条目。
 pub struct NapCatDirectorySource {
-    client: Arc<NapCatApiClient>,
+    client: Arc<dyn NapCatDirectoryReadT>,
 }
 
 impl NapCatDirectorySource {
-    pub fn new(client: Arc<NapCatApiClient>) -> Self {
+    pub fn new(client: Arc<dyn NapCatDirectoryReadT>) -> Self {
         Self { client }
     }
 }

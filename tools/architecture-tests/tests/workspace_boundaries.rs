@@ -250,7 +250,10 @@ fn personal_secretary_backfill_is_protocol_neutral_and_no_send_calls() {
         "group_poke",
         "delete_msg",
         "reqwest",
-        "NapCatApiClient",
+        "NapCatReadOnlyClient",
+        "NapCatCapabilityReadT",
+        "NapCatDirectoryReadT",
+        "NapCatHistoryReadT",
     ] {
         assert!(
             !sources.contains(forbidden),
@@ -294,12 +297,45 @@ fn qqbot_does_not_depend_on_personal_secretary_or_database() {
 }
 
 #[test]
-fn qqbot_server_does_not_send_through_the_local_qq_account() {
-    let sources = rust_sources("apps/qqbot-server/src");
-    for forbidden in ["send_group_msg", "send_private_msg"] {
+fn qqbot_server_napcat_paths_do_not_send_through_the_local_qq_account() {
+    let root = workspace_root();
+    let paths = [
+        "apps/qqbot-server/src/adapters/napcat_directory.rs",
+        "apps/qqbot-server/src/adapters/napcat_history_source.rs",
+        "apps/qqbot-server/src/bootstrap/thread_pipeline.rs",
+        "apps/qqbot-server/src/runtime/connection_loop.rs",
+    ];
+    let sources = paths
+        .iter()
+        .map(|path| fs::read_to_string(root.join(path)).expect("NapCat server source must exist"))
+        .collect::<String>();
+    for forbidden in [
+        "reqwest::Client",
+        "call_api",
+        "action: &str",
+        "action: String",
+        "path: &str",
+        "path: String",
+        "params: Value",
+        "params: serde_json::Value",
+        "send_msg",
+        "send_group_msg",
+        "send_private_msg",
+        "delete_msg",
+        "group_poke",
+        "friend_poke",
+        "set_group_",
+        "set_friend_",
+        "set_qq_",
+        "set_online_",
+        "upload_",
+        "create_group_file",
+        "delete_group_file",
+        "mark_msg_as_read",
+    ] {
         assert!(
             !sources.contains(forbidden),
-            "qqbot-server must not call NapCat mutation {forbidden}"
+            "qqbot-server NapCat wiring contains forbidden marker {forbidden}"
         );
     }
 }
@@ -399,11 +435,20 @@ fn napcat_adapter_exposes_no_personal_account_mutations() {
     let api = fs::read_to_string(workspace_root().join("crates/qqbot/src/napcat/api.rs"))
         .expect("NapCat API source must be readable");
     for forbidden in [
+        "send_msg",
         "send_group_msg",
         "send_private_msg",
+        "delete_msg",
         "group_poke",
         "friend_poke",
-        "delete_msg",
+        "set_group_",
+        "set_friend_",
+        "set_qq_",
+        "set_online_",
+        "upload_",
+        "create_group_file",
+        "delete_group_file",
+        "mark_msg_as_read",
     ] {
         assert!(
             !api.contains(forbidden),
@@ -412,70 +457,97 @@ fn napcat_adapter_exposes_no_personal_account_mutations() {
     }
 }
 
-/// Allowlist guard: the public async methods on `NapCatApiClient` must be exactly
-/// the known read-only set. This is stricter than the denylist above and catches
-/// any future addition of an unlisted OneBot mutation (e.g. set_group_kick).
 #[test]
-fn napcat_adapter_only_exposes_readonly_methods() {
+fn napcat_http_surface_is_private_and_trait_allowlisted() {
+    let napcat_mod = fs::read_to_string(workspace_root().join("crates/qqbot/src/napcat/mod.rs"))
+        .expect("NapCat module source must be readable");
     let api = fs::read_to_string(workspace_root().join("crates/qqbot/src/napcat/api.rs"))
         .expect("NapCat API source must be readable");
+    let qqbot_sources = rust_sources("crates/qqbot/src");
+    let server_sources = rust_sources("apps/qqbot-server/src");
 
-    // Collect every `pub async fn <name>` declared inside `impl NapCatApiClient`.
-    // We look for the impl block to avoid matching methods on other types.
-    let impl_start = api
-        .find("impl NapCatApiClient")
-        .expect("NapCatApiClient impl block must exist");
-    let impl_body = &api[impl_start..];
-
-    let mut methods: Vec<&str> = Vec::new();
-    for line in impl_body.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("pub async fn ")
-            && let Some(name_end) = rest.find('(')
-        {
-            let name = rest[..name_end].trim();
-            // Skip the constructor `new` (not an API action) and helper methods.
-            if name != "new" {
-                methods.push(name);
-            }
-        }
+    assert!(napcat_mod.contains("mod api;"));
+    assert!(!napcat_mod.contains("pub mod api;"));
+    assert!(!qqbot_sources.contains("NapCatApiClient"));
+    assert!(!server_sources.contains("NapCatApiClient"));
+    assert!(!api.contains("type NapCatApiClient"));
+    for required in [
+        "pub trait NapCatCapabilityReadT: Send + Sync",
+        "pub trait NapCatDirectoryReadT: Send + Sync",
+        "pub trait NapCatHistoryReadT: Send + Sync",
+    ] {
+        assert!(api.contains(required));
     }
 
-    let expected = [
-        "get_login_info",
-        "get_group_info",
-        "get_group_member_info",
-        "get_group_list",
-        "get_group_member_list",
-        "get_status",
-        "get_group_msg_history",
-        "get_friend_msg_history",
-        "get_msg",
-        // B5/B4 只读能力探测与会话发现接口。
-        "get_version_info",
-        "get_friend_list",
-        "get_recent_contact",
-    ];
+    let impl_start = api
+        .find("impl NapCatReadOnlyClient")
+        .expect("NapCatReadOnlyClient inherent impl must exist");
+    let impl_end = api[impl_start..]
+        .find("#[async_trait]\nimpl NapCatDirectoryReadT")
+        .expect("directory trait impl must follow the inherent impl");
+    let inherent_impl = &api[impl_start..impl_start + impl_end];
+    assert!(!inherent_impl.contains("pub async fn"));
+    for forbidden in [
+        "pub fn call",
+        "pub fn request",
+        "pub fn post",
+        "pub fn execute_action",
+        "pub fn call_api",
+        "pub fn raw_action",
+        "pub async fn call",
+        "pub async fn request",
+        "pub async fn post",
+        "pub async fn execute_action",
+        "pub async fn call_api",
+        "pub async fn raw_action",
+    ] {
+        assert!(!api.contains(forbidden));
+    }
 
-    let mut missing: Vec<&str> = expected
-        .iter()
-        .filter(|expected_name| !methods.contains(expected_name))
-        .copied()
-        .collect();
-    let mut unexpected: Vec<&str> = methods
-        .iter()
-        .filter(|actual| !expected.contains(actual))
-        .copied()
-        .collect();
-    missing.sort();
-    unexpected.sort();
+    fn trait_methods<'a>(api: &'a str, trait_name: &str) -> Vec<&'a str> {
+        let marker = format!("pub trait {trait_name}");
+        let start = api.find(&marker).expect("read-only trait must exist");
+        let body = &api[start..];
+        let end = body.find("\n}\n").expect("read-only trait must close");
+        body[..end]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("async fn "))
+            .filter_map(|rest| rest.find('(').map(|end| &rest[..end]))
+            .collect()
+    }
 
-    assert!(
-        missing.is_empty() && unexpected.is_empty(),
-        "NapCatApiClient public async methods must be exactly the read-only allowlist.\n\
-         missing: {missing:?}\n\
-         unexpected: {unexpected:?}"
+    assert_eq!(
+        trait_methods(&api, "NapCatCapabilityReadT"),
+        ["get_version_info", "get_status"]
     );
+    assert_eq!(
+        trait_methods(&api, "NapCatDirectoryReadT"),
+        ["get_friend_list", "get_group_list", "get_recent_contact"]
+    );
+    assert_eq!(
+        trait_methods(&api, "NapCatHistoryReadT"),
+        ["get_group_msg_history", "get_friend_msg_history"]
+    );
+}
+
+#[test]
+fn napcat_consumers_hold_only_their_minimum_read_capability() {
+    let root = workspace_root();
+    let directory =
+        fs::read_to_string(root.join("apps/qqbot-server/src/adapters/napcat_directory.rs"))
+            .expect("NapCat directory adapter must be readable");
+    let history =
+        fs::read_to_string(root.join("apps/qqbot-server/src/adapters/napcat_history_source.rs"))
+            .expect("NapCat history adapter must be readable");
+    let capabilities = fs::read_to_string(root.join("crates/qqbot/src/napcat/capabilities.rs"))
+        .expect("NapCat capability source must be readable");
+
+    assert!(directory.contains("client: Arc<dyn NapCatDirectoryReadT>"));
+    assert!(!directory.contains("Arc<NapCatReadOnlyClient>"));
+    assert!(history.contains("client: Arc<dyn NapCatHistoryReadT>"));
+    assert!(!history.contains("Arc<NapCatReadOnlyClient>"));
+    assert!(capabilities.contains("client: &dyn NapCatCapabilityReadT"));
+    assert!(!capabilities.contains("NapCatReadOnlyClient"));
 }
 
 #[test]

@@ -16,14 +16,12 @@
 
 - 当前分支：`Main`；`EVT-007-MSG` 原子提交 `1b4778f` 已从
   `claude/qqbot-evt006-ingestion-backpressure-v1` 快进合并，尚未推送远端。
-- 当前状态：`EVT-007-MSG`（消息 Reply 子先父后解析）已完成实现、五轮 Codex 复核
-  （15 个 P1 + 4 个 P2）全部修复，聚焦 MySQL 20/20 与既有回归全绿（Docker
-  `serverrs-qqbot-mysql`）；已随 `1b4778f` 提交并合并至 `Main`。`EVT-007-NONMSG` 未开始
-  （见切片列表）。个人秘书核心与
-  QQBot 组合根已按洋葱方向重构并完成本地分批提交与合并，尚未 push/stash。
+- 当前状态：`EVT-010-A/B/C` 已完成实现与 Codex 独立复核。NapCat HTTP action 已收敛为
+  7 项封闭只读白名单，消费者按 Capability/Directory/History 持有最小端口，fake HTTP 与
+  架构门禁已固化；当前工作树尚未提交。`EVT-007-NONMSG` 未开始（见切片列表）。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一切片：按 `EVT-009` 继续（EVT-007-MSG 已覆盖仅 NapCat 群/私聊消息 Reply 的延迟解析
-  闭环，EVT-007-NONMSG 等待真实业务样本）。
+- 下一切片：提交 `EVT-010-A/B/C` 后按 `GAP-003` 继续；`EVT-007-NONMSG` 等待真实业务
+  样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -314,10 +312,17 @@
   所有 6 个回归套件全绿，Docker 验证完成。
 - [ ] `EVT-007-NONMSG` 非消息 Reply（文件、卡片、通知等）子先父后解析。必须先取得真实业务
   样本并明确引用模型，不得在本切片顺带实现。
-- [ ] `EVT-009` 明确正文静态加密/密钥轮换/脱敏边界；继续执行
-  `normal/local_only/envelope_only/never_long_term` 保存策略。
-- [ ] `EVT-010` 将 NapCat HTTP 能力收敛为只读业务端口；编译边界持续禁止
-  `send_group_msg`、`send_private_msg`、`group_poke` 等写接口。
+- [x] `EVT-009-CANCELLED` 产品决策不实施数据库消息正文静态加密、密钥轮换、历史重加密或
+  密文搜索索引；不新增相关迁移、配置、Worker 和密钥依赖。现有
+  `normal/local_only/envelope_only/never_long_term` 继续作为应用层内容保存与读取策略执行；
+  若未来出现新的合规或部署要求，必须重新建立独立切片评估，不恢复本次未提交实现。
+- [x] `EVT-010-A` NapCat HTTP action 收敛为封闭、类型化的 7 项只读白名单；任意 action、
+  path、URL 参数和 OneBot 原始响应均不对消费者公开。
+- [x] `EVT-010-B` 按 Capability/Directory/History 拆分最小只读能力端口；组合根负责构造
+  客户端并向各消费者注入对应 trait object。
+- [x] `EVT-010-C` 固化编译边界和 fake HTTP 负向测试，持续禁止 NapCat 写接口；Codex 独立
+  复核后 `qqbot` 55 单元 + 10 fake HTTP + 2 heartbeat、`qqbot-server` 138/138（2 ignored）及
+  workspace boundaries 21/21 通过，严格 Clippy、全工作区 check、fmt 与 diff check 通过。
 - [ ] `GAP-003` 补历史多页方向、边界和完整性证据；NapCat 无法证明完整时必须保持 uncertain。
 - [ ] `GAP-007` 仅评估“普通消息实时入站”的本地磁盘 Spool。Recall Spool 已完成，不得把两者
   混写为同一任务；若引入，必须先定义加密、容量、锁、恢复和健康告警。

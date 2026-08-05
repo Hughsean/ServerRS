@@ -87,10 +87,11 @@ pub(super) async fn run_connection_loop(
         // 受严格整体超时（5s）约束；超时后未完成的能力标记为 Unknown。
         // 探测结果只用于日志与未来健康状态（B7），不影响入站路径。
         // 评审第三轮 P1-2：JoinHandle 保存在 probe_handle，受 single-flight 与关闭管理。
-        let napcat_readonly =
-            qqbot::napcat::NapCatApiClient::new(config.napcat.http_base_url.clone());
+        let napcat_readonly: Arc<dyn qqbot::napcat::NapCatCapabilityReadT> = Arc::new(
+            qqbot::napcat::NapCatReadOnlyClient::new(config.napcat.http_base_url.clone()),
+        );
         probe_handle = Some(tokio::spawn(async move {
-            let snapshot = qqbot::napcat::CapabilitySnapshot::probe(&napcat_readonly).await;
+            let snapshot = qqbot::napcat::CapabilitySnapshot::probe(napcat_readonly.as_ref()).await;
             tracing::info!(
                 app_name = ?snapshot.app_name,
                 app_version = ?snapshot.app_version,
