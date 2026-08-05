@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use personal_secretary::{FollowUpUseCase, NotificationPolicyUseCase, SystemClock};
 use personal_secretary_mysql::{
     build_mysql_artifact_store, build_mysql_follow_up_store, build_mysql_memory_store,
-    build_mysql_notification_policy_store, build_mysql_recall_store,
+    build_mysql_notification_policy_store, build_mysql_realtime_spool_recovery_store,
+    build_mysql_recall_store,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -26,6 +27,8 @@ use crate::runtime::shutdown::ShutdownSource;
 mod connection_loop;
 pub(crate) mod handlers;
 mod health;
+#[path = "realtime_spool_runtime.rs"]
+mod realtime_spool_runtime;
 mod shutdown;
 
 pub(crate) use health::BackfillWake;
@@ -44,6 +47,8 @@ pub enum RuntimeError {
     OfficialPlatform(String),
     #[error("LLM runtime failed: {0}")]
     Llm(String),
+    #[error("realtime message spool failed closed: {0}")]
+    RealtimeSpool(String),
 }
 
 /// 生产入口：使用 OS 信号（Ctrl-C / SIGTERM）触发优雅关闭。
@@ -218,11 +223,71 @@ async fn run_with_shutdown(
     let ingestion_metrics = std::sync::Arc::new(IngestionMetrics::default());
     let health_state = crate::health_runtime::RuntimeHealthState::new();
     health_state.mark_worker_started();
+
+    // B3 撤回闭环：回调先 durable enqueue，Worker 再以 lease 领取并持久化 tombstone。
+    let recall_store = build_mysql_recall_store(infra.db.clone());
+    let recall_use_case = std::sync::Arc::new(personal_secretary::RecallUseCase::new(recall_store));
+    let (recall_queue, recall_worker) = crate::recall::spawn_recall_worker_with_telemetry(
+        std::sync::Arc::clone(&recall_use_case),
+        config.recall_wal.clone(),
+        std::sync::Arc::clone(&recall_spool_telemetry),
+    )
+    .map_err(|error| RuntimeError::Config(format!("cannot open recall WAL: {error}")))?;
+    handles.recall = Some(recall_worker);
+    let recall_handler = std::sync::Arc::new(crate::recall::RecallHandler::new(
+        recall_queue,
+        infra.account.clone(),
+        config.napcat.self_qq_id,
+    ));
+
+    let realtime_spool = if config.realtime_spool.enabled {
+        let mut spool_config = crate::realtime_spool::RealtimeMessageSpoolConfig::new(
+            config.realtime_spool.wal_path.clone(),
+            config.realtime_spool.checkpoint_path.clone(),
+            config.realtime_spool.quarantine_dir.clone(),
+            config.realtime_spool.key_env.clone(),
+        );
+        spool_config.max_frame_plaintext = config.realtime_spool.max_frame_plaintext;
+        let opened =
+            crate::realtime_spool::RealtimeMessageSpool::open(spool_config).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "cannot open realtime message spool: {}:{}",
+                    error.kind.as_str(),
+                    error.stage
+                ))
+            })?;
+        let spool = std::sync::Arc::new(opened.spool);
+        let recovery_store = build_mysql_realtime_spool_recovery_store(
+            infra.db.clone(),
+            config.realtime_spool.recovery_lease_secs,
+        );
+        realtime_spool_runtime::recover_realtime_spool_before_connect(
+            std::sync::Arc::clone(&spool),
+            &infra.account,
+            recovery_store,
+            std::sync::Arc::clone(&infra.store),
+            Some(&recall_use_case),
+            artifact_use_case.as_ref(),
+            config.artifact.default_ttl_secs,
+        )
+        .await
+        .map_err(|fatal| {
+            RuntimeError::Config(format!(
+                "realtime message spool recovery failed: {}",
+                fatal.kind.as_str()
+            ))
+        })?;
+        Some(spool)
+    } else {
+        None
+    };
+
     if config.health.enabled {
         let aggregator = std::sync::Arc::new(
-            crate::health_runtime::build_runtime_health_aggregator_with_recall_spool(
+            crate::health_runtime::build_runtime_health_aggregator_with_spools(
                 std::sync::Arc::clone(&health_state),
                 std::sync::Arc::clone(&recall_spool_telemetry),
+                realtime_spool.as_ref().map(|spool| spool.telemetry()),
                 config.health.cache_ttl_secs,
                 config.health.worker_success_stale_secs,
                 Some(std::sync::Arc::clone(&ingestion_metrics)),
@@ -246,22 +311,6 @@ async fn run_with_shutdown(
         tracing::info!("B7 健康快照已禁用（health.enabled=false）");
     }
 
-    // B3 撤回闭环：回调先 durable enqueue，Worker 再以 lease 领取并持久化 tombstone。
-    let recall_store = build_mysql_recall_store(infra.db.clone());
-    let recall_use_case = std::sync::Arc::new(personal_secretary::RecallUseCase::new(recall_store));
-    let (recall_queue, recall_worker) = crate::recall::spawn_recall_worker_with_telemetry(
-        std::sync::Arc::clone(&recall_use_case),
-        config.recall_wal.clone(),
-        std::sync::Arc::clone(&recall_spool_telemetry),
-    )
-    .map_err(|error| RuntimeError::Config(format!("cannot open recall WAL: {error}")))?;
-    handles.recall = Some(recall_worker);
-    let recall_handler = std::sync::Arc::new(crate::recall::RecallHandler::new(
-        recall_queue,
-        infra.account.clone(),
-        config.napcat.self_qq_id,
-    ));
-
     run_connection_loop(
         infra.store,
         infra.account,
@@ -275,6 +324,7 @@ async fn run_with_shutdown(
         config.artifact.default_ttl_secs,
         Some(std::sync::Arc::clone(&health_state)),
         std::sync::Arc::clone(&ingestion_metrics),
+        realtime_spool,
         &mut shutdown_source,
     )
     .await

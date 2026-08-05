@@ -14,6 +14,7 @@ mod mysql_memory_candidate_control;
 mod mysql_notification_candidate_producer;
 mod mysql_notification_policy;
 mod mysql_owner_binding;
+mod mysql_realtime_spool;
 mod mysql_recall;
 mod mysql_reconcile;
 mod mysql_response_expectation_control;

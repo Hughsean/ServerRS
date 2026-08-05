@@ -219,7 +219,7 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
     }
 }
 
-async fn insert_gap_if_absent(
+pub(super) async fn insert_gap_if_absent(
     db: &sea_orm::DatabaseTransaction,
     account_id: u64,
     connection_epoch_id: &ConnectionEpochId,
@@ -250,7 +250,7 @@ async fn insert_gap_if_absent(
     Ok(result.rows_affected() == 1)
 }
 
-async fn gap_for_epoch(
+pub(super) async fn gap_for_epoch(
     db: &sea_orm::DatabaseTransaction,
     connection_epoch_id: &ConnectionEpochId,
 ) -> Result<Option<IngestionGapId>, InboundEventStoreError> {
@@ -272,7 +272,7 @@ async fn gap_for_epoch(
 ///
 /// 首写获胜：`ON DUPLICATE KEY UPDATE gap_id = gap_id` 不更新已存在的行，确保边界冻结在
 /// 最早连续性中断点。回补时 `known_scopes_for_gap` 读取此快照，而非领取时漂移的实时游标。
-async fn snapshot_gap_boundaries(
+pub(super) async fn snapshot_gap_boundaries(
     db: &sea_orm::DatabaseTransaction,
     gap_id: &str,
     account_id: u64,
@@ -302,7 +302,7 @@ async fn snapshot_gap_boundaries(
 /// 冻结账号最新目录快照到 Gap。`snapshot_id = NULL` 明确表示创建时没有目录快照。
 ///
 /// 在 Gap 创建事务内执行，保证与 gap 行同事务可见。
-async fn freeze_directory_snapshot_for_gap(
+pub(super) async fn freeze_directory_snapshot_for_gap(
     db: &sea_orm::DatabaseTransaction,
     gap_id: &str,
     account_id: u64,

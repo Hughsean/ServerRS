@@ -18,10 +18,12 @@ use qqbot::napcat::{NapCatConnectionObserver, NapCatError, NapCatEventHandler, N
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::inbound::NapCatInboundMapper;
-use crate::ingestion_worker::{IngestionMetrics, WorkerReport, spawn_ingestion_worker};
+use crate::ingestion_worker::{
+    IngestionMetrics, WorkerReport, spawn_ingestion_worker, spawn_spooled_ingestion_worker,
+};
 
 use super::RuntimeError;
-use super::handlers::PersonalSecretaryInboundHandler;
+use super::handlers::{MessageAdmission, PersonalSecretaryInboundHandler};
 use super::health::{BackfillWake, ConnectionObserver};
 use super::shutdown::ShutdownSource;
 
@@ -43,6 +45,7 @@ pub(super) async fn run_connection_loop(
     artifact_default_ttl_secs: u64,
     health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
     ingestion_metrics: Arc<IngestionMetrics>,
+    realtime_spool: Option<Arc<crate::realtime_spool::RealtimeMessageSpool>>,
     shutdown_source: &mut ShutdownSource,
 ) -> Result<(), RuntimeError> {
     let mut backoff = config.napcat.reconnect_initial_secs;
@@ -102,21 +105,54 @@ pub(super) async fn run_connection_loop(
             );
         }));
 
-        let (queue, mut ingestion_worker) = spawn_ingestion_worker(
-            Arc::clone(&store),
-            connection_epoch_id.clone(),
-            config.ingestion.clone(),
-            recall_use_case.clone(),
-            artifact_use_case.clone(),
-            artifact_default_ttl_secs,
-            health_state
-                .clone()
-                .map(|state| state as Arc<dyn crate::ingestion_worker::IngestionHealthReporterT>),
-            Some(Arc::clone(&ingestion_metrics)),
-        );
+        let (fatal_sender, mut fatal_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (admission, mut ingestion_worker, mut spool_writer) = if let Some(spool) =
+            realtime_spool.as_ref()
+        {
+            let (queue, ingestion_worker) = spawn_spooled_ingestion_worker(
+                Arc::clone(&store),
+                connection_epoch_id.clone(),
+                config.ingestion.clone(),
+                recall_use_case.clone(),
+                artifact_use_case.clone(),
+                artifact_default_ttl_secs,
+                health_state.clone().map(|state| {
+                    state as Arc<dyn crate::ingestion_worker::IngestionHealthReporterT>
+                }),
+                Some(Arc::clone(&ingestion_metrics)),
+                super::realtime_spool_runtime::checkpoint_adapter(Arc::clone(spool)),
+                fatal_sender.clone(),
+            );
+            let (admission, writer) = super::realtime_spool_runtime::spawn_realtime_spool_writer(
+                Arc::clone(spool),
+                queue,
+                connection_epoch_id.clone(),
+                config.realtime_spool.admission_capacity,
+                fatal_sender.clone(),
+            );
+            (
+                MessageAdmission::Durable(admission),
+                ingestion_worker,
+                Some(writer),
+            )
+        } else {
+            let (queue, ingestion_worker) = spawn_ingestion_worker(
+                Arc::clone(&store),
+                connection_epoch_id.clone(),
+                config.ingestion.clone(),
+                recall_use_case.clone(),
+                artifact_use_case.clone(),
+                artifact_default_ttl_secs,
+                health_state.clone().map(|state| {
+                    state as Arc<dyn crate::ingestion_worker::IngestionHealthReporterT>
+                }),
+                Some(Arc::clone(&ingestion_metrics)),
+            );
+            (MessageAdmission::Memory(queue), ingestion_worker, None)
+        };
         let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {
             mapper: NapCatInboundMapper::new(config.napcat.self_qq_id),
-            queue,
+            admission,
             group_whitelist: Arc::clone(&group_whitelist),
             recall_handler: recall_handler.clone(),
         });
@@ -137,15 +173,15 @@ pub(super) async fn run_connection_loop(
         // 不再固定使用默认值。可按 NapCat 实现调整启动宽限、超时倍数或禁用 watchdog。
         .with_heartbeat_config(config.napcat.heartbeat);
 
-        let (reason, shutting_down) = tokio::select! {
+        let (reason, shutting_down, spool_fatal) = tokio::select! {
             _ = shutdown_source.wait() => {
-                (ConnectionEndReason::ProcessShutdown, true)
+                (ConnectionEndReason::ProcessShutdown, true, None)
             }
             result = listener.run_forward() => {
                 match result {
                     Ok(()) => {
                         tracing::warn!("NapCat WebSocket 已断开");
-                        (ConnectionEndReason::RemoteClosed, false)
+                        (ConnectionEndReason::RemoteClosed, false, None)
                     }
                     Err(error) => {
                         tracing::warn!(error = %error, "NapCat WebSocket 运行失败");
@@ -156,18 +192,70 @@ pub(super) async fn run_connection_loop(
                             }
                             _ => ConnectionEndReason::TransportError,
                         };
-                        (reason, false)
+                        (reason, false, None)
                     }
                 }
             }
+            fatal = fatal_receiver.recv(), if realtime_spool.is_some() => {
+                let kind = fatal
+                    .map(|fatal| fatal.kind)
+                    .unwrap_or(personal_secretary::RealtimeSpoolFatalKind::WriterStopped);
+                tracing::error!(
+                    error_code = kind.as_str(),
+                    "普通消息 durable Spool 进入 fail-closed，结束当前连接周期"
+                );
+                (ConnectionEndReason::ObserverRejected, false, Some(kind))
+            }
         };
         drop(listener);
-        drain_ingestion_worker(
+        let writer_drained = if let Some(writer) = spool_writer.as_mut() {
+            drain_spool_writer(
+                writer,
+                Duration::from_secs(config.realtime_spool.shutdown_drain_timeout_secs),
+            )
+            .await
+        } else {
+            true
+        };
+        let ingestion_drained = drain_ingestion_worker(
             &mut ingestion_worker,
             Duration::from_secs(config.ingestion.shutdown_drain_timeout_secs),
             &connection_epoch_id,
         )
         .await;
+
+        if let Some(kind) = spool_fatal {
+            if let Some(spool) = realtime_spool.as_ref() {
+                spool.telemetry().set_reconciliation_pending(true);
+            }
+            let gap_persisted = persist_spool_fatal_gap(
+                &store,
+                &connection_epoch_id,
+                Duration::from_secs(config.realtime_spool.shutdown_drain_timeout_secs),
+            )
+            .await;
+            if gap_persisted && let Some(spool) = realtime_spool.as_ref() {
+                spool.telemetry().set_reconciliation_pending(false);
+            }
+            observer.mark_disconnected();
+            abort_probe(&mut probe_handle).await;
+            let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+            handles_to_shutdown.shutdown_all().await;
+            return Err(RuntimeError::RealtimeSpool(kind.as_str().into()));
+        }
+        if !writer_drained || !ingestion_drained {
+            observer.mark_disconnected();
+            abort_probe(&mut probe_handle).await;
+            let handles_to_shutdown = std::mem::replace(handles, WorkerHandles::new());
+            handles_to_shutdown.shutdown_all().await;
+            if shutting_down {
+                tracing::warn!(
+                    "关闭期限内未完成 durable replay；保留开放 epoch 与 WAL，等待下次启动恢复"
+                );
+                return Ok(());
+            }
+            return Err(RuntimeError::RealtimeSpool("shutdown_drain_timeout".into()));
+        }
 
         let gap_id = match store.finish_connection(&connection_epoch_id, reason).await {
             Ok(gap_id) => gap_id,
@@ -223,6 +311,71 @@ pub(super) async fn run_connection_loop(
     }
 }
 
+async fn persist_spool_fatal_gap(
+    store: &Arc<dyn PersonalSecretaryStoreT>,
+    connection_epoch_id: &ConnectionEpochId,
+    budget: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut delay = Duration::from_millis(100);
+    loop {
+        match store
+            .mark_connection_uncertain(
+                connection_epoch_id,
+                personal_secretary::IngestionGapReason::DatabaseUnavailable,
+            )
+            .await
+        {
+            Ok(_) => return true,
+            Err(error) => {
+                let _ = error;
+                tracing::warn!(
+                    error_code = "gap_persist_failed",
+                    retry_delay_ms = delay.as_millis(),
+                    "普通消息 Spool fatal Gap 尚未持久化，将对同一 epoch 幂等重试"
+                );
+            }
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        tokio::time::sleep(delay.min(deadline.saturating_duration_since(now))).await;
+        delay = delay.saturating_mul(2).min(Duration::from_secs(2));
+    }
+}
+
+async fn drain_spool_writer(
+    worker: &mut tokio::task::JoinHandle<super::realtime_spool_runtime::RealtimeSpoolWriterReport>,
+    timeout: Duration,
+) -> bool {
+    match tokio::time::timeout(timeout, &mut *worker).await {
+        Ok(Ok(report)) => {
+            tracing::debug!(
+                durable_receipts = report.durable_receipts,
+                "普通消息 Spool writer 已排空"
+            );
+            true
+        }
+        Ok(Err(_)) => {
+            tracing::error!(
+                error_code = "writer_join_failed",
+                "普通消息 Spool writer 异常退出"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = timeout.as_millis(),
+                "普通消息 Spool writer 未在期限内排空，保留未 checkpoint WAL"
+            );
+            worker.abort();
+            let _ = worker.await;
+            false
+        }
+    }
+}
+
 /// 取消并等待能力探测任务退出（评审第三轮 P1-2）。
 /// abort 后用短超时等待 JoinHandle，避免探测任务悬挂但也不无限阻塞关闭路径。
 async fn abort_probe(probe_handle: &mut Option<tokio::task::JoinHandle<()>>) {
@@ -239,22 +392,28 @@ async fn drain_ingestion_worker(
     worker: &mut tokio::task::JoinHandle<WorkerReport>,
     timeout: Duration,
     connection_epoch_id: &ConnectionEpochId,
-) {
+) -> bool {
     match tokio::time::timeout(timeout, &mut *worker).await {
-        Ok(Ok(report)) => tracing::debug!(
-            connection_epoch_id = %connection_epoch_id.as_str(),
-            accepted = report.accepted,
-            duplicates = report.duplicates,
-            invalid = report.invalid,
-            retries = report.retries,
-            dropped = report.dropped,
-            "持久化 Worker 已在连接结束前排空"
-        ),
-        Ok(Err(error)) => tracing::error!(
-            connection_epoch_id = %connection_epoch_id.as_str(),
-            error = %error,
-            "持久化 Worker 异常退出；连接空窗将保持 uncertain"
-        ),
+        Ok(Ok(report)) => {
+            tracing::debug!(
+                connection_epoch_id = %connection_epoch_id.as_str(),
+                accepted = report.accepted,
+                duplicates = report.duplicates,
+                invalid = report.invalid,
+                retries = report.retries,
+                dropped = report.dropped,
+                "持久化 Worker 已在连接结束前排空"
+            );
+            true
+        }
+        Ok(Err(error)) => {
+            tracing::error!(
+                connection_epoch_id = %connection_epoch_id.as_str(),
+                error = %error,
+                "持久化 Worker 异常退出；连接空窗将保持 uncertain"
+            );
+            false
+        }
         Err(_) => {
             tracing::warn!(
                 connection_epoch_id = %connection_epoch_id.as_str(),
@@ -263,6 +422,7 @@ async fn drain_ingestion_worker(
             );
             worker.abort();
             let _ = worker.await;
+            false
         }
     }
 }

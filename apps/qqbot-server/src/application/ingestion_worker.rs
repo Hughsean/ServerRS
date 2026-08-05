@@ -12,8 +12,10 @@ use std::time::{Duration, Instant};
 use personal_secretary::{
     ArtifactEnvelope, ArtifactId, ArtifactKind, ArtifactUseCase, ConnectionEpochId, ContentSegment,
     ContentTrustLevel, InboundEventStoreError, InboundMessageEnvelope, IngestMessageOutcome,
-    IngestionGapReason, MediaKind, PersonalSecretaryStoreT, RecallCorrelationKey, RecallUseCase,
-    RichContentKind, SourceEventId,
+    IngestionGapReason, MediaKind, PersonalSecretaryStoreT, RealtimeSpoolCheckpointPrefix,
+    RealtimeSpoolFatal, RealtimeSpoolFatalKind, RealtimeSpoolHookKey, RealtimeSpoolReplayProgress,
+    RecallCorrelationKey, RecallUseCase, RecoveredRealtimeSpoolFrame, RichContentKind,
+    SourceEventId, checkpointable_prefix,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -25,6 +27,7 @@ use crate::config::IngestionConfig;
 struct TimestampedEnvelope {
     envelope: InboundMessageEnvelope,
     enqueued_at: Instant,
+    spool_frame: Option<RecoveredRealtimeSpoolFrame>,
 }
 
 // ── 溢出状态 ────────────────────────────────────────────────────────────
@@ -98,6 +101,7 @@ impl IngestionQueue {
         let wrapped = TimestampedEnvelope {
             envelope: message,
             enqueued_at,
+            spool_frame: None,
         };
         match self.sender.try_send(wrapped) {
             Ok(()) => {
@@ -133,6 +137,24 @@ impl IngestionQueue {
                 Err(IngestionEnqueueError::Closed)
             }
         }
+    }
+
+    pub async fn enqueue_spooled(
+        &self,
+        frame: RecoveredRealtimeSpoolFrame,
+    ) -> Result<(), IngestionEnqueueError> {
+        let wrapped = TimestampedEnvelope {
+            envelope: frame.message().clone(),
+            enqueued_at: Instant::now(),
+            spool_frame: Some(frame),
+        };
+        self.sender
+            .send(wrapped)
+            .await
+            .map_err(|_| IngestionEnqueueError::Closed)?;
+        self.metrics
+            .record_enqueue(self.queue_capacity, &self.sender);
+        Ok(())
     }
 }
 
@@ -237,6 +259,14 @@ pub trait IngestionHealthReporterT: Send + Sync {
     fn mark_worker_failure(&self);
 }
 
+#[async_trait::async_trait]
+pub trait RealtimeSpoolCheckpointT: Send + Sync {
+    async fn advance_checkpoint(
+        &self,
+        prefix: RealtimeSpoolCheckpointPrefix,
+    ) -> Result<(), RealtimeSpoolFatal>;
+}
+
 // ── 启动入口 ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -249,6 +279,60 @@ pub fn spawn_ingestion_worker(
     artifact_default_ttl_secs: u64,
     health_reporter: Option<Arc<dyn IngestionHealthReporterT>>,
     external_metrics: Option<Arc<IngestionMetrics>>,
+) -> (IngestionQueue, JoinHandle<WorkerReport>) {
+    spawn_ingestion_worker_inner(
+        store,
+        connection_epoch_id,
+        config,
+        recall_use_case,
+        artifact_use_case,
+        artifact_default_ttl_secs,
+        health_reporter,
+        external_metrics,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_spooled_ingestion_worker(
+    store: Arc<dyn PersonalSecretaryStoreT>,
+    connection_epoch_id: ConnectionEpochId,
+    config: IngestionConfig,
+    recall_use_case: Option<Arc<RecallUseCase>>,
+    artifact_use_case: Option<Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_reporter: Option<Arc<dyn IngestionHealthReporterT>>,
+    external_metrics: Option<Arc<IngestionMetrics>>,
+    checkpoint: Arc<dyn RealtimeSpoolCheckpointT>,
+    fatal_sender: mpsc::UnboundedSender<RealtimeSpoolFatal>,
+) -> (IngestionQueue, JoinHandle<WorkerReport>) {
+    spawn_ingestion_worker_inner(
+        store,
+        connection_epoch_id,
+        config,
+        recall_use_case,
+        artifact_use_case,
+        artifact_default_ttl_secs,
+        health_reporter,
+        external_metrics,
+        Some(checkpoint),
+        Some(fatal_sender),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_ingestion_worker_inner(
+    store: Arc<dyn PersonalSecretaryStoreT>,
+    connection_epoch_id: ConnectionEpochId,
+    config: IngestionConfig,
+    recall_use_case: Option<Arc<RecallUseCase>>,
+    artifact_use_case: Option<Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_reporter: Option<Arc<dyn IngestionHealthReporterT>>,
+    external_metrics: Option<Arc<IngestionMetrics>>,
+    checkpoint: Option<Arc<dyn RealtimeSpoolCheckpointT>>,
+    fatal_sender: Option<mpsc::UnboundedSender<RealtimeSpoolFatal>>,
 ) -> (IngestionQueue, JoinHandle<WorkerReport>) {
     let (sender, receiver) = mpsc::channel(config.queue_capacity);
     let overflow = Arc::new(OverflowState::default());
@@ -271,6 +355,8 @@ pub fn spawn_ingestion_worker(
         artifact_use_case,
         artifact_default_ttl_secs,
         health_reporter,
+        checkpoint,
+        fatal_sender,
     ));
     (queue, worker)
 }
@@ -289,6 +375,8 @@ async fn run_worker(
     artifact_use_case: Option<Arc<ArtifactUseCase>>,
     artifact_default_ttl_secs: u64,
     health_reporter: Option<Arc<dyn IngestionHealthReporterT>>,
+    checkpoint: Option<Arc<dyn RealtimeSpoolCheckpointT>>,
+    fatal_sender: Option<mpsc::UnboundedSender<RealtimeSpoolFatal>>,
 ) -> WorkerReport {
     tracing::debug!(
         connection_epoch_id = %connection_epoch_id.as_str(),
@@ -302,6 +390,7 @@ async fn run_worker(
 
     let flush_timeout = Duration::from_millis(config.batch_flush_ms);
     let batch_capacity = config.batch_size;
+    let mut fatal_observed = false;
 
     loop {
         // 批次开始前持久化溢出 Gap。
@@ -313,8 +402,8 @@ async fn run_worker(
             None => break,
         };
         let oldest_enqueued_age = Some(first.enqueued_at);
-        let mut batch: Vec<InboundMessageEnvelope> = Vec::with_capacity(batch_capacity);
-        batch.push(first.envelope);
+        let mut batch: Vec<TimestampedEnvelope> = Vec::with_capacity(batch_capacity);
+        batch.push(first);
 
         // 用 try_recv 快速填满批次。
         fill_batch(&mut receiver, &mut batch, batch_capacity);
@@ -330,7 +419,7 @@ async fn run_worker(
                 }
                 match tokio::time::timeout(remaining, receiver.recv()).await {
                     Ok(Some(msg)) => {
-                        batch.push(msg.envelope);
+                        batch.push(msg);
                         fill_batch(&mut receiver, &mut batch, batch_capacity);
                         metrics.record_dequeue(config.queue_capacity, receiver.len());
                     }
@@ -349,7 +438,7 @@ async fn run_worker(
             .store(batch.len() as u64, Ordering::Release);
 
         // 实际处理批次（含 retry、poison 二分隔离）。
-        process_batch_with_retry(
+        let result = process_batch_with_retry(
             &store,
             &connection_epoch_id,
             &overflow,
@@ -361,22 +450,30 @@ async fn run_worker(
             artifact_use_case.as_ref(),
             artifact_default_ttl_secs,
             health_reporter.as_ref(),
+            checkpoint.as_ref(),
         )
         .await;
+        if let Err(fatal) = result {
+            if let Some(sender) = &fatal_sender {
+                let _ = sender.send(fatal);
+            }
+            fatal_observed = true;
+            break;
+        }
 
         metrics.record_dequeue(config.queue_capacity, receiver.len());
         metrics.in_flight.store(0, Ordering::Release);
     }
 
     // 排空：channel 关闭后处理剩余消息。
-    let mut drain: Vec<InboundMessageEnvelope> = Vec::with_capacity(batch_capacity);
-    while let Ok(msg) = receiver.try_recv() {
-        drain.push(msg.envelope);
+    let mut drain: Vec<TimestampedEnvelope> = Vec::with_capacity(batch_capacity);
+    while !fatal_observed && let Ok(msg) = receiver.try_recv() {
+        drain.push(msg);
         if drain.len() >= batch_capacity {
             metrics
                 .in_flight
                 .store(drain.len() as u64, Ordering::Release);
-            process_batch_with_retry(
+            if let Err(fatal) = process_batch_with_retry(
                 &store,
                 &connection_epoch_id,
                 &overflow,
@@ -388,18 +485,26 @@ async fn run_worker(
                 artifact_use_case.as_ref(),
                 artifact_default_ttl_secs,
                 health_reporter.as_ref(),
+                checkpoint.as_ref(),
             )
-            .await;
+            .await
+            {
+                if let Some(sender) = &fatal_sender {
+                    let _ = sender.send(fatal);
+                }
+                fatal_observed = true;
+                break;
+            }
             drain.clear();
             metrics.record_dequeue(config.queue_capacity, receiver.len());
             metrics.in_flight.store(0, Ordering::Release);
         }
     }
-    if !drain.is_empty() {
+    if !fatal_observed && !drain.is_empty() {
         metrics
             .in_flight
             .store(drain.len() as u64, Ordering::Release);
-        process_batch_with_retry(
+        let result = process_batch_with_retry(
             &store,
             &connection_epoch_id,
             &overflow,
@@ -411,8 +516,12 @@ async fn run_worker(
             artifact_use_case.as_ref(),
             artifact_default_ttl_secs,
             health_reporter.as_ref(),
+            checkpoint.as_ref(),
         )
         .await;
+        if let (Err(fatal), Some(sender)) = (result, &fatal_sender) {
+            let _ = sender.send(fatal);
+        }
         metrics.record_dequeue(config.queue_capacity, receiver.len());
         metrics.in_flight.store(0, Ordering::Release);
     }
@@ -444,12 +553,12 @@ async fn run_worker(
 /// 从 channel 快速填充批次（非阻塞）。
 fn fill_batch(
     receiver: &mut mpsc::Receiver<TimestampedEnvelope>,
-    batch: &mut Vec<InboundMessageEnvelope>,
+    batch: &mut Vec<TimestampedEnvelope>,
     batch_capacity: usize,
 ) {
     while batch.len() < batch_capacity {
         match receiver.try_recv() {
-            Ok(msg) => batch.push(msg.envelope),
+            Ok(msg) => batch.push(msg),
             Err(_) => break,
         }
     }
@@ -463,17 +572,37 @@ async fn process_batch_with_retry(
     connection_epoch_id: &ConnectionEpochId,
     overflow: &Arc<OverflowState>,
     config: &IngestionConfig,
-    batch: &[InboundMessageEnvelope],
+    batch: &[TimestampedEnvelope],
     metrics: &Arc<IngestionMetrics>,
     _oldest_enqueued_age: Option<Instant>,
     recall_use_case: Option<&Arc<RecallUseCase>>,
     artifact_use_case: Option<&Arc<ArtifactUseCase>>,
     artifact_default_ttl_secs: u64,
     health_reporter: Option<&Arc<dyn IngestionHealthReporterT>>,
-) {
+    checkpoint: Option<&Arc<dyn RealtimeSpoolCheckpointT>>,
+) -> Result<(), RealtimeSpoolFatal> {
+    if batch.iter().any(|item| item.spool_frame.is_some()) {
+        if batch.iter().any(|item| item.spool_frame.is_none()) || checkpoint.is_none() {
+            return Err(RealtimeSpoolFatal::new(
+                RealtimeSpoolFatalKind::RecoveryInvariantViolation,
+            ));
+        }
+        return process_spooled_batch_with_retry(
+            store,
+            config,
+            batch,
+            metrics,
+            recall_use_case,
+            artifact_use_case,
+            artifact_default_ttl_secs,
+            health_reporter,
+            checkpoint.expect("checked above"),
+        )
+        .await;
+    }
     // 将整批推入二分队列（有界迭代，绝不递归爆栈）。
     let mut queue: VecDeque<Vec<InboundMessageEnvelope>> = VecDeque::new();
-    queue.push_back(batch.to_vec());
+    queue.push_back(batch.iter().map(|item| item.envelope.clone()).collect());
 
     let mut retry_delay = Duration::from_millis(config.retry_initial_ms);
     let max_retry_delay = Duration::from_millis(config.retry_max_ms);
@@ -518,7 +647,7 @@ async fn process_batch_with_retry(
 
                     // Post-hooks 必须在事务成功后执行。
                     for (i, outcome) in outcomes.iter().enumerate() {
-                        fire_post_hooks(
+                        let _ = fire_post_hooks(
                             outcome,
                             &current_batch[i],
                             recall_use_case,
@@ -605,26 +734,213 @@ async fn process_batch_with_retry(
             }
         }
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_spooled_batch_with_retry(
+    store: &Arc<dyn PersonalSecretaryStoreT>,
+    config: &IngestionConfig,
+    batch: &[TimestampedEnvelope],
+    metrics: &Arc<IngestionMetrics>,
+    recall_use_case: Option<&Arc<RecallUseCase>>,
+    artifact_use_case: Option<&Arc<ArtifactUseCase>>,
+    artifact_default_ttl_secs: u64,
+    health_reporter: Option<&Arc<dyn IngestionHealthReporterT>>,
+    checkpoint: &Arc<dyn RealtimeSpoolCheckpointT>,
+) -> Result<(), RealtimeSpoolFatal> {
+    let messages = batch
+        .iter()
+        .map(|item| item.envelope.clone())
+        .collect::<Vec<_>>();
+    let mut retry_delay = Duration::from_millis(config.retry_initial_ms);
+    let max_retry_delay = Duration::from_millis(config.retry_max_ms);
+    let outcomes = loop {
+        match store.insert_messages_if_absent(&messages).await {
+            Ok(outcomes) => break outcomes,
+            Err(InboundEventStoreError::InvalidData(_)) => {
+                metrics.invalid.fetch_add(1, Ordering::AcqRel);
+                metrics
+                    .last_failure_at
+                    .store(current_unix_secs(), Ordering::Release);
+                return Err(RealtimeSpoolFatal::new(
+                    RealtimeSpoolFatalKind::RecoveryInvariantViolation,
+                ));
+            }
+            Err(error) => {
+                metrics.retries.fetch_add(1, Ordering::AcqRel);
+                metrics
+                    .last_failure_at
+                    .store(current_unix_secs(), Ordering::Release);
+                if let Some(health) = health_reporter {
+                    health.mark_worker_failure();
+                }
+                tracing::warn!(
+                    error_code = inbound_error_code(&error),
+                    retry_delay_ms = retry_delay.as_millis(),
+                    "durable 消息批次持久化失败，将保持 WAL 并重试"
+                );
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = retry_delay.saturating_mul(2).min(max_retry_delay);
+            }
+        }
+    };
+
+    let mut progress = Vec::with_capacity(batch.len());
+    for (item, outcome) in batch.iter().zip(&outcomes) {
+        let required_hooks = required_hook_keys(
+            &item.envelope,
+            outcome,
+            recall_use_case.is_some(),
+            artifact_use_case.is_some(),
+        )?;
+        let mut hook_delay = Duration::from_millis(config.retry_initial_ms);
+        loop {
+            match fire_post_hooks(
+                outcome,
+                &item.envelope,
+                recall_use_case,
+                artifact_use_case,
+                artifact_default_ttl_secs,
+            )
+            .await
+            {
+                Ok(()) => break,
+                Err(()) => {
+                    metrics.retries.fetch_add(1, Ordering::AcqRel);
+                    metrics
+                        .last_failure_at
+                        .store(current_unix_secs(), Ordering::Release);
+                    if let Some(health) = health_reporter {
+                        health.mark_worker_failure();
+                    }
+                    tracing::warn!(
+                        retry_delay_ms = hook_delay.as_millis(),
+                        error_code = "required_hook_not_converged",
+                        "durable 消息必需 hook 尚未收敛，将保持 WAL 并重试"
+                    );
+                    tokio::time::sleep(hook_delay).await;
+                    hook_delay = hook_delay.saturating_mul(2).min(max_retry_delay);
+                }
+            }
+        }
+        let frame = item.spool_frame.clone().ok_or_else(|| {
+            RealtimeSpoolFatal::new(RealtimeSpoolFatalKind::RecoveryInvariantViolation)
+        })?;
+        let mut entry = RealtimeSpoolReplayProgress::pending(frame, required_hooks.clone())
+            .with_ingestion(outcome.clone());
+        for hook in required_hooks {
+            entry = entry.with_converged_hook(hook);
+        }
+        progress.push(entry);
+    }
+
+    let generation = progress
+        .first()
+        .map(|entry| entry.frame().generation_id().clone())
+        .ok_or_else(|| {
+            RealtimeSpoolFatal::new(RealtimeSpoolFatalKind::RecoveryInvariantViolation)
+        })?;
+    let prefix = checkpointable_prefix(generation, &progress);
+    checkpoint.advance_checkpoint(prefix).await?;
+
+    metrics.accepted.fetch_add(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, IngestMessageOutcome::Accepted { .. }))
+            .count() as u64,
+        Ordering::AcqRel,
+    );
+    metrics.duplicates.fetch_add(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, IngestMessageOutcome::Duplicate { .. }))
+            .count() as u64,
+        Ordering::AcqRel,
+    );
+    metrics.batches_committed.fetch_add(1, Ordering::AcqRel);
+    metrics
+        .last_batch_size
+        .store(batch.len() as u64, Ordering::Release);
+    metrics
+        .last_success_at
+        .store(current_unix_secs(), Ordering::Release);
+    if let Some(health) = health_reporter {
+        health.mark_worker_success(current_unix_secs());
+    }
+    Ok(())
 }
 
 // ── Post-hooks ───────────────────────────────────────────────────────────
 
-async fn fire_post_hooks(
+pub(crate) async fn fire_post_hooks(
     outcome: &IngestMessageOutcome,
     message: &InboundMessageEnvelope,
     recall_use_case: Option<&Arc<RecallUseCase>>,
     artifact_use_case: Option<&Arc<ArtifactUseCase>>,
     artifact_default_ttl_secs: u64,
-) {
+) -> Result<(), ()> {
     let source_event_id = outcome.source_event_id();
-    maybe_apply_pending_recall(recall_use_case, message, source_event_id.as_str()).await;
+    maybe_apply_pending_recall(recall_use_case, message, source_event_id.as_str()).await?;
     maybe_create_artifacts(
         artifact_use_case,
         message,
         source_event_id.as_str(),
         artifact_default_ttl_secs,
     )
-    .await;
+    .await?;
+    Ok(())
+}
+
+pub(crate) fn required_hook_keys(
+    message: &InboundMessageEnvelope,
+    outcome: &IngestMessageOutcome,
+    recall_enabled: bool,
+    artifact_enabled: bool,
+) -> Result<Vec<RealtimeSpoolHookKey>, RealtimeSpoolFatal> {
+    let mut hooks = Vec::new();
+    if recall_enabled {
+        let correlation = RecallCorrelationKey::new(
+            message.source.account_ref(),
+            message.source.channel,
+            message.conversation.clone(),
+            message.source.message_id.clone(),
+        )
+        .map_err(|_| RealtimeSpoolFatal::new(RealtimeSpoolFatalKind::RecoveryInvariantViolation))?;
+        hooks.push(RealtimeSpoolHookKey::recall(correlation));
+    }
+    if artifact_enabled {
+        let source_event_id =
+            SourceEventId::new(outcome.source_event_id().as_str()).map_err(|_| {
+                RealtimeSpoolFatal::new(RealtimeSpoolFatalKind::RecoveryInvariantViolation)
+            })?;
+        for (ordinal, segment) in message.segments.iter().enumerate() {
+            if let Some(kind) = artifact_kind(segment) {
+                hooks.push(RealtimeSpoolHookKey::artifact(
+                    ArtifactId::for_source_segment(&source_event_id, ordinal, kind),
+                ));
+            }
+        }
+    }
+    Ok(hooks)
+}
+
+fn artifact_kind(segment: &ContentSegment) -> Option<ArtifactKind> {
+    match segment {
+        ContentSegment::Media { kind, .. } => Some(match kind {
+            MediaKind::Image => ArtifactKind::Image,
+            MediaKind::Audio => ArtifactKind::Record,
+            MediaKind::Video => ArtifactKind::Video,
+            MediaKind::File => ArtifactKind::File,
+        }),
+        ContentSegment::Forward { .. } => Some(ArtifactKind::Forward),
+        ContentSegment::Rich { kind, .. } => Some(match kind {
+            RichContentKind::Json => ArtifactKind::RichJson,
+            RichContentKind::Xml => ArtifactKind::RichXml,
+            RichContentKind::Card => ArtifactKind::RichCard,
+        }),
+        _ => None,
+    }
 }
 
 // ── Artifact / Recall 辅助（从旧实现迁移，逻辑不变）────────────────────
@@ -634,13 +950,11 @@ async fn maybe_create_artifacts(
     message: &InboundMessageEnvelope,
     source_event_id: &str,
     default_ttl_secs: u64,
-) {
+) -> Result<(), ()> {
     let Some(use_case) = artifact_use_case else {
-        return;
+        return Ok(());
     };
-    let Ok(source_event_id) = SourceEventId::new(source_event_id) else {
-        return;
-    };
+    let source_event_id = SourceEventId::new(source_event_id).map_err(|_| ())?;
     let ttl = if default_ttl_secs == 0 {
         None
     } else {
@@ -703,11 +1017,7 @@ async fn maybe_create_artifacts(
             Ok(env) => env,
             Err(error) => {
                 let _ = error;
-                tracing::warn!(
-                    error_code = "invalid_artifact_envelope",
-                    "跳过非法 Artifact 信封"
-                );
-                continue;
+                return Err(());
             }
         };
         if let Some(name) = display_name {
@@ -718,22 +1028,19 @@ async fn maybe_create_artifacts(
         }
         if let Err(error) = use_case.create(&envelope).await {
             let _ = error;
-            tracing::warn!(
-                source_event_id = source_event_id.as_str(),
-                error_code = "artifact_create_failed",
-                "Artifact 创建失败（消息已入库，不回滚）"
-            );
+            return Err(());
         }
     }
+    Ok(())
 }
 
 async fn maybe_apply_pending_recall(
     recall_use_case: Option<&Arc<RecallUseCase>>,
     message: &InboundMessageEnvelope,
     source_event_id: &str,
-) {
+) -> Result<(), ()> {
     let Some(use_case) = recall_use_case else {
-        return;
+        return Ok(());
     };
     let correlation = match RecallCorrelationKey::new(
         message.source.account_ref(),
@@ -742,38 +1049,20 @@ async fn maybe_apply_pending_recall(
         message.source.message_id.clone(),
     ) {
         Ok(key) => key,
-        Err(error) => {
-            let _ = error;
-            tracing::warn!(
-                platform_message_id = %message.source.message_id,
-                error_code = "invalid_recall_correlation",
-                "无法构造撤回关联键，跳过 pending tombstone 关联"
-            );
-            return;
-        }
+        Err(_) => return Err(()),
     };
     match use_case
         .on_message_ingested(&correlation, source_event_id)
         .await
     {
-        Ok(Some(record)) => {
-            tracing::debug!(
-                source_event_id,
-                status = record.status.as_str(),
-                "消息入库后已自动应用 pending 撤回 tombstone"
-            );
-        }
+        Ok(Some(_record)) => {}
         Ok(None) => {}
         Err(error) => {
             let _ = error;
-            tracing::warn!(
-                source_event_id,
-                platform_message_id = %message.source.message_id,
-                error_code = "pending_recall_apply_failed",
-                "pending 撤回关联失败（消息已入库，不回滚）"
-            );
+            return Err(());
         }
     }
+    Ok(())
 }
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────

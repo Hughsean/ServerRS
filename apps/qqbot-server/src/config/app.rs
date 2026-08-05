@@ -25,8 +25,8 @@ use super::whitelist::WhitelistConfig;
 use super::workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
     HealthConfig, IngestionConfig, MemoryCandidatesConfig, NotificationPolicyConfig,
-    RecallWalConfig, ReplyReconcileConfig, ThreadLinksConfig, ThreadProjectionConfig,
-    ThreadSemanticsConfig,
+    RealtimeSpoolConfig, RecallWalConfig, ReplyReconcileConfig, ThreadLinksConfig,
+    ThreadProjectionConfig, ThreadSemanticsConfig,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +58,8 @@ pub struct AppConfig {
     pub artifact: ArtifactConfig,
     #[serde(default)]
     pub recall_wal: RecallWalConfig,
+    #[serde(default)]
+    pub realtime_spool: RealtimeSpoolConfig,
     #[serde(default)]
     pub health: HealthConfig,
     #[serde(default)]
@@ -146,6 +148,18 @@ impl AppConfig {
         apply_notification_policy_env(&mut self.notification_policy)?;
         apply_artifact_env(&mut self.artifact)?;
         apply_recall_wal_env(&mut self.recall_wal)?;
+        apply_env_fields!(&mut self.realtime_spool;
+            bool { enabled => "QQBOT_REALTIME_SPOOL_ENABLED" },
+            non_empty {
+                key_env => "QQBOT_REALTIME_SPOOL_KEY_ENV",
+            },
+            positive {
+                admission_capacity => "QQBOT_REALTIME_SPOOL_ADMISSION_CAPACITY",
+                max_frame_plaintext => "QQBOT_REALTIME_SPOOL_MAX_FRAME_PLAINTEXT",
+                recovery_lease_secs => "QQBOT_REALTIME_SPOOL_RECOVERY_LEASE_SECS",
+                shutdown_drain_timeout_secs => "QQBOT_REALTIME_SPOOL_SHUTDOWN_DRAIN_TIMEOUT_SECS",
+            },
+        );
         apply_health_env(&mut self.health)?;
         apply_llm_env(&mut self.llm)?;
         apply_env_fields!(&mut self.action_planner;
@@ -180,6 +194,17 @@ impl AppConfig {
         }
         if self.recall_wal.quarantine_dir.is_relative() {
             self.recall_wal.quarantine_dir = config_dir.join(&self.recall_wal.quarantine_dir);
+        }
+        if self.realtime_spool.wal_path.is_relative() {
+            self.realtime_spool.wal_path = config_dir.join(&self.realtime_spool.wal_path);
+        }
+        if self.realtime_spool.checkpoint_path.is_relative() {
+            self.realtime_spool.checkpoint_path =
+                config_dir.join(&self.realtime_spool.checkpoint_path);
+        }
+        if self.realtime_spool.quarantine_dir.is_relative() {
+            self.realtime_spool.quarantine_dir =
+                config_dir.join(&self.realtime_spool.quarantine_dir);
         }
     }
 
@@ -257,6 +282,15 @@ impl AppConfig {
         self.directory_sync.validate()?;
         self.artifact.validate()?;
         self.recall_wal.validate()?;
+        self.realtime_spool.validate()?;
+        if self.realtime_spool.enabled
+            && (self.realtime_spool.wal_path == self.recall_wal.path
+                || self.realtime_spool.quarantine_dir == self.recall_wal.quarantine_dir)
+        {
+            return Err(ConfigError::Invalid(
+                "realtime_spool and recall_wal must use independent paths".into(),
+            ));
+        }
         self.health.validate()?;
         self.llm.validate()?;
         self.qq_open_platform.validate()?;

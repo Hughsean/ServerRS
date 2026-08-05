@@ -95,6 +95,7 @@ struct WebsocketProducer(Arc<RuntimeHealthState>);
 struct HistoryProducer(Arc<RuntimeHealthState>);
 struct DatabaseProducer(Arc<RuntimeHealthState>);
 struct RecallSpoolProducer(Arc<RecallSpoolTelemetry>);
+struct RealtimeSpoolProducer(Arc<crate::realtime_spool::RealtimeSpoolTelemetry>);
 struct IngestionMetricsProducer(Arc<crate::ingestion_worker::IngestionMetrics>);
 struct WorkerProducer {
     state: Arc<RuntimeHealthState>,
@@ -262,6 +263,55 @@ impl HealthSnapshotProducer for RecallSpoolProducer {
         }
     }
 }
+
+#[async_trait]
+impl HealthSnapshotProducer for RealtimeSpoolProducer {
+    fn name(&self) -> &'static str {
+        "realtime_spool"
+    }
+
+    async fn health(&self) -> SubsystemHealth {
+        let snapshot = self.0.snapshot();
+        let now = now_unix().max(0) as u64;
+        let mut metrics = BTreeMap::new();
+        metrics.insert("pending_frames".into(), snapshot.pending_frames);
+        metrics.insert("capacity_bytes".into(), snapshot.capacity_bytes);
+        metrics.insert("bytes_used".into(), snapshot.bytes_used);
+        metrics.insert("quarantine_count".into(), snapshot.quarantine_count);
+        metrics.insert(
+            "reconciliation_pending".into(),
+            u64::from(snapshot.reconciliation_pending),
+        );
+        let ratio = snapshot
+            .bytes_used
+            .saturating_mul(10_000)
+            .checked_div(snapshot.capacity_bytes)
+            .unwrap_or(0)
+            .min(10_000);
+        metrics.insert("capacity_used_ratio_bps".into(), ratio);
+        if let Some(oldest) = snapshot.oldest_occurred_at_unix_secs {
+            metrics.insert(
+                "oldest_record_age_secs".into(),
+                now.saturating_sub(oldest.max(0) as u64),
+            );
+        }
+        SubsystemHealth {
+            name: self.name().into(),
+            status: if !snapshot.observed {
+                HealthStatus::Uncertain
+            } else if !snapshot.usable {
+                HealthStatus::Unavailable
+            } else if snapshot.reconciliation_pending || snapshot.pending_frames > 0 {
+                HealthStatus::Degraded
+            } else {
+                HealthStatus::Healthy
+            },
+            last_success_at_unix_secs: None,
+            last_error: snapshot.recent_error_code.map(str::to_owned),
+            metrics,
+        }
+    }
+}
 #[async_trait]
 impl HealthSnapshotProducer for IngestionMetricsProducer {
     fn name(&self) -> &'static str {
@@ -349,6 +399,27 @@ pub fn build_runtime_health_aggregator_with_recall_spool(
     }));
     if let Some(metrics) = ingestion_metrics {
         aggregator.add_producer(Arc::new(IngestionMetricsProducer(metrics)));
+    }
+    aggregator
+}
+
+pub fn build_runtime_health_aggregator_with_spools(
+    state: Arc<RuntimeHealthState>,
+    recall_spool: Arc<RecallSpoolTelemetry>,
+    realtime_spool: Option<Arc<crate::realtime_spool::RealtimeSpoolTelemetry>>,
+    cache_ttl_secs: u64,
+    worker_success_stale_secs: u64,
+    ingestion_metrics: Option<Arc<crate::ingestion_worker::IngestionMetrics>>,
+) -> HealthAggregator {
+    let mut aggregator = build_runtime_health_aggregator_with_recall_spool(
+        state,
+        recall_spool,
+        cache_ttl_secs,
+        worker_success_stale_secs,
+        ingestion_metrics,
+    );
+    if let Some(telemetry) = realtime_spool {
+        aggregator.add_producer(Arc::new(RealtimeSpoolProducer(telemetry)));
     }
     aggregator
 }

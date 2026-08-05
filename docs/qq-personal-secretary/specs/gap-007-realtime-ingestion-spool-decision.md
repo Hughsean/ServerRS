@@ -243,8 +243,10 @@ pending-gap/reconciliation-pending 状态；不包含任何敏感业务标识或
 2. **GAP-007-IMPL-B，文件适配器**：已完成并通过 Codex 独立复核。独立 AEAD WAL、512 MiB
    实际分配预算、独占锁、最终尾部截断、完整帧全局 fail-closed、连续 checkpoint、compact 与
    Windows 写穿替换均已实现；blocking writer 调度、runtime 接线和 MySQL replay 留在 IMPL-C。
-3. **GAP-007-IMPL-C，runtime/health**：reader/Heartbeat 并发、bounded admission、fatal 到
-   connection loop、运行期 Gap 重试、启动前遗留 epoch reconciliation、pending-gap 健康状态和关闭期限。
+3. **GAP-007-IMPL-C，runtime/health**：已完成并通过 Codex 独立复核。callback 只做 bounded
+   admission；blocking writer 同步成功后把 durable frame 交给统一 ingestion。MySQL commit 与必需
+   hook 收敛后推进连续 checkpoint；fatal/关闭超时保留开放 epoch 与 WAL，启动恢复使用账号作用域
+   typed lease、续租和 fencing，完成后原子创建/复用 uncertain Gap。健康快照不暴露业务标识或路径。
 4. **GAP-007-IMPL-D，故障注入**：阻塞 writer 下 Heartbeat、公平性/队列边界、receipt 前崩溃、
    关闭 deadline、尾部撕裂、全局损坏、遗留 epoch 回收、预算、MySQL 离线、幂等 effect、Windows
    各同步点与崩溃恢复。

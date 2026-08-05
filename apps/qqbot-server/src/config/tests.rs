@@ -33,6 +33,8 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
     assert_eq!(config.napcat.reconnect_max_secs, 60);
     assert_eq!(config.database.max_connections, 5);
     assert_eq!(config.ingestion.queue_capacity, 1_024);
+    assert!(config.realtime_spool.enabled);
+    assert_eq!(config.realtime_spool.admission_capacity, 1_024);
     assert!(config.thread_projection.enabled);
     assert_eq!(config.thread_projection.batch_size, 100);
     assert_eq!(config.thread_projection.same_conversation_window_secs, 300);
@@ -347,6 +349,68 @@ url = "mysql://serverrs@127.0.0.1:3306/serverrs_qq"
     assert_eq!(config.ingestion.batch_size, 32);
     assert_eq!(config.ingestion.batch_flush_ms, 25);
     config.validate(std::path::Path::new(".")).unwrap();
+}
+
+#[test]
+fn example_configuration_remains_parseable() {
+    let content = include_str!("../../config/qqbot.example.toml");
+    let config: AppConfig = toml::from_str(content).unwrap();
+    config.validate(std::path::Path::new(".")).unwrap();
+}
+
+#[test]
+fn realtime_spool_env_overrides_are_applied_before_validation() {
+    let mut config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs@127.0.0.1:3306/serverrs_qq"
+"#,
+    )
+    .unwrap();
+    unsafe {
+        std::env::set_var("QQBOT_REALTIME_SPOOL_ADMISSION_CAPACITY", "64");
+        std::env::set_var("QQBOT_REALTIME_SPOOL_RECOVERY_LEASE_SECS", "30");
+        std::env::set_var("QQBOT_REALTIME_SPOOL_ENABLED", "false");
+    }
+    let result = config.apply_env_overrides();
+    unsafe {
+        std::env::remove_var("QQBOT_REALTIME_SPOOL_ADMISSION_CAPACITY");
+        std::env::remove_var("QQBOT_REALTIME_SPOOL_RECOVERY_LEASE_SECS");
+        std::env::remove_var("QQBOT_REALTIME_SPOOL_ENABLED");
+    }
+    result.unwrap();
+    assert_eq!(config.realtime_spool.admission_capacity, 64);
+    assert_eq!(config.realtime_spool.recovery_lease_secs, 30);
+    assert!(!config.realtime_spool.enabled);
+    config.validate(std::path::Path::new(".")).unwrap();
+}
+
+#[test]
+fn realtime_spool_rejects_shared_recall_paths() {
+    let error = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs@127.0.0.1:3306/serverrs_qq"
+
+[recall_wal]
+path = "shared.wal"
+
+[realtime_spool]
+wal_path = "shared.wal"
+"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("independent paths"));
 }
 
 #[test]

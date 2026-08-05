@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use base64::Engine;
 use fs2::FileExt;
@@ -137,6 +139,136 @@ pub struct RealtimeMessageSpool {
     generation_id: RealtimeSpoolGenerationId,
     _process_lock: File,
     operation_lock: Mutex<()>,
+    telemetry: Arc<RealtimeSpoolTelemetry>,
+}
+
+#[derive(Debug, Default)]
+pub struct RealtimeSpoolTelemetry {
+    observed: AtomicBool,
+    usable: AtomicBool,
+    bytes_used: AtomicU64,
+    pending_frames: AtomicU64,
+    oldest_occurred_at: AtomicU64,
+    quarantine_count: AtomicU64,
+    recent_error: AtomicU8,
+    reconciliation_pending: AtomicBool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RealtimeSpoolTelemetrySnapshot {
+    pub observed: bool,
+    pub usable: bool,
+    pub bytes_used: u64,
+    pub capacity_bytes: u64,
+    pub pending_frames: u64,
+    pub oldest_occurred_at_unix_secs: Option<i64>,
+    pub quarantine_count: u64,
+    pub recent_error_code: Option<&'static str>,
+    pub reconciliation_pending: bool,
+}
+
+impl RealtimeSpoolTelemetry {
+    fn initialize(&self, bytes_used: u64, pending: &[&ScannedFrame], quarantine_count: u64) {
+        self.observed.store(true, Ordering::Release);
+        self.usable.store(true, Ordering::Release);
+        self.bytes_used.store(bytes_used, Ordering::Release);
+        self.pending_frames
+            .store(pending.len() as u64, Ordering::Release);
+        self.oldest_occurred_at.store(
+            pending
+                .first()
+                .map(|frame| frame.recovered.message().occurred_at_unix_secs.max(0) as u64)
+                .unwrap_or(0),
+            Ordering::Release,
+        );
+        self.quarantine_count
+            .store(quarantine_count, Ordering::Release);
+    }
+
+    fn record_append(&self, bytes_used: u64, occurred_at: i64) {
+        let previous = self.pending_frames.fetch_add(1, Ordering::AcqRel);
+        if previous == 0 {
+            self.oldest_occurred_at
+                .store(occurred_at.max(0) as u64, Ordering::Release);
+        }
+        self.bytes_used.store(bytes_used, Ordering::Release);
+        self.usable.store(true, Ordering::Release);
+        self.recent_error.store(0, Ordering::Release);
+    }
+
+    fn record_checkpoint(&self, bytes_used: u64, remaining: &[&ScannedFrame]) {
+        self.bytes_used.store(bytes_used, Ordering::Release);
+        self.pending_frames
+            .store(remaining.len() as u64, Ordering::Release);
+        self.oldest_occurred_at.store(
+            remaining
+                .first()
+                .map(|frame| frame.recovered.message().occurred_at_unix_secs.max(0) as u64)
+                .unwrap_or(0),
+            Ordering::Release,
+        );
+        self.usable.store(true, Ordering::Release);
+        self.recent_error.store(0, Ordering::Release);
+    }
+
+    pub fn mark_fatal(&self, kind: RealtimeSpoolFatalKind) {
+        self.observed.store(true, Ordering::Release);
+        self.usable.store(false, Ordering::Release);
+        self.recent_error.store(fatal_code(kind), Ordering::Release);
+    }
+
+    pub fn set_reconciliation_pending(&self, pending: bool) {
+        self.reconciliation_pending
+            .store(pending, Ordering::Release);
+    }
+
+    pub fn snapshot(&self) -> RealtimeSpoolTelemetrySnapshot {
+        let oldest = self.oldest_occurred_at.load(Ordering::Acquire);
+        RealtimeSpoolTelemetrySnapshot {
+            observed: self.observed.load(Ordering::Acquire),
+            usable: self.usable.load(Ordering::Acquire),
+            bytes_used: self.bytes_used.load(Ordering::Acquire),
+            capacity_bytes: TOTAL_BYTES,
+            pending_frames: self.pending_frames.load(Ordering::Acquire),
+            oldest_occurred_at_unix_secs: (oldest > 0)
+                .then_some(oldest.min(i64::MAX as u64) as i64),
+            quarantine_count: self.quarantine_count.load(Ordering::Acquire),
+            recent_error_code: fatal_code_name(self.recent_error.load(Ordering::Acquire)),
+            reconciliation_pending: self.reconciliation_pending.load(Ordering::Acquire),
+        }
+    }
+}
+
+fn fatal_code(kind: RealtimeSpoolFatalKind) -> u8 {
+    match kind {
+        RealtimeSpoolFatalKind::KeyUnavailable => 1,
+        RealtimeSpoolFatalKind::LockUnavailable => 2,
+        RealtimeSpoolFatalKind::CapacityExhausted => 3,
+        RealtimeSpoolFatalKind::AppendFailed => 4,
+        RealtimeSpoolFatalKind::SyncFailed => 5,
+        RealtimeSpoolFatalKind::WriterStopped => 6,
+        RealtimeSpoolFatalKind::CheckpointFailed => 7,
+        RealtimeSpoolFatalKind::RecoveryCorruptFrame => 8,
+        RealtimeSpoolFatalKind::RecoveryInvariantViolation => 9,
+        RealtimeSpoolFatalKind::ReconciliationFailed => 10,
+    }
+}
+
+fn fatal_code_name(code: u8) -> Option<&'static str> {
+    Some(match code {
+        0 => return None,
+        1 => "key_unavailable",
+        2 => "lock_unavailable",
+        3 => "capacity_exhausted",
+        4 => "append_failed",
+        5 => "sync_failed",
+        6 => "writer_stopped",
+        7 => "checkpoint_failed",
+        8 => "recovery_corrupt_frame",
+        9 => "recovery_invariant_violation",
+        10 => "reconciliation_failed",
+        _ => "unknown_spool_error",
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,6 +326,7 @@ impl RealtimeMessageSpool {
         remove_non_authoritative_temp(&config.checkpoint_temp_path())?;
 
         let (generation_uuid, generation_id) = initialize_or_read_wal(&config, &key_id)?;
+        let telemetry = Arc::new(RealtimeSpoolTelemetry::default());
         let spool = Self {
             config,
             key,
@@ -202,6 +335,7 @@ impl RealtimeMessageSpool {
             generation_id,
             _process_lock: process_lock,
             operation_lock: Mutex::new(()),
+            telemetry: Arc::clone(&telemetry),
         };
         let _guard = spool
             .operation_lock
@@ -211,6 +345,11 @@ impl RealtimeMessageSpool {
         let checkpoint = spool.read_checkpoint_locked()?;
         let pending = spool.pending_after_checkpoint(&scan, checkpoint.as_ref())?;
         spool.verify_budget_locked()?;
+        telemetry.initialize(
+            spool.disk_usage_locked()?,
+            &pending,
+            directory_file_count(&spool.config.quarantine_dir)?,
+        );
         let mut frames = pending
             .into_iter()
             .map(|frame| RealtimeSpoolRecoveryFrame::Replay(Box::new(frame.recovered.clone())))
@@ -231,6 +370,10 @@ impl RealtimeMessageSpool {
 
     pub fn generation_id(&self) -> &RealtimeSpoolGenerationId {
         &self.generation_id
+    }
+
+    pub fn telemetry(&self) -> Arc<RealtimeSpoolTelemetry> {
+        Arc::clone(&self.telemetry)
     }
 
     pub fn append(
@@ -272,6 +415,10 @@ impl RealtimeMessageSpool {
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::AppendFailed, "append_write"))?;
         file.sync_all()
             .map_err(|_| spool_error(RealtimeSpoolFatalKind::SyncFailed, "append_sync"))?;
+        self.telemetry.record_append(
+            self.disk_usage_locked()?,
+            admission.message().occurred_at_unix_secs,
+        );
         Ok(DurableSpoolReceipt::new(
             admission.admission_id().clone(),
             self.generation_id.clone(),
@@ -331,7 +478,12 @@ impl RealtimeMessageSpool {
             generation_id: self.generation_id.clone(),
             last_record_id: prefix.record_ids().last().cloned(),
         };
-        self.write_checkpoint_locked(&checkpoint)
+        self.write_checkpoint_locked(&checkpoint)?;
+        self.telemetry.record_checkpoint(
+            self.disk_usage_locked()?,
+            &pending[prefix.record_ids().len()..],
+        );
+        Ok(())
     }
 
     pub fn compact(&self) -> Result<(), RealtimeMessageSpoolError> {
@@ -1149,6 +1301,39 @@ fn directory_file_bytes(path: &Path) -> Result<u64, RealtimeMessageSpoolError> {
         total = total.saturating_add(allocated_file_bytes(&entry.path())?);
     }
     Ok(total)
+}
+
+fn directory_file_count(path: &Path) -> Result<u64, RealtimeMessageSpoolError> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut count = 0_u64;
+    for entry in std::fs::read_dir(path).map_err(|_| {
+        spool_error(
+            RealtimeSpoolFatalKind::RecoveryInvariantViolation,
+            "dir_read",
+        )
+    })? {
+        let entry = entry.map_err(|_| {
+            spool_error(
+                RealtimeSpoolFatalKind::RecoveryInvariantViolation,
+                "dir_entry",
+            )
+        })?;
+        if entry
+            .file_type()
+            .map_err(|_| {
+                spool_error(
+                    RealtimeSpoolFatalKind::RecoveryInvariantViolation,
+                    "dir_type",
+                )
+            })?
+            .is_file()
+        {
+            count = count.saturating_add(1);
+        }
+    }
+    Ok(count)
 }
 
 #[cfg(windows)]

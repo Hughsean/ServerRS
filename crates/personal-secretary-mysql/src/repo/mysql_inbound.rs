@@ -32,17 +32,35 @@ pub(crate) struct MySqlInboundEventStore {
     /// 回补运行续租秒数。仅 `record_scope_progress` 使用；实时/连续性路径不读取。
     /// 由 `build_mysql_backfill_store` 按配置注入，`build_mysql_inbound_event_store` 用默认值。
     pub(super) lease_secs: u64,
+    /// 普通消息 Spool 启动恢复租约秒数；仅 recovery store 端口读取。
+    pub(super) realtime_spool_recovery_lease_secs: u64,
 }
 
 impl MySqlInboundEventStore {
     /// 构造实时入库/连续性仓储。不参与回补租约，使用默认值。
     pub(crate) fn new(db: DatabaseConnection) -> Self {
-        Self { db, lease_secs: 60 }
+        Self {
+            db,
+            lease_secs: 60,
+            realtime_spool_recovery_lease_secs: 60,
+        }
     }
 
     /// 构造回补状态仓储，注入配置的租约秒数。
     pub(crate) fn new_for_backfill(db: DatabaseConnection, lease_secs: u64) -> Self {
-        Self { db, lease_secs }
+        Self {
+            db,
+            lease_secs,
+            realtime_spool_recovery_lease_secs: 60,
+        }
+    }
+
+    pub(crate) fn new_for_realtime_spool_recovery(db: DatabaseConnection, lease_secs: u64) -> Self {
+        Self {
+            db,
+            lease_secs: 60,
+            realtime_spool_recovery_lease_secs: lease_secs,
+        }
     }
 }
 

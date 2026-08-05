@@ -19,16 +19,14 @@
   逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
   有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
   `EXTERNAL ENV-004`。
-- 当前评估：`GAP-007-A/B/C`、`GAP-007-IMPL-A` 与 `GAP-007-IMPL-B` 已完成并通过 Codex 独立复核。
-  领域/application 契约与独立文件适配器已覆盖 typed admission/receipt/fatal、AEAD WAL、实际分配
-  预算、锁、尾部恢复、完整帧 fail-closed、连续 checkpoint、compact、账号作用域遗留 epoch 领取
-  及 typed lease fencing；尚未接入 runtime、MySQL replay 或健康 Worker。普通消息 Spool 只承诺
-  本地 durable receipt；启动以完整认证 WAL 帧恢复，遗留 `connected` epoch 必须先 replay/hook/
-  checkpoint，再以 MySQL 原子事务结束 epoch 并创建 Gap。
+- 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A/B/C` 已完成并通过 Codex 独立复核。普通消息
+  callback 只做 bounded admission，blocking writer 在 `sync_all` 后产生 durable receipt，再进入统一
+  MySQL ingestion；必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。fatal 与关闭超时保留开放
+  epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
+  复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：先提交已复核的 `GAP-007-IMPL-B`，再进入 `GAP-007-IMPL-C` runtime/health 接线；不得
-  在 runtime 接线前宣称普通消息已获得 durable receipt。`EVT-007-NONMSG` 等待真实业务样本，
-  `EVT-009` 已按产品决策取消。
+- 下一步：进入 `GAP-007-IMPL-D` 故障注入，验证阻塞 writer、receipt 崩溃窗口、关闭 deadline、
+  MySQL 离线和 Windows 同步点。`EVT-007-NONMSG` 等待真实业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -357,8 +355,11 @@
   最终尾部截断、完整帧认证/解码 fail-closed、连续 checkpoint、compact 和 Windows 写穿替换协议；
   普通消息与 Recall 使用独立 magic/key/路径/状态，未接入 WebSocket runtime。Spool 聚焦测试 9/9、
   `qqbot-server` 151 passed/2 ignored、架构边界 24/24、严格 Clippy 与格式门禁通过。
-- [ ] `GAP-007-IMPL-C` 接入 reader/Heartbeat、bounded admission、fatal 传播、MySQL replay、运行期
-  Gap 重试、启动恢复、健康快照和有界关闭。
+- [x] `GAP-007-IMPL-C` 接入 reader/Heartbeat、bounded admission、blocking writer、fatal 传播、
+  MySQL replay、必需 hook 收敛、连续 checkpoint、同 epoch Gap 重试、启动恢复、健康快照和有界关闭。
+  MySQL recovery claim 使用账号作用域、typed token、未过期复验与续租；真实 MySQL 1/1、
+  `personal-secretary` 270/270、`qqbot-server` 159 passed/2 ignored、架构边界 24/24、严格 Clippy、
+  workspace all-targets check、fmt 与 diff check 通过。
 - [ ] `GAP-007-IMPL-D` 完成 writer 阻塞、receipt 前崩溃、关闭 deadline、尾部撕裂、完整帧损坏、
   遗留 epoch、预算、MySQL 离线、幂等 effect 与 Windows 同步点的故障注入验证。
 - [ ] `GAP-008` 分别演练电脑关机/休眠、NapCat 离线和 MySQL 离线；属于需要环境配合的部分移入

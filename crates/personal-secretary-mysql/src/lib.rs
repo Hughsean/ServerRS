@@ -39,6 +39,14 @@ pub fn build_mysql_inbound_event_store(db: DatabaseConnection) -> Arc<dyn Person
     Arc::new(repo::MySqlInboundEventStore::new(db))
 }
 
+/// 构造普通消息 Spool 启动恢复仓储；租约用于 fencing 遗留 epoch 的最终收口。
+pub fn build_mysql_realtime_spool_recovery_store(
+    db: DatabaseConnection,
+    lease_secs: u64,
+) -> Arc<dyn RealtimeSpoolRecoveryStoreT> {
+    Arc::new(repo::MySqlInboundEventStore::new_for_realtime_spool_recovery(db, lease_secs))
+}
+
 /// 构造延迟 Reply 修复仓储（unresolved 候选 + 租约/退避簿），供后台修复 Worker 装配。
 /// 与实时入库仓储共享同一 schema 与同一结构体，端口按需裁剪。
 pub fn build_mysql_reply_reconcile_store(db: DatabaseConnection) -> Arc<dyn ReplyReconcileStoreT> {

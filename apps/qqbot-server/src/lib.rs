@@ -66,7 +66,8 @@ pub mod production {
     pub use crate::directory_sync::spawn_directory_sync_worker;
     pub use crate::health_runtime::{
         HealthLogHandle, HealthReader, RuntimeHealthState, build_runtime_health_aggregator,
-        build_runtime_health_aggregator_with_recall_spool, spawn_health_log_worker,
+        build_runtime_health_aggregator_with_recall_spool,
+        build_runtime_health_aggregator_with_spools, spawn_health_log_worker,
     };
     pub use crate::inbound::NapCatInboundMapper;
     pub use crate::ingestion_worker::{

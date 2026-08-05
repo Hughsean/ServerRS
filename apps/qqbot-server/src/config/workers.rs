@@ -748,6 +748,81 @@ impl RecallWalConfig {
     }
 }
 
+/// GAP-007 ordinary-message durable Spool configuration. `key_env` names the environment
+/// variable containing the key; the key value itself is never stored in TOML.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RealtimeSpoolConfig {
+    pub enabled: bool,
+    pub wal_path: PathBuf,
+    pub checkpoint_path: PathBuf,
+    pub quarantine_dir: PathBuf,
+    pub key_env: String,
+    pub admission_capacity: usize,
+    pub max_frame_plaintext: usize,
+    pub recovery_lease_secs: u64,
+    pub shutdown_drain_timeout_secs: u64,
+}
+
+impl Default for RealtimeSpoolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            wal_path: PathBuf::from("data/qqbot-message.wal"),
+            checkpoint_path: PathBuf::from("data/qqbot-message.checkpoint"),
+            quarantine_dir: PathBuf::from("data/qqbot-message-quarantine"),
+            key_env: "QQBOT_REALTIME_SPOOL_KEY".into(),
+            admission_capacity: 1_024,
+            max_frame_plaintext: 1024 * 1024,
+            recovery_lease_secs: 60,
+            shutdown_drain_timeout_secs: 10,
+        }
+    }
+}
+
+impl RealtimeSpoolConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.wal_path.as_os_str().is_empty()
+            || self.checkpoint_path.as_os_str().is_empty()
+            || self.quarantine_dir.as_os_str().is_empty()
+            || self.key_env.trim().is_empty()
+        {
+            return Err(ConfigError::Invalid(
+                "realtime_spool paths and key_env must not be empty".into(),
+            ));
+        }
+        if self.wal_path == self.checkpoint_path
+            || self.wal_path == self.quarantine_dir
+            || self.checkpoint_path == self.quarantine_dir
+        {
+            return Err(ConfigError::Invalid(
+                "realtime_spool paths must be distinct".into(),
+            ));
+        }
+        if !(1..=65_536).contains(&self.admission_capacity) {
+            return Err(ConfigError::Invalid(
+                "realtime_spool.admission_capacity must be between 1 and 65536".into(),
+            ));
+        }
+        if !(1..=1024 * 1024).contains(&self.max_frame_plaintext) {
+            return Err(ConfigError::Invalid(
+                "realtime_spool.max_frame_plaintext must be between 1 and 1048576".into(),
+            ));
+        }
+        if !(1..=300).contains(&self.recovery_lease_secs) {
+            return Err(ConfigError::Invalid(
+                "realtime_spool.recovery_lease_secs must be between 1 and 300".into(),
+            ));
+        }
+        if !(1..=25).contains(&self.shutdown_drain_timeout_secs) {
+            return Err(ConfigError::Invalid(
+                "realtime_spool.shutdown_drain_timeout_secs must be between 1 and 25".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// B6 富消息 Artifact 配置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]

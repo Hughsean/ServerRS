@@ -91,6 +91,12 @@
 
 ## 最近事件
 
+- `2026-08-06 00:05（Asia/Shanghai）`：`GAP-007-IMPL-C` runtime/health 与 MySQL 恢复闭环完成。
+  NapCat callback 改为 bounded admission，文件 I/O 由 blocking writer 执行；`sync_all` receipt 后才进入
+  ingestion，MySQL commit 与必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。Spool fatal、队列满
+  或关闭超时会保留开放 epoch/WAL 并 fail-closed；启动前按账号领取、续租和 fencing 遗留 epoch，完成
+  replay/checkpoint 后原子结束 epoch、创建或复用 uncertain Gap。新增脱敏健康 telemetry、5 个 runtime
+  恢复测试与 1 个真实 MySQL 测试；Rust/架构/严格 Clippy 门禁通过。
 - `2026-08-05 23:25（Asia/Shanghai）`：`GAP-007-IMPL-B` 文件适配器完成并通过 Codex 独立复核。
   新增独立普通消息 AEAD WAL（不同于 Recall magic/key/路径）、实际分配量预算（活动 WAL 240 MiB、
   compact 临时 240 MiB、quarantine 16 MiB、元数据 16 MiB，总计 512 MiB）、进程锁、最终不完整尾部

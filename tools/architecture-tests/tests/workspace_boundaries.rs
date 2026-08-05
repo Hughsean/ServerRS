@@ -490,18 +490,28 @@ fn qqbot_llm_adapter_only_produces_bounded_semantic_candidates() {
 
 #[test]
 fn napcat_callback_does_not_wait_for_mysql() {
-    // A2 后 runtime 已拆为目录，按目录递归收集。
-    let runtime = rust_sources("apps/qqbot-server/src/runtime");
+    let callback =
+        fs::read_to_string(workspace_root().join("apps/qqbot-server/src/runtime/handlers.rs"))
+            .expect("qqbot-server callback handler must be readable");
+    let spool_runtime = fs::read_to_string(
+        workspace_root().join("apps/qqbot-server/src/runtime/realtime_spool_runtime.rs"),
+    )
+    .expect("qqbot-server realtime spool runtime must be readable");
     let worker = fs::read_to_string(
         workspace_root().join("apps/qqbot-server/src/application/ingestion_worker.rs"),
     )
     .expect("qqbot-server ingestion worker must be readable");
 
-    assert!(runtime.contains("try_enqueue"));
-    assert!(runtime.contains("spawn_ingestion_worker"));
-    assert!(!runtime.contains("insert_message_if_absent"));
+    assert!(callback.contains("try_admit"));
+    assert!(!callback.contains("insert_message_if_absent"));
+    assert!(!callback.contains("RealtimeMessageSpool"));
+    assert!(!callback.contains("sync_all"));
+    assert!(spool_runtime.contains("spawn_realtime_spool_writer"));
+    assert!(spool_runtime.contains("spawn_blocking"));
     assert!(worker.contains("mpsc::channel"));
     assert!(worker.contains("insert_message_if_absent"));
+    assert!(worker.contains("RealtimeSpoolCheckpointT"));
+    assert!(!worker.contains("RealtimeMessageSpool"));
 }
 
 #[test]

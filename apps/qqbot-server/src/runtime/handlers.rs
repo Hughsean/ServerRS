@@ -7,14 +7,31 @@ use std::sync::Arc;
 
 use qqbot::napcat::{NapCatError, NapCatEvent, NapCatEventHandler};
 
+use super::realtime_spool_runtime::RealtimeSpoolAdmissionQueue;
 use crate::inbound::NapCatInboundMapper;
 use crate::ingestion_worker::IngestionQueue;
 use crate::recall::RecallHandler;
 
+pub enum MessageAdmission {
+    Memory(IngestionQueue),
+    Durable(RealtimeSpoolAdmissionQueue),
+}
+
+impl MessageAdmission {
+    fn try_admit(&self, message: personal_secretary::InboundMessageEnvelope) -> Result<(), String> {
+        match self {
+            Self::Memory(queue) => queue
+                .try_enqueue(message)
+                .map_err(|error| error.to_string()),
+            Self::Durable(queue) => queue.try_admit(message).map_err(|error| error.to_string()),
+        }
+    }
+}
+
 /// 个人秘书入站边界：统一身份后先幂等落库，只有新事件才允许进入后续处理。
 pub struct PersonalSecretaryInboundHandler {
     pub mapper: NapCatInboundMapper,
-    pub queue: IngestionQueue,
+    pub admission: MessageAdmission,
     /// 群白名单。非空时只处理白名单内群的消息；为空表示不启用白名单（放行所有群）。
     pub group_whitelist: Arc<std::collections::HashSet<i64>>,
     /// 撤回处理器。可选：未装配时撤回通知只记录日志。
@@ -36,13 +53,13 @@ impl NapCatEventHandler for PersonalSecretaryInboundHandler {
                     tracing::debug!(group_id = event.group_id, "群消息不在白名单内，跳过");
                     return Ok(());
                 }
-                self.queue
-                    .try_enqueue(self.mapper.map_group(event)?)
+                self.admission
+                    .try_admit(self.mapper.map_group(event)?)
                     .map_err(|error| NapCatError::Handler(error.to_string()))?
             }
             NapCatEvent::PrivateMessage(event) => self
-                .queue
-                .try_enqueue(self.mapper.map_private(event)?)
+                .admission
+                .try_admit(self.mapper.map_private(event)?)
                 .map_err(|error| NapCatError::Handler(error.to_string()))?,
             NapCatEvent::GroupMemberIncrease(event) => tracing::info!(
                 group_id = event.group_id,

@@ -30,6 +30,13 @@ pub trait RealtimeSpoolRecoveryStoreT: Send + Sync {
         claimed: &ClaimedLegacyRealtimeSpoolEpoch,
     ) -> Result<(), InboundEventStoreError>;
 
+    /// 延长同一 fencing token 的租约。实现必须复验 token 尚未过期及账号/epoch 归属；
+    /// 过期 token 不得复活。
+    async fn renew_legacy_realtime_spool_epoch(
+        &self,
+        claimed: &ClaimedLegacyRealtimeSpoolEpoch,
+    ) -> Result<(), InboundEventStoreError>;
+
     /// `connected` 周期完成 replay、hook 收敛和 durable checkpoint 后，在一个数据库事务中结束
     /// 该周期、创建或复用 uncertain Gap，并冻结该 Gap 的证据。实现必须在事务内复验账号、
     /// epoch、租约令牌与租约未过期；过期或错误令牌必须 fail-closed。
@@ -66,6 +73,14 @@ mod tests {
         }
 
         async fn finish_legacy_connecting_without_frames(
+            &self,
+            claimed: &ClaimedLegacyRealtimeSpoolEpoch,
+        ) -> Result<(), InboundEventStoreError> {
+            *self.finalized_claim.lock().unwrap() = Some(claimed.clone());
+            Ok(())
+        }
+
+        async fn renew_legacy_realtime_spool_epoch(
             &self,
             claimed: &ClaimedLegacyRealtimeSpoolEpoch,
         ) -> Result<(), InboundEventStoreError> {
