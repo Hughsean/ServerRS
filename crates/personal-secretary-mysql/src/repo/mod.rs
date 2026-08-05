@@ -15,6 +15,7 @@ mod mysql_notification_candidate_producer;
 mod mysql_notification_policy;
 mod mysql_owner_binding;
 mod mysql_recall;
+mod mysql_reconcile;
 mod mysql_response_expectation_control;
 mod mysql_retriever;
 mod mysql_thread_control;

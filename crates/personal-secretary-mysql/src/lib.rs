@@ -39,6 +39,12 @@ pub fn build_mysql_inbound_event_store(db: DatabaseConnection) -> Arc<dyn Person
     Arc::new(repo::MySqlInboundEventStore::new(db))
 }
 
+/// 构造延迟 Reply 修复仓储（unresolved 候选 + 租约/退避簿），供后台修复 Worker 装配。
+/// 与实时入库仓储共享同一 schema 与同一结构体，端口按需裁剪。
+pub fn build_mysql_reply_reconcile_store(db: DatabaseConnection) -> Arc<dyn ReplyReconcileStoreT> {
+    Arc::new(repo::MySqlInboundEventStore::new(db))
+}
+
 /// 构造支持历史回补状态仓储的组合实现：实时入库 + 连续性 + 回补状态。
 /// `lease_secs` 来自 `[backfill]` 配置，用于回补运行续租。返回
 /// `Arc<dyn BackfillStateStoreWithIngestionT>` 以满足用例对统一幂等入口与回补状态的双重需求。

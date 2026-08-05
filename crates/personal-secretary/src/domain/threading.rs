@@ -231,6 +231,14 @@ pub struct ThreadProjectionEvent {
     /// 父消息晚到时，已投影的回复子消息可把父消息拉回同一线程。
     pub reply_child_thread_id: Option<EventThreadId>,
     pub previous_in_conversation: Option<ThreadContextEvent>,
+    /// 父事件所在线程是否为终态（resolved/closed）。
+    /// 终态线程不得自动接纳新 Reply 子事件——子事件必须创建新线程
+    /// （Codex 第四轮复核 #4）。
+    pub reply_parent_thread_is_terminal: bool,
+    /// 子事件所在线程同上的终态判定。
+    pub reply_child_thread_is_terminal: bool,
+    /// previous_in_conversation 所在线程是否为终态，同上不可接纳。
+    pub previous_thread_is_terminal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,22 +320,57 @@ impl DeterministicThreadPlanner {
                 event.conversation.kind.as_str(),
                 event.conversation.id
             );
-            let reply_thread = event
-                .reply_to_event_id
-                .as_ref()
-                .and_then(|id| assigned.get(id.as_str()).cloned())
-                .or_else(|| event.reply_parent_thread_id.clone())
-                .or_else(|| event.reply_child_thread_id.clone());
-            let previous = latest
-                .get(&conversation_key)
-                .cloned()
-                .or_else(|| event.previous_in_conversation.clone())
-                .filter(|previous| {
-                    event
-                        .occurred_at_unix_secs
-                        .saturating_sub(previous.occurred_at_unix_secs)
-                        <= self.policy.same_conversation_window_secs
-                });
+            // 终态线程不得自动接纳新 Reply 子事件（Codex 第四轮复核 #4）。
+            // reply_to_event_id 指向终态线程中的父事件时，子事件必须创建
+            // 新线程——不得通过 reply-child 或 previous 落入任何现有线程
+            // （即使同会话内存在其他 open 线程）。
+            let force_new_thread =
+                event.reply_to_event_id.is_some() && event.reply_parent_thread_is_terminal;
+
+            let reply_thread = if force_new_thread {
+                // 仅批次内 assigned 可用（batch 内父事件刚刚投影，线程仍是
+                // open），跳过 reply-parent（已知终态）、reply-child、previous。
+                event
+                    .reply_to_event_id
+                    .as_ref()
+                    .and_then(|id| assigned.get(id.as_str()).cloned())
+            } else {
+                event
+                    .reply_to_event_id
+                    .as_ref()
+                    .and_then(|id| assigned.get(id.as_str()).cloned())
+                    .or_else(|| {
+                        event
+                            .reply_parent_thread_id
+                            .clone()
+                            .filter(|_| !event.reply_parent_thread_is_terminal)
+                    })
+                    .or_else(|| {
+                        event
+                            .reply_child_thread_id
+                            .clone()
+                            .filter(|_| !event.reply_child_thread_is_terminal)
+                    })
+            };
+            // previous 上下文所在线程为终态或 force_new_thread 时不可纳入候选
+            // （Codex 第四轮复核 #4）。
+            let previous = if force_new_thread {
+                None
+            } else if event.previous_thread_is_terminal {
+                // 仅使用批次内 latest（不跨线程），跳过终态 DB 上下文。
+                latest.get(&conversation_key).cloned()
+            } else {
+                latest
+                    .get(&conversation_key)
+                    .cloned()
+                    .or_else(|| event.previous_in_conversation.clone())
+            }
+            .filter(|previous| {
+                event
+                    .occurred_at_unix_secs
+                    .saturating_sub(previous.occurred_at_unix_secs)
+                    <= self.policy.same_conversation_window_secs
+            });
 
             let (thread_id, creates_thread, root_event_id) = if let Some(thread_id) = reply_thread {
                 let root = event
@@ -349,16 +392,20 @@ impl DeterministicThreadPlanner {
                 )
             };
 
+            // Reply 关系的跳过仅由父线程终态决定，不混入 child-thread 状态
+            // （Codex 第四轮复核 P2-3）。
             if let Some(parent_id) = &event.reply_to_event_id {
-                relations.push(ThreadRelation {
-                    relation_id: ThreadRelationId::generate(),
-                    thread_id: thread_id.clone(),
-                    from_event_id: event.source_event_id.clone(),
-                    to_event_id: parent_id.clone(),
-                    kind: ThreadRelationKind::Reply,
-                    confidence_bps: 10_000,
-                    reason: "structured reply_to_event_id".into(),
-                });
+                if !event.reply_parent_thread_is_terminal {
+                    relations.push(ThreadRelation {
+                        relation_id: ThreadRelationId::generate(),
+                        thread_id: thread_id.clone(),
+                        from_event_id: event.source_event_id.clone(),
+                        to_event_id: parent_id.clone(),
+                        kind: ThreadRelationKind::Reply,
+                        confidence_bps: 10_000,
+                        reason: "structured reply_to_event_id".into(),
+                    });
+                }
             } else if let Some(previous) = &previous {
                 relations.push(ThreadRelation {
                     relation_id: ThreadRelationId::generate(),
@@ -453,6 +500,9 @@ mod tests {
             reply_parent_thread_id: None,
             reply_child_thread_id: None,
             previous_in_conversation: None,
+            reply_parent_thread_is_terminal: false,
+            reply_child_thread_is_terminal: false,
+            previous_thread_is_terminal: false,
         }
     }
 
@@ -533,5 +583,104 @@ mod tests {
             })
             .unwrap();
         assert_ne!(plan.assignments[0].thread_id, plan.assignments[1].thread_id);
+    }
+
+    #[test]
+    fn terminal_parent_forces_new_thread_even_with_open_thread_in_conversation() {
+        // 反例覆盖（Codex 第四轮复核 P1-1）：
+        // 父事件在终态线程 P，同会话内另有 open 线程 D。child 回复父事件
+        // 时必须创建新线程，不得落入 D。
+        let parent = event("parent", "group-1", "alice", 100);
+        let mut child = event("child", "group-1", "bob", 200);
+        child.reply_to_event_id = Some(parent.source_event_id.clone());
+        // 父在一个 closed 线程里。
+        child.reply_parent_thread_id = Some(EventThreadId::new("closed-parent-thread").unwrap());
+        child.reply_parent_thread_is_terminal = true;
+        // DB 中的 previous_in_conversation 指向另一个 open 线程事件。
+        child.previous_in_conversation = Some(ThreadContextEvent {
+            source_event_id: SourceEventId::new("d-event").unwrap(),
+            thread_id: EventThreadId::new("open-thread-d").unwrap(),
+            actor_id: "carol".into(),
+            occurred_at_unix_secs: 150,
+        });
+        // previous 所在线程为 open（非终态）。
+        child.previous_thread_is_terminal = false;
+
+        let plan = planner()
+            .plan(ClaimedThreadProjectionBatch {
+                lease_token: ThreadProjectionLeaseToken::new("lease").unwrap(),
+                events: vec![parent, child],
+            })
+            .unwrap();
+
+        assert_eq!(plan.assignments.len(), 2);
+        // 父事件在批次内 assigned，子通过 assigned 找到父并加入同线程。
+        assert_eq!(
+            plan.assignments[0].thread_id, plan.assignments[1].thread_id,
+            "batch-in parent assigned, child joins same thread"
+        );
+    }
+
+    #[test]
+    fn terminal_parent_outside_batch_forces_new_thread() {
+        // 父事件不在批次内（已在终态线程），child 必须创建新线程。
+        let mut child = event("child", "group-1", "bob", 200);
+        child.reply_to_event_id = Some(SourceEventId::new("parent-outside-batch").unwrap());
+        child.reply_parent_thread_id = Some(EventThreadId::new("closed-parent-thread").unwrap());
+        child.reply_parent_thread_is_terminal = true;
+        // 另有 open 线程事件在 previous。
+        child.previous_in_conversation = Some(ThreadContextEvent {
+            source_event_id: SourceEventId::new("d-event").unwrap(),
+            thread_id: EventThreadId::new("open-thread-d").unwrap(),
+            actor_id: "carol".into(),
+            occurred_at_unix_secs: 150,
+        });
+        child.previous_thread_is_terminal = false;
+
+        let plan = planner()
+            .plan(ClaimedThreadProjectionBatch {
+                lease_token: ThreadProjectionLeaseToken::new("lease").unwrap(),
+                events: vec![child],
+            })
+            .unwrap();
+
+        assert_eq!(plan.assignments.len(), 1);
+        assert!(
+            plan.assignments[0].creates_thread,
+            "父在终态线程时子必须创建新线程，不得落入 previous 的 open 线程"
+        );
+        assert_eq!(plan.relations.len(), 0, "终态父线程不产生 Reply 关系");
+    }
+
+    #[test]
+    fn reply_relation_only_suppressed_by_parent_terminal() {
+        // P2-3：Reply 关系抑制仅由 reply_parent_thread_is_terminal 决定，
+        // 不混入 reply_child_thread_is_terminal。
+        // 构造：父在 open 线程，子（child）回复父，但另一个回复 child 的孙
+        // 事件恰好在终态线程。
+        let parent = event("parent", "group-1", "alice", 100);
+        let mut child = event("child", "group-1", "bob", 200);
+        child.reply_to_event_id = Some(parent.source_event_id.clone());
+        child.reply_parent_thread_id = Some(EventThreadId::new("open-parent-thread").unwrap());
+        child.reply_parent_thread_is_terminal = false;
+        // child 有一个孙事件在终态线程——这不应影响 child→parent 的 Reply 关系。
+        child.reply_child_thread_id = Some(EventThreadId::new("closed-grandchild-thread").unwrap());
+        child.reply_child_thread_is_terminal = true;
+
+        let plan = planner()
+            .plan(ClaimedThreadProjectionBatch {
+                lease_token: ThreadProjectionLeaseToken::new("lease").unwrap(),
+                events: vec![parent, child],
+            })
+            .unwrap();
+
+        assert_eq!(plan.assignments.len(), 2);
+        assert_eq!(plan.assignments[0].thread_id, plan.assignments[1].thread_id);
+        assert!(
+            plan.relations
+                .iter()
+                .any(|r| r.kind == ThreadRelationKind::Reply),
+            "父在 open 线程时 Reply 关系不得被 child-thread 终态抑制"
+        );
     }
 }

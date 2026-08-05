@@ -54,6 +54,14 @@ lease_secs = 60
 retry_initial_ms = 500
 retry_max_ms = 10000
 
+[reply_reconcile]
+enabled = true
+scan_interval_ms = 30000
+batch_size = 100
+lease_secs = 60
+retry_initial_ms = 500
+retry_max_ms = 300000
+
 [thread_semantics]
 enabled = true
 max_events = 50

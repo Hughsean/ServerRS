@@ -32,7 +32,8 @@ pub use whitelist::WhitelistConfig;
 pub use workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
     HealthConfig, IngestionConfig, MemoryCandidatesConfig, NotificationPolicyConfig,
-    RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
+    RecallWalConfig, ReplyReconcileConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    ThreadSemanticsConfig,
 };
 
 /// 配置加载或校验错误。

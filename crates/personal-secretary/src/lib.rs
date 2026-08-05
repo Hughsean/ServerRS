@@ -29,6 +29,8 @@ mod notification_policy_service;
 mod planner_service;
 #[path = "application/recall_service.rs"]
 mod recall_service;
+#[path = "application/reconcile_service.rs"]
+mod reconcile_service;
 #[path = "application/response_expectation_control_service.rs"]
 mod response_expectation_control_service;
 #[path = "application/retriever_service.rs"]
@@ -209,6 +211,10 @@ pub use recall::{
     RecallEventId, RecallFailureKind, RecallKind, TombstoneRecord, TombstoneStatus,
 };
 pub use recall_service::{RecallStoreError, RecallStoreT, RecallUseCase};
+pub use reconcile_service::{
+    ClaimedPendingReply, ReconcileBudget, ReconcilePendingRepliesUseCase, ReconcileRunOutcome,
+    ReplyReconcileStoreT,
+};
 pub use response_expectation_control_service::{
     ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
     ResponseExpectationControlStoreT, ResponseExpectationControlUseCase,

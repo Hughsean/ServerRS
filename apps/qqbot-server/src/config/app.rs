@@ -25,7 +25,8 @@ use super::whitelist::WhitelistConfig;
 use super::workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
     HealthConfig, IngestionConfig, MemoryCandidatesConfig, NotificationPolicyConfig,
-    RecallWalConfig, ThreadLinksConfig, ThreadProjectionConfig, ThreadSemanticsConfig,
+    RecallWalConfig, ReplyReconcileConfig, ThreadLinksConfig, ThreadProjectionConfig,
+    ThreadSemanticsConfig,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +38,8 @@ pub struct AppConfig {
     pub ingestion: IngestionConfig,
     #[serde(default)]
     pub backfill: BackfillConfig,
+    #[serde(default)]
+    pub reply_reconcile: ReplyReconcileConfig,
     #[serde(default)]
     pub thread_projection: ThreadProjectionConfig,
     #[serde(default)]
@@ -244,6 +247,7 @@ impl AppConfig {
         }
         // 回补预算业务不变量在领域层集中定义，配置层调用其校验。
         self.backfill.budget()?;
+        self.reply_reconcile.validate()?;
         self.thread_projection.validate()?;
         self.thread_semantics.validate()?;
         self.thread_links.validate()?;

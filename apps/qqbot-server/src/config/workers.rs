@@ -450,6 +450,78 @@ impl FollowUpConfig {
     }
 }
 
+/// 延迟 Reply 后台修复配置（EVT-007-MSG，Codex 复核 P1-1）。
+///
+/// 实时路径（父事件重放/回补）解析 pending Reply 是最好情况；若父事件永不重放，
+/// 本 Worker 按有界批次领取 unresolved 子事件并重试解析（租约 + 指数退避，
+/// 跨重启安全），保证待解析关系不会永久滞留。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReplyReconcileConfig {
+    pub enabled: bool,
+    /// 扫描间隔（毫秒）。
+    pub scan_interval_ms: u64,
+    /// 单轮最多领取的候选数。
+    pub batch_size: u32,
+    /// 候选租约时长（秒）。
+    pub lease_secs: u64,
+    pub retry_initial_ms: u64,
+    pub retry_max_ms: u64,
+}
+
+impl Default for ReplyReconcileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_interval_ms: 30_000,
+            batch_size: 100,
+            lease_secs: 60,
+            retry_initial_ms: 500,
+            retry_max_ms: 300_000,
+        }
+    }
+}
+
+impl ReplyReconcileConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_ms < 1_000 || self.scan_interval_ms > 3_600_000 {
+            return Err(ConfigError::Invalid(
+                "reply_reconcile.scan_interval_ms must be between 1000 and 3600000".into(),
+            ));
+        }
+        if !(1..=1000).contains(&self.batch_size) {
+            return Err(ConfigError::Invalid(
+                "reply_reconcile.batch_size must be between 1 and 1000".into(),
+            ));
+        }
+        if !(1..=3600).contains(&self.lease_secs) {
+            return Err(ConfigError::Invalid(
+                "reply_reconcile.lease_secs must be between 1 and 3600".into(),
+            ));
+        }
+        if self.retry_initial_ms == 0
+            || self.retry_max_ms < self.retry_initial_ms
+            || self.retry_max_ms > 3_600_000
+        {
+            return Err(ConfigError::Invalid(
+                "reply_reconcile retry delays must be positive, max >= initial, and max <= 3600000"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 构造领域层有界预算。
+    pub fn budget(&self) -> personal_secretary::ReconcileBudget {
+        personal_secretary::ReconcileBudget::new(
+            self.batch_size,
+            self.lease_secs,
+            self.retry_initial_ms,
+            self.retry_max_ms,
+        )
+    }
+}
+
 /// 统一 Notification Policy 求值 Worker 配置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]

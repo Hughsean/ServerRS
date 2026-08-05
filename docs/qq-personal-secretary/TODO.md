@@ -1,6 +1,6 @@
 # 个人 QQ 智能秘书执行看板
 
-> 最后整理：2026-08-04（Asia/Shanghai）
+> 最后整理：2026-08-05（Asia/Shanghai）
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
@@ -15,10 +15,14 @@
 ## 0. 当前状态
 
 - 当前分支：`claude/qqbot-evt006-ingestion-backpressure-v1`。
-- 当前状态：`EVT-006` 已完成；个人秘书核心与 QQBot 组合根已按洋葱方向重构并完成本地分批提交，
-  尚未 push/merge/stash。
+- 当前状态：`EVT-007-MSG`（消息 Reply 子先父后解析）已完成实现、五轮 Codex 复核
+  （15 个 P1 + 4 个 P2）全部修复，聚焦 MySQL 20/20 与既有回归全绿（Docker
+  `serverrs-qqbot-mysql`）；提交授权已获得，随本提交收口。`EVT-007-NONMSG` 未开始
+  （见切片列表）。个人秘书核心与
+  QQBot 组合根已按洋葱方向重构并完成本地分批提交，尚未 push/merge/stash。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一切片：`EVT-007` Reply 子事件先于父事件到达时的跨重启解析与幂等回填。
+- 下一切片：按 `EVT-009` 继续（EVT-007-MSG 已覆盖仅 NapCat 群/私聊消息 Reply 的延迟解析
+  闭环，EVT-007-NONMSG 等待真实业务样本）。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -285,7 +289,30 @@
     增强场景真实证明数据库中途失败整批零 SourceEvent、恢复后全部 Accepted、再次重放全部
     Duplicate 且事实数不增加；随机 schema 已精确清理。常规门禁为 personal-secretary 248/248、
     qqbot-server 131 passed（2 ignored）、workspace boundaries 19/19。
-- [ ] `EVT-007` 补 Reply 子先父后解析的跨重启场景，以及确有业务需求的非消息 Reply 路径。
+- [x] `EVT-007-MSG` 消息 Reply 子事件先于父事件到达时，支持持久化、跨重启、幂等的关系解析。
+  仅覆盖 NapCat 群消息与私聊消息（本切片）；不得把文件、卡片、通知等非消息 Reply 混入。
+  实现收敛于 `personal-secretary-mysql`（`resolve_reply` 会话/通道校验 +
+  `resolve_pending_replies_in_txn` 事务内回填与线程投影失效 + 提交后自愈 + Duplicate 父
+  重放修复 + 后台修复 Worker），新增增量迁移 `20260804_qqbot_reply_reconcile.sql`
+ （含候选队列表 + 结构验证 + 幂等回填；索引 inline，未分拆）。
+  五轮 Codex 复核共修复 15 个 P1 + 4 个 P2：
+  ① reconcile fencing：query_one_raw FOR UPDATE 复验 + fenced_clear 检查 DELETE RI=1；
+  ② 终态空线程 semantic_state DELETE 先于语义派生撤消；
+  ③ Relation 清理覆盖入边方向（`r.from_event_id OR r.to_event_id`）；
+  ④ 终态父线程拒绝自动接纳 Reply 子事件（planner 新增 `reply_parent_thread_is_terminal`/
+  `reply_child_thread_is_terminal`/`previous_thread_is_terminal` 三级终态判定）；
+  ⑤ 候选队列重构（`secretary_reply_reconcile_claims` 为唯一真实候选来源，主路径同一事务
+  INSERT 候选行、解析后 DELETE，reconcile claim 查询从此表出发不再扫描全部 source_events）；
+  ⑥ ReconcileCandidateRow.attempts 类型修正（i64→u32 匹配 INT UNSIGNED）；
+  ⑦ 迁移结构校验改为连接池无关的条件性多行标量子查询，错误列类型/索引顺序/FK 删除规则
+  均产生真实 MySQL 1242 错误，迁移加载器只在整文件成功后登记 migration record；
+  ⑧ 终态线程语义测试使用真实 semantic store 领取批次，Reply 解析后旧补丁提交必须 LeaseLost
+  且零派生写入。
+  `evt007_delayed_reply_mysql` 20 场景全绿（场景 20 同时覆盖正确迁移重放与列/索引/FK 三条
+  fail-closed 负向重放）。
+  所有 6 个回归套件全绿，Docker 验证完成。
+- [ ] `EVT-007-NONMSG` 非消息 Reply（文件、卡片、通知等）子先父后解析。必须先取得真实业务
+  样本并明确引用模型，不得在本切片顺带实现。
 - [ ] `EVT-009` 明确正文静态加密/密钥轮换/脱敏边界；继续执行
   `normal/local_only/envelope_only/never_long_term` 保存策略。
 - [ ] `EVT-010` 将 NapCat HTTP 能力收敛为只读业务端口；编译边界持续禁止

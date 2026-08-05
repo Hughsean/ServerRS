@@ -985,3 +985,67 @@ model = "model"
     .unwrap();
     assert!(loopback.llm_endpoint_verified_loopback());
 }
+
+#[test]
+fn default_reply_reconcile_configuration_loads_and_validates() {
+    let config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+"#,
+    )
+    .unwrap();
+
+    assert!(config.reply_reconcile.enabled);
+    assert_eq!(config.reply_reconcile.batch_size, 100);
+    assert_eq!(config.reply_reconcile.lease_secs, 60);
+    // 默认配置必须能构造出合法的有界预算。
+    let budget = config.reply_reconcile.budget();
+    assert_eq!(budget.batch_size, 100);
+    assert!(budget.retry_max_ms >= budget.retry_initial_ms);
+}
+
+#[test]
+fn reply_reconcile_unknown_field_is_rejected() {
+    let error = toml::from_str::<AppConfig>(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[reply_reconcile]
+unexpected = 1
+"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
+fn reply_reconcile_bounds_are_rejected() {
+    let error = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[reply_reconcile]
+batch_size = 0
+"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("reply_reconcile"));
+}

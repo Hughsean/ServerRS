@@ -11,6 +11,10 @@
   2026-08-03 已完成 QQBot Schema Baseline v1、项目/承诺记忆闭环、旧测试基础设施清理、
   CMD-009（跨阶段有界状态、长期事件检索排序、冲突驱动回读）、CMD-010（Owner 越权、
   提示注入与跨会话指代歧义防线）与 EVT-006（入站微批处理、可观察背压）。
+- **本轮（EVT-007-MSG）**：NapCat 群/私聊消息 Reply 子先父后解析已完成五轮复核。持久化
+  unresolved 候选、事务内父子回填、Duplicate/Backfill 共用幂等入口、后台 reconciliation、
+  线程投影与语义租约 fencing、终态线程边界及迁移 fail-closed 均已闭合；非消息 Reply 继续
+  拆分为等待真实样本的 `EVT-007-NONMSG`。Docker 隔离 MySQL 20/20 与常规门禁全绿，随本提交收口。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -68,6 +72,82 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-05 15:31（Asia/Shanghai）`：EVT-007-MSG 第五轮 Codex 复核完成。迁移原先用
+  `SELECT CASE ... HAVING` 返回零行，执行器会忽略结果并错误登记成功；现改为单语句条件性多行
+  标量子查询，结构错误稳定触发 MySQL 1242，并严格复验列类型/默认值/字符集/排序规则、索引
+  列顺序及 FK `ON DELETE CASCADE`。测试迁移加载器新增返回错误的入口，只在整文件成功后写
+  migration record；场景 20 覆盖正确重放及错误列、错误索引顺序、错误 FK 规则三条负向重放。
+  场景 17 改用真实 semantic store 领取批次，Reply 解析撤销租约后旧补丁提交返回 LeaseLost，
+  且不产生派生行。最终 `evt007_delayed_reply_mysql` 20/20、personal-secretary 251/251、
+  qqbot-server 138 passed（2 ignored）、三 crate 严格 Clippy、workspace all-targets check、fmt 与
+  diff 检查全绿；本轮随机 schema 残留为零。未连接真实 QQ/NapCat，随同一原子提交收口。
+
+- `2026-08-04 18:06（Asia/Shanghai）`：EVT-007-MSG 延迟 Reply 子先父后解析闭环。仅 NapCat
+  群/私聊消息 Reply；非消息 Reply 拆为 EVT-007-NONMSG（待真实样本）。`resolve_reply` 增加
+  会话与通道校验（跨账号/跨会话同名消息 ID fail-closed）；父事件入库事务内
+  `resolve_pending_replies_in_txn` 幂等回填 pending 子事件并失效旧线程投影（复用既有
+  `te.source_event_id IS NULL` 重领取机制）；Duplicate 父重放同样修复 pending；提交后自愈
+  短事务覆盖并发交错窗口；无需新表/新迁移。新增 `evt007_delayed_reply_mysql` 聚焦测试
+  8/8 真实通过（详见 [`history/2026-08.md`](history/2026-08.md) 同时间条目），随机 schema
+  已精确清理；EVT-006 1/1、CMD-010 2/2、participant_causality 2/2 回归未破坏。
+  未连接真实 QQ/NapCat；未提交，工作树等待 Codex 复核；未 push/merge/stash。
+
+- `2026-08-04 20:20（Asia/Shanghai）`：按 Codex 复核意见完成 EVT-007-MSG 的 4 个 P1 修复与
+  5 类补充测试并全量复验。P1：解析时同步撤销投影领取（旧计划 commit 判 LeaseLost）、变空
+  旧线程标记 closed（authority=system_recovery）并清除语义批处理状态与租约（不删除线程
+  行）、提交后自愈失败只记日志保持已提交契约（unresolved 等待父重放可恢复）、投影失效
+  只删 reply/same_conversation_window/same_actor_within_conversation_window 边。补充测试：
+  领取后提交前解析的 LeaseLost 并发、旧线程 closed/root/语义/租约清理断言、自愈失败契约
+  （故障注入 trigger + 恢复后父重放）、非 Reply 证据边保留、真实 `BackfillGapUseCase`
+  路径（父经回补统一入口到达并解析）。修复测试暴露的 `COUNT(*)` 有符号 BIGINT 解码缺陷
+  （`CountRow` 改为 `i64`）。`evt007_delayed_reply_mysql` 12/12 真实通过；EVT-006 1/1、
+  CMD-010 2/2、participant_causality 2/2、cmd009 2/2、action_planner 6/6、
+  project_commitment 3/3 回归通过；personal-secretary 248/248、qqbot-server 131/131
+  （2 ignored）、受影响 3 crate 严格 Clippy、fmt、git diff --check 通过；数字人侧
+  ai-core/digital-human-server 的预先存在 Clippy 错误与本次无关。
+  未连接真实 QQ/NapCat；未提交，工作树等待 Codex 复核；未 push/merge/stash。
+
+- `2026-08-04 22:30（Asia/Shanghai）`：按 Codex 第二轮复核（4 个 P1 + 1 个 P2）完成修复并
+  全量复验。P1-1 持久化 reconciliation：新增增量迁移 `20260804_qqbot_reply_reconcile.sql`
+  （`secretary_reply_reconcile_claims` 候选退避簿）+ 领域层
+  `ReplyReconcileStoreT`/`ReconcilePendingRepliesUseCase`（有界领取、租约/fencing、
+  SKIP LOCKED、指数退避、跨重启）+ MySQL 实现 + `qqbot-server` 后台修复 Worker
+  （`[reply_reconcile]` 配置段，FakeRunner 单测覆盖生命周期/错误恢复/退避）+ 主路径
+  解析联动清理退避簿；自愈失败日志只记 error_code/stage/计数（P2）。P1-2 空线程关闭
+  原子化：FOR SHARE 锁读状态 → 条件 UPDATE（status=读值 AND NOT EXISTS 成员）检查影响
+  行数，投影 commit 对目标线程 FOR UPDATE 复验（终态线程拒绝新成员）。P1-3 已提交语义
+  派生撤销：claims→withdrawn、decisions→revoked、open questions→dismissed、
+  expectations→dismissed（同一事务，保留审计）。P1-4 保留边迁移：投影 commit 把事件
+  的 explicit_project_id/file_version 边 `thread_id` 迁移到事件当前线程。`evt007_
+  delayed_reply_mysql` 15/15 真实通过（新增：reconcile 退避/有界/跨路径清理、终态线程
+  不写虚假历史且拒绝新成员、语义派生撤销），EVT-006 1/1、CMD-010 2/2、
+  participant_causality 2/2、cmd009 2/2、action_planner 6/6、project_commitment 3/3
+  回归通过；personal-secretary 248/248、qqbot-server 138/138（2 ignored，含新增
+  reply_reconcile 配置与 Worker 单测）、受影响 3 crate 严格 Clippy、fmt、workspace
+  all-targets check、git diff --check 全部通过；数字人侧 Clippy 错误仍为预先存在。
+  未连接真实 QQ/NapCat；未提交，工作树等待 Codex 复核；未 push/merge/stash。
+
+- `2026-08-05 12:00（Asia/Shanghai）`：按 Codex 第三轮复核（6 个 P1 + 2 个 P2）完成修复。
+  **P1-1 reconcile fencing**：`ClaimedPendingReply` 新增 `lease_token`；处理时先 FOR UPDATE
+  锁定退避簿行并复验 `lease_token = ? AND lease_expires_at >= now()`（RI=0 放弃）；所有完成/
+  退避写入以 token + 未过期条件锁定并检查影响行数，旧 Worker 不能覆盖新租约。
+  **P1-2 终态线程派生撤销**：`close_empty_thread_in_txn` 分离状态迁移与派生撤销——终态线程
+  跳过关闭 + 历史写入，但仍在锁内确认空成员后调用 `revoke_semantic_derivations_in_txn`
+  撤销 claims/decisions/questions/expectations；场景 14 注入 claim 验证 resolved 线程上
+  claim 标记 withdrawn。**P1-3 投影遇终态整体失败**：`commit_projection` 对终态目标由
+  `continue` 改为 `rollback + return Err(LeaseLost)`，不再部分提交 plan 的 relations 或
+  清除 claims（事件由下次领取重新规划）。**P1-4 跨线程关系删除**：`resolve_pending_replies_in_txn`
+  删除子事件所有出边（移除 `relation_kind IN (...)` 限制），移除 `commit_projection` 中的
+  关系迁移代码；场景 11 断言 explicit_project_id 与其它出边一并删除。
+  **P1-5 pending 扫描索引**：新迁移 `20260805_qqbot_reconcile_index_fk.sql` 添加
+  `idx_secretary_source_reply_pending (reply_to_event_id, received_at)`。
+  **P1-6 shutdown 热轮询**：`shutdown_changed` 由 `yield_now()` 改为 `sleep(100ms)`。
+  **P2-1 退避簿 FK**：同迁移添加 `ON DELETE CASCADE` FK。**P2-2 退避修正**：reconcile store
+  退避公式改为 `1 << (attempts-1)`（首败=initial，非 initial*2）；`retry_max_ms` 加上界
+  3,600,000；`chrono::Duration::milliseconds` 前安全截断 i64。单元测试 248+138 全部通过；
+  Docker Desktop 不可用时 MySQL 15 场景未重跑，其余门禁（fmt/clippy/check/diff --check）全绿。
+  未连接真实 QQ/NapCat；未提交，工作树等待 Codex 复核；未 push/merge/stash。
 
 - `2026-08-04 14:54（Asia/Shanghai）`：继续完成 `qqbot-server` 洋葱边界重构。源文件按
   `application/adapters/infrastructure` 物理分层并用显式模块路径保持现有 crate API；QQ Open
@@ -539,6 +619,25 @@
 - `2026-07-25 12:47（Asia/Shanghai）`：并发优雅关闭、可编程运行时入口与真实 E2E 验收骨架。
 - `2026-07-25 10:44（Asia/Shanghai）`：QQBot 环境变量覆盖改为四类窄宏，消除配置解析样板代码。
 - `2026-07-25 10:35（Asia/Shanghai）`：移除 NapCat Token 配置，HTTP 13990/WebSocket 13991 无 Token 组合验收通过。
+- `2026-08-05 21:00（Asia/Shanghai）`：EVT-007-MSG 第四轮复核反馈修复（P1×2 + P2×3）。
+  P1-1：终态父线程强制新建线程——`force_new_thread` 标志跳过 reply-child + previous，
+  父在终态线程时子事件不入同会话其他 open 线程；新增 3 条领域单测（含反例覆盖）。
+  P1-2：场景 17 改为预置 resolved 线程（走终端分支而非 open→closed）；场景 19 新增
+  过期令牌测试；场景 20 新增完整 migration 重放（删 migration record + 重执行 DDL +
+  INSERT IGNORE）。P2-3：Reply 关系抑制条件只检查 `reply_parent_thread_is_terminal`，
+  不混入 child-thread 状态。P2-4：迁移增加 INFORMATION_SCHEMA 结构验证（列/索引/FK
+  三重检查 fail-closed）。P2-5：TODO.md 移除已删除的 20260805 迁移引用，更新工作树
+  状态。领域测试 251 全绿，evt007 20/20，回归 5/5，全部门禁通过。未提交。
+
+- `2026-08-05 19:30（Asia/Shanghai）`：EVT-007-MSG 第四轮 Codex 复核修复完成。6 项强制修复：
+  ① reconcile fencing `query_one_raw` FOR UPDATE + `fenced_clear` 检查 RI；
+  ② 终态空线程先 DELETE `secretary_thread_semantic_state` 再撤消派生；
+  ③ Relation 清理覆盖入边方向（`from_event_id OR to_event_id`）；
+  ④ 终态父线程拒绝 Reply 子事件（planner 三级终态判定 + 新线程）；
+  ⑤ 候选队列重构（`secretary_reply_reconcile_claims` 为唯一真实候选源）；
+  ⑥ `ReconcileCandidateRow.attempts` 类型修正。`evt007_delayed_reply_mysql` 20/20，
+  6 个回归套件全绿，Docker 验证完成。详见 `history/2026-08.md`。未提交。
+
 - `2026-07-24 22:42（Asia/Shanghai）`：Ollama Qwen3 实机语义与提示注入边界验收通过。
 - 旧事件仅有日期证据，保留原日期，不伪造分钟。
 

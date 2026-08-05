@@ -28,6 +28,7 @@ use crate::qq_open_platform::{
 };
 use crate::qq_open_platform_mysql::{MySqlGatewaySessionStore, MySqlRawEventStore};
 use crate::recall::RecallWorkerHandle;
+use crate::reply_reconcile_worker::ReplyReconcileHandle;
 use crate::runtime::RuntimeError;
 use crate::thread_links::ThreadLinksHandle;
 use crate::thread_projection::ThreadProjectionHandle;
@@ -44,6 +45,7 @@ const WORKER_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_
 /// 回收已启动的任务，避免资源泄漏。正常运行结束时同样调用该方法。
 pub(crate) struct WorkerHandles {
     pub(crate) backfill: Option<BackfillHandle>,
+    pub(crate) reply_reconcile: Option<ReplyReconcileHandle>,
     pub(crate) thread_projection: Option<ThreadProjectionHandle>,
     pub(crate) thread_semantics: Option<ThreadSemanticsHandle>,
     pub(crate) thread_links: Option<ThreadLinksHandle>,
@@ -64,6 +66,7 @@ impl WorkerHandles {
     pub(crate) fn new() -> Self {
         Self {
             backfill: None,
+            reply_reconcile: None,
             thread_projection: None,
             thread_semantics: None,
             thread_links: None,
@@ -85,6 +88,9 @@ impl WorkerHandles {
     pub(crate) async fn shutdown_all(self) {
         let mut workers = RuntimeWorkers::new();
         if let Some(handle) = self.backfill {
+            workers.push(handle.signal_and_detach());
+        }
+        if let Some(handle) = self.reply_reconcile {
             workers.push(handle.signal_and_detach());
         }
         if let Some(handle) = self.thread_projection {

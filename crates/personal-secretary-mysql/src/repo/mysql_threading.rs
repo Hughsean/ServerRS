@@ -101,22 +101,25 @@ ON DUPLICATE KEY UPDATE
 
         let mut events = Vec::with_capacity(rows.len());
         for row in rows {
-            let reply_parent_thread_id = optional_thread_id(
+            let (reply_parent_thread_id, reply_parent_thread_is_terminal) =
+                optional_thread_context(
+                    &transaction,
+                    r#"SELECT te.thread_id AS value, et.status
+FROM secretary_effective_thread_events te
+JOIN secretary_event_threads et ON et.thread_id = te.thread_id
+WHERE te.source_event_id = ?"#,
+                    row.reply_to_event_id.as_deref(),
+                )
+                .await?;
+            let (reply_child_thread_id, reply_child_thread_is_terminal) = optional_thread_context(
                 &transaction,
-                "SELECT thread_id AS value FROM secretary_effective_thread_events WHERE source_event_id = ?",
-                row.reply_to_event_id.as_deref(),
-            )
-            .await?;
-            let reply_child_thread_id = optional_thread_id(
-                &transaction,
-                r#"
-SELECT te.thread_id AS value
+                r#"SELECT te.thread_id AS value, et.status
 FROM secretary_source_events child
 JOIN secretary_effective_thread_events te ON te.source_event_id = child.source_event_id
+JOIN secretary_event_threads et ON et.thread_id = te.thread_id
 WHERE child.reply_to_event_id = ?
 ORDER BY child.occurred_at_unix_secs ASC, child.source_event_id ASC
-LIMIT 1
-"#,
+LIMIT 1"#,
                 Some(&row.source_event_id),
             )
             .await?;
@@ -125,10 +128,12 @@ LIMIT 1
                 r#"
 SELECT previous.source_event_id,
        te.thread_id,
+       et.status AS thread_status,
        previous.actor_platform_id,
        previous.occurred_at_unix_secs
 FROM secretary_source_events previous
 JOIN secretary_effective_thread_events te ON te.source_event_id = previous.source_event_id
+JOIN secretary_event_threads et ON et.thread_id = te.thread_id
 WHERE previous.conversation_id = ?
   AND (previous.occurred_at_unix_secs < ?
        OR (previous.occurred_at_unix_secs = ? AND previous.source_event_id < ?))
@@ -151,6 +156,10 @@ LIMIT 1
             .map_err(store_error)?
             .map(previous_context)
             .transpose()?;
+            let (previous, previous_thread_is_terminal) = match previous {
+                Some((ctx, term)) => (Some(ctx), term),
+                None => (None, false),
+            };
 
             events.push(ThreadProjectionEvent {
                 source_event_id: SourceEventId::new(row.source_event_id)?,
@@ -170,6 +179,9 @@ LIMIT 1
                 reply_parent_thread_id,
                 reply_child_thread_id,
                 previous_in_conversation: previous,
+                reply_parent_thread_is_terminal,
+                reply_child_thread_is_terminal,
+                previous_thread_is_terminal,
             });
         }
 
@@ -255,6 +267,31 @@ VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?)
                     ))
                     .await
                     .map_err(store_error)?;
+            } else {
+                // 并发防护（Codex 复核 P1-2）：Reply 解析事务可能在并发关闭旧线程
+                // （条件 UPDATE 锁定线程行）。这里先以 FOR UPDATE 锁定线程行并复验
+                // 状态：已关闭/终态的线程不得再接纳成员，否则产生"closed 但非空"。
+                // 锁持有到本事务提交，与解析事务的关闭 UPDATE 互斥，两种顺序都收敛
+                // （先锁则成员先落库、关闭复验失败；后锁则读到 closed 跳过插入，
+                // 事件保持未投影状态，claim 删除后由下次领取重新规划到父线程）。
+                let status = StatusRow::find_by_statement(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "SELECT status FROM secretary_event_threads WHERE thread_id = ? FOR UPDATE",
+                    [assignment.thread_id.as_str().into()],
+                ))
+                .one(&transaction)
+                .await
+                .map_err(store_error)?;
+                if matches!(
+                    status.as_ref().map(|row| row.status.as_str()),
+                    None | Some("closed" | "resolved")
+                ) {
+                    // 目标线程已终态或消失：整批计划作废，不清除 claims（事件由下次
+                    // 领取重新规划到父线程）。部分提交会导致已迁出事件永远无法投影
+                    // 且 relation 写入指向不存在或终态线程（Codex 第三轮复核 P1-3）。
+                    let _ = transaction.rollback().await;
+                    return Err(InboundEventStoreError::LeaseLost);
+                }
             }
 
             transaction
@@ -363,35 +400,54 @@ WHERE lease_token = ?
     }
 }
 
-async fn optional_thread_id<C: ConnectionTrait>(
+/// 查询线程上下文（thread_id + status），用于判定父/子线程是否已终态。
+/// 返回 `(Option<EventThreadId>, bool)` 其中 bool 为终态标记
+/// （Codex 第四轮复核 #4）。
+async fn optional_thread_context<C: ConnectionTrait>(
     db: &C,
     sql: &str,
     event_id: Option<&str>,
-) -> Result<Option<EventThreadId>, InboundEventStoreError> {
+) -> Result<(Option<EventThreadId>, bool), InboundEventStoreError> {
     let Some(event_id) = event_id else {
-        return Ok(None);
+        return Ok((None, false));
     };
-    ValueRow::find_by_statement(Statement::from_sql_and_values(
+    let row = ThreadContextRow::find_by_statement(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
         sql,
         [event_id.into()],
     ))
     .one(db)
     .await
-    .map_err(store_error)?
-    .map(|row| EventThreadId::new(row.value))
-    .transpose()
-    .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))
+    .map_err(store_error)?;
+    match row {
+        Some(row) => {
+            let thread_id = EventThreadId::new(row.value)
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+            let is_terminal = is_terminal_thread_status(&row.status);
+            Ok((Some(thread_id), is_terminal))
+        }
+        None => Ok((None, false)),
+    }
 }
 
-fn previous_context(row: PreviousEventRow) -> Result<ThreadContextEvent, InboundEventStoreError> {
-    Ok(ThreadContextEvent {
-        source_event_id: SourceEventId::new(row.source_event_id)?,
-        thread_id: EventThreadId::new(row.thread_id)
-            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
-        actor_id: row.actor_platform_id,
-        occurred_at_unix_secs: row.occurred_at_unix_secs,
-    })
+fn is_terminal_thread_status(status: &str) -> bool {
+    matches!(status, "resolved" | "closed")
+}
+
+fn previous_context(
+    row: PreviousEventRow,
+) -> Result<(ThreadContextEvent, bool), InboundEventStoreError> {
+    let is_terminal = is_terminal_thread_status(&row.thread_status);
+    Ok((
+        ThreadContextEvent {
+            source_event_id: SourceEventId::new(row.source_event_id)?,
+            thread_id: EventThreadId::new(row.thread_id)
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+            actor_id: row.actor_platform_id,
+            occurred_at_unix_secs: row.occurred_at_unix_secs,
+        },
+        is_terminal,
+    ))
 }
 
 fn parse_source(value: &str) -> Result<MessageSource, InboundEventStoreError> {
@@ -432,13 +488,17 @@ struct ProjectionEventRow {
 struct PreviousEventRow {
     source_event_id: String,
     thread_id: String,
+    thread_status: String,
     actor_platform_id: String,
     occurred_at_unix_secs: i64,
 }
 
+/// 线程上下文查询结果（thread_id + status），用于判定父/子线程是否已终态
+/// （Codex 第四轮复核 #4）。
 #[derive(Debug, FromQueryResult)]
-struct ValueRow {
+struct ThreadContextRow {
     value: String,
+    status: String,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -449,4 +509,9 @@ struct CountRow {
 #[derive(Debug, FromQueryResult)]
 struct AccountIdRow {
     id: u64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct StatusRow {
+    status: String,
 }

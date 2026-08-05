@@ -8,11 +8,13 @@ use std::sync::Arc;
 use personal_secretary::{
     BackfillGapUseCase, ConservativeMemoryCandidateExtractor, ConservativeThreadSemanticExtractor,
     DeterministicThreadPlanner, DeterministicThreadPolicy, DirectorySyncUseCase,
-    MemoryCandidateExtractorT, MemoryCandidateUseCase, SourceAccountRef, ThreadLinkUseCase,
-    ThreadProjectionUseCase, ThreadSemanticExtractorT, ThreadSemanticUseCase,
+    MemoryCandidateExtractorT, MemoryCandidateUseCase, ReconcilePendingRepliesUseCase,
+    SourceAccountRef, ThreadLinkUseCase, ThreadProjectionUseCase, ThreadSemanticExtractorT,
+    ThreadSemanticUseCase,
 };
 use personal_secretary_mysql::{
-    build_mysql_backfill_store, build_mysql_memory_candidate_store, build_mysql_thread_link_store,
+    build_mysql_backfill_store, build_mysql_memory_candidate_store,
+    build_mysql_reply_reconcile_store, build_mysql_thread_link_store,
     build_mysql_thread_projection_store, build_mysql_thread_semantic_store,
 };
 use qqbot::napcat::NapCatApiClient;
@@ -23,6 +25,7 @@ use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
 use crate::llm::{LlmMemoryCandidateExtractor, LlmThreadSemanticExtractor, OpenAiCompatibleClient};
 use crate::memory_candidates::spawn_memory_candidates_worker;
+use crate::reply_reconcile_worker::spawn_reply_reconcile_worker;
 use crate::runtime::RuntimeError;
 use crate::thread_links::spawn_thread_links_worker;
 use crate::thread_projection::spawn_thread_projection_worker;
@@ -202,6 +205,27 @@ pub(crate) async fn assemble_thread_workers(
         handles.backfill = Some(handle);
     } else {
         tracing::info!("历史回补已禁用（backfill.enabled=false）");
+    }
+
+    // 装配延迟 Reply 修复：若父事件永不重放，后台按退避周期领取 unresolved
+    // 候选并重试解析（Codex 复核 P1-1），保证待解析关系不会永久滞留。
+    if config.reply_reconcile.enabled {
+        let reconcile_store = build_mysql_reply_reconcile_store(db.clone());
+        let use_case = Arc::new(ReconcilePendingRepliesUseCase::new(
+            reconcile_store,
+            config.reply_reconcile.budget(),
+        ));
+        let handle = spawn_reply_reconcile_worker(use_case, config.reply_reconcile.clone());
+        tracing::info!(
+            batch_size = config.reply_reconcile.batch_size,
+            lease_secs = config.reply_reconcile.lease_secs,
+            retry_initial_ms = config.reply_reconcile.retry_initial_ms,
+            retry_max_ms = config.reply_reconcile.retry_max_ms,
+            "延迟 Reply 修复 Worker 已装配，与实时消息接收解耦"
+        );
+        handles.reply_reconcile = Some(handle);
+    } else {
+        tracing::info!("延迟 Reply 修复已禁用（reply_reconcile.enabled=false）");
     }
 
     // B4 账号会话目录同步：只读 NapCat 列表 API -> 目录快照 -> MySQL。

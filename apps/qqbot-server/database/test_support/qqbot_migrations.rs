@@ -50,6 +50,17 @@ const PRE_V1_MIGRATIONS: &[&str] = &[
 ];
 
 pub async fn apply_qqbot_migrations(db: &DatabaseConnection, migrations_dir: &std::path::Path) {
+    try_apply_qqbot_migrations(db, migrations_dir)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// 应用全部待执行迁移，并在某个增量 SQL 失败时保留错误供负向测试断言。
+/// 迁移记录只在对应 SQL 文件全部成功后写入。
+pub async fn try_apply_qqbot_migrations(
+    db: &DatabaseConnection,
+    migrations_dir: &std::path::Path,
+) -> Result<(), String> {
     let _guard = MIGRATION_LOAD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -65,7 +76,7 @@ pub async fn apply_qqbot_migrations(db: &DatabaseConnection, migrations_dir: &st
     ensure_baseline(db, database_dir).await;
 
     let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(migrations_dir)
-        .unwrap_or_else(|error| panic!("failed to read migrations directory: {error}"))
+        .map_err(|error| format!("failed to read migrations directory: {error}"))?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
@@ -76,13 +87,14 @@ pub async fn apply_qqbot_migrations(db: &DatabaseConnection, migrations_dir: &st
         let migration_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or_else(|| panic!("migration name is not valid UTF-8: {}", path.display()));
+            .ok_or_else(|| format!("migration name is not valid UTF-8: {}", path.display()))?;
         if migration_is_applied(db, migration_name).await {
             continue;
         }
-        apply_sql_file(db, &path).await;
-        record_migration(db, migration_name).await;
+        try_apply_sql_file(db, &path).await?;
+        try_record_migration(db, migration_name).await?;
     }
+    Ok(())
 }
 
 async fn ensure_baseline(db: &DatabaseConnection, database_dir: &std::path::Path) {
@@ -117,22 +129,36 @@ async fn ensure_baseline(db: &DatabaseConnection, database_dir: &std::path::Path
 }
 
 async fn apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) {
+    try_apply_sql_file(db, path)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+async fn try_apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) -> Result<(), String> {
     let sql = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let stripped = sql
         .lines()
         .map(|line| line.split_once("--").map_or(line, |(prefix, _)| prefix))
         .collect::<Vec<_>>()
         .join("\n");
-    for statement in stripped
+    for (statement_index, statement) in stripped
         .split(';')
         .map(str::trim)
         .filter(|statement| !statement.is_empty())
+        .enumerate()
     {
         db.execute_raw(Statement::from_string(DatabaseBackend::MySql, statement))
             .await
-            .unwrap_or_else(|error| panic!("migration {} failed: {error}", path.display()));
+            .map_err(|error| {
+                format!(
+                    "migration {} statement {} failed: {error}",
+                    path.display(),
+                    statement_index + 1
+                )
+            })?;
     }
+    Ok(())
 }
 
 async fn ensure_migration_records_table(db: &DatabaseConnection) {
@@ -150,13 +176,20 @@ async fn ensure_migration_records_table(db: &DatabaseConnection) {
 }
 
 async fn record_migration(db: &DatabaseConnection, migration_name: &str) {
+    try_record_migration(db, migration_name)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+async fn try_record_migration(db: &DatabaseConnection, migration_name: &str) -> Result<(), String> {
     db.execute_raw(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
         "INSERT INTO qqbot_test_schema_migrations (migration_name) VALUES (?)",
         [migration_name.into()],
     ))
     .await
-    .unwrap_or_else(|error| panic!("failed to record migration {migration_name}: {error}"));
+    .map_err(|error| format!("failed to record migration {migration_name}: {error}"))?;
+    Ok(())
 }
 
 async fn migration_is_applied(db: &DatabaseConnection, migration_name: &str) -> bool {

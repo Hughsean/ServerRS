@@ -44,6 +44,8 @@ mod qq_open_platform;
 mod qq_open_platform_mysql;
 #[path = "infrastructure/recall.rs"]
 mod recall;
+#[path = "application/reply_reconcile_worker.rs"]
+mod reply_reconcile_worker;
 pub mod runtime;
 #[path = "application/thread_links.rs"]
 mod thread_links;
