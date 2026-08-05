@@ -14,14 +14,19 @@
 
 ## 0. 当前状态
 
-- 当前分支：`Main`；`EVT-007-MSG` 原子提交 `1b4778f` 已从
-  `claude/qqbot-evt006-ingestion-backpressure-v1` 快进合并，尚未推送远端。
+- 当前分支：`Main`；`GAP-003-A/B/C` 已由独立提交 `7278677` 收口，尚未推送远端。
 - 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。历史分页使用三态 continuation，
   逐页身份/锚点/连续性校验；请求方向与响应页序证据分离，NapCat 在 `ENV-004` 完成前只能
   有界恢复候选事件，不能完成 Scope。真实分页方向、空页原因与 PacketBackend 行为仍属于
-  `EXTERNAL ENV-004`；当前工作树尚未提交。
+  `EXTERNAL ENV-004`。
+- 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A` 已完成并通过 Codex 独立复核。领域/application
+  契约已覆盖 typed admission/receipt/fatal、WAL 恢复资格、连续 checkpoint、账号作用域遗留 epoch
+  领取及 typed lease fencing；当前仍没有文件 WAL、runtime 或 MySQL Spool 实现。普通消息 Spool
+  只承诺本地 durable receipt；启动以完整认证 WAL 帧恢复，遗留 `connected` epoch 必须先
+  replay/hook/checkpoint，再以 MySQL 原子事务结束 epoch 并创建 Gap。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：提交 `GAP-003-A/B/C` 后按 `GAP-007` 继续；`EVT-007-NONMSG` 等待真实业务样本，
+- 下一步：先提交已复核的 `GAP-007-IMPL-A`，再进入 `GAP-007-IMPL-B` 文件适配器切片；不得提前
+  接入 WebSocket runtime 或新增 MySQL Spool 迁移。`EVT-007-NONMSG` 等待真实业务样本，
   `EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
@@ -336,8 +341,23 @@
   `message_seq` 原样传递，身份错误与底层响应详情脱敏。Codex 独立验证：领域 262/262、
   `qqbot-server` 142 passed（2 ignored）、QQBot 55 单元 + 10 fake HTTP + 2 heartbeat、
   workspace boundaries 23/23、GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过。
-- [ ] `GAP-007` 仅评估“普通消息实时入站”的本地磁盘 Spool。Recall Spool 已完成，不得把两者
-  混写为同一任务；若引入，必须先定义加密、容量、锁、恢复和健康告警。
+- [x] `GAP-007-A` 完成普通消息状态与失效模型：运行期 `DurablySpooled` 不是平台 ACK 或跨重启
+  恢复证据；重启依据完整认证 WAL 帧，当前 transport 吞掉 handler 错误并继续连接。
+- [x] `GAP-007-B` 完成 bounded admission、blocking writer、运行期 receipt、WAL-based recovery、
+  Heartbeat 公平性、全局损坏 fail-closed、稳定 hook idempotency key、512 MiB、Windows `sync_all`
+  和崩溃收敛的遗留 epoch 恢复契约。
+- [x] `GAP-007-C` 决策为 **GO，Codex 独立复核通过；尚未实现**。详见
+  [`gap-007-realtime-ingestion-spool-decision.md`](specs/gap-007-realtime-ingestion-spool-decision.md)。
+- [x] `GAP-007-IMPL-A` 完成 typed admission/durable receipt/fatal、WAL 恢复资格、checkpoint
+  eligibility 与遗留 epoch 分阶段恢复端口。Codex 复核补齐账号作用域领取、typed lease token
+  fencing、受控构造与紧凑枚举布局；Recall/Artifact 稳定效果键、恢复顺序和端口传递均有单元测试。
+  `personal-secretary` 270/270、严格 Clippy、all-targets check、架构边界 23/23 与 diff 检查通过。
+- [ ] `GAP-007-IMPL-B` 实现独立 AEAD WAL、512 MiB 总预算、单一 blocking writer、锁、恢复、compact
+  和 Windows 同步协议；不得接入 WebSocket runtime。
+- [ ] `GAP-007-IMPL-C` 接入 reader/Heartbeat、bounded admission、fatal 传播、MySQL replay、运行期
+  Gap 重试、启动恢复、健康快照和有界关闭。
+- [ ] `GAP-007-IMPL-D` 完成 writer 阻塞、receipt 前崩溃、关闭 deadline、尾部撕裂、完整帧损坏、
+  遗留 epoch、预算、MySQL 离线、幂等 effect 与 Windows 同步点的故障注入验证。
 - [ ] `GAP-008` 分别演练电脑关机/休眠、NapCat 离线和 MySQL 离线；属于需要环境配合的部分移入
   `EXTERNAL-TEST`，本地可完成的故障注入仍可先做。
 

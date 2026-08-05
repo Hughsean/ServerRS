@@ -5,7 +5,7 @@
 
 ## 当前阶段
 
-- 主干分支：`Main`；EVT-007-MSG 原子提交 `1b4778f` 及其前置 QQBot 开发线已快进合并，尚未
+- 主干分支：`Main`；GAP-003-A/B/C 独立提交 `7278677` 及其前置 QQBot 开发线已收口，尚未
   推送远端。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
 - 当前开发分支：`Main`。
@@ -21,13 +21,18 @@
   OneBot 原始响应和旧 `NapCatApiClient` 均不再进入公共 API。fake HTTP 覆盖全部 action、参数、
   1 MiB 流式限流、超时与错误脱敏，架构测试约束消费者最小能力和写 action 禁区。Codex 独立
   复核修复私有 action 枚举的严格 Clippy 告警后，全部受影响门禁通过；无数据库或外部系统操作。
-- **本轮（GAP-003-A/B/C，未提交）**：回补契约改为固定“新到旧”与
+- **GAP-003-A/B/C（已提交 `7278677`）**：回补契约改为固定“新到旧”与
   `Next` / `ProvenHistoryStart` / `UnprovenStop` 三态证据；用例在写入前校验账号、
   会话、锚点、单页唯一性、单锚点重叠和 continuation，冻结边界只以幂等入口
   `Duplicate` 为到达证据且不写入页内更旧消息。Codex 复核进一步分离请求方向与响应页序
   证据：NapCat 在外部验证前可有界恢复候选，但不能完成 Scope 或据页内位置跳过事件。
   NapCat 空页与 OwnerControl 只产生 `UnprovenStop`，错误详情脱敏。无数据库迁移；Rust 门禁、
   GAP-003 MySQL 1/1 与 EVT-007 MySQL 20/20 通过，未连接真实 NapCat。
+- **本轮（GAP-007-A/B/C，已通过）**：普通消息本地磁盘 Spool 的架构决策经三轮 Codex 复核收口。
+  receipt 只驱动运行期 replay，启动恢复以完整认证 WAL 帧为准；pending Gap 不能只驻留内存。
+  遗留 `connected` epoch 必须保持可写完成 replay、hook 收敛与耐久 checkpoint，再由 MySQL 事务结束
+  epoch、创建 Gap 和冻结证据；文件与数据库之间采用崩溃收敛协议，不宣称跨资源原子。遗留
+  `connecting` epoch 有帧时 fail-closed。A/B/C 已完成，建立未完成的 IMPL-A/B/C/D；本轮只有 Markdown。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -85,6 +90,25 @@
 | 2026-08-01～ | 上线前 TODO 连续收口 | [2026-08 归档](history/2026-08.md) |
 
 ## 最近事件
+
+- `2026-08-05 23:03（Asia/Shanghai）`：`GAP-007-IMPL-A` Codex 独立复核完成。直接修复恢复端口
+  缺少账号作用域与 fencing 的 P1：领取改为显式接收 `SourceAccountRef` 并返回携带 typed lease
+  token 的 claim，`connecting`/`connected` 收口只能传递该 claim，后续 MySQL 实现必须事务内复验
+  账号、epoch、token 与租约未过期。同步封闭 admission、恢复帧和 replay progress 的关键字段，
+  修复大枚举内联完整消息造成的 Clippy 告警。`personal-secretary` all-targets check、严格 Clippy、
+  270/270 单元测试、架构边界 23/23、fmt 与 diff 检查通过；无 Docker/MySQL 或外部系统操作。
+- `2026-08-05 22:50（Asia/Shanghai）`：开始 `GAP-007-IMPL-A`，只在
+  `personal-secretary` 新增协议中立的实时 Spool 领域/application 契约与纯单元测试：typed
+  admission/recoverable/fatal、仅运行期的 `DurableSpoolReceipt`、完整认证 WAL 帧的启动 replay
+  资格、连续 checkpoint 前缀、Recall 关联键与确定性 `ArtifactId` 的效果收敛，以及遗留
+  `connecting`/`connected` epoch 的分阶段恢复端口。恢复端口明确只保证数据库内 epoch/Gap
+  原子收口，不声称文件 checkpoint 跨资源原子。未实现文件 WAL、AEAD、锁、compact、runtime、
+  MySQL 适配器、迁移或配置；未执行编译、Clippy、测试、Docker/MySQL、网络或真实 QQ/NapCat，
+  等待 Codex 独立复核与门禁执行。
+- `2026-08-05 22:37（Asia/Shanghai）`：GAP-007-A/B/C 最终规格经 Codex 独立复核通过，结论为
+  **GO，尚未实现**。最终修复遗留 epoch 顺序：旧 `connected` epoch 先完成 WAL replay、hook 收敛和
+  耐久 checkpoint，再以 MySQL 原子事务结束 epoch 并创建 Gap；跨文件/MySQL 流程只承诺崩溃收敛。
+  TODO 已建立未完成的 IMPL-A/B/C/D；未修改或验证任何生产 Spool。
 
 - `2026-08-05 21:17（Asia/Shanghai）`：GAP-003-A/B/C Codex 独立复核完成。修复未验证的
   NapCat 响应方向被误当完整性证据的问题，新增 `UntrustedPageOrder` 与独立来源能力门；

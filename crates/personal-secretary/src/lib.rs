@@ -27,6 +27,8 @@ mod memory_service;
 mod notification_policy_service;
 #[path = "application/planner_service.rs"]
 mod planner_service;
+#[path = "application/realtime_spool_service.rs"]
+mod realtime_spool_service;
 #[path = "application/recall_service.rs"]
 mod recall_service;
 #[path = "application/reconcile_service.rs"]
@@ -74,6 +76,8 @@ mod memory_candidate;
 mod notification_policy;
 #[path = "domain/planner.rs"]
 mod planner;
+#[path = "domain/realtime_spool.rs"]
+mod realtime_spool;
 #[path = "domain/recall.rs"]
 mod recall;
 #[path = "domain/retriever.rs"]
@@ -206,6 +210,7 @@ pub use planner::{
 pub use planner_service::{
     ActionCheckpointStoreFactoryT, PlannerRunReport, PlannerUseCase, PlannerUseCaseError,
 };
+pub use realtime_spool_service::RealtimeSpoolRecoveryStoreT;
 pub use recall::{
     ClaimedRecallEvent, InvalidationTarget, RecallCorrelationKey, RecallError, RecallEvent,
     RecallEventId, RecallFailureKind, RecallKind, TombstoneRecord, TombstoneStatus,
@@ -302,6 +307,15 @@ pub use backfill::{
 pub use backfill_service::{
     BackfillGapUseCase, BackfillStateStoreT, BackfillStateStoreWithIngestionT,
     HistoryBackfillSourceT,
+};
+pub use realtime_spool::{
+    ClaimedLegacyRealtimeSpoolEpoch, ConnectedEpochRecoveryStage, DurableSpoolReceipt,
+    LegacyRealtimeSpoolEpoch, LegacyRealtimeSpoolRecoveryPlan, RealtimeSpoolAdmission,
+    RealtimeSpoolAdmissionId, RealtimeSpoolAdmissionResult, RealtimeSpoolCheckpointEligibility,
+    RealtimeSpoolCheckpointPrefix, RealtimeSpoolError, RealtimeSpoolFatal, RealtimeSpoolFatalKind,
+    RealtimeSpoolGenerationId, RealtimeSpoolHookKey, RealtimeSpoolRecordId,
+    RealtimeSpoolRecoveryFrame, RealtimeSpoolRecoveryLeaseToken, RealtimeSpoolRejection,
+    RealtimeSpoolReplayProgress, RecoveredRealtimeSpoolFrame, checkpointable_prefix,
 };
 
 /// Graph CheckpointStore 的内存实现（仅测试用；生产用 MySQL 实现）。
