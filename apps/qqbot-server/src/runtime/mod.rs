@@ -140,43 +140,6 @@ async fn run_with_shutdown(
         tracing::info!("统一通知策略求值 Worker 已禁用（notification_policy.enabled=false）");
     }
 
-    // P0 修复：Action Planner 必须在 QQ Open Platform 之前装配，
-    // 因为 OwnerCommand 入站时需要 PlannerUseCase 创建 action_run。
-    let action_planner_use_case = match bootstrap::action_planner::assemble_action_planner(
-        &mut handles,
-        infra.db.clone(),
-        &config,
-        infra.account.clone(),
-    )
-    .await
-    {
-        Ok(use_case) => use_case,
-        Err(error) => {
-            tracing::error!(error = %error, "Action Planner 装配失败，正在回收已启动的任务");
-            // 评审 P1：直接 await 回收，保证 Worker 真正关闭后再返回错误，
-            // 不用 spawn 后立即返回（无法保证回收完成）。shutdown_all 有全局 deadline 上限。
-            let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
-            handles_to_clean.shutdown_all().await;
-            return Err(error);
-        }
-    };
-
-    if let Err(error) = bootstrap::workers::assemble_official_platform(
-        &mut handles,
-        &config,
-        &infra.db,
-        &follow_up_use_case,
-        &infra.account,
-        &action_planner_use_case,
-    )
-    .await
-    {
-        tracing::error!(error = %error, "QQ 开放平台装配失败，正在回收已启动的任务");
-        let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
-        handles_to_clean.shutdown_all().await;
-        return Err(error);
-    }
-
     // 后续装配（线程投影/语义/关联/回补）可能失败，失败时回收已启动的 Worker。
     if let Err(error) = bootstrap::thread_pipeline::assemble_thread_workers(
         &mut handles,
@@ -282,19 +245,19 @@ async fn run_with_shutdown(
         None
     };
 
+    let health_aggregator = std::sync::Arc::new(
+        crate::health_runtime::build_runtime_health_aggregator_with_spools(
+            std::sync::Arc::clone(&health_state),
+            std::sync::Arc::clone(&recall_spool_telemetry),
+            realtime_spool.as_ref().map(|spool| spool.telemetry()),
+            config.health.cache_ttl_secs,
+            config.health.worker_success_stale_secs,
+            Some(std::sync::Arc::clone(&ingestion_metrics)),
+        ),
+    );
     if config.health.enabled {
-        let aggregator = std::sync::Arc::new(
-            crate::health_runtime::build_runtime_health_aggregator_with_spools(
-                std::sync::Arc::clone(&health_state),
-                std::sync::Arc::clone(&recall_spool_telemetry),
-                realtime_spool.as_ref().map(|spool| spool.telemetry()),
-                config.health.cache_ttl_secs,
-                config.health.worker_success_stale_secs,
-                Some(std::sync::Arc::clone(&ingestion_metrics)),
-            ),
-        );
         let (health_reader, health_handle) = crate::health_runtime::spawn_health_log_worker(
-            aggregator,
+            std::sync::Arc::clone(&health_aggregator),
             std::sync::Arc::clone(&health_state),
             infra.db.clone(),
             infra.account.clone(),
@@ -309,6 +272,42 @@ async fn run_with_shutdown(
         );
     } else {
         tracing::info!("B7 健康快照已禁用（health.enabled=false）");
+    }
+
+    // Action Planner 在官方通道之前装配；健康聚合器已包含 WebSocket、Worker、Gap、Recall
+    // Spool、实时 Spool 和入站指标，Owner 状态查询可读取同一份有界快照。
+    let action_planner_use_case = match bootstrap::action_planner::assemble_action_planner(
+        &mut handles,
+        infra.db.clone(),
+        &config,
+        infra.account.clone(),
+        Some(std::sync::Arc::clone(&health_aggregator)),
+    )
+    .await
+    {
+        Ok(use_case) => use_case,
+        Err(error) => {
+            tracing::error!(error = %error, "Action Planner 装配失败，正在回收已启动的任务");
+            let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
+            handles_to_clean.shutdown_all().await;
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = bootstrap::workers::assemble_official_platform(
+        &mut handles,
+        &config,
+        &infra.db,
+        &follow_up_use_case,
+        &infra.account,
+        &action_planner_use_case,
+    )
+    .await
+    {
+        tracing::error!(error = %error, "QQ 开放平台装配失败，正在回收已启动的任务");
+        let handles_to_clean = std::mem::replace(&mut handles, WorkerHandles::new());
+        handles_to_clean.shutdown_all().await;
+        return Err(error);
     }
 
     run_connection_loop(

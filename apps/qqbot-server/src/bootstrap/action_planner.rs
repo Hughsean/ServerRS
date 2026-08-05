@@ -47,6 +47,7 @@ pub(crate) async fn assemble_action_planner(
     db: DatabaseConnection,
     config: &AppConfig,
     account: SourceAccountRef,
+    health: Option<Arc<personal_secretary::HealthAggregator>>,
 ) -> Result<Option<Arc<PlannerUseCase>>, RuntimeError> {
     if !config.action_planner.enabled {
         tracing::info!("Action Planner 已禁用（action_planner.enabled=false）");
@@ -123,26 +124,28 @@ pub(crate) async fn assemble_action_planner(
     let thread_link_review = Arc::new(ThreadLinkReviewUseCase::new(build_mysql_thread_link_store(
         db.clone(),
     )));
-    let use_case = Arc::new(
-        PlannerUseCase::new(
-            action_store,
-            planner,
-            placeholder_checkpoint,
-            config.action_planner.lease_secs,
-        )
-        .with_retriever(retriever)
-        .with_notification_policy(notification_policy)
-        .with_agenda(agenda)
-        .with_memory(memory)
-        .with_thread_control(thread_control)
-        .with_follow_up_control(follow_up_control)
-        .with_response_expectation_control(response_expectation_control)
-        .with_memory_candidate(memory_candidate)
-        .with_memory_candidate_control(memory_candidate_control)
-        .with_thread_link_review(thread_link_review)
-        .with_loopback(is_loopback)
-        .with_checkpoint_store_factory(build_mysql_action_checkpoint_store_factory(db)),
-    );
+    let mut planner_use_case = PlannerUseCase::new(
+        action_store,
+        planner,
+        placeholder_checkpoint,
+        config.action_planner.lease_secs,
+    )
+    .with_retriever(retriever)
+    .with_notification_policy(notification_policy)
+    .with_agenda(agenda)
+    .with_memory(memory)
+    .with_thread_control(thread_control)
+    .with_follow_up_control(follow_up_control)
+    .with_response_expectation_control(response_expectation_control)
+    .with_memory_candidate(memory_candidate)
+    .with_memory_candidate_control(memory_candidate_control)
+    .with_thread_link_review(thread_link_review)
+    .with_loopback(is_loopback)
+    .with_checkpoint_store_factory(build_mysql_action_checkpoint_store_factory(db));
+    if let Some(health) = health {
+        planner_use_case = planner_use_case.with_health_aggregator(health);
+    }
+    let use_case = Arc::new(planner_use_case);
     let handle = spawn_action_planner_worker(Arc::clone(&use_case), config.action_planner.clone());
     tracing::info!(
         lease_secs = config.action_planner.lease_secs,

@@ -57,6 +57,11 @@
   Project/Commitment 回归 3/3；领域 286/286、服务器 177 passed/2 ignored、架构 24/24、
   workspace check、严格 Clippy、fmt 和 diff check 全绿。真实 Owner QQ 投递仍是 EXTERNAL，
   未伪造联机验收。
+- **本轮（OPS-001，本地已完成）**：`get_secretary_status` 现在读取与运行时相同的有界
+  `HealthAggregator` 快照，追加 WebSocket、Worker、历史 Gap、Recall/Realtime Spool、入站
+  指标和 MySQL 子系统状态。输出只允许固定名称、四态状态、类型化错误码和有界数值，健康快照
+  中的账号/epoch 字段不会进入 Owner 文本；未启用健康 Worker 时仍保守显示不确定。新增脱敏、
+  有界输出单测，workspace check、严格 Clippy、fmt 和架构门禁保持通过。
 - **本轮（THR-010，已完成）**：线程逻辑迁移后的旧语义不再永久失效；新增
   `reconfirm_thread_semantics` 类型化 L2 Owner Action 与不可变重新确认边界，事务内复验 OwnerBinding、
   Action lease 和账号/线程归属后清除语义状态，允许 Worker 重新计算。Split 撤销在同一事务内关闭

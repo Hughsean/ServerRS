@@ -91,6 +91,7 @@ pub struct PlannerUseCase {
     store: Arc<dyn ActionStoreT>,
     planner: Arc<dyn crate::ActionPlannerT>,
     retriever: Option<Arc<crate::RetrieverUseCase>>,
+    health: Option<Arc<crate::HealthAggregator>>,
     notification_policy: Option<Arc<crate::NotificationPolicyUseCase>>,
     agenda: Option<Arc<crate::AgendaUseCase>>,
     memory: Option<Arc<crate::MemoryUseCase>>,
@@ -120,6 +121,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            health: None,
             notification_policy: None,
             agenda: None,
             memory: None,
@@ -151,6 +153,12 @@ impl PlannerUseCase {
     /// P0-2 修复：注入 RetrieverUseCase，让 PlanNode 检索数据库证据。
     pub fn with_retriever(mut self, retriever: Arc<crate::RetrieverUseCase>) -> Self {
         self.retriever = Some(retriever);
+        self
+    }
+
+    /// 注入运行期健康聚合器，供 Owner 状态查询读取有界快照。
+    pub fn with_health_aggregator(mut self, health: Arc<crate::HealthAggregator>) -> Self {
+        self.health = Some(health);
         self
     }
 
@@ -234,6 +242,7 @@ impl PlannerUseCase {
             store,
             planner,
             retriever: None,
+            health: None,
             notification_policy: None,
             agenda: None,
             memory: None,
@@ -334,6 +343,9 @@ impl PlannerUseCase {
             claimed.command_source_event_id.clone(),
             claimed.recent_events.clone(),
         );
+        if let Some(health) = &self.health {
+            effect_executor = effect_executor.with_health_aggregator(Arc::clone(health));
+        }
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),
@@ -524,6 +536,9 @@ impl PlannerUseCase {
             claimed.command_source_event_id.clone(),
             claimed.recent_events.clone(),
         );
+        if let Some(health) = &self.health {
+            effect_executor = effect_executor.with_health_aggregator(Arc::clone(health));
+        }
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),

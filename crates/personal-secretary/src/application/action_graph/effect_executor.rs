@@ -12,16 +12,16 @@ use async_trait::async_trait;
 use crate::{
     AccountScopedParticipantRef, AgendaApplyRequest, AgendaError, AgendaItemId, AgendaMutation,
     AgendaUseCase, ConversationMemoryModeInput, EventQuery, FollowUpControlEffectRequest,
-    FollowUpControlStoreError, FollowUpControlUseCase, MemoryCandidateControlEffectRequest,
-    MemoryCandidateControlStoreError, MemoryCandidateControlUseCase, MemoryCandidateUseCase,
-    MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
-    NotificationPolicyEffectRequest, NotificationPolicyUseCase, QueryEffectResultV1,
-    QueryEffectTypedEvent, RecentEventRef, ReferenceContext,
-    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
-    ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
-    SecretaryActionReceipt, SecretaryToolKind, SourceAccountRef, SourceEventId,
-    ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
-    ThreadLinkReviewUseCase,
+    FollowUpControlStoreError, FollowUpControlUseCase, HealthAggregator,
+    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
+    MemoryCandidateControlUseCase, MemoryCandidateUseCase, MemoryDeleteInput, MemoryFact,
+    MemoryFactId, MemoryFactStatus, MemoryUseCase, NotificationPolicyEffectRequest,
+    NotificationPolicyUseCase, QueryEffectResultV1, QueryEffectTypedEvent, RecentEventRef,
+    ReferenceContext, ResponseExpectationControlEffectRequest,
+    ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
+    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SecretaryToolKind,
+    SourceAccountRef, SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError,
+    ThreadControlUseCase, ThreadLinkReviewUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -35,6 +35,7 @@ pub struct SecretaryActionEffectExecutor {
     run_id: ActionRunId,
     lease_token: ActionLeaseToken,
     retriever: Option<Arc<RetrieverUseCase>>,
+    health: Option<Arc<HealthAggregator>>,
     notification_policy: Option<Arc<NotificationPolicyUseCase>>,
     agenda: Option<Arc<AgendaUseCase>>,
     memory: Option<Arc<MemoryUseCase>>,
@@ -65,6 +66,7 @@ impl SecretaryActionEffectExecutor {
             run_id,
             lease_token,
             retriever,
+            health: None,
             notification_policy: None,
             agenda: None,
             memory: None,
@@ -85,6 +87,12 @@ impl SecretaryActionEffectExecutor {
     /// 注入经过运行时配置验证的本地模型标记；默认远程路径 fail-closed。
     pub fn with_loopback(mut self, is_local_loopback: bool) -> Self {
         self.is_local_loopback = is_local_loopback;
+        self
+    }
+
+    /// 注入运行期健康聚合器；Owner 状态查询只读取其有界缓存快照。
+    pub fn with_health_aggregator(mut self, health: Arc<HealthAggregator>) -> Self {
+        self.health = Some(health);
         self
     }
 
@@ -1002,7 +1010,11 @@ impl SecretaryActionEffectExecutor {
                     .secretary_status(&self.account)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                let summary = format_secretary_status(&status);
+                let health = match &self.health {
+                    Some(health) => Some(health.snapshot(self.now_unix_secs).await),
+                    None => None,
+                };
+                let summary = format_secretary_status(&status, health.as_ref());
                 query_effect_json(
                     SecretaryToolKind::GetSecretaryStatus,
                     &summary,
@@ -1756,7 +1768,10 @@ fn format_event_results(results: &[crate::EventSearchResult]) -> String {
     format!("命中 {total} 条{truncation}: {}", parts.join("; "))
 }
 
-fn format_secretary_status(status: &crate::SecretaryStatusView) -> String {
+fn format_secretary_status(
+    status: &crate::SecretaryStatusView,
+    health: Option<&crate::HealthSnapshot>,
+) -> String {
     let continuity = if status.unresolved_gap_count == 0 {
         "无未闭合空窗".to_owned()
     } else {
@@ -1767,7 +1782,7 @@ fn format_secretary_status(status: &crate::SecretaryStatusView) -> String {
             status.earliest_gap_started_at_unix_secs
         )
     };
-    format!(
+    let base = format!(
         "连续性：{continuity}；线程：开放 {}、等待 {}；待办：回复期待 {}、跟进 {}；通知：待求值 {}、待投递 {}、异常 {}",
         status.open_thread_count,
         status.waiting_thread_count,
@@ -1776,7 +1791,33 @@ fn format_secretary_status(status: &crate::SecretaryStatusView) -> String {
         status.pending_evaluation_count,
         status.pending_outbox_count,
         status.failed_outbox_count,
-    )
+    );
+    let Some(health) = health else {
+        return base;
+    };
+    let mut details = Vec::new();
+    for subsystem in health.subsystems.iter().take(12) {
+        let mut detail = format!("{}={}", subsystem.name, subsystem.status.as_str());
+        for (key, value) in subsystem.metrics.iter().take(8) {
+            detail.push_str(&format!(" {key}:{value}"));
+        }
+        if let Some(error) = subsystem.last_error.as_deref() {
+            detail.push_str(" error:");
+            detail.push_str(error);
+        }
+        details.push(detail);
+    }
+    let suffix = format!(
+        "；运行健康：{}；子系统：{}",
+        health.overall_status.as_str(),
+        details.join(", ")
+    );
+    let mut output = format!("{base}{suffix}");
+    if output.chars().count() > 1800 {
+        output = output.chars().take(1790).collect();
+        output.push_str("……");
+    }
+    output
 }
 
 fn format_pending_owner_work(items: &[crate::PendingOwnerWorkItem]) -> String {
@@ -2181,13 +2222,52 @@ fn build_query_effect_json(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::{
-        ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId,
-        ThreadLinkCandidateCursor, ThreadLinkCandidateId, ThreadLinkCandidateStatus,
-        ThreadLinkCandidateView, ThreadLinkSourceExcerpt, ThreadSearchMatchRank,
-        ThreadSearchResult, ThreadStatus, VerifiedActor, VerifiedActorKind,
+        ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId, HealthSnapshot,
+        HealthStatus, SecretaryStatusView, SubsystemHealth, ThreadLinkCandidateCursor,
+        ThreadLinkCandidateId, ThreadLinkCandidateStatus, ThreadLinkCandidateView,
+        ThreadLinkSourceExcerpt, ThreadSearchMatchRank, ThreadSearchResult, ThreadStatus,
+        VerifiedActor, VerifiedActorKind,
     };
+
+    #[test]
+    fn secretary_status_includes_bounded_runtime_health_without_identifiers() {
+        let mut metrics = BTreeMap::new();
+        metrics.insert("queue_depth".into(), 7);
+        let health = HealthSnapshot::new(
+            vec![SubsystemHealth {
+                name: "websocket".into(),
+                status: HealthStatus::Degraded,
+                last_success_at_unix_secs: None,
+                last_error: Some("websocket_disconnected".into()),
+                metrics,
+            }],
+            100,
+        )
+        .with_account_id("account-must-not-be-rendered")
+        .with_connection_epoch_id("epoch-must-not-be-rendered");
+        let status = SecretaryStatusView {
+            unresolved_gap_count: 1,
+            open_gap_count: 1,
+            earliest_gap_started_at_unix_secs: Some(90),
+            open_thread_count: 2,
+            waiting_thread_count: 0,
+            active_response_expectation_count: 0,
+            scheduled_follow_up_count: 0,
+            pending_evaluation_count: 0,
+            pending_outbox_count: 0,
+            failed_outbox_count: 0,
+        };
+        let output = format_secretary_status(&status, Some(&health));
+        assert!(output.contains("运行健康：degraded"));
+        assert!(output.contains("websocket=degraded queue_depth:7"));
+        assert!(!output.contains("account-must-not-be-rendered"));
+        assert!(!output.contains("epoch-must-not-be-rendered"));
+        assert!(output.chars().count() <= 1800);
+    }
 
     #[test]
     fn thread_search_projects_representative_sources_as_typed_events() {

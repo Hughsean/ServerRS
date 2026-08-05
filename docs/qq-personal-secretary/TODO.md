@@ -27,8 +27,9 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `CMD-002` 的 QQ 开放平台真实联机与 Gateway Resume 外部验收。`FUP-007` 本地
-  送达回执、租约 fencing、重试和 `unknown_commit` 已完成；`GAP-008-LOCAL` 已完成；
+- 下一步：继续收口 `CMD-003/CMD-004/CMD-008` 与 `OPS-002..OPS-007` 的本地可验证部分。
+  `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
+  Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
   业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -442,7 +443,9 @@
 
 ## 5. 可观测性与上线强化
 
-- [ ] `OPS-001` 把 WebSocket、Worker、Recall Spool 和 Gap 的安全有界快照并入 Owner 状态查询。
+- [x] `OPS-001` 把 WebSocket、Worker、Recall/Realtime Spool、入站指标和 Gap 的安全有界快照
+  并入 Owner 状态查询；仅展示固定子系统名、四态状态和有界数值，不暴露账号、epoch、路径、
+  正文或凭据。
 - [ ] `OPS-002` 展示回补进度和关键失败原因；日志只允许类型化错误，不输出正文、Token、OpenID、
   数据库 URL、密钥或本地敏感路径。
 - [ ] `OPS-003` 完成待处理事项与线程的分页、跨线程聚合和运行期健康详情。
