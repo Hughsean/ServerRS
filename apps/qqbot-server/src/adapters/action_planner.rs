@@ -111,7 +111,7 @@ get_thread_context, get_event_causal_context, get_participant_context,
 get_participant_context_by_name,
 list_thread_link_candidates,
 confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
-set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
+reconfirm_thread_semantics, set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
 dismiss_response_expectation, dismiss_response_expectations, list_memory_candidates,
 approve_memory_candidate, reject_memory_candidate, list_projects, query_project, list_commitments。
@@ -685,6 +685,17 @@ fn build_action(
                     || PlannerError::InvalidOutput("missing thread_question_id".into()),
                 )?)
                 .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?,
+                reason: raw
+                    .text
+                    .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+            })
+        }
+        "reconfirm_thread_semantics" => {
+            let thread_id = resolve_thread_id(&raw.thread_id, temp_ref_map)?
+                .ok_or_else(|| PlannerError::InvalidOutput("missing thread_id".into()))?;
+            Ok(SecretaryAction::ReconfirmThreadSemantics {
+                thread_id,
                 reason: raw
                     .text
                     .clone()
@@ -1700,6 +1711,7 @@ fn tool_kind_display_name(kind: personal_secretary::SecretaryToolKind) -> &'stat
         ConfirmThreadDecision => "确认线程决策",
         RevokeThreadDecision => "撤销线程决策",
         DismissThreadQuestion => "忽略线程问题",
+        ReconfirmThreadSemantics => "重新确认线程语义",
         SetThreadLifecycle => "设置线程生命周期",
         DismissFollowUp => "忽略跟进",
         SnoozeFollowUp => "推迟跟进",
@@ -2836,6 +2848,36 @@ mod tests {
         // 9. 时间和时区字段存在
         assert_eq!(captured["now_unix_secs"], 1000);
         assert_eq!(captured["timezone"], "Asia/Shanghai");
+    }
+
+    #[tokio::test]
+    async fn reconfirm_thread_semantics_maps_registered_thread_ref() {
+        let mut planner_input = input();
+        planner_input.recent_event_views = vec![event_view(
+            "reconfirm-event",
+            "owner",
+            "迁移后的线程需要重新确认",
+            ContentTrustLevel::Normal,
+        )];
+        let (planner, _client) = planner_with_response(json!({
+            "kind": "proposal",
+            "tool": "reconfirm_thread_semantics",
+            "thread_id": "thread_1",
+            "text": "Owner 已复核迁移后的既有语义",
+            "rationale": "重新确认线程语义",
+            "evidence": ["evt_1", "evt_2"]
+        }));
+        let output = planner.plan(&planner_input).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::ReconfirmThreadSemantics { thread_id, reason } => {
+                    assert_eq!(thread_id.as_str(), "thread-1");
+                    assert_eq!(reason, "Owner 已复核迁移后的既有语义");
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected output: {other:?}"),
+        }
     }
 
     #[tokio::test]

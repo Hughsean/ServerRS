@@ -454,7 +454,15 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         }
         SecretaryAction::ConfirmThreadDecision { .. } => {}
         SecretaryAction::RevokeThreadDecision { reason, .. }
-        | SecretaryAction::DismissThreadQuestion { reason, .. } => {
+        | SecretaryAction::DismissThreadQuestion { reason, .. }
+        | SecretaryAction::ReconfirmThreadSemantics { reason, .. } => {
+            if matches!(action, SecretaryAction::ReconfirmThreadSemantics { .. })
+                && reason.trim().is_empty()
+            {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "thread control reason must not be blank".into(),
+                ));
+            }
             bounded_text("thread control reason", reason, 1, 1_000)?;
         }
         SecretaryAction::SetThreadLifecycle {

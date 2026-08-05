@@ -180,6 +180,69 @@ async fn apply_control<C: ConnectionTrait>(
                 result_ref: format!("未决问题 {} 已忽略", question_id.as_str()),
             })
         }
+        SecretaryAction::ReconfirmThreadSemantics { thread_id, reason } => {
+            let row = lock_thread(db, thread_id.as_str(), account_id).await?;
+            let pending = CountRow::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                r#"SELECT COUNT(*) AS value
+                   FROM secretary_thread_semantic_invalidations invalidation
+                   WHERE invalidation.thread_id = ?
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM secretary_thread_semantic_reconfirmations reconfirmation
+                       WHERE reconfirmation.thread_id = invalidation.thread_id
+                         AND reconfirmation.created_at >= invalidation.created_at
+                     )"#,
+                [thread_id.as_str().into()],
+            ))
+            .one(db)
+            .await
+            .map_err(database_error)?
+            .map(|row| u64::try_from(row.value).unwrap_or_default())
+            .unwrap_or_default();
+            if pending == 0 {
+                return Err(ThreadControlStoreError::InvalidData(
+                    "thread has no pending semantic invalidation to reconfirm".into(),
+                ));
+            }
+            let reconfirmation_id = stable_id("thread-semantic-reconfirmation", &request.effect_id);
+            let inserted = db
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    r#"INSERT INTO secretary_thread_semantic_reconfirmations
+                       (reconfirmation_id, thread_id, command_source_event_id, effect_id, reason)
+                       VALUES (?, ?, ?, ?, ?)"#,
+                    [
+                        reconfirmation_id.into(),
+                        thread_id.as_str().into(),
+                        request.command_source_event_id.as_str().into(),
+                        request.effect_id.clone().into(),
+                        reason.clone().into(),
+                    ],
+                ))
+                .await
+                .map_err(database_error)?;
+            if inserted.rows_affected() != 1 {
+                return Err(ThreadControlStoreError::Database);
+            }
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "DELETE FROM secretary_thread_semantic_state WHERE thread_id = ?",
+                [thread_id.as_str().into()],
+            ))
+            .await
+            .map_err(database_error)?;
+            Ok(AppliedControl {
+                thread_id: thread_id.as_str().to_owned(),
+                target_kind: "thread",
+                target_id: thread_id.as_str().to_owned(),
+                control_kind: "reconfirm_thread_semantics",
+                previous_status: row.status.clone(),
+                current_status: row.status,
+                reason: reason.clone(),
+                result_ref: format!("线程 {} 的语义已重新确认", thread_id.as_str()),
+            })
+        }
         SecretaryAction::SetThreadLifecycle {
             thread_id,
             expected_status,
@@ -558,4 +621,9 @@ struct TargetRow {
 struct QuestionIdRow {
     #[allow(dead_code)]
     question_id: String,
+}
+
+#[derive(FromQueryResult)]
+struct CountRow {
+    value: i64,
 }

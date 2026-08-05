@@ -132,7 +132,8 @@ impl MySqlRetrieverStore {
         // 不得把旧显示名/别名/档案属性当有效事实返回。
         let profile_valid = match &profile {
             Some(profile) if profile.invalidated == 0 => {
-                source_refs_valid(&self.db, account_id, &profile.source_event_ids_json).await?
+                profile_source_refs_valid(&self.db, account_id, &profile.source_event_ids_json)
+                    .await?
             }
             _ => false,
         };
@@ -140,7 +141,7 @@ impl MySqlRetrieverStore {
         // 该建立事件失效（撤回/删除/降级）时显示名必须独立失效。
         let established_valid = match &profile {
             Some(profile) => match profile.established_by_event_id.as_deref() {
-                Some(id) => single_event_valid(&self.db, account_id, id).await?,
+                Some(id) => profile_event_valid(&self.db, account_id, id).await?,
                 None => false,
             },
             None => false,
@@ -1346,7 +1347,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         }
         let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
         let profile = profiles.pop();
-        if event_kind.is_none() {
+        if event_kind.is_none()
+            && profile
+                .as_ref()
+                .is_none_or(|profile| profile.invalidated != 0)
+        {
             return Ok(None);
         }
         // 身份种类优先取档案行（档案键的一部分），无档案时由最近事件恢复。
@@ -1382,7 +1387,11 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let profile =
             load_current_profile_by_kind(&self.db, account_id, identity_kind, actor_id).await?;
         let event_kind = load_actor_kind_from_events(&self.db, account_id, actor_id).await?;
-        if event_kind.is_none() {
+        if event_kind.is_none()
+            && profile
+                .as_ref()
+                .is_none_or(|profile| profile.invalidated != 0)
+        {
             return Ok(None);
         }
         self.participant_context_impl(
@@ -3259,6 +3268,60 @@ async fn single_event_valid(
 ) -> Result<bool, InboundEventStoreError> {
     let json = serde_json::json!([event_id]).to_string();
     source_refs_valid(db, account_id, &json).await
+}
+
+/// 参与者档案保存的是信封级身份观察，因此 envelope_only 来源仍可支撑昵称；
+/// never_long_term、撤回、投影缺失或跨账号来源仍必须使档案 fail-closed。
+async fn profile_event_valid(
+    db: &DatabaseConnection,
+    account_id: u64,
+    event_id: &str,
+) -> Result<bool, InboundEventStoreError> {
+    let json = serde_json::json!([event_id]).to_string();
+    profile_source_refs_valid(db, account_id, &json).await
+}
+
+async fn profile_source_refs_valid(
+    db: &DatabaseConnection,
+    account_id: u64,
+    source_json: &str,
+) -> Result<bool, InboundEventStoreError> {
+    if source_json.trim().is_empty() || source_json == "null" {
+        return Ok(false);
+    }
+    let sources: Vec<String> = serde_json::from_str(source_json).map_err(|error| {
+        InboundEventStoreError::InvalidData(format!("source_event_ids_json decode failed: {error}"))
+    })?;
+    if sources.is_empty() {
+        return Ok(false);
+    }
+    #[derive(Debug, FromQueryResult)]
+    struct ValidityRow {
+        valid: i8,
+    }
+    let row = ValidityRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT NOT EXISTS (
+             SELECT 1 FROM JSON_TABLE(CAST(? AS CHAR), '$[*]'
+                 COLUMNS (sid VARCHAR(191) PATH '$')) jt
+             LEFT JOIN secretary_source_events e
+               ON e.source_event_id = jt.sid AND e.account_id = ?
+             LEFT JOIN secretary_conversations c ON c.id = e.conversation_id
+             LEFT JOIN secretary_message_contents m ON m.source_event_id = jt.sid
+             LEFT JOIN secretary_message_tombstones t
+               ON t.source_event_id = jt.sid AND t.status = 'applied'
+             WHERE e.source_event_id IS NULL
+                OR t.source_event_id IS NOT NULL
+                OR c.memory_mode NOT IN ('normal', 'envelope_only')
+                OR m.content_mode NOT IN ('normal', 'envelope_only')
+                OR m.source_event_id IS NULL
+           ) AS valid"#,
+        [source_json.into(), account_id.into()],
+    ))
+    .one(db)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map(|row| row.valid != 0).unwrap_or(false))
 }
 
 /// 来源有效性（fail-closed）：来源事件消失、已被撤回、正文投影缺失或会话/事件为

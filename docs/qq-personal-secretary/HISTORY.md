@@ -50,6 +50,13 @@
   授权的本地模型开放；会话降级在同一事务内失效语义、线程链接、记忆派生、Planner 租约和草稿。
   领域 285/285、`qqbot-server` 176 passed/2 ignored、架构 24/24，THR-009 及既有 MySQL 回归
   通过；无迁移或 schema 变更。
+- **本轮（THR-010，已完成）**：线程逻辑迁移后的旧语义不再永久失效；新增
+  `reconfirm_thread_semantics` 类型化 L2 Owner Action 与不可变重新确认边界，事务内复验 OwnerBinding、
+  Action lease 和账号/线程归属后清除语义状态，允许 Worker 重新计算。Split 撤销在同一事务内关闭
+  无物理成员且无 active overlay 的空有效线程，并写入 Owner 状态历史；终态与并发边界保持 CAS。
+  迁移包含结构 fail-closed 校验并可安全重放。领域 286/286、`qqbot-server` 177 passed/2 ignored、
+  架构 24/24、THR-010 MySQL 1/1 及 Action Planner、THR-004、THR-005、THR-009、Participant
+  Causality 回归通过；严格 Clippy、workspace check、fmt 与 diff check 全绿。
 - **本轮（THR-002，已完成）**：跨会话候选新增三类强证据：显式文件版本、精确 Forward 引用和
   完整 Rich 载荷摘要。文件版本采用当前文件键指向上一版本键的显式关系，不从文件名、发送者或
   相似正文推断；Forward 键大小写敏感，Rich 摘要覆盖未截断载荷并按 JSON/XML/Card 域分隔。

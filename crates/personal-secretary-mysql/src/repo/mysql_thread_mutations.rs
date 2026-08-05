@@ -503,6 +503,16 @@ impl ThreadMutationStoreT for MySqlThreadMutationStore {
                 "applied mutation has no active logical overlay to revert".into(),
             ));
         }
+        if impact.kind == ThreadMutationKind::Split {
+            close_empty_split_thread(
+                &transaction,
+                input.proposal_id.as_str(),
+                &input.command_source_event_id,
+                &input.reason,
+                &stable_id("thread-mutation-revert-close", input.proposal_id.as_str()),
+            )
+            .await?;
+        }
         refresh_link_hints_and_candidates(&transaction, &impact).await?;
         record_semantic_invalidations(&transaction, &impact, "mutation_reverted").await?;
         transaction.commit().await.map_err(store_error)?;
@@ -706,6 +716,100 @@ async fn record_semantic_invalidations<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Split creates a logical effective thread without physical members. Once its
+/// override is reverted, close that empty evidence row instead of leaving an
+/// open thread in Owner status counts.
+async fn close_empty_split_thread<C: ConnectionTrait>(
+    connection: &C,
+    thread_id: &str,
+    command_source_event_id: &crate::SourceEventId,
+    reason: &str,
+    change_id: &str,
+) -> Result<(), InboundEventStoreError> {
+    let current = connection
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT status FROM secretary_event_threads
+               WHERE thread_id = ? FOR UPDATE"#,
+            [thread_id.into()],
+        ))
+        .await
+        .map_err(store_error)?;
+    let Some(current) = current else {
+        return Ok(());
+    };
+    let status = current
+        .try_get::<String>("", "status")
+        .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+    if status != "open" && status != "waiting" && status != "reopened" {
+        return Ok(());
+    }
+    let members = CountRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"SELECT (
+             (SELECT COUNT(*) FROM secretary_thread_events WHERE thread_id = ?) +
+             (SELECT COUNT(*) FROM secretary_thread_split_overrides
+                WHERE effective_thread_id = ? AND active = TRUE)
+           ) AS value"#,
+        [thread_id.into(), thread_id.into()],
+    ))
+    .one(connection)
+    .await
+    .map_err(store_error)?
+    .map(|row| row.value)
+    .unwrap_or_default();
+    if members != 0 {
+        return Ok(());
+    }
+    let updated = connection
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"UPDATE secretary_event_threads
+               SET status = 'closed'
+               WHERE thread_id = ? AND status = ?
+                 AND NOT EXISTS (SELECT 1 FROM secretary_thread_events
+                                 WHERE thread_id = ?)
+                 AND NOT EXISTS (SELECT 1 FROM secretary_thread_split_overrides
+                                 WHERE effective_thread_id = ? AND active = TRUE)"#,
+            [
+                thread_id.into(),
+                status.clone().into(),
+                thread_id.into(),
+                thread_id.into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+    if updated.rows_affected() != 1 {
+        return Ok(());
+    }
+    connection
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_thread_status_history
+               (change_id, thread_id, from_status, to_status, authority, reason)
+               VALUES (?, ?, ?, 'closed', 'owner_confirmed', ?)"#,
+            [
+                change_id.into(),
+                thread_id.into(),
+                status.into(),
+                format!("{}；{}", reason, "撤销拆分后空线程已关闭").into(),
+            ],
+        ))
+        .await
+        .map_err(store_error)?;
+    connection
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"INSERT INTO secretary_thread_status_sources (change_id, source_event_id)
+               VALUES (?, ?)"#,
+            [change_id.into(), command_source_event_id.as_str().into()],
+        ))
+        .await
+        .map_err(store_error)?;
+    Ok(())
+}
+
 async fn apply_merge<C: ConnectionTrait>(
     connection: &C,
     impact: &ThreadMutationImpact,
@@ -854,6 +958,14 @@ fn parse_status(value: &str) -> Result<ThreadMutationProposalStatus, InboundEven
             "unknown thread mutation status {value}"
         ))),
     }
+}
+
+fn stable_id(namespace: &str, effect_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("{namespace}:{effect_id}").as_bytes(),
+    )
+    .to_string()
 }
 
 #[derive(Debug, FromQueryResult)]

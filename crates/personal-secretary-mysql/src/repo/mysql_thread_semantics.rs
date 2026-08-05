@@ -173,7 +173,10 @@ LIMIT ?
              WHERE decision.thread_id = ? AND decision.status = 'confirmed' \
              AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_invalidations invalidation \
                  WHERE invalidation.thread_id = decision.thread_id \
-                 AND invalidation.created_at >= decision.updated_at) \
+                 AND invalidation.created_at >= decision.updated_at \
+                 AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_reconfirmations reconfirmation \
+                     WHERE reconfirmation.thread_id = invalidation.thread_id \
+                       AND reconfirmation.created_at >= invalidation.created_at)) \
              ORDER BY decision.created_at, decision.decision_id",
             [thread.thread_id.clone().into()],
         ))
@@ -192,7 +195,10 @@ LIMIT ?
              WHERE question.thread_id = ? AND question.status = 'open' \
              AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_invalidations invalidation \
                  WHERE invalidation.thread_id = question.thread_id \
-                 AND invalidation.created_at >= question.updated_at) \
+                 AND invalidation.created_at >= question.updated_at \
+                 AND NOT EXISTS (SELECT 1 FROM secretary_thread_semantic_reconfirmations reconfirmation \
+                     WHERE reconfirmation.thread_id = invalidation.thread_id \
+                       AND reconfirmation.created_at >= invalidation.created_at)) \
              ORDER BY question.created_at, question.question_id",
             [thread.thread_id.clone().into()],
         ))

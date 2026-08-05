@@ -66,6 +66,7 @@ pub enum SecretaryToolKind {
     ConfirmThreadDecision,
     RevokeThreadDecision,
     DismissThreadQuestion,
+    ReconfirmThreadSemantics,
     SetThreadLifecycle,
     DismissFollowUp,
     SnoozeFollowUp,
@@ -174,7 +175,8 @@ impl SecretaryToolKind {
             | Self::DismissResponseExpectation
             | Self::DismissResponseExpectations
             | Self::ApproveMemoryCandidate
-            | Self::RejectMemoryCandidate => SecretaryToolPolicy {
+            | Self::RejectMemoryCandidate
+            | Self::ReconfirmThreadSemantics => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 // v1 没有自动撤销入口；不能向 Owner 暗示完成、关闭或审批可以自动恢复。
@@ -432,6 +434,10 @@ pub enum SecretaryAction {
         question_id: crate::OpenQuestionId,
         reason: String,
     },
+    ReconfirmThreadSemantics {
+        thread_id: crate::EventThreadId,
+        reason: String,
+    },
     SetThreadLifecycle {
         thread_id: crate::EventThreadId,
         expected_status: crate::ThreadStatus,
@@ -607,6 +613,7 @@ impl SecretaryAction {
             Self::ConfirmThreadDecision { .. } => SecretaryToolKind::ConfirmThreadDecision,
             Self::RevokeThreadDecision { .. } => SecretaryToolKind::RevokeThreadDecision,
             Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
+            Self::ReconfirmThreadSemantics { .. } => SecretaryToolKind::ReconfirmThreadSemantics,
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
             Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
             Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,

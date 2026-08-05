@@ -112,6 +112,34 @@ fn owner_work_close_actions_require_confirmation_and_are_not_advertised_as_rever
 }
 
 #[test]
+fn semantic_reconfirmation_is_bounded_l2_owner_control() {
+    let action = SecretaryAction::ReconfirmThreadSemantics {
+        thread_id: crate::EventThreadId::new("thread-1").unwrap(),
+        reason: "Owner 已复核迁移后的线程语义".into(),
+    };
+    let policy = action.kind().policy();
+    assert_eq!(policy.risk, SecretaryRiskLevel::L2Impactful);
+    assert!(policy.requires_confirmation);
+    assert!(!policy.reversible);
+    assert_eq!(
+        proposal(action, Some("reconfirm:thread-1")).action.kind(),
+        SecretaryToolKind::ReconfirmThreadSemantics
+    );
+
+    let error = SecretaryActionProposal::new(
+        SecretaryAction::ReconfirmThreadSemantics {
+            thread_id: crate::EventThreadId::new("thread-1").unwrap(),
+            reason: " ".into(),
+        },
+        "重新确认线程语义",
+        vec![SourceEventId::new("event-1").unwrap()],
+        Some("reconfirm:thread-1".into()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("thread control reason"));
+}
+
+#[test]
 fn working_state_rejects_unbounded_recent_window() {
     let events = (0..=MAX_RECENT_EVENTS)
         .map(|index| RecentEventRef {

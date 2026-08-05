@@ -1688,6 +1688,7 @@ fn is_thread_control_action(action: &SecretaryAction) -> bool {
         SecretaryAction::ConfirmThreadDecision { .. }
             | SecretaryAction::RevokeThreadDecision { .. }
             | SecretaryAction::DismissThreadQuestion { .. }
+            | SecretaryAction::ReconfirmThreadSemantics { .. }
             | SecretaryAction::SetThreadLifecycle { .. }
     )
 }
