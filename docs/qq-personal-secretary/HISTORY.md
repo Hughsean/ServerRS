@@ -58,6 +58,11 @@
   不再只返回计数。复杂指代增加当前/上一条、回复父消息/被回复者、当前线程/线程发起人的有界
   确定性解析，缺少会话或权威因果关系仍 fail-closed 澄清。真实质量样本与隔离 MySQL 覆盖排序、
   字面通配符、账号/隐私隔离及 merge/split 有效投影。
+- **本轮（THR-005，已完成）**：结论修订链新增协议无关的有界 keyset 分页，游标绑定 Thread 并
+  校验反序列化字段，结果返回强类型 Decision ID、置信度、显式 supersedes、微秒创建时间和来源。
+  MySQL 按账号归属与 `(created_at DESC, decision_id DESC)` 读取，不使用 OFFSET、不改写 revision；
+  既有线程索引被原子重建为可重放的分页前缀。隔离 MySQL 证明同微秒稳定排序、三页无重无漏、
+  跨账号/跨线程 fail-closed、迁移重放和读取前后修订快照完全一致。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -116,6 +121,12 @@
 
 ## 最近事件
 
+- `2026-08-06 02:53（Asia/Shanghai）`：`THR-005` 完成。新增绑定 Thread 的强类型修订游标与
+  `1..=50` 页面边界；MySQL 以 `(created_at, decision_id)` 逆序 keyset 分页并强制账号归属，返回
+  confidence、supersedes、创建时间和来源。迁移原子重建既有索引为
+  `(thread_id, created_at, decision_id, status)`，删除迁移记录后重放成功。领域 280/280、
+  `qqbot-server` 175 passed/2 ignored、架构 24/24；THR-005 1/1、Action Planner 6/6、项目承诺
+  3/3 隔离 MySQL 回归通过，严格 Clippy、workspace check、fmt 与 diff check 全绿。
 - `2026-08-06 02:16（Asia/Shanghai）`：`THR-004` 完成。`ThreadSearchResult` 增加代表事件、发送者、
   会话、代表时间、内容策略与封闭相关性等级；MySQL 以有效线程 View 检索，远程/local loopback
   内容边界直接参与 SQL 候选和排序。`SearchEventThreads` 形成 typed observation。复杂指代只对

@@ -1742,7 +1742,7 @@ fn format_thread_context(context: &crate::ThreadContextView) -> String {
     for decision in context.decisions.iter().take(3) {
         let line = format!(
             "\n结论 {}:{} | {}",
-            decision.decision_id,
+            decision.decision_id.as_str(),
             decision.status,
             decision.statement.chars().take(80).collect::<String>()
         );

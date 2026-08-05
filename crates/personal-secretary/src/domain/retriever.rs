@@ -4,11 +4,12 @@
 //! 领域层不依赖 SeaORM、NapCat 或 LLM；复杂查询在基础设施仓储中实现。
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::planner::AgentEventView;
 use crate::{
     ConversationRef, EventThreadId, InboundEventStoreError, MessageRole, RecentEventRef,
-    SourceAccountRef, SourceEventId, ThreadStatus, VerifiedActor,
+    SourceAccountRef, SourceEventId, ThreadDecisionId, ThreadStatus, VerifiedActor,
 };
 
 // ===== 查询与结果类型 =====
@@ -194,10 +195,79 @@ pub struct ThreadClaimSummary {
 /// 已形成或仍在修订的线程结论。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadDecisionSummary {
-    pub decision_id: String,
+    pub decision_id: ThreadDecisionId,
     pub status: String,
     pub statement: String,
+    pub confidence_bps: u16,
+    pub supersedes: Option<ThreadDecisionId>,
+    pub created_at_unix_micros: i64,
     pub source_event_ids: Vec<SourceEventId>,
+}
+
+/// 结论修订分页游标。游标绑定 Thread，禁止跨线程复用；字段私有，调用方只能使用 Store 返回值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ThreadDecisionRevisionCursorWire")]
+pub struct ThreadDecisionRevisionCursor {
+    thread_id: EventThreadId,
+    created_at_unix_micros: i64,
+    decision_id: ThreadDecisionId,
+}
+
+#[derive(Deserialize)]
+struct ThreadDecisionRevisionCursorWire {
+    thread_id: String,
+    created_at_unix_micros: i64,
+    decision_id: String,
+}
+
+impl TryFrom<ThreadDecisionRevisionCursorWire> for ThreadDecisionRevisionCursor {
+    type Error = String;
+
+    fn try_from(value: ThreadDecisionRevisionCursorWire) -> Result<Self, Self::Error> {
+        Self::new(
+            EventThreadId::new(value.thread_id).map_err(|error| error.to_string())?,
+            value.created_at_unix_micros,
+            ThreadDecisionId::new(value.decision_id).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+impl ThreadDecisionRevisionCursor {
+    pub fn new(
+        thread_id: EventThreadId,
+        created_at_unix_micros: i64,
+        decision_id: ThreadDecisionId,
+    ) -> Result<Self, RetrieverError> {
+        if created_at_unix_micros < 0 {
+            return Err(RetrieverError::InvalidData(
+                "decision revision cursor timestamp must be non-negative".into(),
+            ));
+        }
+        Ok(Self {
+            thread_id,
+            created_at_unix_micros,
+            decision_id,
+        })
+    }
+
+    pub fn thread_id(&self) -> &EventThreadId {
+        &self.thread_id
+    }
+
+    pub fn created_at_unix_micros(&self) -> i64 {
+        self.created_at_unix_micros
+    }
+
+    pub fn decision_id(&self) -> &ThreadDecisionId {
+        &self.decision_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadDecisionRevisionPage {
+    pub decisions: Vec<ThreadDecisionSummary>,
+    pub next_cursor: Option<ThreadDecisionRevisionCursor>,
 }
 
 /// 尚未达成一致或仍待回答的问题。
@@ -861,6 +931,15 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         thread_id: &EventThreadId,
     ) -> Result<Option<ThreadContextView>, InboundEventStoreError>;
+
+    /// 按不可变修订记录的创建顺序分页。实现必须使用稳定 keyset，不得 OFFSET 或改写 revision。
+    async fn thread_decision_revisions(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &EventThreadId,
+        cursor: Option<&ThreadDecisionRevisionCursor>,
+        limit: u16,
+    ) -> Result<ThreadDecisionRevisionPage, InboundEventStoreError>;
 
     /// 构建单事件的账号作用域因果上下文（THR-011/THR-012）。
     /// 返回 None 表示该账号下不存在此事件。所有 SQL 强制 `account_id` 过滤；

@@ -234,6 +234,31 @@ impl RetrieverUseCase {
         Ok(self.store.thread_context(account, thread_id).await?)
     }
 
+    pub async fn thread_decision_revisions(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &EventThreadId,
+        cursor: Option<&crate::ThreadDecisionRevisionCursor>,
+        limit: u16,
+    ) -> Result<crate::ThreadDecisionRevisionPage, RetrieverUseCaseError> {
+        if !(1..=50).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "decision revision page limit must be in 1..=50".into(),
+            ));
+        }
+        if let Some(cursor) = cursor
+            && cursor.thread_id() != thread_id
+        {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "decision revision cursor belongs to another thread".into(),
+            ));
+        }
+        Ok(self
+            .store
+            .thread_decision_revisions(account, thread_id, cursor, limit)
+            .await?)
+    }
+
     /// 构建单事件的账号作用域因果上下文（THR-011/THR-012）。
     /// 结果必须先通过有界校验与严格角色语义校验；违例 fail-closed，
     /// 绝不让低置信语义伪装成已确认角色进入调用方。
@@ -674,6 +699,18 @@ mod tests {
         ) -> Result<Option<ThreadContextView>, InboundEventStoreError> {
             Ok(None)
         }
+        async fn thread_decision_revisions(
+            &self,
+            _account: &SourceAccountRef,
+            _thread_id: &EventThreadId,
+            _cursor: Option<&crate::ThreadDecisionRevisionCursor>,
+            _limit: u16,
+        ) -> Result<crate::ThreadDecisionRevisionPage, InboundEventStoreError> {
+            Ok(crate::ThreadDecisionRevisionPage {
+                decisions: Vec::new(),
+                next_cursor: None,
+            })
+        }
         async fn event_causal_context(
             &self,
             _account: &SourceAccountRef,
@@ -807,6 +844,83 @@ mod tests {
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let result = use_case.list_upcoming(&account(), 0).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn decision_revision_paging_rejects_invalid_limits_and_cross_thread_cursor() {
+        let use_case = RetrieverUseCase::new(fake_store(Vec::new()), RetrieverPolicy::default());
+        let thread = EventThreadId::new("thread-a").unwrap();
+        assert!(
+            use_case
+                .thread_decision_revisions(&account(), &thread, None, 0)
+                .await
+                .is_err()
+        );
+        assert!(
+            use_case
+                .thread_decision_revisions(&account(), &thread, None, 51)
+                .await
+                .is_err()
+        );
+
+        let cursor = crate::ThreadDecisionRevisionCursor::new(
+            EventThreadId::new("thread-b").unwrap(),
+            1,
+            crate::ThreadDecisionId::new("decision-b").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            use_case
+                .thread_decision_revisions(&account(), &thread, Some(&cursor), 10)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn decision_revision_cursor_rejects_negative_timestamp() {
+        assert!(
+            crate::ThreadDecisionRevisionCursor::new(
+                EventThreadId::new("thread-a").unwrap(),
+                -1,
+                crate::ThreadDecisionId::new("decision-a").unwrap(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn decision_revision_cursor_deserialization_revalidates_all_fields() {
+        let valid = serde_json::json!({
+            "thread_id": "thread-a",
+            "created_at_unix_micros": 1,
+            "decision_id": "decision-a"
+        });
+        let cursor: crate::ThreadDecisionRevisionCursor =
+            serde_json::from_value(valid).expect("valid cursor");
+        assert_eq!(cursor.thread_id().as_str(), "thread-a");
+
+        for invalid in [
+            serde_json::json!({
+                "thread_id": "",
+                "created_at_unix_micros": 1,
+                "decision_id": "decision-a"
+            }),
+            serde_json::json!({
+                "thread_id": "thread-a",
+                "created_at_unix_micros": -1,
+                "decision_id": "decision-a"
+            }),
+            serde_json::json!({
+                "thread_id": "thread-a",
+                "created_at_unix_micros": 1,
+                "decision_id": ""
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<crate::ThreadDecisionRevisionCursor>(invalid).is_err()
+            );
+        }
     }
 
     fn reference_context(current: &str, recent: &[&str]) -> ReferenceContext {

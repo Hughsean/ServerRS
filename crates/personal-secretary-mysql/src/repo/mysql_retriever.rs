@@ -19,9 +19,10 @@ use crate::{
     ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
     PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
     RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId,
-    ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
-    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem,
-    VerifiedActor, VerifiedActorKind,
+    ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView, ThreadDecisionId,
+    ThreadDecisionRevisionCursor, ThreadDecisionRevisionPage, ThreadDecisionSummary,
+    ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem, VerifiedActor,
+    VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
@@ -822,6 +823,9 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         let decisions = ThreadDecisionRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT d.decision_id, d.status, SUBSTRING(d.statement, 1, 120) AS statement,
+                      d.confidence_bps, d.supersedes_id,
+                      TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', d.created_at)
+                        AS created_at_unix_micros,
                       (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
                        FROM secretary_thread_decision_sources s WHERE s.decision_id = d.decision_id)
                         AS source_event_ids
@@ -867,6 +871,108 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             decisions,
             open_questions,
         }))
+    }
+
+    async fn thread_decision_revisions(
+        &self,
+        account: &SourceAccountRef,
+        thread_id: &EventThreadId,
+        cursor: Option<&ThreadDecisionRevisionCursor>,
+        limit: u16,
+    ) -> Result<ThreadDecisionRevisionPage, InboundEventStoreError> {
+        if !(1..=50).contains(&limit) {
+            return Err(InboundEventStoreError::InvalidData(
+                "decision revision page limit must be in 1..=50".into(),
+            ));
+        }
+        if cursor.is_some_and(|cursor| cursor.thread_id() != thread_id) {
+            return Err(InboundEventStoreError::InvalidData(
+                "decision revision cursor belongs to another thread".into(),
+            ));
+        }
+
+        let account_id = resolve_account_id(&self.db, account).await?;
+        let fetch_limit = u64::from(limit) + 1;
+        let (sql, values) = match cursor {
+            Some(cursor) => (
+                r#"SELECT d.decision_id, d.status, d.statement, d.confidence_bps,
+                          d.supersedes_id,
+                          TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', d.created_at)
+                            AS created_at_unix_micros,
+                          (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
+                           FROM secretary_thread_decision_sources s
+                           WHERE s.decision_id = d.decision_id) AS source_event_ids
+                   FROM secretary_thread_decisions d
+                   INNER JOIN secretary_event_threads t ON t.thread_id = d.thread_id
+                   WHERE d.thread_id = ? AND t.account_id = ?
+                     AND (d.created_at < TIMESTAMPADD(MICROSECOND, ?, '1970-01-01 00:00:00')
+                          OR (d.created_at = TIMESTAMPADD(MICROSECOND, ?, '1970-01-01 00:00:00')
+                              AND d.decision_id < ?))
+                   ORDER BY d.created_at DESC, d.decision_id DESC
+                   LIMIT ?"#,
+                vec![
+                    thread_id.as_str().into(),
+                    account_id.into(),
+                    cursor.created_at_unix_micros().into(),
+                    cursor.created_at_unix_micros().into(),
+                    cursor.decision_id().as_str().into(),
+                    fetch_limit.into(),
+                ],
+            ),
+            None => (
+                r#"SELECT d.decision_id, d.status, d.statement, d.confidence_bps,
+                          d.supersedes_id,
+                          TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', d.created_at)
+                            AS created_at_unix_micros,
+                          (SELECT GROUP_CONCAT(s.source_event_id ORDER BY s.source_event_id SEPARATOR ',')
+                           FROM secretary_thread_decision_sources s
+                           WHERE s.decision_id = d.decision_id) AS source_event_ids
+                   FROM secretary_thread_decisions d
+                   INNER JOIN secretary_event_threads t ON t.thread_id = d.thread_id
+                   WHERE d.thread_id = ? AND t.account_id = ?
+                   ORDER BY d.created_at DESC, d.decision_id DESC
+                   LIMIT ?"#,
+                vec![
+                    thread_id.as_str().into(),
+                    account_id.into(),
+                    fetch_limit.into(),
+                ],
+            ),
+        };
+        let mut rows = ThreadDecisionRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            sql,
+            values,
+        ))
+        .all(&self.db)
+        .await
+        .map_err(store_error)?;
+        let has_more = rows.len() > usize::from(limit);
+        if has_more {
+            rows.pop();
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|row| {
+                    ThreadDecisionRevisionCursor::new(
+                        thread_id.clone(),
+                        row.created_at_unix_micros,
+                        ThreadDecisionId::new(row.decision_id.clone()).map_err(domain_err)?,
+                    )
+                    .map_err(domain_err)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let decisions = rows
+            .into_iter()
+            .map(map_thread_decision_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ThreadDecisionRevisionPage {
+            decisions,
+            next_cursor,
+        })
     }
 
     async fn event_causal_context(
@@ -2077,10 +2183,32 @@ fn map_thread_claim_row(row: ThreadClaimRow) -> Result<ThreadClaimSummary, Inbou
 fn map_thread_decision_row(
     row: ThreadDecisionRow,
 ) -> Result<ThreadDecisionSummary, InboundEventStoreError> {
+    let confidence_bps = u16::try_from(row.confidence_bps).map_err(|_| {
+        InboundEventStoreError::InvalidData(
+            "database returned an out-of-range decision confidence".into(),
+        )
+    })?;
+    if confidence_bps > 10_000 {
+        return Err(InboundEventStoreError::InvalidData(
+            "database returned an out-of-range decision confidence".into(),
+        ));
+    }
+    if row.created_at_unix_micros < 0 {
+        return Err(InboundEventStoreError::InvalidData(
+            "database returned a decision timestamp before the Unix epoch".into(),
+        ));
+    }
     Ok(ThreadDecisionSummary {
-        decision_id: row.decision_id,
+        decision_id: ThreadDecisionId::new(row.decision_id).map_err(domain_err)?,
         status: row.status,
         statement: row.statement,
+        confidence_bps,
+        supersedes: row
+            .supersedes_id
+            .map(ThreadDecisionId::new)
+            .transpose()
+            .map_err(domain_err)?,
+        created_at_unix_micros: row.created_at_unix_micros,
         source_event_ids: parse_source_event_id_list(row.source_event_ids)?,
     })
 }
@@ -2153,6 +2281,9 @@ struct ThreadDecisionRow {
     decision_id: String,
     status: String,
     statement: String,
+    confidence_bps: u32,
+    supersedes_id: Option<String>,
+    created_at_unix_micros: i64,
     source_event_ids: Option<String>,
 }
 

@@ -14,8 +14,8 @@
 
 ## 0. 当前状态
 
-- 当前分支：`Main`；`GAP-003-A/B/C`、`GAP-007`、`GAP-008-LOCAL`、`THR-002`、`THR-004`
-  已提交收口，工作树仅保留用户未跟踪的 `.mcp.json`。
+- 当前分支：`Main`；`GAP-003-A/B/C`、`GAP-007`、`GAP-008-LOCAL`、`THR-002`、`THR-004`、
+  `THR-005` 已提交收口，工作树仅保留用户未跟踪的 `.mcp.json`。
 - 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。2026-08-06 双账号 NapCat 4.18.14
   实测确认 `reverseOrder=true` 才是向更旧读取，响应数组仍为旧到新；客户端已在协议边界归一化为
   新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。空页原因、跨重启覆盖和
@@ -26,7 +26,7 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `THR-005` 结论修订链有界分页。`GAP-008-LOCAL` 已完成；
+- 下一步：进入 `THR-006` 有来源证据的自动结束条件。`GAP-008-LOCAL` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
   业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -396,7 +396,13 @@
   避免 loopback Token 暴露。验证：领域 277/277、QQBot 57 单元 + 10 fake HTTP + 3 heartbeat、
   `qqbot-server` 175 passed/2 ignored、架构边界 24/24；THR-004 1/1、CMD-010 2/2、参与者因果
   2/2 隔离 MySQL 回归通过，严格 Clippy、workspace all-targets check、fmt 与 diff check 全绿。
-- [ ] `THR-005` 增加结论修订链的有界分页，不改变既有不可变 revision 语义。
+- [x] `THR-005` 完成结论修订链的有界分页，不改变既有不可变 revision 语义。新增绑定 Thread 的
+  强类型游标与 `1..=50` 页面边界，按 `(created_at DESC, decision_id DESC)` 稳定 keyset 读取，返回
+  confidence、supersedes、创建时间和来源事件；SQL 强制账号归属，不使用 OFFSET 或更新 revision。
+  MySQL 原子重建既有线程索引为 `(thread_id, created_at, decision_id, status)`，迁移记录丢失后仍可
+  重放并 fail-closed 复验精确形状。隔离 MySQL 覆盖同微秒排序、三页无重无漏、账号/游标隔离、
+  首页面重放、迁移重放及读取前后行级快照不变；领域 280/280、`qqbot-server` 175 passed/2 ignored、
+  架构 24/24、Action Planner 6/6、项目承诺 3/3 与 THR-005 1/1 通过。
 - [ ] `THR-006` 定义有来源证据的自动结束条件；不因一段时间无人发言直接宣称事项已经解决。
 - [ ] `THR-008` 完成低置信度确认话术；QQ 开放平台投递属于外部验收，不阻塞本地响应产物。
 - [ ] `THR-009` 完成跨会话检索授权过滤、受限内容的既有派生状态失效与必要防泄露测试。
