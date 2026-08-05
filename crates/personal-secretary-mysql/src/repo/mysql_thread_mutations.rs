@@ -12,10 +12,10 @@ use uuid::Uuid;
 
 use crate::{
     InboundEventStoreError, ThreadMutationAgentState, ThreadMutationDecision, ThreadMutationEffect,
-    ThreadMutationEffectReceipt, ThreadMutationImpact, ThreadMutationKind,
-    ThreadMutationProposalStatus, ThreadMutationResumeInput, ThreadMutationRevertInput,
-    ThreadMutationRevertReceipt, ThreadMutationStoreT, validate_thread_mutation_impact,
-    validate_thread_mutation_revert,
+    ThreadMutationEffectReceipt, ThreadMutationImpact, ThreadMutationImpactRequest,
+    ThreadMutationKind, ThreadMutationProposalStatus, ThreadMutationResumeInput,
+    ThreadMutationRevertInput, ThreadMutationRevertReceipt, ThreadMutationStoreT,
+    validate_thread_mutation_impact, validate_thread_mutation_revert,
 };
 
 use super::mysql_inbound::store_error;
@@ -32,6 +32,193 @@ impl MySqlThreadMutationStore {
 
 #[async_trait]
 impl ThreadMutationStoreT for MySqlThreadMutationStore {
+    async fn build_impact(
+        &self,
+        request: &ThreadMutationImpactRequest,
+    ) -> Result<ThreadMutationImpact, InboundEventStoreError> {
+        match request.kind {
+            ThreadMutationKind::Merge
+                if !(2..=10).contains(&request.thread_ids.len())
+                    || !request.selected_source_event_ids.is_empty() =>
+            {
+                return Err(InboundEventStoreError::InvalidData(
+                    "merge impact request must contain 2..=10 threads and no selected events"
+                        .into(),
+                ));
+            }
+            ThreadMutationKind::Split
+                if request.thread_ids.len() != 1
+                    || request.selected_source_event_ids.is_empty()
+                    || request.selected_source_event_ids.len() > 100 =>
+            {
+                return Err(InboundEventStoreError::InvalidData(
+                    "split impact request must contain one thread and 1..=100 selected events"
+                        .into(),
+                ));
+            }
+            _ => {}
+        }
+        let unique_threads = request
+            .thread_ids
+            .iter()
+            .map(crate::EventThreadId::as_str)
+            .collect::<HashSet<_>>();
+        let unique_events = request
+            .selected_source_event_ids
+            .iter()
+            .map(crate::SourceEventId::as_str)
+            .collect::<HashSet<_>>();
+        if unique_threads.len() != request.thread_ids.len()
+            || unique_events.len() != request.selected_source_event_ids.len()
+        {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread mutation impact request contains duplicate ids".into(),
+            ));
+        }
+        if request.reason.trim().is_empty() || request.reason.chars().count() > 1_000 {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread mutation reason must contain 1..=1000 characters".into(),
+            ));
+        }
+
+        let account = AccountRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT id FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ?",
+            [
+                request.account.channel.as_str().into(),
+                request.account.account_id.clone().into(),
+            ],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            InboundEventStoreError::InvalidData("thread mutation account was not found".into())
+        })?;
+
+        for thread_id in &request.thread_ids {
+            let row = ThreadAccountRow::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "SELECT account_id FROM secretary_event_threads WHERE thread_id = ?",
+                [thread_id.as_str().into()],
+            ))
+            .one(&self.db)
+            .await
+            .map_err(store_error)?
+            .ok_or_else(|| {
+                InboundEventStoreError::InvalidData("thread mutation thread was not found".into())
+            })?;
+            if row.account_id != account.id {
+                return Err(InboundEventStoreError::InvalidData(
+                    "thread mutation cannot cross managed accounts".into(),
+                ));
+            }
+        }
+
+        let mut event_rows = Vec::new();
+        match request.kind {
+            ThreadMutationKind::Merge => {
+                for thread_id in &request.thread_ids {
+                    let rows = ImpactEventRow::find_by_statement(Statement::from_sql_and_values(
+                        DatabaseBackend::MySql,
+                        r#"SELECT e.source_event_id, e.account_id, e.conversation_id,
+                                  e.occurred_at_unix_secs
+                           FROM secretary_source_events e
+                           JOIN secretary_thread_events te
+                             ON te.source_event_id = e.source_event_id
+                           WHERE te.thread_id = ?
+                           ORDER BY e.occurred_at_unix_secs, e.source_event_id"#,
+                        [thread_id.as_str().into()],
+                    ))
+                    .all(&self.db)
+                    .await
+                    .map_err(store_error)?;
+                    event_rows.extend(rows);
+                }
+            }
+            ThreadMutationKind::Split => {
+                let source_thread = request
+                    .thread_ids
+                    .first()
+                    .expect("validated split request has one thread");
+                for event_id in &request.selected_source_event_ids {
+                    let row = ImpactEventWithThreadRow::find_by_statement(
+                        Statement::from_sql_and_values(
+                            DatabaseBackend::MySql,
+                            r#"SELECT e.source_event_id, e.account_id, e.conversation_id,
+                                      e.occurred_at_unix_secs, te.thread_id
+                               FROM secretary_source_events e
+                               JOIN secretary_thread_events te
+                                 ON te.source_event_id = e.source_event_id
+                               WHERE e.source_event_id = ?"#,
+                            [event_id.as_str().into()],
+                        ),
+                    )
+                    .one(&self.db)
+                    .await
+                    .map_err(store_error)?
+                    .ok_or_else(|| {
+                        InboundEventStoreError::InvalidData(
+                            "split source event was not found in a thread".into(),
+                        )
+                    })?;
+                    if row.account_id != account.id || row.thread_id != source_thread.as_str() {
+                        return Err(InboundEventStoreError::InvalidData(
+                            "split source event is outside the proposal account or thread".into(),
+                        ));
+                    }
+                    event_rows.push(ImpactEventRow {
+                        source_event_id: row.source_event_id,
+                        account_id: row.account_id,
+                        conversation_id: row.conversation_id,
+                        occurred_at_unix_secs: row.occurred_at_unix_secs,
+                    });
+                }
+                event_rows.sort_by(|left, right| {
+                    (left.occurred_at_unix_secs, left.source_event_id.as_str())
+                        .cmp(&(right.occurred_at_unix_secs, right.source_event_id.as_str()))
+                });
+            }
+        }
+        if event_rows.is_empty() || event_rows.len() > 100 {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread mutation impact must contain 1..=100 events".into(),
+            ));
+        }
+        if event_rows.iter().any(|row| row.account_id != account.id) {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread mutation event crossed managed account".into(),
+            ));
+        }
+        let conversations = event_rows
+            .iter()
+            .map(|row| row.conversation_id)
+            .collect::<HashSet<_>>();
+        let impact = ThreadMutationImpact {
+            proposal_id: request.proposal_id.clone(),
+            kind: request.kind,
+            account: request.account.clone(),
+            thread_ids: request.thread_ids.clone(),
+            affected_event_count: u32::try_from(event_rows.len()).map_err(|_| {
+                InboundEventStoreError::InvalidData("thread mutation event count overflow".into())
+            })?,
+            affected_conversation_count: u32::try_from(conversations.len()).map_err(|_| {
+                InboundEventStoreError::InvalidData(
+                    "thread mutation conversation count overflow".into(),
+                )
+            })?,
+            affected_source_event_ids: event_rows
+                .into_iter()
+                .map(|row| crate::SourceEventId::new(row.source_event_id))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+            reason: request.reason.clone(),
+        };
+        validate_thread_mutation_impact(&impact)
+            .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?;
+        Ok(impact)
+    }
+
     async fn persist_proposal(
         &self,
         impact: &ThreadMutationImpact,
@@ -989,6 +1176,23 @@ struct EventMembershipRow {
     conversation_id: u64,
     thread_id: String,
     occurred_at_unix_secs: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ImpactEventRow {
+    source_event_id: String,
+    account_id: u64,
+    conversation_id: u64,
+    occurred_at_unix_secs: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ImpactEventWithThreadRow {
+    source_event_id: String,
+    account_id: u64,
+    conversation_id: u64,
+    occurred_at_unix_secs: i64,
+    thread_id: String,
 }
 
 #[derive(Debug, FromQueryResult)]

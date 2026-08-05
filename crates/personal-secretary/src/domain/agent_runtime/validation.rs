@@ -484,6 +484,44 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 ));
             }
         }
+        SecretaryAction::MergeThreads { thread_ids, reason } => {
+            if !(2..=10).contains(&thread_ids.len()) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "merge requires 2..=10 threads".into(),
+                ));
+            }
+            let unique = thread_ids
+                .iter()
+                .map(crate::EventThreadId::as_str)
+                .collect::<HashSet<_>>();
+            if unique.len() != thread_ids.len() {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "merge thread ids must be unique".into(),
+                ));
+            }
+            bounded_text("thread mutation reason", reason, 1, 1_000)?;
+        }
+        SecretaryAction::SplitThread {
+            source_event_ids,
+            reason,
+            ..
+        } => {
+            if source_event_ids.is_empty() || source_event_ids.len() > 100 {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "split requires 1..=100 source events".into(),
+                ));
+            }
+            let unique = source_event_ids
+                .iter()
+                .map(SourceEventId::as_str)
+                .collect::<HashSet<_>>();
+            if unique.len() != source_event_ids.len() {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "split source event ids must be unique".into(),
+                ));
+            }
+            bounded_text("thread mutation reason", reason, 1, 1_000)?;
+        }
         SecretaryAction::DismissFollowUp {
             follow_up_id,
             expected_source_version,

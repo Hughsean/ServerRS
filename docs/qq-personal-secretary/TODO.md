@@ -439,7 +439,9 @@
   用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。
 - [ ] `CMD-003` 将剩余写命令逐项接入统一 OwnerBinding、同账号、Resume 与 Effect 复验边界。
 - [ ] `CMD-004` 补真实自然语言到现有类型化 Action 的关键映射质量，不新增不受约束的自由工具。
-- [ ] `CMD-008` 接入线程拆分/合并的 QQ Owner 自然语言入口；后端 Suspend/Resume 不重写。
+- [x] `CMD-008` 已接入线程拆分/合并的 QQ Owner 自然语言入口：Planner 只接受已登记的
+  `thread_ref`/`event_ref`，L2 Gate 继续复用现有 Suspend/Resume；Effect 阶段由线程变更
+  Store 重新读取完整影响预览，并在同一 OwnerBinding、账号和幂等 Effect 边界内提交。
 
 ## 5. 可观测性与上线强化
 

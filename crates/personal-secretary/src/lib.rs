@@ -265,8 +265,8 @@ pub use thread_links::{
 };
 pub use thread_mutation_service::{
     ThreadMutationApprovalNode, ThreadMutationDecisionNode, ThreadMutationEffectExecutor,
-    ThreadMutationRevertUseCase, ThreadMutationStoreT, ThreadMutationUseCase,
-    ThreadMutationUseCaseError,
+    ThreadMutationImpactRequest, ThreadMutationRevertUseCase, ThreadMutationStoreT,
+    ThreadMutationUseCase, ThreadMutationUseCaseError,
 };
 pub use thread_mutations::{
     ThreadMutationAgentState, ThreadMutationApprovalRequest, ThreadMutationDecision,

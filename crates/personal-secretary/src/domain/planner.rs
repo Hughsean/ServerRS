@@ -129,6 +129,8 @@ pub fn is_allowed_action_in_batch(action: &SecretaryAction) -> bool {
             | DismissThreadQuestion { .. }
             | ReconfirmThreadSemantics { .. }
             | SetThreadLifecycle { .. }
+            | MergeThreads { .. }
+            | SplitThread { .. }
             | DismissFollowUp { .. }
             | SnoozeFollowUp { .. }
             | DismissFollowUps { .. }

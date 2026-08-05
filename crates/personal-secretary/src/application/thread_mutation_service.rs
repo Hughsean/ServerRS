@@ -9,15 +9,33 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::{
-    InboundEventStoreError, ThreadMutationAgentState, ThreadMutationApprovalRequest,
-    ThreadMutationDecision, ThreadMutationEffect, ThreadMutationEffectReceipt,
-    ThreadMutationImpact, ThreadMutationProposalStatus, ThreadMutationResumeInput,
-    ThreadMutationRevertInput, ThreadMutationRevertReceipt, ThreadMutationUpdate,
-    validate_thread_mutation_impact, validate_thread_mutation_revert,
+    EventThreadId, InboundEventStoreError, SecretaryAction, SourceAccountRef, SourceEventId,
+    ThreadMutationAgentState, ThreadMutationApprovalRequest, ThreadMutationDecision,
+    ThreadMutationEffect, ThreadMutationEffectReceipt, ThreadMutationImpact,
+    ThreadMutationProposalStatus, ThreadMutationResumeInput, ThreadMutationRevertInput,
+    ThreadMutationRevertReceipt, ThreadMutationUpdate, validate_thread_mutation_impact,
+    validate_thread_mutation_revert,
 };
+
+/// 从 Owner Action 构造权威影响预览的应用请求。计数和完整成员集合由 Store
+/// 重新读取，Planner 不能自行声明影响范围。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMutationImpactRequest {
+    pub proposal_id: crate::ThreadMutationProposalId,
+    pub kind: crate::ThreadMutationKind,
+    pub account: SourceAccountRef,
+    pub thread_ids: Vec<EventThreadId>,
+    pub selected_source_event_ids: Vec<SourceEventId>,
+    pub reason: String,
+}
 
 #[async_trait]
 pub trait ThreadMutationStoreT: Send + Sync {
+    async fn build_impact(
+        &self,
+        request: &ThreadMutationImpactRequest,
+    ) -> Result<ThreadMutationImpact, InboundEventStoreError>;
+
     async fn persist_proposal(
         &self,
         impact: &ThreadMutationImpact,
@@ -74,6 +92,76 @@ impl ThreadMutationUseCase {
         validate_thread_mutation_impact(&impact)?;
         self.store.persist_proposal(&impact).await?;
         Ok(ThreadMutationAgentState::new(impact)?)
+    }
+
+    /// 统一 Action Graph 已完成 L2 Suspend/Resume 后，复用既有线程变更仓储的
+    /// Proposal、OwnerBinding 复验和幂等 Effect 提交，不建立第二套审批状态机。
+    pub async fn apply_approved_action(
+        &self,
+        account: &SourceAccountRef,
+        proposal_id: &str,
+        action: &SecretaryAction,
+        command_source_event_id: &SourceEventId,
+        effect_id: &str,
+    ) -> Result<ThreadMutationEffectReceipt, ThreadMutationUseCaseError> {
+        let proposal_id = crate::ThreadMutationProposalId::new(proposal_id)?;
+        let request = match action {
+            SecretaryAction::MergeThreads { thread_ids, reason } => ThreadMutationImpactRequest {
+                proposal_id: proposal_id.clone(),
+                kind: crate::ThreadMutationKind::Merge,
+                account: account.clone(),
+                thread_ids: thread_ids.clone(),
+                selected_source_event_ids: Vec::new(),
+                reason: reason.clone(),
+            },
+            SecretaryAction::SplitThread {
+                thread_id,
+                source_event_ids,
+                reason,
+            } => ThreadMutationImpactRequest {
+                proposal_id: proposal_id.clone(),
+                kind: crate::ThreadMutationKind::Split,
+                account: account.clone(),
+                thread_ids: vec![thread_id.clone()],
+                selected_source_event_ids: source_event_ids.clone(),
+                reason: reason.clone(),
+            },
+            _ => {
+                return Err(ThreadMutationUseCaseError::Domain(
+                    crate::ThreadMutationError::InvalidImpact(
+                        "action is not a thread mutation".into(),
+                    ),
+                ));
+            }
+        };
+        let impact = self.store.build_impact(&request).await?;
+        validate_thread_mutation_impact(&impact)?;
+        self.store.persist_proposal(&impact).await?;
+        let status = self
+            .store
+            .authorize_resume(&ThreadMutationResumeInput {
+                proposal_id: proposal_id.clone(),
+                decision: ThreadMutationDecision::Approve,
+                command_source_event_id: command_source_event_id.clone(),
+            })
+            .await?;
+        if status != ThreadMutationProposalStatus::Approved {
+            return Err(ThreadMutationUseCaseError::Store(
+                InboundEventStoreError::InvalidData(
+                    "thread mutation approval did not converge to approved".into(),
+                ),
+            ));
+        }
+        Ok(self
+            .store
+            .apply_effect(
+                &ThreadMutationEffect {
+                    proposal_id,
+                    kind: impact.kind,
+                },
+                effect_id,
+            )
+            .await?)
     }
 }
 
@@ -285,6 +373,27 @@ mod tests {
 
     #[async_trait]
     impl ThreadMutationStoreT for FakeStore {
+        async fn build_impact(
+            &self,
+            request: &ThreadMutationImpactRequest,
+        ) -> Result<ThreadMutationImpact, InboundEventStoreError> {
+            let source_event_ids = if request.selected_source_event_ids.is_empty() {
+                vec![SourceEventId::new("event").unwrap()]
+            } else {
+                request.selected_source_event_ids.clone()
+            };
+            Ok(ThreadMutationImpact {
+                proposal_id: request.proposal_id.clone(),
+                kind: request.kind,
+                account: request.account.clone(),
+                thread_ids: request.thread_ids.clone(),
+                affected_event_count: source_event_ids.len() as u32,
+                affected_conversation_count: 1,
+                affected_source_event_ids: source_event_ids,
+                reason: request.reason.clone(),
+            })
+        }
+
         async fn persist_proposal(
             &self,
             impact: &ThreadMutationImpact,
@@ -471,5 +580,31 @@ mod tests {
         );
         assert!(fake.effects.lock().unwrap().is_empty());
         assert!(completed.effect_receipts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approved_owner_action_reuses_proposal_authorization_and_effect_store() {
+        let fake = Arc::new(FakeStore::default());
+        let use_case = ThreadMutationUseCase::new(fake.clone());
+        let action = SecretaryAction::MergeThreads {
+            thread_ids: vec![
+                EventThreadId::new("thread-a").unwrap(),
+                EventThreadId::new("thread-b").unwrap(),
+            ],
+            reason: "Owner 确认两个线程属于同一事项".into(),
+        };
+        let receipt = use_case
+            .apply_approved_action(
+                &SourceAccountRef::new(MessageSource::NapCat, "managed-account").unwrap(),
+                "00000000-0000-0000-0000-000000000099",
+                &action,
+                &SourceEventId::new("owner-command").unwrap(),
+                "effect-1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.status, ThreadMutationProposalStatus::Applied);
+        assert_eq!(fake.proposals.lock().unwrap().len(), 1);
+        assert_eq!(fake.effects.lock().unwrap().as_slice(), &["effect-1"]);
     }
 }

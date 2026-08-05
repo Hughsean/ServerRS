@@ -106,34 +106,33 @@ async fn run_scenario(db: DatabaseConnection) {
 
     let mutation_store = build_mysql_thread_mutation_store(db.clone());
     let merge_proposal = uuid::Uuid::new_v4().to_string();
-    let merge_impact = ThreadMutationImpact {
-        proposal_id: personal_secretary::ThreadMutationProposalId::new(&merge_proposal).unwrap(),
-        kind: ThreadMutationKind::Merge,
-        account: account.clone(),
+    let merge_command = common::owner_command_with_binding(
+        &db,
+        &inbound,
+        managed,
+        "thr010-owner",
+        "thr010-action-merge",
+        "合并两个线程",
+        2_000_000_006,
+    )
+    .await;
+    let merge_action = SecretaryAction::MergeThreads {
         thread_ids: vec![
             EventThreadId::new("thr010-merge-old").unwrap(),
             EventThreadId::new("thr010-merge-new").unwrap(),
         ],
-        affected_event_count: 2,
-        affected_conversation_count: 2,
-        affected_source_event_ids: vec![merge_a.clone(), merge_b.clone()],
         reason: "Owner 确认两个线程属于同一事项".into(),
     };
     ThreadMutationUseCase::new(mutation_store.clone())
-        .prepare(merge_impact.clone())
-        .await
-        .expect("merge proposal must persist");
-    approve_proposal(&db, &merge_proposal).await;
-    mutation_store
-        .apply_effect(
-            &ThreadMutationEffect {
-                proposal_id: merge_impact.proposal_id.clone(),
-                kind: ThreadMutationKind::Merge,
-            },
+        .apply_approved_action(
+            &account,
+            &merge_proposal,
+            &merge_action,
+            &merge_command,
             "thr010-merge-effect",
         )
         .await
-        .expect("merge effect must apply");
+        .expect("merge action must persist, authorize and apply");
     assert_eq!(pending_invalidations(&db, "thr010-merge-old").await, 1);
 
     apply_reconfirmation(
@@ -145,7 +144,7 @@ async fn run_scenario(db: DatabaseConnection) {
         "thr010-reconfirm",
         2_000_000_010,
         "thr010-reconfirm-effect",
-        true,
+        false,
     )
     .await
     .expect("Owner semantic reconfirmation must apply");
@@ -238,11 +237,9 @@ async fn run_scenario(db: DatabaseConnection) {
         Some("open".into())
     );
 
-    let revert_command = common::owner_command_with_binding(
-        &db,
+    let revert_command = insert_owner_command(
         &inbound,
-        managed,
-        "thr010-owner-revert",
+        "thr010-owner",
         "thr010-revert",
         "撤销线程拆分",
         2_000_000_013,
@@ -387,6 +384,32 @@ async fn approve_proposal(db: &DatabaseConnection, proposal_id: &str) {
     ))
     .await
     .expect("proposal must be approved");
+}
+
+async fn insert_owner_command(
+    inbound: &std::sync::Arc<dyn personal_secretary::PersonalSecretaryStoreT>,
+    command_account: &str,
+    message_id: &str,
+    text: &str,
+    occurred_at_unix_secs: i64,
+) -> personal_secretary::SourceEventId {
+    inbound
+        .insert_message_if_absent(
+            &InboundMessageEnvelope::new(
+                SourceMessageRef::new(MessageSource::QqOpenPlatform, command_account, message_id)
+                    .unwrap(),
+                ConversationRef::new(ConversationKind::OwnerControl, "owner-conv").unwrap(),
+                VerifiedActor::new(VerifiedActorKind::Owner, "owner-openid").unwrap(),
+                occurred_at_unix_secs,
+                text,
+                Vec::new(),
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("insert OwnerCommand")
+        .source_event_id()
+        .clone()
 }
 
 async fn pending_invalidations(db: &DatabaseConnection, thread_id: &str) -> u64 {

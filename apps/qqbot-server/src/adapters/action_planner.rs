@@ -110,6 +110,7 @@ set_conversation_memory_mode, get_secretary_status, list_pending_owner_work,
 get_thread_context, get_event_causal_context, get_participant_context,
 get_participant_context_by_name,
 list_thread_link_candidates,
+merge_threads, split_thread,
 confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 reconfirm_thread_semantics, set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
@@ -146,7 +147,11 @@ approve_memory_candidate 必须提供 candidate_id、expected_candidate_version
 （一律来自 ListMemoryCandidates 展示的 vN，禁止从正文猜测版本）和 reason；
 reject_memory_candidate 必须提供 candidate_id、expected_candidate_version
 （同样来自 vN，禁止从正文猜测版本）和 reason；批准与拒绝没有自动撤销机制，
-拒绝会使候选永久失效，必须由 Owner 明确确认；不要输出其他 tool。"#;
+拒绝会使候选永久失效，必须由 Owner 明确确认；
+merge_threads 必须提供 2..=10 个已登记的 thread_ref（字段 thread_ids）和 reason；数组第一项
+是 canonical，服务端会在 Effect 阶段重新读取完整线程成员并复验账号；
+split_thread 必须提供一个已登记的 thread_ref（字段 thread_id）、1..=100 个已登记的 event_ref
+（字段 source_event_refs）和 reason；不能从正文猜测稳定 ID。不要输出其他 tool。"#;
 
 /// LLM Action Planner。持有共享的 LLM 客户端。
 pub(crate) struct LlmActionPlanner {
@@ -223,6 +228,8 @@ impl LlmActionPlanner {
                     conversation_ref,
                     memory_mode,
                     thread_id,
+                    thread_ids,
+                    source_event_refs,
                     thread_decision_id,
                     thread_question_id,
                     expected_thread_status,
@@ -265,6 +272,8 @@ impl LlmActionPlanner {
                     conversation_ref,
                     memory_mode,
                     thread_id,
+                    thread_ids,
+                    source_event_refs,
                     thread_decision_id,
                     thread_question_id,
                     expected_thread_status,
@@ -425,6 +434,10 @@ struct RawProposalFields<'a> {
     conversation_ref: Option<String>,
     memory_mode: Option<ContentTrustLevel>,
     thread_id: Option<String>,
+    /// Merge 的线程临时引用（thread_N）；不得直接输出稳定线程 ID。
+    thread_ids: Vec<String>,
+    /// Split 的来源事件临时引用（evt_N）；不得直接输出稳定事件 ID。
+    source_event_refs: Vec<String>,
     thread_decision_id: Option<String>,
     thread_question_id: Option<String>,
     expected_thread_status: Option<ThreadStatus>,
@@ -716,6 +729,44 @@ fn build_action(
                 reason: raw
                     .text
                     .clone()
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+            })
+        }
+        "merge_threads" => {
+            let thread_ids = raw
+                .thread_ids
+                .iter()
+                .map(|thread_ref| {
+                    temp_ref_map
+                        .resolve_thread(thread_ref)
+                        .cloned()
+                        .ok_or_else(|| {
+                            PlannerError::InvalidOutput(format!(
+                                "模型引用了未登记的 thread_id: {thread_ref}"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(SecretaryAction::MergeThreads {
+                thread_ids,
+                reason: raw
+                    .reason
+                    .clone()
+                    .or_else(|| raw.text.clone())
+                    .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+            })
+        }
+        "split_thread" => {
+            let thread_id = resolve_thread_id(&raw.thread_id, temp_ref_map)?
+                .ok_or_else(|| PlannerError::InvalidOutput("missing thread_id".into()))?;
+            let source_event_ids = resolve_event_refs(&raw.source_event_refs, temp_ref_map)?;
+            Ok(SecretaryAction::SplitThread {
+                thread_id,
+                source_event_ids,
+                reason: raw
+                    .reason
+                    .clone()
+                    .or_else(|| raw.text.clone())
                     .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
             })
         }
@@ -1713,6 +1764,8 @@ fn tool_kind_display_name(kind: personal_secretary::SecretaryToolKind) -> &'stat
         DismissThreadQuestion => "忽略线程问题",
         ReconfirmThreadSemantics => "重新确认线程语义",
         SetThreadLifecycle => "设置线程生命周期",
+        MergeThreads => "合并线程",
+        SplitThread => "拆分线程",
         DismissFollowUp => "忽略跟进",
         SnoozeFollowUp => "推迟跟进",
         DismissFollowUps => "批量忽略跟进",
@@ -1931,6 +1984,10 @@ struct RawProposalOutput {
     memory_mode: Option<ContentTrustLevel>,
     #[serde(default)]
     thread_id: Option<String>,
+    #[serde(default)]
+    thread_ids: Vec<String>,
+    #[serde(default)]
+    source_event_refs: Vec<String>,
     #[serde(default)]
     thread_decision_id: Option<String>,
     #[serde(default)]
@@ -2873,6 +2930,88 @@ mod tests {
                 SecretaryAction::ReconfirmThreadSemantics { thread_id, reason } => {
                     assert_eq!(thread_id.as_str(), "thread-1");
                     assert_eq!(reason, "Owner 已复核迁移后的既有语义");
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn merge_threads_maps_only_registered_thread_refs() {
+        let mut planner_input = input();
+        planner_input.recent_event_views = vec![
+            event_view(
+                "merge-event-a",
+                "owner",
+                "线程 A",
+                ContentTrustLevel::Normal,
+            ),
+            personal_secretary::AgentEventView {
+                thread_id: Some(personal_secretary::EventThreadId::new("thread-2").unwrap()),
+                ..event_view(
+                    "merge-event-b",
+                    "owner",
+                    "线程 B",
+                    ContentTrustLevel::Normal,
+                )
+            },
+        ];
+        let (planner, _client) = planner_with_response(json!({
+            "kind": "proposal",
+            "tool": "merge_threads",
+            "thread_ids": ["thread_1", "thread_2"],
+            "reason": "Owner 确认两个线程属于同一事项",
+            "rationale": "合并线程",
+            "evidence": ["evt_1"]
+        }));
+        let output = planner.plan(&planner_input).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::MergeThreads { thread_ids, reason } => {
+                    assert_eq!(
+                        thread_ids
+                            .iter()
+                            .map(personal_secretary::EventThreadId::as_str)
+                            .collect::<Vec<_>>(),
+                        vec!["thread-1", "thread-2"]
+                    );
+                    assert_eq!(reason, "Owner 确认两个线程属于同一事项");
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn split_thread_requires_registered_event_refs() {
+        let mut planner_input = input();
+        planner_input.recent_event_views = vec![event_view(
+            "split-event",
+            "owner",
+            "需要拆分的消息",
+            ContentTrustLevel::Normal,
+        )];
+        let (planner, _client) = planner_with_response(json!({
+            "kind": "proposal",
+            "tool": "split_thread",
+            "thread_id": "thread_1",
+            "source_event_refs": ["evt_2"],
+            "reason": "Owner 确认这条消息属于新事项",
+            "rationale": "拆分线程",
+            "evidence": ["evt_1"]
+        }));
+        let output = planner.plan(&planner_input).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => match proposal.action {
+                SecretaryAction::SplitThread {
+                    thread_id,
+                    source_event_ids,
+                    ..
+                } => {
+                    assert_eq!(thread_id.as_str(), "thread-1");
+                    assert_eq!(source_event_ids[0].as_str(), "split-event");
                 }
                 other => panic!("unexpected action: {other:?}"),
             },

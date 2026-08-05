@@ -92,6 +92,7 @@ pub struct PlannerUseCase {
     planner: Arc<dyn crate::ActionPlannerT>,
     retriever: Option<Arc<crate::RetrieverUseCase>>,
     health: Option<Arc<crate::HealthAggregator>>,
+    thread_mutation: Option<Arc<crate::ThreadMutationUseCase>>,
     notification_policy: Option<Arc<crate::NotificationPolicyUseCase>>,
     agenda: Option<Arc<crate::AgendaUseCase>>,
     memory: Option<Arc<crate::MemoryUseCase>>,
@@ -122,6 +123,7 @@ impl PlannerUseCase {
             planner,
             retriever: None,
             health: None,
+            thread_mutation: None,
             notification_policy: None,
             agenda: None,
             memory: None,
@@ -159,6 +161,14 @@ impl PlannerUseCase {
     /// 注入运行期健康聚合器，供 Owner 状态查询读取有界快照。
     pub fn with_health_aggregator(mut self, health: Arc<crate::HealthAggregator>) -> Self {
         self.health = Some(health);
+        self
+    }
+
+    pub fn with_thread_mutation(
+        mut self,
+        thread_mutation: Arc<crate::ThreadMutationUseCase>,
+    ) -> Self {
+        self.thread_mutation = Some(thread_mutation);
         self
     }
 
@@ -243,6 +253,7 @@ impl PlannerUseCase {
             planner,
             retriever: None,
             health: None,
+            thread_mutation: None,
             notification_policy: None,
             agenda: None,
             memory: None,
@@ -345,6 +356,12 @@ impl PlannerUseCase {
         );
         if let Some(health) = &self.health {
             effect_executor = effect_executor.with_health_aggregator(Arc::clone(health));
+        }
+        if let Some(thread_mutation) = &self.thread_mutation {
+            effect_executor = effect_executor.with_thread_mutation(
+                Arc::clone(thread_mutation),
+                claimed.command_source_event_id.clone(),
+            );
         }
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
@@ -538,6 +555,12 @@ impl PlannerUseCase {
         );
         if let Some(health) = &self.health {
             effect_executor = effect_executor.with_health_aggregator(Arc::clone(health));
+        }
+        if let Some(thread_mutation) = &self.thread_mutation {
+            effect_executor = effect_executor.with_thread_mutation(
+                Arc::clone(thread_mutation),
+                claimed.command_source_event_id.clone(),
+            );
         }
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(

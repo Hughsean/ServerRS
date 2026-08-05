@@ -68,6 +68,8 @@ pub enum SecretaryToolKind {
     DismissThreadQuestion,
     ReconfirmThreadSemantics,
     SetThreadLifecycle,
+    MergeThreads,
+    SplitThread,
     DismissFollowUp,
     SnoozeFollowUp,
     DismissFollowUps,
@@ -160,6 +162,8 @@ impl SecretaryToolKind {
             | Self::RevokeThreadDecision
             | Self::DismissThreadQuestion
             | Self::SetThreadLifecycle
+            | Self::MergeThreads
+            | Self::SplitThread
             | Self::DismissFollowUp
             | Self::SnoozeFollowUp
             | Self::DismissFollowUps
@@ -444,6 +448,18 @@ pub enum SecretaryAction {
         target_status: crate::ThreadStatus,
         reason: String,
     },
+    /// 合并逻辑线程。实际影响预览由线程变更仓储在 Effect 阶段重新读取，
+    /// 不信任 Planner 携带的事件计数或稳定 ID。
+    MergeThreads {
+        thread_ids: Vec<crate::EventThreadId>,
+        reason: String,
+    },
+    /// 将一个来源线程中的有界事件集合拆到新逻辑线程。
+    SplitThread {
+        thread_id: crate::EventThreadId,
+        source_event_ids: Vec<SourceEventId>,
+        reason: String,
+    },
     DismissFollowUp {
         follow_up_id: crate::FollowUpId,
         /// 审批时刻的期望来源版本（>= 1），落库时与行内 source_version CAS 比较。
@@ -615,6 +631,8 @@ impl SecretaryAction {
             Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
             Self::ReconfirmThreadSemantics { .. } => SecretaryToolKind::ReconfirmThreadSemantics,
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
+            Self::MergeThreads { .. } => SecretaryToolKind::MergeThreads,
+            Self::SplitThread { .. } => SecretaryToolKind::SplitThread,
             Self::DismissFollowUp { .. } => SecretaryToolKind::DismissFollowUp,
             Self::SnoozeFollowUp { .. } => SecretaryToolKind::SnoozeFollowUp,
             Self::DismissFollowUps { .. } => SecretaryToolKind::DismissFollowUps,

@@ -62,6 +62,10 @@
   指标和 MySQL 子系统状态。输出只允许固定名称、四态状态、类型化错误码和有界数值，健康快照
   中的账号/epoch 字段不会进入 Owner 文本；未启用健康 Worker 时仍保守显示不确定。新增脱敏、
   有界输出单测，workspace check、严格 Clippy、fmt 和架构门禁保持通过。
+- **本轮（CMD-008，本地已完成）**：线程拆分/合并接入统一 Action Planner。Planner 只恢复已登记
+  的临时线程/事件引用；L2 Gate 继续 Suspend，Resume 后由线程变更 Store 重新构造完整影响预览，
+  复验 OwnerBinding、托管账号和现有幂等 Effect，再执行 Merge/Split。新增 Planner/UseCase 单测，
+  THR-010 真实 MySQL 回归 1/1 通过；未连接 QQ 开放平台或发送外部消息。
 - **本轮（THR-010，已完成）**：线程逻辑迁移后的旧语义不再永久失效；新增
   `reconfirm_thread_semantics` 类型化 L2 Owner Action 与不可变重新确认边界，事务内复验 OwnerBinding、
   Action lease 和账号/线程归属后清除语义状态，允许 Worker 重新计算。Split 撤销在同一事务内关闭

@@ -11,7 +11,7 @@ use personal_secretary::{
     MemoryCandidateUseCase, MemoryUseCase, NotificationPolicyUseCase, PlannerError, PlannerInput,
     PlannerOutput, PlannerUseCase, ResponseExpectationControlUseCase, RetrieverPolicy,
     RetrieverUseCase, SecretaryAgentState, SourceAccountRef, SystemClock, ThreadControlUseCase,
-    ThreadLinkReviewUseCase,
+    ThreadLinkReviewUseCase, ThreadMutationUseCase,
 };
 use personal_secretary_mysql::{
     build_mysql_action_checkpoint_store_factory, build_mysql_action_store,
@@ -91,6 +91,9 @@ pub(crate) async fn assemble_action_planner(
     let thread_control = Arc::new(ThreadControlUseCase::new(build_mysql_thread_control_store(
         db.clone(),
     )));
+    let thread_mutation = Arc::new(ThreadMutationUseCase::new(
+        personal_secretary_mysql::build_mysql_thread_mutation_store(db.clone()),
+    ));
     let follow_up_control = Arc::new(FollowUpControlUseCase::new(
         build_mysql_follow_up_control_store(db.clone()),
     ));
@@ -135,6 +138,7 @@ pub(crate) async fn assemble_action_planner(
     .with_agenda(agenda)
     .with_memory(memory)
     .with_thread_control(thread_control)
+    .with_thread_mutation(thread_mutation)
     .with_follow_up_control(follow_up_control)
     .with_response_expectation_control(response_expectation_control)
     .with_memory_candidate(memory_candidate)

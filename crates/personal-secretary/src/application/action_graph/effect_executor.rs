@@ -21,7 +21,7 @@ use crate::{
     ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
     SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SecretaryToolKind,
     SourceAccountRef, SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError,
-    ThreadControlUseCase, ThreadLinkReviewUseCase,
+    ThreadControlUseCase, ThreadLinkReviewUseCase, ThreadMutationUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -40,6 +40,7 @@ pub struct SecretaryActionEffectExecutor {
     agenda: Option<Arc<AgendaUseCase>>,
     memory: Option<Arc<MemoryUseCase>>,
     thread_control: Option<Arc<ThreadControlUseCase>>,
+    thread_mutation: Option<Arc<ThreadMutationUseCase>>,
     follow_up_control: Option<Arc<FollowUpControlUseCase>>,
     response_expectation_control: Option<Arc<ResponseExpectationControlUseCase>>,
     memory_candidate: Option<Arc<MemoryCandidateUseCase>>,
@@ -71,6 +72,7 @@ impl SecretaryActionEffectExecutor {
             agenda: None,
             memory: None,
             thread_control: None,
+            thread_mutation: None,
             follow_up_control: None,
             response_expectation_control: None,
             memory_candidate: None,
@@ -143,6 +145,16 @@ impl SecretaryActionEffectExecutor {
         command_source_event_id: SourceEventId,
     ) -> Self {
         self.thread_control = Some(thread_control);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    pub fn with_thread_mutation(
+        mut self,
+        thread_mutation: Arc<ThreadMutationUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.thread_mutation = Some(thread_mutation);
         self.command_source_event_id = Some(command_source_event_id);
         self
     }
@@ -334,6 +346,42 @@ impl SecretaryActionEffectExecutor {
             .await
             .map_err(thread_control_effect_error)?;
         Ok(Some(receipt))
+    }
+
+    async fn execute_thread_mutation(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<Option<SecretaryActionReceipt>, EffectError> {
+        if !is_thread_mutation_action(&proposal.action) {
+            return Ok(None);
+        }
+        let use_case = self.thread_mutation.as_ref().ok_or_else(|| {
+            EffectError::new(EffectErrorKind::Permanent, "ThreadMutationUseCase 未注入")
+        })?;
+        let command_source_event_id = self.command_source_event_id.clone().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "线程拆分/合并需要原始 OwnerCommand 身份",
+            )
+        })?;
+        let receipt = use_case
+            .apply_approved_action(
+                &self.account,
+                &proposal.proposal_id,
+                &proposal.action,
+                &command_source_event_id,
+                effect_id,
+            )
+            .await
+            .map_err(thread_mutation_effect_error)?;
+        let result_ref = serde_json::to_string(&receipt)
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        Ok(Some(SecretaryActionReceipt {
+            proposal_id: proposal.proposal_id.clone(),
+            result_ref,
+            tool_kind: None,
+        }))
     }
 
     async fn execute_memory(
@@ -1205,11 +1253,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         let is_mutable_policy =
             is_mutable_notification_policy_action(&envelope.effect.proposal.action);
         let is_thread_control = is_thread_control_action(&envelope.effect.proposal.action);
+        let is_thread_mutation = is_thread_mutation_action(&envelope.effect.proposal.action);
         let is_owner_work_control = is_owner_work_control_action(&envelope.effect.proposal.action);
         let is_memory_candidate_control =
             is_memory_candidate_control_action(&envelope.effect.proposal.action);
         if !is_mutable_policy
             && !is_thread_control
+            && !is_thread_mutation
             && !is_owner_work_control
             && !is_memory_candidate_control
             && let Some(mut receipt) = self
@@ -1248,6 +1298,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
         }
         if let Some(mut receipt) = self
             .execute_thread_control(&envelope.effect.proposal, &envelope.id.to_string())
+            .await?
+        {
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
+        }
+        if let Some(mut receipt) = self
+            .execute_thread_mutation(&envelope.effect.proposal, &envelope.id.to_string())
             .await?
         {
             receipt.tool_kind = Some(tool_kind);
@@ -1362,6 +1419,16 @@ fn thread_control_effect_error(error: ThreadControlStoreError) -> EffectError {
         ThreadControlStoreError::LeaseLost
         | ThreadControlStoreError::Unauthorized
         | ThreadControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn thread_mutation_effect_error(error: crate::ThreadMutationUseCaseError) -> EffectError {
+    let kind = match error {
+        crate::ThreadMutationUseCaseError::Store(
+            crate::InboundEventStoreError::Unavailable | crate::InboundEventStoreError::Database(_),
+        ) => EffectErrorKind::UnknownCommit,
+        _ => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
 }
@@ -1702,6 +1769,13 @@ fn is_thread_control_action(action: &SecretaryAction) -> bool {
             | SecretaryAction::DismissThreadQuestion { .. }
             | SecretaryAction::ReconfirmThreadSemantics { .. }
             | SecretaryAction::SetThreadLifecycle { .. }
+    )
+}
+
+fn is_thread_mutation_action(action: &SecretaryAction) -> bool {
+    matches!(
+        action,
+        SecretaryAction::MergeThreads { .. } | SecretaryAction::SplitThread { .. }
     )
 }
 
