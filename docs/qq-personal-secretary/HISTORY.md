@@ -51,6 +51,13 @@
   MySQL 只允许五类强 signal，文件版本提示与上一版本精确文件提示跨类型匹配，结果仍只到
   `proposed`。NapCat 4.18.14 标准文件段未提供版本父指针，因此适配器 fail-closed，不猜测。
   THR-002 隔离 MySQL 1/1、EVT-007 回归 20/20 及完整 Rust/架构门禁通过。
+- **本轮（THR-004，已完成）**：跨线程检索改为有效线程投影和类型化代表来源，相关性按精确、
+  前缀、包含分级，再以线程最新事件时间和 Thread ID 稳定排序；LIKE 字面转义，账号、撤回、缺失正文
+  与内容策略在 SQL 候选阶段过滤。远程模型的候选、计数和排序完全排除 `local_only`，只有已验证
+  loopback 且策略允许时才在 Store 层纳入。SearchEventThreads 现在向 Replan 提供 typed events，
+  不再只返回计数。复杂指代增加当前/上一条、回复父消息/被回复者、当前线程/线程发起人的有界
+  确定性解析，缺少会话或权威因果关系仍 fail-closed 澄清。真实质量样本与隔离 MySQL 覆盖排序、
+  字面通配符、账号/隐私隔离及 merge/split 有效投影。
 - **本轮（CMD-009）**：`AgentWorkingContextV1` 版本化有界工作上下文（引用/开放指代/冲突
   上下文，硬上限 + 32 KiB 序列化上限 + Checkpoint JSON 持久化 + 旧 Checkpoint 兼容）；
   `SearchRecentEvents` 扩展可选时间窗/会话/线程/Actor 硬过滤并移除 24 小时窗口限制，
@@ -109,6 +116,12 @@
 
 ## 最近事件
 
+- `2026-08-06 02:16（Asia/Shanghai）`：`THR-004` 完成。`ThreadSearchResult` 增加代表事件、发送者、
+  会话、代表时间、内容策略与封闭相关性等级；MySQL 以有效线程 View 检索，远程/local loopback
+  内容边界直接参与 SQL 候选和排序。`SearchEventThreads` 形成 typed observation。复杂指代只对
+  固定中文质量样本走当前运行窗口或已确认 causal context，其他表达仍走作用域候选并在零/多解时
+  澄清。领域 277/277、QQBot 57 + 10 + 3、`qqbot-server` 175 passed/2 ignored、架构 24/24；
+  THR-004 1/1、CMD-010 2/2、参与者因果 2/2 隔离 MySQL 回归通过。
 - `2026-08-06 01:51（Asia/Shanghai）`：`THR-002` 完成。领域新增显式文件版本引用，关联提取器
   支持精确 Forward 与完整 Rich 内容摘要；NapCat 富消息在协议边界计算未截断载荷摘要，缺少摘要
   时继续保留 Artifact，但不形成强关联。MySQL 增量迁移扩展强信号 CHECK，文件版本通过跨类型

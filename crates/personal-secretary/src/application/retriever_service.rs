@@ -18,6 +18,41 @@ use crate::{
     validate_causal_context, validate_event_query, validate_participant_context,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextReferenceIntent {
+    CurrentMessage,
+    PreviousMessage,
+    ReplyParent,
+    ReplyParentActor,
+    CurrentThread,
+    ThreadStarter,
+}
+
+fn classify_context_reference(expression: &str) -> Option<ContextReferenceIntent> {
+    use ContextReferenceIntent::*;
+
+    let normalized: String = expression
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '，' | '。' | '？' | '?' | '！' | '!'))
+        .collect();
+    match normalized.as_str() {
+        "这条消息" | "当前消息" | "本条消息" => Some(CurrentMessage),
+        "上一条" | "上一条消息" | "前一条消息" | "刚才那条消息" => {
+            Some(PreviousMessage)
+        }
+        "回复的原消息" | "我回复的原消息" | "被回复的消息" | "回复父消息" => {
+            Some(ReplyParent)
+        }
+        "被回复的人" | "原消息发送者" | "回复对象" => Some(ReplyParentActor),
+        "这个线程" | "当前线程" | "这个话题" | "当前话题" => Some(CurrentThread),
+        "线程发起人" | "这个线程的发起人" | "话题发起人" | "这个话题的发起人" => {
+            Some(ThreadStarter)
+        }
+        _ => None,
+    }
+}
+
 /// Retriever 内容策略（约束 6/7）。默认 `allow_local_only_to_loopback_llm = false`（保守安全）。
 #[derive(Debug, Clone, Default)]
 pub struct RetrieverPolicy {
@@ -127,8 +162,35 @@ impl RetrieverUseCase {
         }
         Ok(self
             .store
-            .search_threads(account, query_text, limit)
+            .search_threads(account, query_text, limit, false)
             .await?)
+    }
+
+    /// 返回允许进入当前模型边界的线程结果。内容策略直接传入 Store，
+    /// 使候选集合、计数和排序都不会先观察再过滤受限内容。
+    pub async fn search_threads_for_model(
+        &self,
+        account: &SourceAccountRef,
+        query_text: &str,
+        limit: u16,
+        is_local_loopback: bool,
+    ) -> Result<Vec<ThreadSearchResult>, RetrieverUseCaseError> {
+        if query_text.trim().is_empty() {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "query_text must not be empty".into(),
+            ));
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "limit must be in 1..=100".into(),
+            ));
+        }
+        let include_local_only = is_local_loopback && self.policy.allow_local_only_to_loopback_llm;
+        let results = self
+            .store
+            .search_threads(account, query_text, limit, include_local_only)
+            .await?;
+        Ok(results)
     }
 
     pub async fn list_upcoming(
@@ -306,11 +368,140 @@ impl RetrieverUseCase {
                 "expression must not be empty".into(),
             ));
         }
+        if let Some(resolution) = self
+            .resolve_bounded_context_reference(expression, context)
+            .await?
+        {
+            return Ok(resolution);
+        }
         let candidates = self
             .store
             .find_reference_candidates(account, expression, context)
             .await?;
         Ok(resolve_reference_from_candidates(candidates, context))
+    }
+
+    async fn resolve_bounded_context_reference(
+        &self,
+        expression: &str,
+        context: &ReferenceContext,
+    ) -> Result<Option<ReferenceResolution>, RetrieverUseCaseError> {
+        use ContextReferenceIntent::*;
+
+        let Some(intent) = classify_context_reference(expression) else {
+            return Ok(None);
+        };
+        let unresolved = |evidence: &str| ReferenceResolution {
+            resolved_actor_id: None,
+            resolved_thread_id: None,
+            resolved_event_ids: Vec::new(),
+            ambiguous: true,
+            evidence: evidence.into(),
+        };
+
+        if intent == PreviousMessage {
+            let Some(current_conversation) = context.current_conversation.as_ref() else {
+                return Ok(Some(unresolved(
+                    "未提供当前会话，不能从账号级最近窗口猜测上一条消息",
+                )));
+            };
+            for event in context.recent_events.iter().rev() {
+                if Some(&event.source_event_id) == context.current_event_id.as_ref() {
+                    continue;
+                }
+                let detail = self
+                    .store
+                    .read_source_event(&event.source_event_id, &context.account)
+                    .await?;
+                if let Some(detail) = detail
+                    && &detail.conversation == current_conversation
+                {
+                    return Ok(Some(ReferenceResolution {
+                        resolved_actor_id: None,
+                        resolved_thread_id: detail.thread_id,
+                        resolved_event_ids: vec![event.source_event_id.clone()],
+                        ambiguous: false,
+                        evidence: "由当前运行的有界最近窗口解析上一条消息".into(),
+                    }));
+                }
+            }
+            return Ok(Some(unresolved(
+                "当前会话内没有可证明的上一条消息，需 Owner 澄清",
+            )));
+        }
+
+        let Some(current_event_id) = context.current_event_id.as_ref() else {
+            return Ok(Some(unresolved(
+                "当前运行缺少权威命令事件，不能解析上下文指代",
+            )));
+        };
+        if intent == CurrentMessage {
+            return Ok(Some(ReferenceResolution {
+                resolved_actor_id: None,
+                resolved_thread_id: context.current_thread_id.clone(),
+                resolved_event_ids: vec![current_event_id.clone()],
+                ambiguous: false,
+                evidence: "由当前运行的权威命令事件解析当前消息".into(),
+            }));
+        }
+
+        let causal = self
+            .event_causal_context(&context.account, current_event_id)
+            .await?;
+        let Some(causal) = causal else {
+            return Ok(Some(unresolved(
+                "当前事件没有可验证的因果上下文，需 Owner 澄清",
+            )));
+        };
+        let resolution = match intent {
+            ReplyParent | ReplyParentActor => match causal.reply_parent {
+                Some(parent) => ReferenceResolution {
+                    resolved_actor_id: if intent == ReplyParentActor {
+                        parent
+                            .sender
+                            .as_ref()
+                            .map(|sender| sender.stable_id.clone())
+                    } else {
+                        None
+                    },
+                    resolved_thread_id: causal
+                        .thread
+                        .as_ref()
+                        .map(|thread| thread.thread_id.clone()),
+                    resolved_event_ids: vec![parent.source_event_id],
+                    ambiguous: intent == ReplyParentActor && parent.sender.is_none(),
+                    evidence: if intent == ReplyParentActor {
+                        "由已确认 replies_to 关系解析被回复者".into()
+                    } else {
+                        "由已确认 replies_to 关系解析回复父消息".into()
+                    },
+                },
+                None => unresolved("当前消息没有已确认的回复父消息，需 Owner 澄清"),
+            },
+            CurrentThread | ThreadStarter => match causal.thread {
+                Some(thread) => ReferenceResolution {
+                    resolved_actor_id: if intent == ThreadStarter {
+                        thread
+                            .root_sender
+                            .as_ref()
+                            .map(|sender| sender.stable_id.clone())
+                    } else {
+                        None
+                    },
+                    resolved_thread_id: Some(thread.thread_id),
+                    resolved_event_ids: vec![thread.root_event_id],
+                    ambiguous: intent == ThreadStarter && thread.root_sender.is_none(),
+                    evidence: if intent == ThreadStarter {
+                        "由有效线程根事件解析线程发起人".into()
+                    } else {
+                        "由有效线程投影解析当前线程".into()
+                    },
+                },
+                None => unresolved("当前消息没有有效线程归属，需 Owner 澄清"),
+            },
+            CurrentMessage | PreviousMessage => unreachable!("handled above"),
+        };
+        Ok(Some(resolution))
     }
 
     /// 判定内容信任级别是否允许进入模型（约束 6/7）。
@@ -372,8 +563,10 @@ impl RetrieverUseCase {
 mod tests {
     use super::*;
     use crate::{
-        ConversationKind, ConversationRef, EventQuery, EventSearchResult, MessageRole,
-        MessageSource, SourceAccountRef, SourceEventId, VerifiedActor, VerifiedActorKind,
+        CausalEventRef, CausalThreadRef, ConversationKind, ConversationRef, EventQuery,
+        EventSearchResult, IdentityTrust, MessageRole, MessageSource, ParticipantIdentity,
+        PlatformIdentityKind, RecentEventRef, SourceAccountRef, SourceEventId, ThreadStatus,
+        VerifiedActor, VerifiedActorKind,
     };
     use async_trait::async_trait;
     use std::sync::Mutex;
@@ -384,6 +577,18 @@ mod tests {
 
     struct FakeStore {
         events: Mutex<Vec<EventSearchResult>>,
+        details: Mutex<Vec<SourceEventDetail>>,
+        threads: Mutex<Vec<ThreadSearchResult>>,
+        causal: Mutex<Option<EventCausalContextView>>,
+    }
+
+    fn fake_store(events: Vec<EventSearchResult>) -> Arc<FakeStore> {
+        Arc::new(FakeStore {
+            events: Mutex::new(events),
+            details: Mutex::new(Vec::new()),
+            threads: Mutex::new(Vec::new()),
+            causal: Mutex::new(None),
+        })
     }
 
     #[async_trait]
@@ -403,18 +608,25 @@ mod tests {
         }
         async fn read_source_event(
             &self,
-            _event_id: &SourceEventId,
+            event_id: &SourceEventId,
             _account: &SourceAccountRef,
         ) -> Result<Option<SourceEventDetail>, InboundEventStoreError> {
-            Ok(None)
+            Ok(self
+                .details
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|detail| &detail.source_event_id == event_id)
+                .cloned())
         }
         async fn search_threads(
             &self,
             _account: &SourceAccountRef,
             _query_text: &str,
             _limit: u16,
+            _include_local_only: bool,
         ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError> {
-            Ok(Vec::new())
+            Ok(self.threads.lock().unwrap().clone())
         }
         async fn find_reference_candidates(
             &self,
@@ -467,7 +679,7 @@ mod tests {
             _account: &SourceAccountRef,
             _source_event_id: &SourceEventId,
         ) -> Result<Option<EventCausalContextView>, InboundEventStoreError> {
-            Ok(None)
+            Ok(self.causal.lock().unwrap().clone())
         }
         async fn participant_context(
             &self,
@@ -534,12 +746,10 @@ mod tests {
 
     #[tokio::test]
     async fn remote_loopback_excludes_local_only_by_default() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(vec![
-                event(ContentTrustLevel::Normal),
-                event(ContentTrustLevel::LocalOnly),
-            ]),
-        });
+        let store = fake_store(vec![
+            event(ContentTrustLevel::Normal),
+            event(ContentTrustLevel::LocalOnly),
+        ]);
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let query = EventQuery::for_account(account());
         let results = use_case.search_events(&query, false).await.unwrap();
@@ -549,12 +759,10 @@ mod tests {
 
     #[tokio::test]
     async fn local_loopback_includes_local_only_when_allowed() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(vec![
-                event(ContentTrustLevel::Normal),
-                event(ContentTrustLevel::LocalOnly),
-            ]),
-        });
+        let store = fake_store(vec![
+            event(ContentTrustLevel::Normal),
+            event(ContentTrustLevel::LocalOnly),
+        ]);
         let policy = RetrieverPolicy {
             allow_local_only_to_loopback_llm: true,
         };
@@ -566,9 +774,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_loopback_excludes_local_only_when_not_allowed() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(vec![event(ContentTrustLevel::LocalOnly)]),
-        });
+        let store = fake_store(vec![event(ContentTrustLevel::LocalOnly)]);
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let query = EventQuery::for_account(account());
         let results = use_case.search_events(&query, true).await.unwrap();
@@ -577,9 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn never_long_term_always_excluded() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(vec![event(ContentTrustLevel::NeverLongTerm)]),
-        });
+        let store = fake_store(vec![event(ContentTrustLevel::NeverLongTerm)]);
         let policy = RetrieverPolicy {
             allow_local_only_to_loopback_llm: true,
         };
@@ -591,9 +795,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_threads_rejects_empty_query() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(Vec::new()),
-        });
+        let store = fake_store(Vec::new());
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let result = use_case.search_threads(&account(), "  ", 10).await;
         assert!(result.is_err());
@@ -601,11 +803,151 @@ mod tests {
 
     #[tokio::test]
     async fn list_upcoming_rejects_zero_horizon() {
-        let store = Arc::new(FakeStore {
-            events: Mutex::new(Vec::new()),
-        });
+        let store = fake_store(Vec::new());
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let result = use_case.list_upcoming(&account(), 0).await;
         assert!(result.is_err());
+    }
+
+    fn reference_context(current: &str, recent: &[&str]) -> ReferenceContext {
+        ReferenceContext {
+            account: account(),
+            current_event_id: Some(SourceEventId::new(current).unwrap()),
+            current_conversation: Some(
+                ConversationRef::new(ConversationKind::Group, "quality-group").unwrap(),
+            ),
+            current_thread_id: Some(EventThreadId::new("quality-thread").unwrap()),
+            recent_events: recent
+                .iter()
+                .map(|id| RecentEventRef {
+                    source_event_id: SourceEventId::new(*id).unwrap(),
+                    summary: String::new(),
+                })
+                .collect(),
+            now_unix_secs: 1_700_000_000,
+            timezone: "Asia/Shanghai".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn realistic_previous_message_reference_uses_bounded_run_window() {
+        let store = fake_store(Vec::new());
+        store.details.lock().unwrap().push(SourceEventDetail {
+            source_event_id: SourceEventId::new("older-event").unwrap(),
+            account: account(),
+            conversation: ConversationRef::new(ConversationKind::Group, "quality-group").unwrap(),
+            actor: VerifiedActor::new(VerifiedActorKind::External, "actor-older").unwrap(),
+            participant: None,
+            message_role: MessageRole::ExternalObservation,
+            occurred_at_unix_secs: 1_699_999_999,
+            normalized_text: "部署窗口".into(),
+            content_trust_level: ContentTrustLevel::Normal,
+            reply_to_event_id: None,
+            thread_id: Some(EventThreadId::new("quality-thread").unwrap()),
+        });
+        store.details.lock().unwrap().push(SourceEventDetail {
+            source_event_id: SourceEventId::new("other-group-event").unwrap(),
+            account: account(),
+            conversation: ConversationRef::new(ConversationKind::Group, "other-group").unwrap(),
+            actor: VerifiedActor::new(VerifiedActorKind::External, "actor-other").unwrap(),
+            participant: None,
+            message_role: MessageRole::ExternalObservation,
+            occurred_at_unix_secs: 1_699_999_999,
+            normalized_text: "其他群消息".into(),
+            content_trust_level: ContentTrustLevel::Normal,
+            reply_to_event_id: None,
+            thread_id: Some(EventThreadId::new("other-thread").unwrap()),
+        });
+        let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
+        let context = reference_context(
+            "command-event",
+            &["older-event", "other-group-event", "command-event"],
+        );
+
+        for sample in ["上一条消息", "刚才那条消息？"] {
+            let resolution = use_case
+                .resolve_reference(&account(), sample, &context)
+                .await
+                .unwrap();
+            assert!(!resolution.ambiguous, "sample={sample}");
+            assert_eq!(resolution.resolved_event_ids[0].as_str(), "older-event");
+        }
+    }
+
+    #[tokio::test]
+    async fn realistic_reply_and_thread_references_use_confirmed_causal_roles() {
+        let store = fake_store(Vec::new());
+        let parent_sender = ParticipantIdentity::new(
+            PlatformIdentityKind::External,
+            "parent-actor",
+            IdentityTrust::Observed,
+        )
+        .unwrap();
+        let root_sender = ParticipantIdentity::new(
+            PlatformIdentityKind::External,
+            "root-actor",
+            IdentityTrust::Observed,
+        )
+        .unwrap();
+        *store.causal.lock().unwrap() = Some(EventCausalContextView {
+            source_event_id: SourceEventId::new("command-event").unwrap(),
+            account: account(),
+            sender: None,
+            reply_parent: Some(CausalEventRef {
+                source_event_id: SourceEventId::new("parent-event").unwrap(),
+                sender: Some(parent_sender),
+            }),
+            thread: Some(CausalThreadRef {
+                thread_id: EventThreadId::new("quality-thread").unwrap(),
+                status: ThreadStatus::Open,
+                root_event_id: SourceEventId::new("root-event").unwrap(),
+                root_sender: Some(root_sender),
+            }),
+            mentioned: Vec::new(),
+            requesters: Vec::new(),
+            assignees: Vec::new(),
+            promisors: Vec::new(),
+            beneficiaries: Vec::new(),
+            participants: Vec::new(),
+            relations: Vec::new(),
+            ambiguous: false,
+            source_refs: Vec::new(),
+        });
+        let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
+        let context = reference_context("command-event", &["command-event"]);
+
+        let replied_actor = use_case
+            .resolve_reference(&account(), "被回复的人", &context)
+            .await
+            .unwrap();
+        assert!(!replied_actor.ambiguous);
+        assert_eq!(
+            replied_actor.resolved_actor_id.as_deref(),
+            Some("parent-actor")
+        );
+        assert_eq!(replied_actor.resolved_event_ids[0].as_str(), "parent-event");
+
+        let starter = use_case
+            .resolve_reference(&account(), "这个话题的发起人", &context)
+            .await
+            .unwrap();
+        assert!(!starter.ambiguous);
+        assert_eq!(starter.resolved_actor_id.as_deref(), Some("root-actor"));
+        assert_eq!(starter.resolved_event_ids[0].as_str(), "root-event");
+    }
+
+    #[tokio::test]
+    async fn contextual_reference_without_authoritative_evidence_stays_ambiguous() {
+        let use_case = RetrieverUseCase::new(fake_store(Vec::new()), RetrieverPolicy::default());
+        let context = reference_context("command-event", &["command-event"]);
+
+        for sample in ["上一条消息", "回复的原消息", "线程发起人"] {
+            let resolution = use_case
+                .resolve_reference(&account(), sample, &context)
+                .await
+                .unwrap();
+            assert!(resolution.ambiguous, "sample={sample}");
+            assert!(resolution.resolved_event_ids.is_empty(), "sample={sample}");
+        }
     }
 }

@@ -92,9 +92,10 @@ const ACTION_PLANNER_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的动
 get_event_causal_context 必须提供 source_event_id（event_ref）；get_participant_context 必须提供
 actor_ref（已存在的临时引用）；get_participant_context_by_name 必须提供 expression（人物显示名或
 别名），conversation_ref 可选；conversation_ref 一旦提供必须是输入中已存在的临时引用。
-resolve_reference 用于解析"他/那个人/那条消息"等非显式指代：默认只允许在显式作用域内解析，
-必须同时提供已登记的 conversation_ref（如 "conv_1"）或 thread_ref 限定范围；没有明确会话范围
-时不要输出 resolve_reference，改用 ask_owner_clarification 请 Owner 说明具体会话或对象。
+resolve_reference 用于解析非显式指代。"上一条消息/刚才那条消息"必须提供当前已登记的
+conversation_ref；"回复的原消息/被回复的人/当前线程/线程发起人"会严格从当前命令事件的已确认
+replies_to 与有效线程根关系解析，可以省略 thread_ref。其他"他/那个人/那条消息"仍必须提供已登记的
+conversation_ref（如 "conv_1"）或 thread_ref；没有明确作用域时改用 ask_owner_clarification，绝不猜测。
 
 没有充分证据时返回 no_action。
 只返回一个 JSON 对象，严格符合以下格式之一：

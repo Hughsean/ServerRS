@@ -115,8 +115,23 @@ pub struct ThreadSearchResult {
     pub status: ThreadStatus,
     pub event_count: u64,
     pub latest_event_at_unix_secs: i64,
-    /// 最新事件的有界摘录。
-    pub latest_excerpt: String,
+    /// 线程内与查询最相关的代表来源。调用方必须通过类型化临时引用投影，
+    /// 不能把稳定 ID 拼进模型可见摘要。
+    pub representative_source_event_id: SourceEventId,
+    pub representative_conversation: ConversationRef,
+    pub representative_actor: VerifiedActor,
+    pub representative_occurred_at_unix_secs: i64,
+    pub representative_excerpt: String,
+    pub representative_content_trust_level: ContentTrustLevel,
+    pub match_rank: ThreadSearchMatchRank,
+}
+
+/// 线程检索的确定性文本相关性。数值只在 MySQL 适配器内部映射，领域层不接受任意分数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ThreadSearchMatchRank {
+    Contains,
+    Prefix,
+    Exact,
 }
 
 /// 即将到期事项。
@@ -679,6 +694,8 @@ pub struct ReferenceCandidate {
 #[derive(Debug, Clone)]
 pub struct ReferenceContext {
     pub account: SourceAccountRef,
+    /// 发起当前 Action run 的权威事件。复杂指代只能围绕该事件和有界最近窗口解析。
+    pub current_event_id: Option<SourceEventId>,
     pub current_conversation: Option<ConversationRef>,
     pub current_thread_id: Option<EventThreadId>,
     pub recent_events: Vec<RecentEventRef>,
@@ -807,6 +824,7 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         query_text: &str,
         limit: u16,
+        include_local_only: bool,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError>;
 
     /// 查找指代解析候选。Store 只返回候选集合，不判定唯一/歧义。
@@ -1644,6 +1662,7 @@ mod tests {
     fn resolve_empty_candidates_returns_no_result() {
         let context = ReferenceContext {
             account: account(),
+            current_event_id: None,
             current_conversation: None,
             current_thread_id: None,
             recent_events: Vec::new(),
@@ -1662,6 +1681,7 @@ mod tests {
         // （可能是另一群/另一身份命名空间的同 ID 参与者），一律要求澄清。
         let context = ReferenceContext {
             account: account(),
+            current_event_id: None,
             current_conversation: None,
             current_thread_id: None,
             recent_events: Vec::new(),
@@ -1692,6 +1712,7 @@ mod tests {
         // 显式作用域 + 唯一完整身份（kind + actor_id）→ 允许精确解析（C.4）。
         let mut context = ReferenceContext {
             account: account(),
+            current_event_id: None,
             current_conversation: None,
             current_thread_id: None,
             recent_events: Vec::new(),
@@ -1725,6 +1746,7 @@ mod tests {
         // 是两个参与者，不得因"唯一字符串"静默绑定到其中之一。
         let context = ReferenceContext {
             account: account(),
+            current_event_id: None,
             current_conversation: Some(
                 ConversationRef::new(ConversationKind::Group, "group-a").unwrap(),
             ),

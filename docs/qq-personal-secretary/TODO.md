@@ -14,8 +14,8 @@
 
 ## 0. 当前状态
 
-- 当前分支：`Main`；`GAP-003-A/B/C`、`GAP-007`、`GAP-008-LOCAL` 已提交收口，当前工作树完成
-  `THR-002`，等待本轮提交。
+- 当前分支：`Main`；`GAP-003-A/B/C`、`GAP-007`、`GAP-008-LOCAL`、`THR-002`、`THR-004`
+  已提交收口，工作树仅保留用户未跟踪的 `.mcp.json`。
 - 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。2026-08-06 双账号 NapCat 4.18.14
   实测确认 `reverseOrder=true` 才是向更旧读取，响应数组仍为旧到新；客户端已在协议边界归一化为
   新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。空页原因、跨重启覆盖和
@@ -26,7 +26,7 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：进入 `THR-004` 跨线程排序检索、复杂指代与真实质量样本。`GAP-008-LOCAL` 已完成；
+- 下一步：进入 `THR-005` 结论修订链有界分页。`GAP-008-LOCAL` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
   业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
@@ -384,7 +384,18 @@
   `personal-secretary` 273/273、QQBot 57 单元 + 10 fake HTTP + 3 heartbeat、`qqbot-server`
   175 passed/2 ignored、架构边界 24/24；THR-002 MySQL 1/1、EVT-007 回归 20/20，迁移重放、
   弱信号 CHECK、账号隔离与幂等均通过。
-- [ ] `THR-004` 完成跨线程排序检索、复杂指代与一小组真实质量样本；候选必须引用当前批次来源。
+- [x] `THR-004` 完成跨线程排序检索、复杂指代与一小组真实质量样本。线程检索统一使用
+  `secretary_effective_thread_events`，按精确 > 前缀 > 包含、线程最新事件时间与 Thread ID 确定排序；
+  LIKE 通配符按字面转义，账号、撤回、缺失投影和内容策略在 SQL 候选阶段过滤。每个结果携带
+  代表 `SourceEvent`、发送者、会话、时间、受控摘录和相关性等级，经 `QueryEffectTypedEvent`
+  投影为请求内临时引用，不再只返回线程计数。`local_only` 是否参与候选/计数/排序由已验证
+  loopback 策略下沉到 Store，远程路径不会先排序后过滤。复杂指代只识别固定的当前/上一条消息、
+  回复父消息、被回复者、当前线程和线程发起人；上一条逐条回读复验当前会话，回复与发起人只使用
+  已确认因果关系，缺证据继续 OpenReference。语义候选现有领域门持续要求所有来源属于当前领取
+  批次。完整门禁同时修复 NapCat 本地 fake HTTP 偶发被代理接管的问题：只读客户端显式禁用代理，
+  避免 loopback Token 暴露。验证：领域 277/277、QQBot 57 单元 + 10 fake HTTP + 3 heartbeat、
+  `qqbot-server` 175 passed/2 ignored、架构边界 24/24；THR-004 1/1、CMD-010 2/2、参与者因果
+  2/2 隔离 MySQL 回归通过，严格 Clippy、workspace all-targets check、fmt 与 diff check 全绿。
 - [ ] `THR-005` 增加结论修订链的有界分页，不改变既有不可变 revision 语义。
 - [ ] `THR-006` 定义有来源证据的自动结束条件；不因一段时间无人发言直接宣称事项已经解决。
 - [ ] `THR-008` 完成低置信度确认话术；QQ 开放平台投递属于外部验收，不阻塞本地响应产物。

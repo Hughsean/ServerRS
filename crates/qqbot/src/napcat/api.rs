@@ -355,6 +355,9 @@ impl NapCatReadOnlyClient {
         Self {
             base_url,
             http_client: reqwest::Client::builder()
+                // NapCat 是本机/受管局域网边界；禁止继承环境代理，避免 loopback
+                // 请求被代理接管或把本地访问令牌暴露给代理进程。
+                .no_proxy()
                 .timeout(timeout)
                 .connect_timeout(timeout)
                 .build()

@@ -318,7 +318,11 @@ impl PlannerUseCase {
             claimed.account.clone(),
             self.clock.now_unix_secs(),
         )
-        .with_loopback(self.is_local_loopback);
+        .with_loopback(self.is_local_loopback)
+        .with_reference_context(
+            claimed.command_source_event_id.clone(),
+            claimed.recent_events.clone(),
+        );
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),
@@ -500,7 +504,11 @@ impl PlannerUseCase {
             claimed.account.clone(),
             self.clock.now_unix_secs(),
         )
-        .with_loopback(self.is_local_loopback);
+        .with_loopback(self.is_local_loopback)
+        .with_reference_context(
+            claimed.command_source_event_id.clone(),
+            claimed.recent_events.clone(),
+        );
         if let Some(notification_policy) = &self.notification_policy {
             effect_executor = effect_executor.with_notification_policy(
                 Arc::clone(notification_policy),

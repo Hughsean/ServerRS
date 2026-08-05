@@ -391,42 +391,91 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         account: &SourceAccountRef,
         query_text: &str,
         limit: u16,
+        include_local_only: bool,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
+        let escaped = escape_like_pattern(query_text.trim());
+        let prefix = format!("{escaped}%");
+        let contains = format!("%{escaped}%");
         let rows = ThreadSearchRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            r#"SELECT t.thread_id, t.status, COUNT(te.source_event_id) AS event_count,
-                      MAX(e.occurred_at_unix_secs) AS latest_at,
-                      SUBSTRING((SELECT m2.normalized_text
-                                 FROM secretary_source_events e2
-                                 LEFT JOIN secretary_thread_events te2
-                                   ON te2.source_event_id = e2.source_event_id
-                                 LEFT JOIN secretary_message_contents m2
-                                   ON e2.source_event_id = m2.source_event_id
-                                 WHERE te2.thread_id = t.thread_id
-                                   AND NOT EXISTS (
-                                       SELECT 1 FROM secretary_message_tombstones t2
-                                       WHERE t2.source_event_id = e2.source_event_id
-                                         AND t2.account_id = e2.account_id
-                                         AND t2.status = 'applied'
-                                   )
-                                 ORDER BY e2.occurred_at_unix_secs DESC LIMIT 1), 1, ?) AS latest_excerpt
-               FROM secretary_event_threads t
-               LEFT JOIN secretary_thread_events te ON te.thread_id = t.thread_id
-               LEFT JOIN secretary_source_events e ON e.source_event_id = te.source_event_id
-                 AND e.account_id = ?
-               LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
-               WHERE t.account_id = ?
-                 AND (m.normalized_text LIKE ? OR t.thread_id LIKE ?)
-               GROUP BY t.thread_id, t.status
-               ORDER BY latest_at DESC
+            r#"WITH base_events AS (
+                   SELECT ev.thread_id, t.status, e.source_event_id,
+                          e.actor_platform_id, e.actor_kind, e.occurred_at_unix_secs,
+                          c.platform_conversation_id, c.conversation_kind,
+                          CASE
+                            WHEN c.memory_mode = 'never_long_term'
+                              OR m.content_mode = 'never_long_term' THEN 'never_long_term'
+                            WHEN c.memory_mode = 'envelope_only'
+                              OR m.content_mode = 'envelope_only' THEN 'envelope_only'
+                            WHEN c.memory_mode = 'local_only'
+                              OR m.content_mode = 'local_only' THEN 'local_only'
+                            ELSE 'normal'
+                          END AS memory_mode,
+                          m.normalized_text
+                   FROM secretary_effective_thread_events ev
+                   JOIN secretary_event_threads t ON t.thread_id = ev.thread_id
+                   JOIN secretary_source_events e ON e.source_event_id = ev.source_event_id
+                   JOIN secretary_conversations c ON c.id = e.conversation_id
+                   JOIN secretary_message_contents m ON m.source_event_id = e.source_event_id
+                   WHERE t.account_id = ? AND e.account_id = ?
+                     AND NOT EXISTS (
+                         SELECT 1 FROM secretary_message_tombstones mt
+                         WHERE mt.source_event_id = e.source_event_id
+                           AND mt.account_id = e.account_id
+                           AND mt.status = 'applied'
+                     )
+               ), eligible_events AS (
+                   SELECT * FROM base_events
+                   WHERE memory_mode = 'normal' OR (? AND memory_mode = 'local_only')
+               ), thread_totals AS (
+                   SELECT thread_id, COUNT(*) AS event_count,
+                          MAX(occurred_at_unix_secs) AS latest_at
+                   FROM eligible_events GROUP BY thread_id
+               ), ranked_matches AS (
+                   SELECT eligible_events.*,
+                          CASE
+                            WHEN normalized_text = ? THEN 3
+                            WHEN normalized_text LIKE ? ESCAPE '\\' THEN 2
+                            ELSE 1
+                          END AS match_rank,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY thread_id
+                            ORDER BY
+                              CASE
+                                WHEN normalized_text = ? THEN 3
+                                WHEN normalized_text LIKE ? ESCAPE '\\' THEN 2
+                                ELSE 1
+                              END DESC,
+                              occurred_at_unix_secs DESC,
+                              source_event_id DESC
+                          ) AS row_rank
+                   FROM eligible_events
+                   WHERE normalized_text LIKE ? ESCAPE '\\'
+               )
+               SELECT r.thread_id, r.status, totals.event_count, totals.latest_at,
+                      r.source_event_id AS representative_source_event_id,
+                      r.actor_platform_id, r.actor_kind,
+                      r.occurred_at_unix_secs AS representative_occurred_at,
+                      r.platform_conversation_id, r.conversation_kind,
+                      r.memory_mode,
+                      SUBSTRING(r.normalized_text, 1, ?) AS representative_excerpt,
+                      r.match_rank
+               FROM ranked_matches r
+               JOIN thread_totals totals ON totals.thread_id = r.thread_id
+               WHERE r.row_rank = 1
+               ORDER BY r.match_rank DESC, totals.latest_at DESC, r.thread_id ASC
                LIMIT ?"#,
             [
+                account_id.into(),
+                account_id.into(),
+                include_local_only.into(),
+                query_text.trim().into(),
+                prefix.clone().into(),
+                query_text.trim().into(),
+                prefix.into(),
+                contains.into(),
                 EXCERPT_MAX_CHARS.into(),
-                account_id.into(),
-                account_id.into(),
-                format!("%{query_text}%").into(),
-                format!("%{query_text}%").into(),
                 limit.into(),
             ],
         ))
@@ -465,17 +514,25 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         if conversation_id.is_none() && scoped_thread_id.is_none() {
             return Ok(Vec::new());
         }
+        let escaped = escape_like_pattern(expression.trim());
+        let contains = format!("%{escaped}%");
         let rows = ReferenceCandidateRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
             r#"SELECT e.source_event_id, e.actor_platform_id, e.actor_kind, te.thread_id,
                       SUBSTRING(m.normalized_text, 1, ?) AS excerpt
                FROM secretary_source_events e
                LEFT JOIN secretary_message_contents m ON e.source_event_id = m.source_event_id
-               LEFT JOIN secretary_thread_events te ON te.source_event_id = e.source_event_id
+               LEFT JOIN secretary_effective_thread_events te
+                 ON te.source_event_id = e.source_event_id
+               INNER JOIN secretary_conversations c ON c.id = e.conversation_id
                WHERE e.account_id = ?
-                 AND (e.actor_platform_id LIKE ? OR m.normalized_text LIKE ?)
-                 AND (? IS NULL OR e.conversation_id = ?)
-                 AND (? IS NULL OR te.thread_id = ?)
+                  AND (e.actor_platform_id LIKE ? ESCAPE '\\'
+                       OR m.normalized_text LIKE ? ESCAPE '\\')
+                  AND (? IS NULL OR e.conversation_id = ?)
+                  AND (? IS NULL OR te.thread_id = ?)
+                  AND m.source_event_id IS NOT NULL
+                  AND c.memory_mode = 'normal'
+                  AND m.content_mode = 'normal'
                  AND NOT EXISTS (
                      SELECT 1 FROM secretary_message_tombstones t
                      WHERE t.source_event_id = e.source_event_id
@@ -487,8 +544,8 @@ impl RetrieverStoreT for MySqlRetrieverStore {
             [
                 EXCERPT_MAX_CHARS.into(),
                 account_id.into(),
-                format!("%{expression}%").into(),
-                format!("%{expression}%").into(),
+                contains.clone().into(),
+                contains.into(),
                 // NULL 参数用 Option 内的 None（sea-query 1.x Value 无 Null 变体）。
                 conversation_id
                     .map(sea_orm::Value::from)
@@ -1763,7 +1820,31 @@ fn map_thread_row(row: ThreadSearchRow) -> Result<ThreadSearchResult, InboundEve
         status: parse_thread_status(&row.status)?,
         event_count: row.event_count as u64,
         latest_event_at_unix_secs: row.latest_at.unwrap_or(0),
-        latest_excerpt: row.latest_excerpt.unwrap_or_default(),
+        representative_source_event_id: SourceEventId::new(&row.representative_source_event_id)
+            .map_err(domain_err)?,
+        representative_conversation: ConversationRef::new(
+            parse_conversation_kind(&row.conversation_kind)?,
+            &row.platform_conversation_id,
+        )
+        .map_err(domain_err)?,
+        representative_actor: VerifiedActor::new(
+            parse_actor_kind(&row.actor_kind)?,
+            &row.actor_platform_id,
+        )
+        .map_err(domain_err)?,
+        representative_occurred_at_unix_secs: row.representative_occurred_at,
+        representative_excerpt: row.representative_excerpt.unwrap_or_default(),
+        representative_content_trust_level: parse_memory_mode(&row.memory_mode)?,
+        match_rank: match row.match_rank {
+            3 => crate::ThreadSearchMatchRank::Exact,
+            2 => crate::ThreadSearchMatchRank::Prefix,
+            1 => crate::ThreadSearchMatchRank::Contains,
+            other => {
+                return Err(InboundEventStoreError::InvalidData(format!(
+                    "unknown thread search match rank: {other}"
+                )));
+            }
+        },
     })
 }
 
@@ -2126,7 +2207,15 @@ struct ThreadSearchRow {
     status: String,
     event_count: i64,
     latest_at: Option<i64>,
-    latest_excerpt: Option<String>,
+    representative_source_event_id: String,
+    actor_platform_id: String,
+    actor_kind: String,
+    representative_occurred_at: i64,
+    platform_conversation_id: String,
+    conversation_kind: String,
+    memory_mode: String,
+    representative_excerpt: Option<String>,
+    match_rank: i32,
 }
 
 #[allow(dead_code)]

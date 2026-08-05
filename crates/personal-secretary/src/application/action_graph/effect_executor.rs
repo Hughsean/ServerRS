@@ -16,11 +16,11 @@ use crate::{
     MemoryCandidateControlStoreError, MemoryCandidateControlUseCase, MemoryCandidateUseCase,
     MemoryDeleteInput, MemoryFact, MemoryFactId, MemoryFactStatus, MemoryUseCase,
     NotificationPolicyEffectRequest, NotificationPolicyUseCase, QueryEffectResultV1,
-    QueryEffectTypedEvent, ReferenceContext, ResponseExpectationControlEffectRequest,
-    ResponseExpectationControlStoreError, ResponseExpectationControlUseCase, RetrieverUseCase,
-    SecretaryAction, SecretaryActionEffect, SecretaryActionReceipt, SecretaryToolKind,
-    SourceAccountRef, SourceEventId, ThreadControlEffectRequest, ThreadControlStoreError,
-    ThreadControlUseCase,
+    QueryEffectTypedEvent, RecentEventRef, ReferenceContext,
+    ResponseExpectationControlEffectRequest, ResponseExpectationControlStoreError,
+    ResponseExpectationControlUseCase, RetrieverUseCase, SecretaryAction, SecretaryActionEffect,
+    SecretaryActionReceipt, SecretaryToolKind, SourceAccountRef, SourceEventId,
+    ThreadControlEffectRequest, ThreadControlStoreError, ThreadControlUseCase,
 };
 
 use super::port::{ActionLeaseToken, ActionRunId, ActionStoreError, ActionStoreT};
@@ -43,6 +43,7 @@ pub struct SecretaryActionEffectExecutor {
     memory_candidate: Option<Arc<MemoryCandidateUseCase>>,
     memory_candidate_control: Option<Arc<MemoryCandidateControlUseCase>>,
     command_source_event_id: Option<SourceEventId>,
+    recent_events: Vec<RecentEventRef>,
     account: SourceAccountRef,
     now_unix_secs: i64,
     is_local_loopback: bool,
@@ -71,6 +72,7 @@ impl SecretaryActionEffectExecutor {
             memory_candidate: None,
             memory_candidate_control: None,
             command_source_event_id: None,
+            recent_events: Vec::new(),
             account,
             now_unix_secs,
             is_local_loopback: false,
@@ -80,6 +82,17 @@ impl SecretaryActionEffectExecutor {
     /// 注入经过运行时配置验证的本地模型标记；默认远程路径 fail-closed。
     pub fn with_loopback(mut self, is_local_loopback: bool) -> Self {
         self.is_local_loopback = is_local_loopback;
+        self
+    }
+
+    /// 注入当前 Action run 的权威命令事件与有界最近窗口，供复杂指代解析。
+    pub fn with_reference_context(
+        mut self,
+        command_source_event_id: SourceEventId,
+        recent_events: Vec<RecentEventRef>,
+    ) -> Self {
+        self.command_source_event_id = Some(command_source_event_id);
+        self.recent_events = recent_events;
         self
     }
 
@@ -878,16 +891,10 @@ impl SecretaryActionEffectExecutor {
             }
             SecretaryAction::SearchEventThreads { query, limit } => {
                 let results = retriever
-                    .search_threads(&self.account, query, *limit)
+                    .search_threads_for_model(&self.account, query, *limit, self.is_local_loopback)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                let summary = format!("搜索到 {} 个线程", results.len());
-                query_effect_json(
-                    SecretaryToolKind::SearchEventThreads,
-                    &summary,
-                    &[],
-                    Vec::new(),
-                )
+                thread_search_query_effect(results)
             }
             SecretaryAction::ResolveReference {
                 expression,
@@ -899,9 +906,10 @@ impl SecretaryActionEffectExecutor {
                 // 回执携带歧义标记，供 ReplanDecision 登记 OpenReference。
                 let context = ReferenceContext {
                     account: self.account.clone(),
+                    current_event_id: self.command_source_event_id.clone(),
                     current_conversation: conversation_ref.clone(),
                     current_thread_id: thread_id.clone(),
-                    recent_events: Vec::new(),
+                    recent_events: self.recent_events.clone(),
                     now_unix_secs: self.now_unix_secs,
                     timezone: "UTC".into(),
                 };
@@ -914,29 +922,33 @@ impl SecretaryActionEffectExecutor {
                 } else {
                     format!("指代已解析：{}", resolution.evidence)
                 };
-                // 唯一解析只把一条权威来源投影为 typed_event；稳定事件/Actor ID
+                // 唯一解析把有界权威来源投影为 typed_event；稳定事件/Actor ID
                 // 由下一轮 LLM 适配层替换为 evt_N/actor_N。歧义时不暴露候选集合，
                 // 仅登记 OpenReference 并强制 Owner 澄清。
                 let mut source_event_ids = Vec::new();
                 let mut typed_events = Vec::new();
-                if !resolution.ambiguous
-                    && let Some(event_id) = resolution.resolved_event_ids.first()
-                    && let Some(detail) = retriever
-                        .read_source_event(event_id, &self.account)
-                        .await
-                        .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?
-                {
-                    source_event_ids.push(detail.source_event_id.clone());
-                    typed_events.push(QueryEffectTypedEvent {
-                        source_event_id: detail.source_event_id,
-                        actor_id: detail.actor.id,
-                        actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
-                            detail.actor.kind,
-                        ),
-                        occurred_at_unix_secs: detail.occurred_at_unix_secs,
-                        // 指代解析只需要身份与来源，不把正文再次送入模型。
-                        excerpt: String::new(),
-                    });
+                if !resolution.ambiguous {
+                    for event_id in resolution.resolved_event_ids.iter().take(20) {
+                        if let Some(detail) = retriever
+                            .read_source_event(event_id, &self.account)
+                            .await
+                            .map_err(|e| {
+                                EffectError::new(EffectErrorKind::Transient, e.to_string())
+                            })?
+                        {
+                            source_event_ids.push(detail.source_event_id.clone());
+                            typed_events.push(QueryEffectTypedEvent {
+                                source_event_id: detail.source_event_id,
+                                actor_id: detail.actor.id,
+                                actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
+                                    detail.actor.kind,
+                                ),
+                                occurred_at_unix_secs: detail.occurred_at_unix_secs,
+                                // 指代解析只需要身份与来源，不把正文再次送入模型。
+                                excerpt: String::new(),
+                            });
+                        }
+                    }
                 }
                 // 歧义标记进入回执，供 ReplanDecision 登记未解决指代（CMD-009 目标 A）。
                 query_effect_json_ambiguous(
@@ -2001,6 +2013,34 @@ fn query_effect_json(
     build_query_effect_json(tool_kind, summary, source_event_ids, typed_events, false)
 }
 
+fn thread_search_query_effect(
+    results: Vec<crate::ThreadSearchResult>,
+) -> Result<String, EffectError> {
+    let summary = format!("搜索到 {} 个线程", results.len());
+    let source_event_ids: Vec<SourceEventId> = results
+        .iter()
+        .map(|result| result.representative_source_event_id.clone())
+        .collect();
+    let typed_events = results
+        .into_iter()
+        .map(|result| QueryEffectTypedEvent {
+            source_event_id: result.representative_source_event_id,
+            actor_id: result.representative_actor.id,
+            actor_kind: crate::PlatformIdentityKind::from_verified_actor_kind(
+                result.representative_actor.kind,
+            ),
+            occurred_at_unix_secs: result.representative_occurred_at_unix_secs,
+            excerpt: result.representative_excerpt,
+        })
+        .collect();
+    query_effect_json(
+        SecretaryToolKind::SearchEventThreads,
+        &summary,
+        &source_event_ids,
+        typed_events,
+    )
+}
+
 /// 带歧义标记的查询回执（如 ResolveReference 多候选）。歧义是确定性业务结果，
 /// 供 ReplanDecision 节点登记未解决指代。
 fn query_effect_json_ambiguous(
@@ -2038,4 +2078,47 @@ fn build_query_effect_json(
     };
     serde_json::to_string(&result)
         .map_err(|e| EffectError::new(EffectErrorKind::Permanent, e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ContentTrustLevel, ConversationKind, ConversationRef, EventThreadId, ThreadSearchMatchRank,
+        ThreadSearchResult, ThreadStatus, VerifiedActor, VerifiedActorKind,
+    };
+
+    #[test]
+    fn thread_search_projects_representative_sources_as_typed_events() {
+        let source_event_id = SourceEventId::new("source-1").unwrap();
+        let result_ref = thread_search_query_effect(vec![ThreadSearchResult {
+            thread_id: EventThreadId::new("thread-1").unwrap(),
+            status: ThreadStatus::Open,
+            event_count: 2,
+            latest_event_at_unix_secs: 123,
+            representative_source_event_id: source_event_id.clone(),
+            representative_conversation: ConversationRef::new(
+                ConversationKind::Group,
+                "conversation-1",
+            )
+            .unwrap(),
+            representative_actor: VerifiedActor::new(VerifiedActorKind::External, "actor-1")
+                .unwrap(),
+            representative_occurred_at_unix_secs: 122,
+            representative_excerpt: "部署窗口已确认".into(),
+            representative_content_trust_level: ContentTrustLevel::Normal,
+            match_rank: ThreadSearchMatchRank::Exact,
+        }])
+        .unwrap();
+
+        let parsed: QueryEffectResultV1 = serde_json::from_str(&result_ref).unwrap();
+        assert_eq!(parsed.tool_kind, SecretaryToolKind::SearchEventThreads);
+        assert_eq!(parsed.source_event_ids, vec![source_event_id.clone()]);
+        assert_eq!(parsed.typed_events.len(), 1);
+        assert_eq!(parsed.typed_events[0].source_event_id, source_event_id);
+        assert_eq!(parsed.typed_events[0].actor_id, "actor-1");
+        assert_eq!(parsed.typed_events[0].occurred_at_unix_secs, 122);
+        assert_eq!(parsed.typed_events[0].excerpt, "部署窗口已确认");
+        assert!(!parsed.summary.contains("actor-1"));
+    }
 }

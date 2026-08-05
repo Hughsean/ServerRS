@@ -509,6 +509,7 @@ async fn reference_resolution_scenario(db: DatabaseConnection) -> Result<(), Str
                       conversation: Option<ConversationRef>| {
         ReferenceContext {
             account: account.clone(),
+            current_event_id: None,
             current_conversation: conversation,
             current_thread_id: None,
             recent_events: Vec::new(),

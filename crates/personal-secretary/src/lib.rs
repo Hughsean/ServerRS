@@ -236,7 +236,7 @@ pub use retriever::{
     ProjectMemorySummary, ReferenceCandidate, ReferenceContext, ReferenceResolution,
     RetrieverError, RetrieverStoreT, SecretaryStatusView, SourceEventDetail, ThreadActorSummary,
     ThreadClaimSummary, ThreadContextView, ThreadDecisionSummary, ThreadQuestionSummary,
-    ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
+    ThreadSearchMatchRank, ThreadSearchResult, UpcomingItem, check_causal_role_strictness,
     check_participant_permission_boundary, filter_for_model, grants_owner_authority,
     is_allowed_for_model, resolve_reference_from_candidates, validate_causal_context,
     validate_event_query, validate_participant_context,
