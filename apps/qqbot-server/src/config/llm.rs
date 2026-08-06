@@ -10,10 +10,14 @@ use serde::Deserialize;
 use super::ConfigError;
 use super::validation::is_loopback_host;
 
+pub(crate) const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "http://127.0.0.1:11434/v1";
+pub(crate) const DEEPSEEK_OFFICIAL_BASE_URL: &str = "https://api.deepseek.com/v1";
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct LlmConfig {
     pub enabled: bool,
+    pub provider: LlmProvider,
     pub base_url: String,
     pub model: String,
     pub api_key_file: Option<PathBuf>,
@@ -31,6 +35,15 @@ pub struct LlmConfig {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum LlmProvider {
+    #[default]
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmReasoningMode {
     #[default]
@@ -42,7 +55,8 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            base_url: "http://127.0.0.1:11434/v1".into(),
+            provider: LlmProvider::OpenAiCompatible,
+            base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.into(),
             model: String::new(),
             api_key_file: None,
             connect_timeout_secs: 10,
@@ -69,7 +83,23 @@ impl LlmConfig {
                 "llm.model must contain 1..=191 bytes when enabled".into(),
             ));
         }
-        let url = url::Url::parse(&self.base_url).map_err(|error| {
+        if self.provider == LlmProvider::DeepSeek
+            && self.reasoning_mode != LlmReasoningMode::ProviderDefault
+        {
+            return Err(ConfigError::Invalid(
+                "llm.reasoning_mode must be provider_default for the DeepSeek provider".into(),
+            ));
+        }
+        if self.provider == LlmProvider::DeepSeek
+            && self.base_url.trim_end_matches('/') != DEFAULT_OPENAI_COMPATIBLE_BASE_URL
+            && self.base_url.trim_end_matches('/') != DEEPSEEK_OFFICIAL_BASE_URL
+        {
+            return Err(ConfigError::Invalid(
+                "llm.base_url cannot override the official DeepSeek endpoint".into(),
+            ));
+        }
+        let effective_base_url = self.effective_base_url();
+        let url = url::Url::parse(effective_base_url).map_err(|error| {
             ConfigError::Invalid(format!("llm.base_url must be an absolute URL: {error}"))
         })?;
         if !url.username().is_empty()
@@ -142,8 +172,19 @@ impl LlmConfig {
         Ok(())
     }
 
+    pub(crate) fn effective_base_url(&self) -> &str {
+        match self.provider {
+            LlmProvider::OpenAiCompatible => &self.base_url,
+            LlmProvider::DeepSeek => DEEPSEEK_OFFICIAL_BASE_URL,
+        }
+    }
+
     pub(crate) fn api_key(&self) -> Result<Option<String>, ConfigError> {
-        if let Ok(value) = std::env::var("QQBOT_LLM_API_KEY")
+        let key_env = match self.provider {
+            LlmProvider::OpenAiCompatible => "QQBOT_LLM_API_KEY",
+            LlmProvider::DeepSeek => "QQBOT_DEEPSEEK_API_KEY",
+        };
+        if let Ok(value) = std::env::var(key_env)
             && !value.trim().is_empty()
         {
             return Ok(Some(value));

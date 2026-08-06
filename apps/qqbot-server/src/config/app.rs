@@ -180,9 +180,9 @@ impl AppConfig {
     /// 记忆提取所调用的 LLM 端点是否已验证为回环地址。
     /// 决定 `local_only` 内容信任等级是否可进入记忆候选提取：NapCat 端点固定为
     /// 回环，但 LLM 端点可配置为远程地址，`local_only` 正文绝不能发送给远程模型，
-    /// 因此信任判定的对象是 `llm.base_url` 而非 NapCat 端点。
+    /// 因此信任判定的对象是 Provider 的有效 LLM 端点而非 NapCat 端点。
     pub fn llm_endpoint_verified_loopback(&self) -> bool {
-        url::Url::parse(&self.llm.base_url)
+        url::Url::parse(self.llm.effective_base_url())
             .ok()
             .and_then(|url| url.host_str().map(is_loopback_host))
             .unwrap_or(false)

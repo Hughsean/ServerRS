@@ -36,6 +36,8 @@
   成功收到同一消息，免打扰、自身消息上报和完整派生链三项证据闭合，ENV-003 已完成。
 - 下一步：只继续上线所需外部事项；需要 QQ 开放平台新凭据、实际断网/休眠或远端管理权限的事项
   保留为 `EXTERNAL`。知识库、多模态理解和第三方自动回复已按产品决定停止，不属于当前目标。
+  LLM 已新增 DeepSeek 官方 Provider，本地忽略配置已切换为 `deepseek-chat`；后续需要真实模型的
+  测试只使用该 Provider，不再回退 Ollama。专用 API Key 未设置时客户端启动即 fail-closed。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG-FILE` 已由
@@ -481,6 +483,12 @@
 
 ## 5. 可观测性与上线强化
 
+- [x] `LLM-001` 新增 DeepSeek 官方 API Provider。`provider=deepseek` 固定
+  `https://api.deepseek.com/v1`，拒绝自定义端点与 Ollama 专用 `qwen_no_think`；密钥只读取
+  `QQBOT_DEEPSEEK_API_KEY` 或本地 `api_key_file`，缺失时 fail-closed。现有
+  `openai_compatible`/Ollama 配置保持兼容；DeepSeek 仍复用既有输入、输出 Token、响应字节、超时、
+  JSON 结构化边界和无工具策略。本地配置已切换到 `deepseek-chat`，真实 API 调用等待用户设置专用
+  密钥后执行；QQBot Server 203 passed/3 ignored、架构 24/24、严格 Clippy 与 workspace check 通过。
 - [x] `OPS-001` 把 WebSocket、Worker、Recall/Realtime Spool、入站指标和 Gap 的安全有界快照
   并入 Owner 状态查询；仅展示固定子系统名、四态状态和有界数值，不暴露账号、epoch、路径、
   正文或凭据。

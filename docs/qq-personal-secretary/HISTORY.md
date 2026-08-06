@@ -5,6 +5,11 @@
 
 ## 当前阶段
 
+- **本轮（DeepSeek 官方 Provider）**：`[llm]` 新增显式 `deepseek` Provider，端点固定为官方
+  `https://api.deepseek.com/v1`，使用独立 `QQBOT_DEEPSEEK_API_KEY`/本地密钥文件并在缺失时
+  fail-closed；自定义端点和 Ollama 专用推理模式均被拒绝。现有 OpenAI-compatible/Ollama 配置兼容，
+  本地忽略配置已切换到 `deepseek-chat`。QQBot Server 203 passed/3 ignored、架构 24/24 和严格
+  Clippy 通过；本机尚未设置专用密钥，未伪报真实 DeepSeek API 调用成功。
 - **本轮（CMD-002/CMD-LIVE 完成）**：本地忽略 `.env` 的三项 QQ 开放平台凭据已更新；
   不输出值的结构检查通过，真实 Token、Gateway Identify 和保留同一 Session 的 Resume 均成功。
   Owner C2C 主动发送返回官方 `500/11255`，现有分类正确收敛为 `unknown_commit` 且未盲重试；

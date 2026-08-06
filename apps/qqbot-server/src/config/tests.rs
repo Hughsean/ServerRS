@@ -45,7 +45,79 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
     assert_eq!(config.thread_links.max_events, 100);
     assert_eq!(config.thread_links.max_total_chars, 100_000);
     assert!(!config.llm.enabled);
+    assert_eq!(config.llm.provider, LlmProvider::OpenAiCompatible);
     assert_eq!(config.llm.base_url, "http://127.0.0.1:11434/v1");
+}
+
+#[test]
+fn accepts_official_deepseek_provider_without_a_configurable_endpoint() {
+    let config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+provider = "deepseek"
+model = "deepseek-chat"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.llm.provider, LlmProvider::DeepSeek);
+    assert_eq!(
+        config.llm.effective_base_url(),
+        "https://api.deepseek.com/v1"
+    );
+    assert!(!config.llm_endpoint_verified_loopback());
+}
+
+#[test]
+fn deepseek_rejects_endpoint_override_and_ollama_reasoning_mode() {
+    let custom_endpoint = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+provider = "deepseek"
+base_url = "https://example.com/v1"
+model = "deepseek-chat"
+"#,
+    )
+    .unwrap_err();
+    assert!(custom_endpoint.to_string().contains("official DeepSeek"));
+
+    let reasoning_mode = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+provider = "deepseek"
+model = "deepseek-chat"
+reasoning_mode = "qwen_no_think"
+"#,
+    )
+    .unwrap_err();
+    assert!(reasoning_mode.to_string().contains("provider_default"));
 }
 
 #[test]

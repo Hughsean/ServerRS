@@ -23,10 +23,12 @@ max_connections = 5
 
 [llm]
 enabled = false
+provider = "openai_compatible"
 base_url = "http://127.0.0.1:11434/v1"
 model = ""
 reasoning_mode = "provider_default"
-# API Key 不写入 TOML；使用 QQBOT_LLM_API_KEY，或取消下一行注释指向本地文件。
+# OpenAI-compatible 使用 QQBOT_LLM_API_KEY；DeepSeek 使用 QQBOT_DEEPSEEK_API_KEY。
+# 也可取消下一行注释，改用对应 Provider 的本地密钥文件。密钥不得写入 TOML。
 # api_key_file = "D:/private/qqbot-llm-api-key.txt"
 connect_timeout_secs = 10
 request_timeout_secs = 60

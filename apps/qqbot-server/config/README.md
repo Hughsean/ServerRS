@@ -40,15 +40,19 @@ Worker 只批量读取已经落库的 `SourceEvent`，不调用 LLM：结构化 
 适配层按批次中的 `source_event_id` 映射发言人并生成领域 ID，最后仍必须经过相同的来源、身份、
 候选数量、修订链和生命周期校验。模型不能关闭/合并/拆分线程，也不能调用任何工具。
 
-OpenAI-compatible/Ollama 配置位于 `[llm]`，对应 `QQBOT_LLM_*`。默认端点为本机
+OpenAI-compatible/Ollama 与 DeepSeek 官方 Provider 配置位于 `[llm]`。`provider` 可取
+`openai_compatible`（默认）或 `deepseek`，也可通过 `QQBOT_LLM_PROVIDER` 覆盖。默认兼容端点为本机
 `http://127.0.0.1:11434/v1`，只有 loopback 允许明文 HTTP，远程端点必须使用 HTTPS；URL 禁止
-携带用户名、密码、查询参数或片段。`model` 在启用时必填。API Key 只能来自
-`QQBOT_LLM_API_KEY` 或本地 `api_key_file`，TOML 中的 `api_key` 会被拒绝。输入字符、输出 Token、
+携带用户名、密码、查询参数或片段。DeepSeek Provider 固定使用官方
+`https://api.deepseek.com/v1`，拒绝自定义端点，密钥只能来自 `QQBOT_DEEPSEEK_API_KEY` 或本地
+`api_key_file`；兼容 Provider 使用 `QQBOT_LLM_API_KEY`。`model` 在启用时必填，TOML 中的
+`api_key` 会被拒绝。输入字符、输出 Token、
 响应字节、超时和每类候选数量均有硬上限；失败由语义 Worker 指数退避，不会静默绕过策略门或
 退回不受审计的模型调用。当前 LLM 只用于线程语义候选提取，尚未接入 Owner 自然语言 Action
 Planner。普通模型使用 `reasoning_mode = "provider_default"`；Ollama 的 Qwen3 可显式配置
 `reasoning_mode = "qwen_no_think"`，适配器会在用户输入末尾添加 `/no_think` 并同时发送
-`think=false`，避免思考内容耗尽结构化输出预算。该设置不会修改聊天事件原文。
+`think=false`，避免思考内容耗尽结构化输出预算。DeepSeek 不接受该 Ollama 专用模式。该设置不会
+修改聊天事件原文。
 
 跨会话线程关联配置位于 `[thread_links]`，对应 `QQBOT_THREAD_LINKS_*`。Worker 只识别严格格式
 项目 ID 与精确文件 `source_key`，数据库仅保存 SHA-256 指纹；同名人物、相似话题和相同文件名

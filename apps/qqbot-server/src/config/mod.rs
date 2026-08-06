@@ -25,7 +25,7 @@ mod workers;
 pub use action_planner::ActionPlannerConfig;
 pub use app::AppConfig;
 pub use database::DatabaseConfig;
-pub use llm::{LlmConfig, LlmReasoningMode};
+pub use llm::{LlmConfig, LlmProvider, LlmReasoningMode};
 pub use napcat::NapCatConfig;
 pub use qq_open_platform::QqOpenPlatformConfig;
 pub use whitelist::WhitelistConfig;

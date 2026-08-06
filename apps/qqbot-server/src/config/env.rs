@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use super::ConfigError;
-use super::llm::{LlmConfig, LlmReasoningMode};
+use super::llm::{LlmConfig, LlmProvider, LlmReasoningMode};
 use super::qq_open_platform::QqOpenPlatformConfig;
 use super::whitelist::WhitelistConfig;
 use super::workers::{
@@ -287,6 +287,17 @@ pub(super) fn apply_llm_env(config: &mut LlmConfig) -> Result<(), ConfigError> {
             max_candidates_per_kind => "QQBOT_LLM_MAX_CANDIDATES_PER_KIND",
         },
     );
+    if let Ok(value) = std::env::var("QQBOT_LLM_PROVIDER") {
+        config.provider = match value.trim().to_ascii_lowercase().as_str() {
+            "openai_compatible" => LlmProvider::OpenAiCompatible,
+            "deepseek" => LlmProvider::DeepSeek,
+            _ => {
+                return Err(ConfigError::Invalid(
+                    "QQBOT_LLM_PROVIDER must be openai_compatible or deepseek".into(),
+                ));
+            }
+        };
+    }
     if let Ok(value) = std::env::var("QQBOT_LLM_TEMPERATURE") {
         config.temperature = value
             .parse()
