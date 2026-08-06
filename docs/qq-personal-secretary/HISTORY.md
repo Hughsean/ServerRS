@@ -5,6 +5,13 @@
 
 ## 当前阶段
 
+- **本轮（OPS-003，已完成）**：待处理 Owner 工作和跨线程搜索新增稳定 keyset 分页，分别按
+  `due_at IS NULL → due_at → source_kind → source_id` 与
+  `match_rank DESC → latest_at DESC → thread_id ASC` 排序；游标字段私有且反序列化复验，
+  线程游标绑定规范化查询，Owner/账号过滤先于排序和分页。工具观察只暴露本轮 `cursor_N` 临时引用，
+  真实 keyset 字段留在服务端，不把稳定线程 ID 放入模型摘要。真实隔离 MySQL 覆盖三页无重漏、同键稳定排序、NULL 到期和
+  账号隔离；领域 290/290、qqbot-server 183 passed/2 ignored、严格 Clippy 通过。
+
 - **本轮（OPS-002，已完成）**：健康 Worker 现在按托管账号采样 `uncertain`、`backfilling`、
   `unrecoverable` Gap，以及活跃回补运行的页数、事件、Accepted、Duplicate、anomaly 和预算耗尽
   计数；最近失败原因只经过固定 allowlist 映射，未知文本统一为 `backfill_failure_unknown`，采样

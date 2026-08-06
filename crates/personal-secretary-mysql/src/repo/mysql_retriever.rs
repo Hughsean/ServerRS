@@ -17,12 +17,13 @@ use crate::{
     InboundEventStoreError, MAX_CAUSAL_MENTIONED, MAX_CAUSAL_PARTICIPANTS, MAX_CAUSAL_SOURCE_REFS,
     MAX_PARTICIPANT_ALIASES, MAX_PARTICIPANT_ATTRIBUTES, MAX_RELATION_SOURCES, MessageRole,
     ParticipantAttribute, ParticipantAttributeKind, ParticipantContextView, ParticipantIdentity,
-    PendingOwnerWorkItem, PlatformIdentityKind, ReferenceCandidate, ReferenceContext,
-    RetrievalVisibility, RetrieverStoreT, SecretaryStatusView, SourceAccountRef, SourceEventDetail,
-    SourceEventId, ThreadActorRef, ThreadActorSummary, ThreadClaimSummary, ThreadContextView,
-    ThreadDecisionId, ThreadDecisionRevisionCursor, ThreadDecisionRevisionPage,
-    ThreadDecisionSummary, ThreadQuestionSummary, ThreadSearchResult, ThreadStatus, UpcomingItem,
-    VerifiedActor, VerifiedActorKind,
+    PendingOwnerWorkCursor, PendingOwnerWorkItem, PendingOwnerWorkPage, PlatformIdentityKind,
+    ReferenceCandidate, ReferenceContext, RetrievalVisibility, RetrieverStoreT,
+    SecretaryStatusView, SourceAccountRef, SourceEventDetail, SourceEventId, ThreadActorRef,
+    ThreadActorSummary, ThreadClaimSummary, ThreadContextView, ThreadDecisionId,
+    ThreadDecisionRevisionCursor, ThreadDecisionRevisionPage, ThreadDecisionSummary,
+    ThreadQuestionSummary, ThreadSearchCursor, ThreadSearchPage, ThreadSearchResult, ThreadStatus,
+    UpcomingItem, VerifiedActor, VerifiedActorKind,
 };
 
 /// 正文摘录最大字符数（约束 7）。
@@ -414,13 +415,31 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         limit: u16,
         visibility: RetrievalVisibility,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError> {
+        Ok(self
+            .search_threads_page(account, query_text, None, limit, visibility)
+            .await?
+            .threads)
+    }
+
+    async fn search_threads_page(
+        &self,
+        account: &SourceAccountRef,
+        query_text: &str,
+        cursor: Option<&ThreadSearchCursor>,
+        limit: u16,
+        visibility: RetrievalVisibility,
+    ) -> Result<ThreadSearchPage, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
-        let escaped = escape_like_pattern(query_text.trim());
+        let query_text = query_text.trim();
+        if cursor.is_some_and(|cursor| cursor.query_text() != query_text) {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread search cursor does not belong to this query".into(),
+            ));
+        }
+        let escaped = escape_like_pattern(query_text);
         let prefix = format!("{escaped}%");
         let contains = format!("%{escaped}%");
-        let rows = ThreadSearchRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::MySql,
-            r#"WITH base_events AS (
+        let mut sql = r#"WITH base_events AS (
                    SELECT ev.thread_id, t.status, e.source_event_id,
                           e.actor_platform_id, e.actor_kind, e.occurred_at_unix_secs,
                           c.platform_conversation_id, c.conversation_kind,
@@ -484,26 +503,71 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                       r.match_rank
                FROM ranked_matches r
                JOIN thread_totals totals ON totals.thread_id = r.thread_id
-               WHERE r.row_rank = 1
-               ORDER BY r.match_rank DESC, totals.latest_at DESC, r.thread_id ASC
-               LIMIT ?"#,
-            [
-                account_id.into(),
-                account_id.into(),
-                visibility.includes_local_only().into(),
-                query_text.trim().into(),
-                prefix.clone().into(),
-                query_text.trim().into(),
-                prefix.into(),
-                contains.into(),
-                EXCERPT_MAX_CHARS.into(),
-                limit.into(),
-            ],
+               WHERE r.row_rank = 1"#
+            .to_owned();
+        let mut params = vec![
+            account_id.into(),
+            account_id.into(),
+            visibility.includes_local_only().into(),
+            query_text.into(),
+            prefix.clone().into(),
+            query_text.into(),
+            prefix.into(),
+            contains.into(),
+            EXCERPT_MAX_CHARS.into(),
+        ];
+        if let Some(cursor) = cursor {
+            sql.push_str(
+                " AND (r.match_rank < ? OR (r.match_rank = ? AND (totals.latest_at < ? \
+                 OR (totals.latest_at = ? AND r.thread_id > ?))))",
+            );
+            let rank = thread_search_rank_value(cursor.match_rank());
+            params.extend([
+                rank.into(),
+                rank.into(),
+                cursor.latest_event_at_unix_secs().into(),
+                cursor.latest_event_at_unix_secs().into(),
+                cursor.thread_id().as_str().into(),
+            ]);
+        }
+        sql.push_str(" ORDER BY r.match_rank DESC, totals.latest_at DESC, r.thread_id ASC LIMIT ?");
+        params.push((u64::from(limit) + 1).into());
+        let rows = ThreadSearchRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            &sql,
+            params,
         ))
         .all(&self.db)
         .await
         .map_err(store_error)?;
-        rows.into_iter().map(map_thread_row).collect()
+        let has_more = rows.len() > usize::from(limit);
+        let mut threads = rows
+            .into_iter()
+            .take(usize::from(limit))
+            .map(map_thread_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if has_more {
+            let last = threads.last().ok_or_else(|| {
+                InboundEventStoreError::InvalidData(
+                    "thread search page was unexpectedly empty".into(),
+                )
+            })?;
+            Some(
+                ThreadSearchCursor::new(
+                    query_text,
+                    last.match_rank,
+                    last.latest_event_at_unix_secs,
+                    last.thread_id.clone(),
+                )
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(ThreadSearchPage {
+            threads: std::mem::take(&mut threads),
+            next_cursor,
+        })
     }
 
     async fn find_reference_candidates(
@@ -731,10 +795,20 @@ impl RetrieverStoreT for MySqlRetrieverStore {
         account: &SourceAccountRef,
         limit: u16,
     ) -> Result<Vec<PendingOwnerWorkItem>, InboundEventStoreError> {
+        Ok(self
+            .list_pending_owner_work_page(account, None, limit)
+            .await?
+            .items)
+    }
+
+    async fn list_pending_owner_work_page(
+        &self,
+        account: &SourceAccountRef,
+        cursor: Option<&PendingOwnerWorkCursor>,
+        limit: u16,
+    ) -> Result<PendingOwnerWorkPage, InboundEventStoreError> {
         let account_id = resolve_account_id(&self.db, account).await?;
-        let rows = PendingOwnerWorkRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::MySql,
-            r#"SELECT source_kind, source_id, due_at_unix_secs, work_status, summary, source_version
+        let mut sql = r#"SELECT source_kind, source_id, due_at_unix_secs, work_status, summary, source_version
                FROM (
                     SELECT 'response_expectation' AS source_kind,
                            expectation_id AS source_id,
@@ -764,22 +838,59 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                            NULL AS source_version
                     FROM secretary_notification_outbox
                     WHERE account_id = ? AND delivery_status IN ('failed', 'unknown_commit')
-               ) work
-               ORDER BY due_at_unix_secs IS NULL, due_at_unix_secs, source_kind, source_id
-               LIMIT ?"#,
-            [
-                account_id.into(),
-                account_id.into(),
-                account_id.into(),
-                account_id.into(),
-                limit.into(),
-            ],
+               ) work"#
+            .to_owned();
+        let mut params = vec![
+            account_id.into(),
+            account_id.into(),
+            account_id.into(),
+            account_id.into(),
+        ];
+        if let Some(cursor) = cursor {
+            match cursor.due_at_unix_secs() {
+                Some(due_at) => {
+                    sql.push_str(
+                        " WHERE due_at_unix_secs IS NULL OR (due_at_unix_secs IS NOT NULL AND \
+                         (due_at_unix_secs > ? OR (due_at_unix_secs = ? AND \
+                         (source_kind > ? OR (source_kind = ? AND source_id > ?)))))",
+                    );
+                    params.extend([
+                        due_at.into(),
+                        due_at.into(),
+                        cursor.source_kind().into(),
+                        cursor.source_kind().into(),
+                        cursor.source_id().into(),
+                    ]);
+                }
+                None => {
+                    sql.push_str(
+                        " WHERE due_at_unix_secs IS NULL AND (source_kind > ? OR \
+                         (source_kind = ? AND source_id > ?))",
+                    );
+                    params.extend([
+                        cursor.source_kind().into(),
+                        cursor.source_kind().into(),
+                        cursor.source_id().into(),
+                    ]);
+                }
+            }
+        }
+        sql.push_str(
+            " ORDER BY due_at_unix_secs IS NULL, due_at_unix_secs, source_kind, source_id LIMIT ?",
+        );
+        params.push((u64::from(limit) + 1).into());
+        let rows = PendingOwnerWorkRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            &sql,
+            params,
         ))
         .all(&self.db)
         .await
         .map_err(store_error)?;
-        Ok(rows
+        let has_more = rows.len() > usize::from(limit);
+        let items = rows
             .into_iter()
+            .take(usize::from(limit))
             .map(|row| PendingOwnerWorkItem {
                 source_kind: row.source_kind,
                 source_id: row.source_id,
@@ -788,7 +899,25 @@ impl RetrieverStoreT for MySqlRetrieverStore {
                 summary: row.summary.chars().take(120).collect(),
                 source_version: row.source_version,
             })
-            .collect())
+            .collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            let last = items.last().ok_or_else(|| {
+                InboundEventStoreError::InvalidData(
+                    "pending work page was unexpectedly empty".into(),
+                )
+            })?;
+            Some(
+                PendingOwnerWorkCursor::new(
+                    last.due_at_unix_secs,
+                    last.source_kind.clone(),
+                    last.source_id.clone(),
+                )
+                .map_err(|error| InboundEventStoreError::InvalidData(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(PendingOwnerWorkPage { items, next_cursor })
     }
 
     async fn thread_context(
@@ -2124,6 +2253,14 @@ fn map_thread_row(row: ThreadSearchRow) -> Result<ThreadSearchResult, InboundEve
             }
         },
     })
+}
+
+fn thread_search_rank_value(rank: crate::ThreadSearchMatchRank) -> i32 {
+    match rank {
+        crate::ThreadSearchMatchRank::Exact => 3,
+        crate::ThreadSearchMatchRank::Prefix => 2,
+        crate::ThreadSearchMatchRank::Contains => 1,
+    }
 }
 
 fn map_upcoming_row(row: UpcomingItemRow) -> Result<UpcomingItem, InboundEventStoreError> {

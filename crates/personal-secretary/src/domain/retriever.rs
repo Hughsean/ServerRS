@@ -110,7 +110,7 @@ pub struct SourceEventDetail {
 }
 
 /// 线程搜索结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadSearchResult {
     pub thread_id: EventThreadId,
     pub status: ThreadStatus,
@@ -125,6 +125,92 @@ pub struct ThreadSearchResult {
     pub representative_excerpt: String,
     pub representative_content_trust_level: ContentTrustLevel,
     pub match_rank: ThreadSearchMatchRank,
+}
+
+/// 线程搜索 keyset 游标。游标绑定规范化后的查询文本，禁止跨查询复用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ThreadSearchCursorWire")]
+pub struct ThreadSearchCursor {
+    query_text: String,
+    match_rank: ThreadSearchMatchRank,
+    latest_event_at_unix_secs: i64,
+    thread_id: EventThreadId,
+}
+
+#[derive(Deserialize)]
+struct ThreadSearchCursorWire {
+    query_text: String,
+    match_rank: ThreadSearchMatchRank,
+    latest_event_at_unix_secs: i64,
+    thread_id: String,
+}
+
+impl TryFrom<ThreadSearchCursorWire> for ThreadSearchCursor {
+    type Error = String;
+
+    fn try_from(value: ThreadSearchCursorWire) -> Result<Self, Self::Error> {
+        Self::new(
+            value.query_text,
+            value.match_rank,
+            value.latest_event_at_unix_secs,
+            EventThreadId::new(value.thread_id).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+impl ThreadSearchCursor {
+    pub fn new(
+        query_text: impl Into<String>,
+        match_rank: ThreadSearchMatchRank,
+        latest_event_at_unix_secs: i64,
+        thread_id: EventThreadId,
+    ) -> Result<Self, RetrieverError> {
+        let query_text = query_text.into();
+        if query_text.trim().is_empty() || query_text.chars().count() > 1_000 {
+            return Err(RetrieverError::InvalidData(
+                "thread search cursor query must contain 1..=1000 characters".into(),
+            ));
+        }
+        if query_text != query_text.trim() {
+            return Err(RetrieverError::InvalidData(
+                "thread search cursor query must be normalized".into(),
+            ));
+        }
+        if latest_event_at_unix_secs < 0 {
+            return Err(RetrieverError::InvalidData(
+                "thread search cursor timestamp must be non-negative".into(),
+            ));
+        }
+        Ok(Self {
+            query_text,
+            match_rank,
+            latest_event_at_unix_secs,
+            thread_id,
+        })
+    }
+
+    pub fn query_text(&self) -> &str {
+        &self.query_text
+    }
+
+    pub fn match_rank(&self) -> ThreadSearchMatchRank {
+        self.match_rank
+    }
+
+    pub fn latest_event_at_unix_secs(&self) -> i64 {
+        self.latest_event_at_unix_secs
+    }
+
+    pub fn thread_id(&self) -> &EventThreadId {
+        &self.thread_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSearchPage {
+    pub threads: Vec<ThreadSearchResult>,
+    pub next_cursor: Option<ThreadSearchCursor>,
 }
 
 /// 存储层检索可见性。调用方不能分别拼接内容策略；所有候选、排序和 LIMIT
@@ -156,7 +242,8 @@ impl RetrievalVisibility {
 }
 
 /// 线程检索的确定性文本相关性。数值只在 MySQL 适配器内部映射，领域层不接受任意分数。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ThreadSearchMatchRank {
     Contains,
     Prefix,
@@ -199,6 +286,75 @@ pub struct PendingOwnerWorkItem {
     /// 来源行版本，用于后续忽略/推迟等写操作的并发 fencing。
     /// 无版本来源（如 outbox）为 None；缺失时不得用 0 表示。
     pub source_version: Option<u64>,
+}
+
+/// Owner 待处理事项的稳定 keyset 游标。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PendingOwnerWorkCursorWire")]
+pub struct PendingOwnerWorkCursor {
+    due_at_unix_secs: Option<i64>,
+    source_kind: String,
+    source_id: String,
+}
+
+#[derive(Deserialize)]
+struct PendingOwnerWorkCursorWire {
+    due_at_unix_secs: Option<i64>,
+    source_kind: String,
+    source_id: String,
+}
+
+impl TryFrom<PendingOwnerWorkCursorWire> for PendingOwnerWorkCursor {
+    type Error = String;
+
+    fn try_from(value: PendingOwnerWorkCursorWire) -> Result<Self, Self::Error> {
+        Self::new(value.due_at_unix_secs, value.source_kind, value.source_id)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl PendingOwnerWorkCursor {
+    pub fn new(
+        due_at_unix_secs: Option<i64>,
+        source_kind: impl Into<String>,
+        source_id: impl Into<String>,
+    ) -> Result<Self, RetrieverError> {
+        let source_kind = source_kind.into();
+        let source_id = source_id.into();
+        if source_kind.trim().is_empty() || source_kind.chars().count() > 64 {
+            return Err(RetrieverError::InvalidData(
+                "pending work cursor source_kind must contain 1..=64 characters".into(),
+            ));
+        }
+        if source_id.trim().is_empty() || source_id.chars().count() > 191 {
+            return Err(RetrieverError::InvalidData(
+                "pending work cursor source_id must contain 1..=191 characters".into(),
+            ));
+        }
+        Ok(Self {
+            due_at_unix_secs,
+            source_kind,
+            source_id,
+        })
+    }
+
+    pub fn due_at_unix_secs(&self) -> Option<i64> {
+        self.due_at_unix_secs
+    }
+
+    pub fn source_kind(&self) -> &str {
+        &self.source_kind
+    }
+
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingOwnerWorkPage {
+    pub items: Vec<PendingOwnerWorkItem>,
+    pub next_cursor: Option<PendingOwnerWorkCursor>,
 }
 
 /// 线程参与者的账号作用域统计。
@@ -928,6 +1084,28 @@ pub trait RetrieverStoreT: Send + Sync {
         visibility: RetrievalVisibility,
     ) -> Result<Vec<ThreadSearchResult>, InboundEventStoreError>;
 
+    /// 按相关性、最新事件时间和线程 ID 做稳定 keyset 分页。
+    async fn search_threads_page(
+        &self,
+        account: &SourceAccountRef,
+        query_text: &str,
+        cursor: Option<&ThreadSearchCursor>,
+        limit: u16,
+        visibility: RetrievalVisibility,
+    ) -> Result<ThreadSearchPage, InboundEventStoreError> {
+        if cursor.is_some() {
+            return Err(InboundEventStoreError::InvalidData(
+                "thread search paging is not supported by this store".into(),
+            ));
+        }
+        Ok(ThreadSearchPage {
+            threads: self
+                .search_threads(account, query_text, limit, visibility)
+                .await?,
+            next_cursor: None,
+        })
+    }
+
     /// 查找指代解析候选。Store 只返回候选集合，不判定唯一/歧义。
     async fn find_reference_candidates(
         &self,
@@ -955,6 +1133,24 @@ pub trait RetrieverStoreT: Send + Sync {
         account: &SourceAccountRef,
         limit: u16,
     ) -> Result<Vec<PendingOwnerWorkItem>, InboundEventStoreError>;
+
+    /// 按空到期标记、到期时间、来源种类和来源 ID 做稳定 keyset 分页。
+    async fn list_pending_owner_work_page(
+        &self,
+        account: &SourceAccountRef,
+        cursor: Option<&PendingOwnerWorkCursor>,
+        limit: u16,
+    ) -> Result<PendingOwnerWorkPage, InboundEventStoreError> {
+        if cursor.is_some() {
+            return Err(InboundEventStoreError::InvalidData(
+                "pending owner work paging is not supported by this store".into(),
+            ));
+        }
+        Ok(PendingOwnerWorkPage {
+            items: self.list_pending_owner_work(account, limit).await?,
+            next_cursor: None,
+        })
+    }
 
     /// 查询单线程的参与者、要求、结论和未决问题；严格限定账号。
     async fn thread_context(

@@ -979,12 +979,22 @@ impl SecretaryActionEffectExecutor {
                     typed_events,
                 )
             }
-            SecretaryAction::SearchEventThreads { query, limit } => {
-                let results = retriever
-                    .search_threads_for_model(&self.account, query, *limit, self.is_local_loopback)
+            SecretaryAction::SearchEventThreads {
+                query,
+                limit,
+                cursor,
+            } => {
+                let page = retriever
+                    .search_threads_page_for_model(
+                        &self.account,
+                        query,
+                        cursor.as_ref(),
+                        *limit,
+                        self.is_local_loopback,
+                    )
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                thread_search_query_effect(results)
+                thread_search_query_effect(page)
             }
             SecretaryAction::ResolveReference {
                 expression,
@@ -1070,17 +1080,19 @@ impl SecretaryActionEffectExecutor {
                     Vec::new(),
                 )
             }
-            SecretaryAction::ListPendingOwnerWork { limit } => {
-                let items = retriever
-                    .list_pending_owner_work(&self.account, *limit)
+            SecretaryAction::ListPendingOwnerWork { limit, cursor } => {
+                let page = retriever
+                    .list_pending_owner_work_page(&self.account, cursor.as_ref(), *limit)
                     .await
                     .map_err(|e| EffectError::new(EffectErrorKind::Transient, e.to_string()))?;
-                let summary = format_pending_owner_work(&items);
-                query_effect_json(
+                let summary = format_pending_owner_work(&page)?;
+                query_effect_json_with_cursor(
                     SecretaryToolKind::ListPendingOwnerWork,
                     &summary,
                     &[],
                     Vec::new(),
+                    page.next_cursor
+                        .map(crate::QueryEffectNextCursor::PendingOwnerWork),
                 )
             }
             SecretaryAction::GetThreadContext { thread_id } => {
@@ -1894,12 +1906,12 @@ fn format_secretary_status(
     output
 }
 
-fn format_pending_owner_work(items: &[crate::PendingOwnerWorkItem]) -> String {
-    if items.is_empty() {
-        return "当前没有需要 Owner 处理的事项".into();
+fn format_pending_owner_work(page: &crate::PendingOwnerWorkPage) -> Result<String, EffectError> {
+    if page.items.is_empty() {
+        return Ok("当前没有需要 Owner 处理的事项".into());
     }
-    let mut output = format!("当前有 {} 项待处理：", items.len());
-    for item in items.iter().take(8) {
+    let mut output = format!("本页有 {} 项待处理：", page.items.len());
+    for item in page.items.iter().take(8) {
         // 仅在存在来源版本时展示，无版本事项不伪造版本（如 outbox）。
         let version_prefix = item
             .source_version
@@ -1920,7 +1932,7 @@ fn format_pending_owner_work(items: &[crate::PendingOwnerWorkItem]) -> String {
         }
         output.push_str(&line);
     }
-    output
+    Ok(output)
 }
 
 fn format_thread_context(context: &crate::ThreadContextView) -> String {
@@ -2227,15 +2239,15 @@ fn query_effect_json(
     build_query_effect_json(tool_kind, summary, source_event_ids, typed_events, false)
 }
 
-fn thread_search_query_effect(
-    results: Vec<crate::ThreadSearchResult>,
-) -> Result<String, EffectError> {
-    let summary = format!("搜索到 {} 个线程", results.len());
-    let source_event_ids: Vec<SourceEventId> = results
+fn thread_search_query_effect(page: crate::ThreadSearchPage) -> Result<String, EffectError> {
+    let summary = format!("本页搜索到 {} 个线程", page.threads.len());
+    let source_event_ids: Vec<SourceEventId> = page
+        .threads
         .iter()
         .map(|result| result.representative_source_event_id.clone())
         .collect();
-    let typed_events = results
+    let typed_events = page
+        .threads
         .into_iter()
         .map(|result| QueryEffectTypedEvent {
             source_event_id: result.representative_source_event_id,
@@ -2247,11 +2259,13 @@ fn thread_search_query_effect(
             excerpt: result.representative_excerpt,
         })
         .collect();
-    query_effect_json(
+    query_effect_json_with_cursor(
         SecretaryToolKind::SearchEventThreads,
         &summary,
         &source_event_ids,
         typed_events,
+        page.next_cursor
+            .map(crate::QueryEffectNextCursor::ThreadSearch),
     )
 }
 
@@ -2280,6 +2294,41 @@ fn build_query_effect_json(
     typed_events: Vec<QueryEffectTypedEvent>,
     ambiguous: bool,
 ) -> Result<String, EffectError> {
+    build_query_effect_json_with_cursor(
+        tool_kind,
+        summary,
+        source_event_ids,
+        typed_events,
+        ambiguous,
+        None,
+    )
+}
+
+fn query_effect_json_with_cursor(
+    tool_kind: SecretaryToolKind,
+    summary: &str,
+    source_event_ids: &[SourceEventId],
+    typed_events: Vec<QueryEffectTypedEvent>,
+    next_cursor: Option<crate::QueryEffectNextCursor>,
+) -> Result<String, EffectError> {
+    build_query_effect_json_with_cursor(
+        tool_kind,
+        summary,
+        source_event_ids,
+        typed_events,
+        false,
+        next_cursor,
+    )
+}
+
+fn build_query_effect_json_with_cursor(
+    tool_kind: SecretaryToolKind,
+    summary: &str,
+    source_event_ids: &[SourceEventId],
+    typed_events: Vec<QueryEffectTypedEvent>,
+    ambiguous: bool,
+    next_cursor: Option<crate::QueryEffectNextCursor>,
+) -> Result<String, EffectError> {
     let bounded_summary: String = summary.chars().take(2_000).collect();
     let result = QueryEffectResultV1 {
         version: 1,
@@ -2289,6 +2338,7 @@ fn build_query_effect_json(
         event_count: source_event_ids.len(),
         typed_events,
         ambiguous,
+        next_cursor,
     };
     serde_json::to_string(&result)
         .map_err(|e| EffectError::new(EffectErrorKind::Permanent, e.to_string()))
@@ -2351,30 +2401,43 @@ mod tests {
     #[test]
     fn thread_search_projects_representative_sources_as_typed_events() {
         let source_event_id = SourceEventId::new("source-1").unwrap();
-        let result_ref = thread_search_query_effect(vec![ThreadSearchResult {
-            thread_id: EventThreadId::new("thread-1").unwrap(),
-            status: ThreadStatus::Open,
-            event_count: 2,
-            latest_event_at_unix_secs: 123,
-            representative_source_event_id: source_event_id.clone(),
-            representative_conversation: ConversationRef::new(
-                ConversationKind::Group,
-                "conversation-1",
-            )
-            .unwrap(),
-            representative_actor: VerifiedActor::new(VerifiedActorKind::External, "actor-1")
+        let result_ref = thread_search_query_effect(crate::ThreadSearchPage {
+            threads: vec![ThreadSearchResult {
+                thread_id: EventThreadId::new("thread-1").unwrap(),
+                status: ThreadStatus::Open,
+                event_count: 2,
+                latest_event_at_unix_secs: 123,
+                representative_source_event_id: source_event_id.clone(),
+                representative_conversation: ConversationRef::new(
+                    ConversationKind::Group,
+                    "conversation-1",
+                )
                 .unwrap(),
-            representative_occurred_at_unix_secs: 122,
-            representative_excerpt: "部署窗口已确认".into(),
-            representative_content_trust_level: ContentTrustLevel::Normal,
-            match_rank: ThreadSearchMatchRank::Exact,
-        }])
+                representative_actor: VerifiedActor::new(VerifiedActorKind::External, "actor-1")
+                    .unwrap(),
+                representative_occurred_at_unix_secs: 122,
+                representative_excerpt: "部署窗口已确认".into(),
+                representative_content_trust_level: ContentTrustLevel::Normal,
+                match_rank: ThreadSearchMatchRank::Exact,
+            }],
+            next_cursor: Some(
+                crate::ThreadSearchCursor::new(
+                    "部署",
+                    ThreadSearchMatchRank::Exact,
+                    123,
+                    EventThreadId::new("thread-1").unwrap(),
+                )
+                .unwrap(),
+            ),
+        })
         .unwrap();
 
         let parsed: QueryEffectResultV1 = serde_json::from_str(&result_ref).unwrap();
         assert_eq!(parsed.tool_kind, SecretaryToolKind::SearchEventThreads);
         assert_eq!(parsed.source_event_ids, vec![source_event_id.clone()]);
         assert_eq!(parsed.typed_events.len(), 1);
+        assert!(parsed.next_cursor.is_some());
+        assert!(!parsed.summary.contains("thread-1"));
         assert_eq!(parsed.typed_events[0].source_event_id, source_event_id);
         assert_eq!(parsed.typed_events[0].actor_id, "actor-1");
         assert_eq!(parsed.typed_events[0].occurred_at_unix_secs, 122);

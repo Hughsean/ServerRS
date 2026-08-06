@@ -255,6 +255,8 @@ pub enum SecretaryAction {
     SearchEventThreads {
         query: String,
         limit: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<crate::ThreadSearchCursor>,
     },
     /// 解析非显式指代（"他""那条消息"等）。CMD-010 防线 C：
     /// 默认只能在显式作用域（已登记 conversation_ref/thread_ref）内解析；
@@ -272,6 +274,8 @@ pub enum SecretaryAction {
     GetSecretaryStatus,
     ListPendingOwnerWork {
         limit: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<crate::PendingOwnerWorkCursor>,
     },
     GetThreadContext {
         thread_id: crate::EventThreadId,

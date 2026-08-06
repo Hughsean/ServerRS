@@ -210,6 +210,7 @@ async fn replan_decision_parses_query_effect_and_returns_observation() {
         event_count: 3,
         typed_events: vec![],
         ambiguous: false,
+        next_cursor: None,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -260,6 +261,7 @@ async fn replan_decision_skips_when_outcome_set() {
         event_count: 3,
         typed_events: vec![],
         ambiguous: false,
+        next_cursor: None,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -329,6 +331,7 @@ fn replan_router_continue_when_query_tool_and_has_observation() {
         event_count: 3,
         typed_events: vec![],
         ambiguous: false,
+        next_cursor: None,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -351,6 +354,7 @@ fn replan_router_finish_when_budget_exhausted() {
         event_count: 1,
         typed_events: vec![],
         ambiguous: false,
+        next_cursor: None,
     };
     let result_ref = serde_json::to_string(&query_result).unwrap();
     let mut state = state_with_receipt(&result_ref, SecretaryToolKind::SearchRecentEvents);
@@ -648,6 +652,7 @@ impl EffectExecutor<SecretaryActionEffect> for FakeEffectExecutor {
                 excerpt: "关于报价单的讨论".into(),
             }],
             ambiguous: false,
+            next_cursor: None,
         };
         let result_ref = serde_json::to_string(&query_result).unwrap();
         Ok(SecretaryActionReceipt {

@@ -292,6 +292,9 @@ pub struct PlannerToolObservation {
     /// 观察结果是否指代歧义（来自 QueryEffectResultV1.ambiguous）。
     #[serde(default)]
     pub ambiguous: bool,
+    /// 仅分页查询产生的下一页游标；真实字段只留在服务端，LLM 只见临时 cursor_N。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<QueryEffectNextCursor>,
 }
 
 fn default_observation_version() -> u8 {
@@ -314,6 +317,23 @@ pub fn validate_tool_observation(obs: &PlannerToolObservation) -> Result<(), Pla
         return Err(PlannerError::InvalidInput(format!(
             "observation source_event_ids exceeds max {MAX_OBSERVATION_EVENT_REFS}"
         )));
+    }
+    let cursor_matches_tool = matches!(
+        (&obs.next_cursor, obs.tool_kind),
+        (None, _)
+            | (
+                Some(QueryEffectNextCursor::ThreadSearch(_)),
+                SecretaryToolKind::SearchEventThreads
+            )
+            | (
+                Some(QueryEffectNextCursor::PendingOwnerWork(_)),
+                SecretaryToolKind::ListPendingOwnerWork
+            )
+    );
+    if !cursor_matches_tool {
+        return Err(PlannerError::InvalidInput(
+            "observation cursor does not match its tool kind".into(),
+        ));
     }
     // P1：typed_events 数量、字段、去重与集合一致性校验。
     if obs.typed_events.len() > MAX_TYPED_EVENTS_PER_OBSERVATION {
@@ -379,6 +399,14 @@ pub struct QueryEffectTypedEvent {
     pub excerpt: String,
 }
 
+/// 查询分页游标的受限联合类型；不允许工具之间互换。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum QueryEffectNextCursor {
+    ThreadSearch(crate::ThreadSearchCursor),
+    PendingOwnerWork(crate::PendingOwnerWorkCursor),
+}
+
 /// 旧格式 result_ref（无 actor_kind 字段）反序列化时的保守兜底：
 /// External 命名空间不暴露 Owner/Bot 身份，且不触发歧义拒绝。
 fn default_typed_event_actor_kind() -> PlatformIdentityKind {
@@ -411,6 +439,9 @@ pub struct QueryEffectResultV1 {
     /// 查询结果是否指代歧义（如 ResolveReference 多候选）。用于登记未解决指代。
     #[serde(default)]
     pub ambiguous: bool,
+    /// 下一页游标，仅由分页查询产生；旧回执缺失时按无下一页兼容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<QueryEffectNextCursor>,
 }
 
 impl QueryEffectResultV1 {
@@ -425,6 +456,7 @@ impl QueryEffectResultV1 {
             version: 1,
             typed_events: self.typed_events.clone(),
             ambiguous: self.ambiguous,
+            next_cursor: self.next_cursor.clone(),
         }
     }
 }

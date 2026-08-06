@@ -125,6 +125,28 @@ async fn run_scenario(db: DatabaseConnection) {
         "unrelated deployment note",
     )
     .await;
+    let exact_tie_a = common::insert_group_message(
+        &inbound,
+        "thr004-account-a",
+        "exact-tie-a",
+        "group-tie-a",
+        "actor-tie-a",
+        VerifiedActorKind::External,
+        200,
+        "alpha",
+    )
+    .await;
+    let exact_tie_z = common::insert_group_message(
+        &inbound,
+        "thr004-account-a",
+        "exact-tie-z",
+        "group-tie-z",
+        "actor-tie-z",
+        VerifiedActorKind::External,
+        200,
+        "alpha",
+    )
+    .await;
 
     for (thread, account, event) in [
         ("thr004-exact", "thr004-account-a", &exact),
@@ -135,6 +157,8 @@ async fn run_scenario(db: DatabaseConnection) {
         ("thr004-local", "thr004-account-a", &local_only),
         ("thr004-envelope", "thr004-account-a", &envelope_only),
         ("thr004-other", "thr004-account-b", &other_account),
+        ("thr004-tie-a", "thr004-account-a", &exact_tie_a),
+        ("thr004-tie-z", "thr004-account-a", &exact_tie_z),
     ] {
         create_thread(&db, thread, account, event, event).await;
         attach_event(&db, thread, event).await;
@@ -155,10 +179,12 @@ async fn run_scenario(db: DatabaseConnection) {
         .expect("ranked search");
     assert_eq!(ranked[0].thread_id.as_str(), "thr004-exact");
     assert_eq!(ranked[0].match_rank, ThreadSearchMatchRank::Exact);
-    assert_eq!(ranked[1].thread_id.as_str(), "thr004-prefix");
-    assert_eq!(ranked[1].match_rank, ThreadSearchMatchRank::Prefix);
-    assert_eq!(ranked[2].thread_id.as_str(), "thr004-contains");
-    assert_eq!(ranked[2].match_rank, ThreadSearchMatchRank::Contains);
+    assert_eq!(ranked[1].thread_id.as_str(), "thr004-tie-a");
+    assert_eq!(ranked[2].thread_id.as_str(), "thr004-tie-z");
+    assert_eq!(ranked[3].thread_id.as_str(), "thr004-prefix");
+    assert_eq!(ranked[3].match_rank, ThreadSearchMatchRank::Prefix);
+    assert_eq!(ranked[4].thread_id.as_str(), "thr004-contains");
+    assert_eq!(ranked[4].match_rank, ThreadSearchMatchRank::Contains);
     assert!(
         ranked
             .iter()
@@ -183,6 +209,38 @@ async fn run_scenario(db: DatabaseConnection) {
     assert_eq!(ranked[0].representative_occurred_at_unix_secs, 100);
     assert_eq!(ranked[0].latest_event_at_unix_secs, 250);
     assert_eq!(ranked[0].event_count, 2);
+
+    let mut cursor = None;
+    let mut paged_ids = Vec::new();
+    for expected_len in [2, 2, 1] {
+        let page = retriever
+            .search_threads_page(&account, "alpha", cursor.as_ref(), 2)
+            .await
+            .expect("thread search page");
+        assert_eq!(page.threads.len(), expected_len);
+        paged_ids.extend(
+            page.threads
+                .iter()
+                .map(|thread| thread.thread_id.as_str().to_owned()),
+        );
+        cursor = page.next_cursor;
+    }
+    assert!(cursor.is_none());
+    assert_eq!(
+        paged_ids,
+        ranked
+            .iter()
+            .map(|thread| thread.thread_id.as_str().to_owned())
+            .collect::<Vec<_>>()
+    );
+    let mismatched_cursor = cursor_for_query(&retriever, &account).await;
+    assert!(
+        retriever
+            .search_threads_page(&account, "different", Some(&mismatched_cursor), 2)
+            .await
+            .is_err(),
+        "a thread cursor cannot be reused with another query"
+    );
 
     let remote = retriever
         .search_threads_for_model(&account, "alpha", 20, false)
@@ -216,6 +274,114 @@ async fn run_scenario(db: DatabaseConnection) {
     assert_eq!(literal_results[0].thread_id.as_str(), "thr004-literal");
 
     verify_effective_merge_and_split(&db, &inbound, &retriever, &account).await;
+    verify_pending_owner_work_paging(&db, &inbound, &retriever, &account).await;
+}
+
+async fn cursor_for_query(
+    retriever: &RetrieverUseCase,
+    account: &personal_secretary::SourceAccountRef,
+) -> personal_secretary::ThreadSearchCursor {
+    retriever
+        .search_threads_page(account, "alpha", None, 1)
+        .await
+        .expect("cursor seed page")
+        .next_cursor
+        .expect("cursor seed must have a next page")
+}
+
+async fn verify_pending_owner_work_paging(
+    db: &DatabaseConnection,
+    inbound: &Arc<dyn personal_secretary::PersonalSecretaryStoreT>,
+    retriever: &RetrieverUseCase,
+    account: &personal_secretary::SourceAccountRef,
+) {
+    let source_a = common::insert_group_message(
+        inbound,
+        "thr004-account-a",
+        "pending-source-a",
+        "pending-group-a",
+        "pending-actor-a",
+        VerifiedActorKind::Owner,
+        2_000,
+        "pending seed",
+    )
+    .await;
+    let source_b = common::insert_group_message(
+        inbound,
+        "thr004-account-b",
+        "pending-source-b",
+        "pending-group-b",
+        "pending-actor-b",
+        VerifiedActorKind::Owner,
+        2_000,
+        "other account pending seed",
+    )
+    .await;
+    for (suffix, platform_account, source, due_at) in [
+        ("0001", "thr004-account-a", &source_a, Some(100_i64)),
+        ("0002", "thr004-account-a", &source_a, Some(100_i64)),
+        ("0003", "thr004-account-a", &source_a, Some(200_i64)),
+        ("0004", "thr004-account-a", &source_a, None),
+        ("0005", "thr004-account-a", &source_a, None),
+        ("9999", "thr004-account-b", &source_b, Some(50_i64)),
+    ] {
+        let item_id = format!("00000000-0000-0000-0000-00000000{suffix}");
+        let inserted = db
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_agenda_items \
+                 (item_id, account_id, item_kind, title, scheduled_at_unix_secs, timezone_name, \
+                  item_status, version, created_command_event_id, current_command_event_id, \
+                  create_idempotency_key) \
+                 SELECT ?, id, 'task', ?, ?, 'Asia/Shanghai', 'scheduled', 1, ?, ?, ? \
+                 FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+                [
+                    item_id.clone().into(),
+                    format!("pending-{suffix}").into(),
+                    due_at.into(),
+                    source.as_str().into(),
+                    source.as_str().into(),
+                    format!("pending-key-{suffix}").into(),
+                    platform_account.into(),
+                ],
+            ))
+            .await
+            .expect("insert pending agenda item");
+        assert_eq!(inserted.rows_affected(), 1);
+    }
+
+    let mut cursor = None;
+    let mut collected = Vec::new();
+    for expected_len in [2, 2, 1] {
+        let page = retriever
+            .list_pending_owner_work_page(account, cursor.as_ref(), 2)
+            .await
+            .expect("pending owner work page");
+        assert_eq!(page.items.len(), expected_len);
+        collected.extend(page.items.iter().map(|item| {
+            (
+                item.source_id.clone(),
+                item.due_at_unix_secs,
+                item.source_kind.clone(),
+            )
+        }));
+        cursor = page.next_cursor;
+    }
+    assert!(cursor.is_none());
+    assert_eq!(
+        collected
+            .iter()
+            .map(|(id, due, _)| (id.as_str(), *due))
+            .collect::<Vec<_>>(),
+        vec![
+            ("00000000-0000-0000-0000-000000000001", Some(100)),
+            ("00000000-0000-0000-0000-000000000002", Some(100)),
+            ("00000000-0000-0000-0000-000000000003", Some(200)),
+            ("00000000-0000-0000-0000-000000000004", None),
+            ("00000000-0000-0000-0000-000000000005", None),
+        ]
+    );
+    assert!(collected.iter().all(|(_, _, kind)| kind == "agenda"));
 }
 
 async fn verify_effective_merge_and_split(

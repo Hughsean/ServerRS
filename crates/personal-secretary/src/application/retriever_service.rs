@@ -184,6 +184,26 @@ impl RetrieverUseCase {
             .await?)
     }
 
+    pub async fn search_threads_page(
+        &self,
+        account: &SourceAccountRef,
+        query_text: &str,
+        cursor: Option<&crate::ThreadSearchCursor>,
+        limit: u16,
+    ) -> Result<crate::ThreadSearchPage, RetrieverUseCaseError> {
+        self.validate_thread_search_page(query_text, cursor, limit)?;
+        Ok(self
+            .store
+            .search_threads_page(
+                account,
+                query_text.trim(),
+                cursor,
+                limit,
+                RetrievalVisibility::NormalOnly,
+            )
+            .await?)
+    }
+
     /// 返回允许进入当前模型边界的线程结果。内容策略直接传入 Store，
     /// 使候选集合、计数和排序都不会先观察再过滤受限内容。
     pub async fn search_threads_for_model(
@@ -212,6 +232,50 @@ impl RetrieverUseCase {
             .search_threads(account, query_text, limit, visibility)
             .await?;
         Ok(results)
+    }
+
+    pub async fn search_threads_page_for_model(
+        &self,
+        account: &SourceAccountRef,
+        query_text: &str,
+        cursor: Option<&crate::ThreadSearchCursor>,
+        limit: u16,
+        is_local_loopback: bool,
+    ) -> Result<crate::ThreadSearchPage, RetrieverUseCaseError> {
+        self.validate_thread_search_page(query_text, cursor, limit)?;
+        let visibility = RetrievalVisibility::for_model(
+            is_local_loopback,
+            self.policy.allow_local_only_to_loopback_llm,
+        );
+        Ok(self
+            .store
+            .search_threads_page(account, query_text.trim(), cursor, limit, visibility)
+            .await?)
+    }
+
+    fn validate_thread_search_page(
+        &self,
+        query_text: &str,
+        cursor: Option<&crate::ThreadSearchCursor>,
+        limit: u16,
+    ) -> Result<(), RetrieverUseCaseError> {
+        let normalized_query = query_text.trim();
+        if normalized_query.is_empty() {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "query_text must not be empty".into(),
+            ));
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "limit must be in 1..=100".into(),
+            ));
+        }
+        if cursor.is_some_and(|cursor| cursor.query_text() != normalized_query) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "thread search cursor does not belong to this query".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn list_upcoming(
@@ -245,6 +309,23 @@ impl RetrieverUseCase {
             ));
         }
         Ok(self.store.list_pending_owner_work(account, limit).await?)
+    }
+
+    pub async fn list_pending_owner_work_page(
+        &self,
+        account: &SourceAccountRef,
+        cursor: Option<&crate::PendingOwnerWorkCursor>,
+        limit: u16,
+    ) -> Result<crate::PendingOwnerWorkPage, RetrieverUseCaseError> {
+        if !(1..=20).contains(&limit) {
+            return Err(RetrieverUseCaseError::InvalidInput(
+                "pending owner work limit must be in 1..=20".into(),
+            ));
+        }
+        Ok(self
+            .store
+            .list_pending_owner_work_page(account, cursor, limit)
+            .await?)
     }
 
     pub async fn thread_context(
@@ -875,6 +956,42 @@ mod tests {
         let use_case = RetrieverUseCase::new(store, RetrieverPolicy::default());
         let result = use_case.search_threads(&account(), "  ", 10).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn thread_search_page_rejects_cursor_from_another_query() {
+        let use_case = RetrieverUseCase::new(fake_store(Vec::new()), RetrieverPolicy::default());
+        let cursor = crate::ThreadSearchCursor::new(
+            "alpha",
+            crate::ThreadSearchMatchRank::Exact,
+            100,
+            EventThreadId::new("thread-a").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            use_case
+                .search_threads_page(&account(), "beta", Some(&cursor), 10)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paging_cursor_deserialization_revalidates_private_fields() {
+        let invalid_thread = serde_json::json!({
+            "query_text": " alpha ",
+            "match_rank": "exact",
+            "latest_event_at_unix_secs": 100,
+            "thread_id": "thread-a"
+        });
+        assert!(serde_json::from_value::<crate::ThreadSearchCursor>(invalid_thread).is_err());
+
+        let invalid_pending = serde_json::json!({
+            "due_at_unix_secs": null,
+            "source_kind": "agenda",
+            "source_id": ""
+        });
+        assert!(serde_json::from_value::<crate::PendingOwnerWorkCursor>(invalid_pending).is_err());
     }
 
     #[tokio::test]

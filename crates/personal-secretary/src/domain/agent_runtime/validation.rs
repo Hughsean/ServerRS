@@ -161,7 +161,11 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
                 bounded_text("actor_id", actor, 1, 191)?;
             }
         }
-        SecretaryAction::SearchEventThreads { query, limit } => {
+        SecretaryAction::SearchEventThreads {
+            query,
+            limit,
+            cursor: _,
+        } => {
             bounded_text("query", query, 1, 1_000)?;
             if !(1..=100).contains(limit) {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(
@@ -261,7 +265,7 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
         } => {
             bounded_text("name", name, 1, 200)?;
         }
-        SecretaryAction::ListPendingOwnerWork { limit } => {
+        SecretaryAction::ListPendingOwnerWork { limit, cursor: _ } => {
             if !(1..=20).contains(limit) {
                 return Err(SecretaryAgentRuntimeError::InvalidProposal(
                     "pending owner work limit must be in 1..=20".into(),

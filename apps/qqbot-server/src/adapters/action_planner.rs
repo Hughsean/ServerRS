@@ -19,10 +19,10 @@ use personal_secretary::{
     AccountScopedParticipantRef, ActionPlannerT, Clock, CommitmentStatus, ContentTrustLevel,
     ConversationKind, ConversationRef, EventThreadId, FollowUpControlTarget, FollowUpId,
     IdentityTrust, MemoryCandidateId, MemoryCandidateKind, MemoryCandidateStatus, MemoryFactId,
-    MemoryPayload, OpenQuestionId, PlannerError, PlannerInput, PlannerOutput, PlatformIdentityKind,
-    ResponseExpectationControlTarget, ResponseExpectationId, SecretaryAction,
-    SecretaryActionProposal, SourceEventId, SystemClock, ThreadDecisionId, ThreadStatus,
-    validate_planner_output,
+    MemoryPayload, OpenQuestionId, PendingOwnerWorkCursor, PlannerError, PlannerInput,
+    PlannerOutput, PlatformIdentityKind, QueryEffectNextCursor, ResponseExpectationControlTarget,
+    ResponseExpectationId, SecretaryAction, SecretaryActionProposal, SourceEventId, SystemClock,
+    ThreadDecisionId, ThreadSearchCursor, ThreadStatus, validate_planner_output,
 };
 
 use crate::llm::{LlmClientError, OpenAiCompatibleClient, StructuredLlmClientT};
@@ -116,6 +116,9 @@ reconfirm_thread_semantics, set_thread_lifecycle, dismiss_follow_up, snooze_foll
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
 dismiss_response_expectation, dismiss_response_expectations, list_memory_candidates,
 approve_memory_candidate, reject_memory_candidate, list_projects, query_project, list_commitments。
+search_event_threads 与 list_pending_owner_work 的工具观察可能返回 next_cursor_ref（如 cursor_1）。
+继续翻页时必须在同一 tool 中把该临时引用原样放入 cursor 字段；第一页或没有 next_cursor_ref 时
+省略 cursor。不得解析、改写、截断或发明 cursor_ref，search_event_threads 翻页还必须保持 query 完全一致。
 记忆修改、会话记忆模式和线程控制属于高影响操作，必须准确引用目标 ID；写操作必须提供 IANA timezone、
 未来 UTC 时间（除 complete/cancel）和目标 item_id/version；dismiss_follow_up 必须提供 follow_up_id、
 expected_source_version（来自 ListPendingOwnerWork 展示的 version N）和 reason；
@@ -207,6 +210,7 @@ impl LlmActionPlanner {
                     evidence,
                     query,
                     limit,
+                    cursor,
                     since_unix_secs,
                     until_unix_secs,
                     source_event_id,
@@ -251,6 +255,7 @@ impl LlmActionPlanner {
                     tool: &tool,
                     query,
                     limit,
+                    cursor,
                     since_unix_secs,
                     until_unix_secs,
                     source_event_id,
@@ -411,6 +416,7 @@ struct RawProposalFields<'a> {
     tool: &'a str,
     query: Option<String>,
     limit: Option<u16>,
+    cursor: Option<String>,
     /// search_recent_events 可选时间下限（UTC Unix 秒）。
     since_unix_secs: Option<i64>,
     /// search_recent_events 可选时间上限（UTC Unix 秒）。
@@ -469,6 +475,37 @@ struct RawProposalFields<'a> {
     beneficiary_actor_ref: Option<String>,
 }
 
+/// 分页游标只通过本轮临时 `cursor_N` 引用进入模型，真实字段永不进入 LLM。
+fn resolve_thread_cursor(
+    cursor_ref: Option<&str>,
+    map: &TempRefMap,
+) -> Result<Option<ThreadSearchCursor>, PlannerError> {
+    let Some(cursor_ref) = cursor_ref else {
+        return Ok(None);
+    };
+    match map.resolve_cursor(cursor_ref) {
+        Some(QueryEffectNextCursor::ThreadSearch(cursor)) => Ok(Some(cursor.clone())),
+        _ => Err(PlannerError::InvalidOutput(
+            "cursor_ref 未登记或不属于线程搜索".into(),
+        )),
+    }
+}
+
+fn resolve_pending_cursor(
+    cursor_ref: Option<&str>,
+    map: &TempRefMap,
+) -> Result<Option<PendingOwnerWorkCursor>, PlannerError> {
+    let Some(cursor_ref) = cursor_ref else {
+        return Ok(None);
+    };
+    match map.resolve_cursor(cursor_ref) {
+        Some(QueryEffectNextCursor::PendingOwnerWork(cursor)) => Ok(Some(cursor.clone())),
+        _ => Err(PlannerError::InvalidOutput(
+            "cursor_ref 未登记或不属于待处理事项".into(),
+        )),
+    }
+}
+
 /// 批量忽略目标的嵌套 DTO；显式拒绝未知字段，防止模型夹带额外键。
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -519,6 +556,14 @@ fn build_action(
     raw: &RawProposalFields<'_>,
     temp_ref_map: &TempRefMap,
 ) -> Result<SecretaryAction, PlannerError> {
+    if raw.cursor.is_some()
+        && raw.tool != "search_event_threads"
+        && raw.tool != "list_pending_owner_work"
+    {
+        return Err(PlannerError::InvalidOutput(
+            "cursor 仅适用于分页查询工具".into(),
+        ));
+    }
     match raw.tool {
         "search_recent_events" => {
             // CMD-009 目标 B：可选时间窗与显式 conversation/thread/actor 硬过滤；
@@ -574,6 +619,7 @@ fn build_action(
                 .clone()
                 .ok_or_else(|| PlannerError::InvalidOutput("missing query".into()))?,
             limit: raw.limit.unwrap_or(20),
+            cursor: resolve_thread_cursor(raw.cursor.as_deref(), temp_ref_map)?,
         }),
         "resolve_reference" => {
             // CMD-010 防线 C：显式作用域只能来自已登记 conversation_ref /
@@ -608,6 +654,7 @@ fn build_action(
         "get_secretary_status" => Ok(SecretaryAction::GetSecretaryStatus),
         "list_pending_owner_work" => Ok(SecretaryAction::ListPendingOwnerWork {
             limit: raw.limit.unwrap_or(10),
+            cursor: resolve_pending_cursor(raw.cursor.as_deref(), temp_ref_map)?,
         }),
         "get_thread_context" => {
             let thread_id = resolve_thread_id(&raw.thread_id, temp_ref_map)?
@@ -1206,6 +1253,7 @@ struct TempRefMap {
     actors: HashMap<String, AccountScopedParticipantRef>,
     /// CMD-009 目标 C：fact_ref → 记忆事实内部引用（仅工作上下文登记的事实）。
     facts: HashMap<String, MemoryFactId>,
+    cursors: HashMap<String, QueryEffectNextCursor>,
 }
 
 impl TempRefMap {
@@ -1224,6 +1272,10 @@ impl TempRefMap {
     /// 解析 fact_ref（fact_N）：仅通过工作上下文登记恢复；未登记引用 fail-closed。
     fn resolve_fact(&self, fact_ref: &str) -> Option<&MemoryFactId> {
         self.facts.get(fact_ref)
+    }
+
+    fn resolve_cursor(&self, cursor_ref: &str) -> Option<&QueryEffectNextCursor> {
+        self.cursors.get(cursor_ref)
     }
 
     /// 解析 actor 临时引用：映射到账号作用域内的平台稳定 actor_id。
@@ -1270,6 +1322,7 @@ fn build_llm_views(
     let mut actor_next: usize = 0;
     let mut conv_next: usize = 0;
     let mut thread_next: usize = 0;
+    let mut cursor_next: usize = 0;
     let mut evt: usize = 0;
 
     // 命令事件：evt_1，通过 command_event_ref 暴露给模型
@@ -1559,8 +1612,15 @@ fn build_llm_views(
     // source_event_id 必须有映射，映射缺失 fail-closed。
     let mut observation_views: Vec<ObservationLlmView> =
         Vec::with_capacity(input.observations.len());
+    let mut cursor_refs: HashMap<String, QueryEffectNextCursor> = HashMap::new();
     for obs in &input.observations {
         let tool_name = tool_kind_display_name(obs.tool_kind);
+        let next_cursor_ref = obs.next_cursor.as_ref().map(|cursor| {
+            cursor_next += 1;
+            let label = format!("cursor_{cursor_next}");
+            cursor_refs.insert(label.clone(), cursor.clone());
+            label
+        });
 
         // 从 typed source_event_ids 构建 source_event_refs
         let source_event_refs: Vec<String> = obs
@@ -1644,6 +1704,7 @@ fn build_llm_views(
             success: obs.success,
             summary: prefixed,
             source_event_refs,
+            next_cursor_ref,
         });
     }
 
@@ -1705,6 +1766,7 @@ fn build_llm_views(
         conversations: temp_conversations,
         actors: temp_actors,
         facts: temp_facts,
+        cursors: cursor_refs,
     };
 
     Ok((
@@ -1839,6 +1901,9 @@ struct ObservationLlmView {
     /// 来源事件临时引用列表。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     source_event_refs: Vec<String>,
+    /// 下一页游标临时引用；真实 keyset 字段只留在 TempRefMap。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor_ref: Option<String>,
 }
 
 /// CMD-009 目标 A/C：工作上下文 LLM 视图。只含临时引用与有界中文说明，
@@ -1939,6 +2004,9 @@ struct RawProposalOutput {
     query: Option<String>,
     #[serde(default)]
     limit: Option<u16>,
+    /// 只允许原样回传上一次工具回执给出的已验证分页游标。
+    #[serde(default)]
+    cursor: Option<String>,
     /// search_recent_events 可选时间下限（UTC Unix 秒；省略时允许检索 24 小时以前的长期事件）。
     #[serde(default)]
     since_unix_secs: Option<i64>,
@@ -2035,6 +2103,34 @@ mod tests {
 
     fn account() -> SourceAccountRef {
         SourceAccountRef::new(MessageSource::NapCat, "account-1").unwrap()
+    }
+
+    #[test]
+    fn paging_cursor_is_only_recoverable_from_typed_temporary_reference() {
+        let cursor = ThreadSearchCursor::new(
+            "alpha",
+            personal_secretary::ThreadSearchMatchRank::Exact,
+            100,
+            EventThreadId::new("thread-private-id").unwrap(),
+        )
+        .unwrap();
+        let map = TempRefMap {
+            events: HashMap::new(),
+            threads: HashMap::new(),
+            conversations: HashMap::new(),
+            actors: HashMap::new(),
+            facts: HashMap::new(),
+            cursors: HashMap::from([(
+                "cursor_1".into(),
+                QueryEffectNextCursor::ThreadSearch(cursor.clone()),
+            )]),
+        };
+        let decoded = resolve_thread_cursor(Some("cursor_1"), &map)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded, cursor);
+        assert!(resolve_thread_cursor(Some("cursor_unknown"), &map).is_err());
+        assert!(resolve_pending_cursor(Some("cursor_1"), &map).is_err());
     }
 
     fn input() -> PlannerInput {
@@ -3083,6 +3179,7 @@ mod tests {
             }],
             version: 1,
             ambiguous: false,
+            next_cursor: None,
         };
 
         let mut input = input();
@@ -3142,6 +3239,38 @@ mod tests {
         assert_eq!(captured["remaining_query_budget"], 1);
     }
 
+    #[test]
+    fn observation_paging_cursor_maps_to_private_temporary_reference() {
+        use personal_secretary::{PlannerToolObservation, QueryEffectNextCursor};
+
+        let cursor = ThreadSearchCursor::new(
+            "alpha",
+            personal_secretary::ThreadSearchMatchRank::Exact,
+            100,
+            EventThreadId::new("stable-thread-id").unwrap(),
+        )
+        .unwrap();
+        let mut planner_input = input();
+        planner_input.replan_round = 1;
+        planner_input.observations = vec![PlannerToolObservation {
+            proposal_id: "proposal-page".into(),
+            tool_kind: personal_secretary::SecretaryToolKind::SearchEventThreads,
+            success: true,
+            source_event_ids: Vec::new(),
+            summary: "next page available".into(),
+            typed_events: Vec::new(),
+            version: 1,
+            ambiguous: false,
+            next_cursor: Some(QueryEffectNextCursor::ThreadSearch(cursor.clone())),
+        }];
+        let (_, _, views, _, map, _) = build_llm_views(&planner_input, false).unwrap();
+        assert_eq!(views[0].next_cursor_ref.as_deref(), Some("cursor_1"));
+        assert_eq!(
+            resolve_thread_cursor(Some("cursor_1"), &map).unwrap(),
+            Some(cursor)
+        );
+    }
+
     /// 验证 typed_events 为空时只输出有界计数摘要，不泄露任何 ID。
     #[tokio::test]
     async fn observation_without_typed_events_only_shows_count() {
@@ -3156,6 +3285,7 @@ mod tests {
             typed_events: vec![], // 空 typed_events
             version: 1,
             ambiguous: false,
+            next_cursor: None,
         };
 
         let mut input = input();
