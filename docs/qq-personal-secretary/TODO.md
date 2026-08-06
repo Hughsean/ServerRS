@@ -487,8 +487,9 @@
   `https://api.deepseek.com/v1`，拒绝自定义端点与 Ollama 专用 `qwen_no_think`；密钥只读取
   `QQBOT_DEEPSEEK_API_KEY` 或本地 `api_key_file`，缺失时 fail-closed。现有
   `openai_compatible`/Ollama 配置保持兼容；DeepSeek 仍复用既有输入、输出 Token、响应字节、超时、
-  JSON 结构化边界和无工具策略。本地配置已切换到 `deepseek-chat`，真实 API 调用等待用户设置专用
-  密钥后执行；QQBot Server 203 passed/3 ignored、架构 24/24、严格 Clippy 与 workspace check 通过。
+  JSON 结构化边界和无工具策略。本地配置已切换到 `deepseek-chat`；2026-08-06 23:19 使用专用密钥
+  完成官方 API 真实调用，来源约束语义提取与提示注入边界 2/2 通过。QQBot Server 203 passed/
+  3 ignored、架构 24/24、严格 Clippy 与 workspace check 通过。
 - [x] `OPS-001` 把 WebSocket、Worker、Recall/Realtime Spool、入站指标和 Gap 的安全有界快照
   并入 Owner 状态查询；仅展示固定子系统名、四态状态和有界数值，不暴露账号、epoch、路径、
   正文或凭据。
