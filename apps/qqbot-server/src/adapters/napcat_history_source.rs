@@ -307,132 +307,24 @@ fn map_source_error(error: NapCatError) -> BackfillSourceError {
 /// 把历史消息的结构化 `message` 数组解析为协议无关消息段，与实时 CQ 解析保持一致。
 pub(crate) fn parse_history_segments(
     message: &serde_json::Value,
-    self_qq_id: i64,
+    _self_qq_id: i64,
 ) -> Vec<NapCatMessageSegment> {
     use qqbot::napcat::MessageSegment;
-    let Some(array) = message.as_array() else {
-        // 非数组（如纯字符串 raw_message）回退为单条文本段。
-        if let Some(text) = message.as_str() {
-            return vec![MessageSegment::Text {
-                content: text.to_string(),
-            }];
-        }
-        return Vec::new();
-    };
-
-    let mut segments = Vec::new();
-    for item in array {
-        let ty = item
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let data = item.get("data").cloned().unwrap_or(serde_json::Value::Null);
-        match ty {
-            "text" => {
-                let content = data
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                segments.push(MessageSegment::Text { content });
-            }
-            "face" => {
-                let id = data
-                    .get("id")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0) as i32;
-                let text = data
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                segments.push(MessageSegment::Face { id, text });
-            }
-            "image" => {
-                let file = data
-                    .get("file")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let url = data
-                    .get("url")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                segments.push(MessageSegment::Image { file, url });
-            }
-            "at" => {
-                let qq = data
-                    .get("qq")
-                    .map(|value| match value {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        _ => String::new(),
-                    })
-                    .unwrap_or_default();
-                segments.push(MessageSegment::At { qq });
-            }
-            "reply" => {
-                let id = data
-                    .get("id")
-                    .map(|value| match value {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        _ => String::new(),
-                    })
-                    .unwrap_or_default();
-                segments.push(MessageSegment::Reply { id });
-            }
-            "record" => {
-                let file = data
-                    .get("file")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                segments.push(MessageSegment::Record { file });
-            }
-            "video" => {
-                let file = data
-                    .get("file")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let url = data
-                    .get("url")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                segments.push(MessageSegment::Video { file, url });
-            }
-            "file" => {
-                let file = data
-                    .get("file")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let name = data
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                let size = data.get("size").and_then(serde_json::Value::as_u64);
-                segments.push(MessageSegment::File { file, name, size });
-            }
-            _ => {
-                // 评审 P1-2：历史 Unknown 段也必须有界，与实时解析语义一致。
-                // 必须按 UTF-8 字符边界截断，否则中文字符/emoji 切在中间会 panic。
-                let raw = item.to_string();
-                let raw = truncate_utf8_safe(&raw, 2000);
-                segments.push(MessageSegment::Unknown {
-                    seg_type: item
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("?")
-                        .to_string(),
-                    raw: Some(raw),
-                });
-            }
-        }
+    if let Some(array) = message.as_array() {
+        // 与实时 WebSocket 共用同一结构化段解析器，避免历史 Backfill 将 json/xml/card/
+        // forward 等已知段降级为 Unknown，并统一段数、单段和总字节预算。
+        return qqbot::napcat::segments::parse_structured_segments(array).0;
     }
-    // self_qq_id 用于与实时解析保持一致（at_bot 语义），此处仅保留参数以便未来扩展。
-    let _ = self_qq_id;
-    segments
+
+    // 非数组（如纯字符串 raw_message）回退为单条文本段。
+    message
+        .as_str()
+        .map(|text| {
+            vec![MessageSegment::Text {
+                content: text.to_string(),
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// 把历史消息结构化数组归一化为纯文本，与实时 `normalize_text` 行为一致。
@@ -445,19 +337,6 @@ fn normalize_history_text(message: &serde_json::Value, self_qq_id: i64) -> Strin
         }
     }
     parts.join(" ").trim().to_string()
-}
-
-/// 按字节上限截断字符串，保证 UTF-8 字符边界安全（评审 P1-2）。
-/// `str::is_char_boundary` 回退到最近的合法字符边界，不会切在多字节字符中间。
-fn truncate_utf8_safe(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_string();
-    }
-    let mut end = max_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_string()
 }
 
 #[cfg(test)]
@@ -749,43 +628,41 @@ mod tests {
         }
     }
 
-    // 评审 P1-2：历史 Unknown 段截断必须按 UTF-8 字符边界，不能 panic。
-    // 多字节中文/emoji 切在中间会导致 `byte index is not a char boundary` panic。
-    #[test]
-    fn truncate_utf8_safe_handles_multibyte_characters_without_panic() {
-        // 中文每个字符 3 字节 UTF-8。截断到 4 字节应回退到 3 字节边界（1 个中文字符）。
-        let s = "你好世界测试";
-        let truncated = truncate_utf8_safe(s, 4);
-        assert!(truncated.len() <= 4);
-        assert!(s.starts_with(&truncated));
-        // 验证不 panic 且结果合法。
-        assert_eq!(truncated, "你");
-
-        // emoji 4 字节。截断到 5 字节应回退到 4 字节边界。
-        let emoji = "😀😀😀";
-        let truncated = truncate_utf8_safe(emoji, 5);
-        assert!(truncated.len() <= 5);
-        assert_eq!(truncated, "😀");
-
-        // 短字符串不截断。
-        assert_eq!(truncate_utf8_safe("短", 100), "短");
-    }
-
-    // 评审 P1-2：parse_history_segments 对未知段应用 UTF-8 安全截断。
+    // 历史与实时共用解析器；未知段按字符边界有界，不能因多字节内容 panic。
     #[test]
     fn parse_history_segments_unknown_segment_truncates_multibyte_safely() {
-        // 构造一个会超过 2000 字节上限的未知段（中文重复）。
-        let big_content = "你好".repeat(2000); // 2000 * 3 = 6000 字节
+        let big_content = "你好".repeat(2000);
         let unknown_seg = serde_json::json!([{"type":"poke","data":{"name": big_content}}]);
         let segments = parse_history_segments(&unknown_seg, 10001);
         assert_eq!(segments.len(), 1);
         if let qqbot::napcat::MessageSegment::Unknown { raw, .. } = &segments[0] {
             let raw = raw.as_ref().expect("raw must be present");
-            assert!(raw.len() <= 2000);
-            // 验证是合法 UTF-8（to_string 成功即合法）。
+            assert!(raw.chars().count() <= qqbot::napcat::segments::MAX_META_CHARS);
             assert!(std::str::from_utf8(raw.as_bytes()).is_ok());
         } else {
             panic!("expected Unknown segment");
         }
+    }
+
+    #[test]
+    fn parse_history_segments_preserves_json_card_as_rich_content() {
+        let message = serde_json::json!([{
+            "type": "json",
+            "data": {"data": {"app": "com.tencent.structmsg", "desc": "群分享"}}
+        }]);
+        let segments = parse_history_segments(&message, 10001);
+        assert_eq!(segments.len(), 1);
+        let qqbot::napcat::MessageSegment::Rich {
+            kind,
+            content_sha256,
+            ..
+        } = &segments[0]
+        else {
+            panic!("expected rich JSON segment");
+        };
+        assert_eq!(*kind, qqbot::napcat::RichKind::Json);
+        let digest = content_sha256.as_deref().expect("JSON digest must exist");
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 }

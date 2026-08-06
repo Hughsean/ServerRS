@@ -18,9 +18,9 @@ mod common;
 use common::{isolated_db, scalar_string, scalar_u64, try_apply_qqbot_migrations};
 use personal_secretary::{
     ClaimKind, ContentSegment, ConversationKind, ConversationRef, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, InboundMessageEnvelope, MediaKind, MessageSource, SourceMessageRef,
-    ThreadClaimCandidate, ThreadClaimId, ThreadProjectionUseCase, ThreadSemanticPatch,
-    VerifiedActor, VerifiedActorKind,
+    DeterministicThreadPolicy, InboundMessageEnvelope, MediaKind, MessageSource, RichContentKind,
+    SourceMessageRef, ThreadClaimCandidate, ThreadClaimId, ThreadProjectionUseCase,
+    ThreadSemanticPatch, VerifiedActor, VerifiedActorKind,
 };
 use personal_secretary_mysql::{
     build_mysql_backfill_store, build_mysql_inbound_event_store, build_mysql_reply_reconcile_store,
@@ -99,6 +99,30 @@ fn file_envelope(
             source_key: "napcat-file-key".into(),
             source_url: None,
             display_name: Some("sample.txt".into()),
+        }],
+    )
+    .unwrap()
+}
+
+/// NapCat 实测 Ark/JSON 卡片是历史中拥有稳定 message_id 的普通消息，不属于 notice。
+fn rich_card_envelope(
+    account_id: &str,
+    message_id: &str,
+    conv_id: &str,
+    actor_id: &str,
+    occurred_at_unix_secs: i64,
+) -> InboundMessageEnvelope {
+    InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, account_id, message_id).unwrap(),
+        ConversationRef::new(ConversationKind::Group, conv_id).unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, actor_id).unwrap(),
+        occurred_at_unix_secs,
+        String::new(),
+        vec![ContentSegment::Rich {
+            kind: RichContentKind::Json,
+            source_key: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+            summary: Some("[卡片消息]".into()),
         }],
     )
     .unwrap()
@@ -2909,6 +2933,62 @@ async fn file_history_parent_resolves_delayed_reply_without_notice_source_event(
             .await,
             0,
             "non-message upload notices must never be fabricated as SourceEvent parents"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+// ── 22. 真实 Ark/JSON 卡片模型：历史卡片本身有稳定 ID，复用消息 Reply 解析 ──
+
+#[tokio::test]
+#[ignore]
+async fn rich_card_history_parent_resolves_delayed_reply_as_message_event() {
+    run_scenario("_evt007s22", |db| async move {
+        let store: Arc<dyn personal_secretary::PersonalSecretaryStoreT> =
+            build_mysql_inbound_event_store(db.clone());
+
+        let child = store
+            .insert_message_if_absent(&envelope(
+                "acc-card",
+                "child-card-reply",
+                ConversationKind::Group,
+                "g-card",
+                "actor-child",
+                200,
+                Some("history-card-parent"),
+            ))
+            .await
+            .map_err(|error| format!("insert card Reply child failed: {error}"))?;
+        let child_id = child.source_event_id().as_str().to_owned();
+        assert!(is_pending(&db, &child_id).await);
+
+        let parent = store
+            .insert_message_if_absent(&rich_card_envelope(
+                "acc-card",
+                "history-card-parent",
+                "g-card",
+                "actor-card",
+                100,
+            ))
+            .await
+            .map_err(|error| format!("insert rich card history parent failed: {error}"))?;
+        let parent_id = parent.source_event_id().as_str().to_owned();
+
+        assert_eq!(
+            resolved_parent_of(&db, &child_id).await.as_deref(),
+            Some(parent_id.as_str())
+        );
+        assert!(!is_pending(&db, &child_id).await);
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT COUNT(*) AS value FROM secretary_source_events WHERE event_type = 'message'",
+                Vec::new(),
+            )
+            .await,
+            2,
+            "card parent and Reply child must both remain ordinary message SourceEvents"
         );
         Ok(())
     })

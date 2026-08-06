@@ -5,6 +5,15 @@
 
 ## 当前阶段
 
+- **本轮（EVT-007-NONMSG-CARD，已完成）**：6099 在唯一授权群成功发送真实 Ark/JSON 卡片并
+  回复；历史证实卡片有稳定消息 ID，Reply `data.id` 与其一致，所以复用消息 Reply 模型，不伪造
+  notice SourceEvent。历史适配器改为复用实时结构化段解析器，json/xml/card/forward 不再降级
+  Unknown；JSON Rich 单测、QQBot Server 198 passed/3 ignored 和隔离 MySQL 卡片父后到场景通过。
+- **本轮（ENV-004 继续受阻）**：6100 沿 opaque cursor 读取 `10,10,10,10,8,1` 后停在同一
+  包含式锚点，没有空页；两实例 PacketBackend 状态 action 均 failed/400/null。6099 本次真实
+  `Process/Restart` 后没有自动登录；用户手动确认后 OneBot HTTP `3001`、WS `6701` 和授权群历史
+  读取恢复，但 PacketBackend 明确报告当前 QQ 版本不兼容，跨重启自动恢复与完整历史仍未证明。
+
 - **本轮（EVT-007-NONMSG-FILE，已完成）**：唯一授权群的真实文件上传证明 `group_upload` notice
   没有稳定 `message_id`，而是由后续历史中的 `file` 段消息提供可引用父 ID；Reply 段 `data.id`
   与该历史消息精确一致。协议层不伪造 SourceEvent，只发出有界会话历史信号；运行时持久化精确

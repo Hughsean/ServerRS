@@ -38,7 +38,8 @@
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG-FILE` 已由
-  授权群真实上传/Reply 样本完成；卡片仍等待真实业务样本，`EVT-009` 已按产品决策取消。
+  授权群真实上传/Reply 样本完成；`EVT-007-NONMSG-CARD` 也已由真实 Ark/JSON 卡片证明为普通
+  消息 Reply 并完成历史解析收口，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -336,8 +337,12 @@
   未见会话使用 sentinel 从最新页开始；连接结束后仍复用完整冻结 Scope。新增迁移
   `20260806_qqbot_non_message_history_signals.sql` 建立受 FK/CHECK 约束的持久化 scope ledger。
   隔离 MySQL 覆盖文件父子解析、未见会话、已有 cursor、多 scope 和未通知会话排除。
-- [ ] `EVT-007-NONMSG-CARD` 卡片/分享等非消息 Reply。两种主动构造的 JSON/share 卡片均被 NapCat
-  拒绝，尚无真实可引用样本；不得依赖猜测的 notice 或伪造 SourceEvent 实现。
+- [x] `EVT-007-NONMSG-CARD` Ark/JSON 卡片 Reply。2026-08-06 通过 6099 的受认证 Debug schema
+  调用 `ArkShareGroup` 得到 Ark JSON，只向授权群发送一个 `json` 段并回复；群历史确认卡片本身
+  拥有稳定 `message_id`，Reply 段 `data.id` 精确指向该 ID。因此它不是非消息 notice，也不需要
+  新建 Gap/SourceEvent 模型，复用 `EVT-007-MSG` 的持久化 pending 解析。修复历史适配器重复解析
+  导致 json/xml/card/forward 降级 Unknown 的缺陷，统一复用实时结构化段解析器；新增 JSON Rich
+  历史单测和卡片父后到 MySQL 场景。
 - [x] `EVT-009-CANCELLED` 产品决策不实施数据库消息正文静态加密、密钥轮换、历史重加密或
   密文搜索索引；不新增相关迁移、配置、Worker 和密钥依赖。现有
   `normal/local_only/envelope_only/never_long_term` 继续作为应用层内容保存与读取策略执行；
@@ -509,7 +514,9 @@
   2026-08-06 已完成后两项：6099 临时开启 `reportSelfMessage` 后在唯一授权群发送消息，WebSocket
   收到自身事件且历史回读成功；随机隔离 QQBot schema 中 SourceEvent、正文投影和线程成员均落库，
   随后完整恢复配置并清理 schema/临时文件。剩余仅为确认该群测试时确实处于免打扰状态；没有
-  权威状态证据前不得以 NapCat 能收到普通消息代替。
+  权威状态证据前不得以 NapCat 能收到普通消息代替。2026-08-06 20:30 对 6099 执行真实进程重启
+  后账号未自动恢复登录；20:56 用户在 WebUI 完成登录确认，OneBot HTTP `3001`、WS `6701` 和
+  授权群历史读取已恢复。剩余仍是免打扰状态的权威人机验收。
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
   PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
   为旧到新且 cursor 受账号主体约束；空页语义、完整跨重启分页覆盖和 PacketBackend 行为尚未验证，
@@ -517,11 +524,19 @@
   `count=10`：原始页首 opaque `message_seq` 可连续推进且页序旧到新；跨账号复用 cursor 返回
   retcode 200。短页后仍返回 1 条锚点重叠，不能解释为历史终点；`nc_get_packet_status` 两实例均
   返回 retcode 400/空数据。6099 重启前后授权群最近 10 条历史摘要一致，且重启后
-  `online=true/good=true`；但空页原因和 PacketBackend 仍无证据，故继续保持未完成。
+  `online=true/good=true`；但 20:30 再次执行 `Process/Restart` 后未自动登录，说明重启恢复不稳定；
+  20:56 用户手动确认后业务端口和授权群历史读取恢复。
+  6100 继续以 opaque cursor 读取到页计数 `10,10,10,10,8,1` 后停在包含式锚点且 cursor 不再推进，
+  没有出现可解释空页。两实例 `packetBackend=auto`、`packetServer` 为空，
+  `nc_get_packet_status` 均为 failed/400/null；6099 当前进一步返回当前 QQ
+  `9.9.33-51802-x64` 与 NapCat `v4.18.14` 的 PacketBackend 不兼容。空页原因、稳定自动重登和
+  PacketBackend 兼容仍无正向证据，生产继续以 `UnprovenStop`/uncertain fail-closed，本项保持未完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
   runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。
-- [ ] `EXTERNAL OPS-LIVE` 电脑休眠/断网/NapCat 退出的实机恢复演练。
+- [ ] `EXTERNAL OPS-LIVE` 电脑休眠/断网/NapCat 退出的实机恢复演练。NapCat 进程重启已真实证明
+  WebUI 与业务端口分阶段恢复且 6099 本次需要用户手动确认登录后才恢复；电脑休眠与物理网络断开
+  仍需用户参与，不能以进程重启代替。
 
 ## 7. 后期延期
 

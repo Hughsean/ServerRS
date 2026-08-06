@@ -1,6 +1,6 @@
 # NapCat 历史回补接口契约记录
 
-> 验证日期：2026-07-23
+> 验证日期：2026-08-06
 > 范围：本机两个 NapCat 测试账号的只读历史接口，以及仅限获批测试群的主动消息和 WebSocket
 > 契约；不记录账号、好友号、访问令牌或聊天正文。
 
@@ -46,6 +46,23 @@ ID 和正文的前提下：
 
 早期重复探测出现过成功空页，本次非空结果不能推翻该风险：接口成功仍不能单独证明某个时间窗
 已完整覆盖。
+
+### 2026-08-06 补充证据
+
+- `reverseOrder=true` 才能沿真实 opaque `message_seq` 向更旧方向推进；响应数组仍为旧到新，
+  客户端必须在协议边界归一化，禁止解析或运算 cursor。
+- 6100 的连续页计数为 `10,10,10,10,8,1`，最后一页仅保留包含式锚点且 cursor 不再推进；
+  当前 PacketBackend 没有返回可解释空页，必须映射为 `UnprovenStop`/uncertain。
+- 两实例均配置 `packetBackend=auto` 且 `packetServer` 为空，`nc_get_packet_status` 均返回
+  failed/retcode 400/null；当前环境不能证明 PacketBackend 兼容。
+- 6099 一次重启后曾恢复历史可读；20:30 再次执行 `Process/Restart` 时仅 WebUI 恢复，账号没有
+  自动登录且业务端口在 90 秒内未恢复。20:56 用户手动确认后，OneBot HTTP `3001`、WS `6701`
+  及授权群历史读取恢复。跨重启覆盖不是稳定自动能力，启动就绪必须检查登录、业务端口和实际历史
+  调用，不能只检查 WebUI。
+- 6099 当前 `nc_get_packet_status` 进一步明确报告 QQ `9.9.33-51802-x64` 与 NapCat `v4.18.14`
+  的 PacketBackend 不兼容；在版本组合修复并得到正向证据前，不能声明完整历史能力。
+- 真实 `group_upload` notice 没有稳定消息 ID，可引用父节点来自历史 `file` 消息；真实 Ark/JSON
+  卡片则相反，它本身是拥有稳定消息 ID 的 `json` 段消息，Reply `data.id` 直接指向该消息。
 
 ## 获批测试群主动验证
 
