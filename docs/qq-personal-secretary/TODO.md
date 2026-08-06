@@ -462,7 +462,9 @@
 - [x] `FUP-007` 本地已完成账号隔离、租约 fencing、重试、送达回执和 `unknown_commit`；真实
   Owner QQ 投递仍属于 `EXTERNAL`，仅在轮换凭据后验收。
 - [ ] `CMD-002` 完成 QQ 开放平台真实联机、Gateway Resume 和 Owner 回执验收；执行前必须通知
-  用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。
+  用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。2026-08-06 22:35 新凭据真实换取 Token、
+  Gateway Identify 和持久会话 Resume 均成功；Owner C2C 投递返回官方 `500/11255`，按既有分类为
+  `unknown_commit`，未盲目重试。需用户确认是否实际收到，或先向机器人发送消息后再做被动回复验收。
 - [x] `CMD-003` 已完成本地可验证的剩余写命令收口：记忆纠正、删除、TTL 修订和会话记忆模式
   统一进入专用原子 Effect 事务，在业务变更与 Receipt 之间复验 OwnerBinding、同账号、原始
   OwnerCommand、Action lease 和完整 proposal；重复 Effect、碰撞、跨账号、过期租约与 Binding
@@ -514,7 +516,9 @@
 
 ## 6. 外部阻塞与人工验收
 
-- [ ] `EXTERNAL ENV-002` 轮换已经暴露的 QQ 开放平台 Secret，并通过本地环境变量或忽略文件配置。
+- [x] `EXTERNAL ENV-002` 已轮换暴露的 QQ 开放平台 Secret，并写入本地忽略 `.env`；非敏感结构检查
+  确认 App ID、Secret、Owner OpenID 均非空，真实 Token 获取与 Gateway Identify/Resume 进一步
+  证明新凭据有效。凭据值未输出、未写入 TOML、Git、日志或文档。
 - [x] `EXTERNAL ENV-003` NapCat 实机确认免打扰消息、自身消息上报和一条新消息完整派生链。
   2026-08-06 先完成自身消息与派生链：6099 临时开启 `reportSelfMessage` 后在唯一授权群发送消息，WebSocket
   收到自身事件且历史回读成功；随机隔离 QQBot schema 中 SourceEvent、正文投影和线程成员均落库，
@@ -542,7 +546,9 @@
   PacketBackend 兼容仍无正向证据，生产继续以 `UnprovenStop`/uncertain fail-closed，本项保持未完成。
 - [x] `EXTERNAL QA-004-CANCELLED` 远端 protected Environment、受保护 runner 签名密钥和 branch
   protection required check 属于未来发布治理，按产品决定停止，不属于当前上线收尾目标。
-- [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。
+- [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；新凭据已用于 Token 与 Gateway
+  正向验收，但首次 Owner C2C 主动投递返回 `500/11255`/`unknown_commit`，不得自动重发；等待用户
+  对账是否收到，并需由用户向机器人发起一次消息后继续被动回复验收。
 - [ ] `EXTERNAL OPS-LIVE` 电脑休眠/断网/NapCat 退出的实机恢复演练。NapCat 进程重启已真实证明
   WebUI 与业务端口分阶段恢复且 6099 本次需要用户手动确认登录后才恢复；电脑休眠与物理网络断开
   仍需用户参与，不能以进程重启代替。
