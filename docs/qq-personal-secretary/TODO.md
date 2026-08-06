@@ -30,11 +30,11 @@
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
 - 当前实机证据：`EXTERNAL ENV-003` 的 6099 自身消息上报、授权群历史回读及
   `qqbot-server -> 隔离 QQBot MySQL -> SourceEvent/正文/线程` 完整派生链已通过；测试结束后
-  `reportSelfMessage=false`、HTTP 3000/WS 6700 原配置已恢复，随机 schema 和临时文件无残留。
-  6100 的 Debug adapter 可读授权群历史但账号当前离线，发送按 OneBot retcode 200 拒绝；免打扰
+  `reportSelfMessage=false`，随机 schema 和临时文件无残留。6099 当前 HTTP `3001`/WS `6701`
+  正常；6100 重新登录后受认证 Debug adapter 可读授权群历史，但没有配置 HTTP/WS 服务。免打扰
   状态仍缺少权威证据，因此 ENV-003 暂不勾选。
-- 下一步：继续可独立执行的 NapCat 实机验证与剩余外部事项；需要 QQ 开放平台新凭据、实际断网/
-  休眠或产品范围扩展的事项继续明确保留为 `EXTERNAL`/`DEFERRED`。
+- 下一步：只继续上线所需外部事项；需要 QQ 开放平台新凭据、实际断网/休眠或远端管理权限的事项
+  保留为 `EXTERNAL`。知识库、多模态理解和第三方自动回复已按产品决定停止，不属于当前目标。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG-FILE` 已由
@@ -528,7 +528,10 @@
   20:56 用户手动确认后业务端口和授权群历史读取恢复。
   6100 继续以 opaque cursor 读取到页计数 `10,10,10,10,8,1` 后停在包含式锚点且 cursor 不再推进，
   没有出现可解释空页。两实例 `packetBackend=auto`、`packetServer` 为空，
-  `nc_get_packet_status` 均为 failed/400/null；6099 当前进一步返回当前 QQ
+  `nc_get_packet_status` 均为 failed/400/null。21:24 在两个账号重新登录后重跑：6099 页计数为
+  `10,10,10,10,10,5,1`，6100 为 `10,10,10,10,10,6,1`，两边均因包含式锚点不再推进而
+  `no_progress`，没有可解释空页。交叉 cursor 双向均返回目标账号视图中的 1 条非同锚点结果，不能
+  作为 continuation 安全复用，应用层账号绑定保持不变。两实例都明确报告当前 QQ
   `9.9.33-51802-x64` 与 NapCat `v4.18.14` 的 PacketBackend 不兼容。空页原因、稳定自动重登和
   PacketBackend 兼容仍无正向证据，生产继续以 `UnprovenStop`/uncertain fail-closed，本项保持未完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
@@ -538,11 +541,13 @@
   WebUI 与业务端口分阶段恢复且 6099 本次需要用户手动确认登录后才恢复；电脑休眠与物理网络断开
   仍需用户参与，不能以进程重启代替。
 
-## 7. 后期延期
+## 7. 产品范围外
 
-- [ ] `DEFERRED KB-001` 文档、网页个人知识库和向量检索。
-- [ ] `DEFERRED MM-001` 图片、语音和文件内容理解。
-- [ ] `DEFERRED AUTO-001` 代表 Owner 向第三方自动回复；必须重新进行权限、误发和隐私风险评审。
+- [x] `DEFERRED KB-001-CANCELLED` 文档、网页个人知识库和向量检索按 2026-08-06 产品决定停止，
+  不属于当前 QQBot 收尾目标；不新增领域、仓储、迁移、配置或 Worker。
+- [x] `DEFERRED MM-001-CANCELLED` 图片、语音和文件内容理解按同一决定停止。
+- [x] `DEFERRED AUTO-001-CANCELLED` 代表 Owner 向第三方自动回复按同一决定停止；现有安全边界
+  继续禁止第三方自动发送。
 
 ## 8. 已完成能力索引
 
