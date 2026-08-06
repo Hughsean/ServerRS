@@ -18,7 +18,7 @@ mod common;
 use common::{isolated_db, scalar_string, scalar_u64, try_apply_qqbot_migrations};
 use personal_secretary::{
     ClaimKind, ContentSegment, ConversationKind, ConversationRef, DeterministicThreadPlanner,
-    DeterministicThreadPolicy, InboundMessageEnvelope, MessageSource, SourceMessageRef,
+    DeterministicThreadPolicy, InboundMessageEnvelope, MediaKind, MessageSource, SourceMessageRef,
     ThreadClaimCandidate, ThreadClaimId, ThreadProjectionUseCase, ThreadSemanticPatch,
     VerifiedActor, VerifiedActorKind,
 };
@@ -75,6 +75,31 @@ fn envelope(
         occurred_at_unix_secs,
         format!("message text for {message_id}"),
         segments,
+    )
+    .unwrap()
+}
+
+/// NapCat 实测群文件父消息：可引用 ID 属于历史中的 `file` 消息，不属于 `group_upload`
+/// notice 的 file.id。只保留有界文件元数据，与生产历史适配器映射一致。
+fn file_envelope(
+    account_id: &str,
+    message_id: &str,
+    conv_id: &str,
+    actor_id: &str,
+    occurred_at_unix_secs: i64,
+) -> InboundMessageEnvelope {
+    InboundMessageEnvelope::new(
+        SourceMessageRef::new(MessageSource::NapCat, account_id, message_id).unwrap(),
+        ConversationRef::new(ConversationKind::Group, conv_id).unwrap(),
+        VerifiedActor::new(VerifiedActorKind::External, actor_id).unwrap(),
+        occurred_at_unix_secs,
+        String::new(),
+        vec![ContentSegment::Media {
+            kind: MediaKind::File,
+            source_key: "napcat-file-key".into(),
+            source_url: None,
+            display_name: Some("sample.txt".into()),
+        }],
     )
     .unwrap()
 }
@@ -2818,6 +2843,72 @@ async fn candidate_queue_bounded_non_reply_excluded_mainline_cleanup() {
             reply_reconcile_migration_record_count(&db).await,
             0,
             "列结构错误导致迁移失败时不得写入 migration record"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+// ── 21. 真实 group_upload 关联模型：Reply 指向历史 file 消息，而非 notice file.id ──
+
+#[tokio::test]
+#[ignore]
+async fn file_history_parent_resolves_delayed_reply_without_notice_source_event() {
+    run_scenario("_evt007s21", |db| async move {
+        let store: Arc<dyn personal_secretary::PersonalSecretaryStoreT> =
+            build_mysql_inbound_event_store(db.clone());
+
+        // 实时子消息先到：它只有历史 file 消息 ID，不能引用 group_upload notice 的 file.id。
+        let child = store
+            .insert_message_if_absent(&envelope(
+                "acc-file",
+                "child-file-reply",
+                ConversationKind::Group,
+                "g-file",
+                "actor-child",
+                200,
+                Some("history-file-parent"),
+            ))
+            .await
+            .map_err(|error| format!("insert Reply child failed: {error}"))?;
+        let child_id = child.source_event_id().as_str().to_owned();
+        assert!(
+            is_pending(&db, &child_id).await,
+            "child must remain pending before history parent"
+        );
+
+        // 回补历史带来可引用的 file 消息父节点；不插入任何 group_upload notice SourceEvent。
+        let parent = store
+            .insert_message_if_absent(&file_envelope(
+                "acc-file",
+                "history-file-parent",
+                "g-file",
+                "actor-file",
+                100,
+            ))
+            .await
+            .map_err(|error| format!("insert file history parent failed: {error}"))?;
+        let parent_id = parent.source_event_id().as_str().to_owned();
+
+        assert_eq!(
+            resolved_parent_of(&db, &child_id).await.as_deref(),
+            Some(parent_id.as_str()),
+            "file history parent must resolve the pending Reply in the same conversation"
+        );
+        assert!(
+            !is_pending(&db, &child_id).await,
+            "resolved file Reply must leave no pending state"
+        );
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT COUNT(*) AS value FROM secretary_source_events \
+                 WHERE platform_event_id = 'group-upload-notice-file-id'",
+                Vec::new(),
+            )
+            .await,
+            0,
+            "non-message upload notices must never be fabricated as SourceEvent parents"
         );
         Ok(())
     })

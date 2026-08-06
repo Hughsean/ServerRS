@@ -43,8 +43,10 @@ impl BackfillStateStoreT for MySqlInboundEventStore {
     ) -> Result<Option<ClaimedGap>, InboundEventStoreError> {
         let transaction = self.db.begin().await.map_err(store_error)?;
         let now = Utc::now().naive_utc();
-        // 原子领取一个 uncertain 且空窗已结束、且退避已过期的 Gap。
-        // - gap_ended_at IS NOT NULL：重连已结束空窗，避免回补尚未结束的离线窗口；
+        // 原子领取一个 uncertain 且空窗已结束、或有明确非消息会话信号的 Gap，且退避已过期。
+        // - 普通 Gap 必须 gap_ended_at IS NOT NULL：避免在仍在线的连接中并发回补整段空窗；
+        // - 带持久化 signal scope 的 Gap 来自 group_upload 等无 message_id 通知，只回补明确 Scope，
+        //   可在连接仍在线时立即领取，避免实时 Reply 子消息无限 pending；
         // - next_eligible_at IS NULL OR <= now：退避已过，防止热循环与饿死；
         // - ORDER BY updated_at ASC：最久未处理的 Gap 优先，避免总是领取同一个不可证 Gap；
         // - FOR UPDATE：同一时刻只有一个事务能领取该 Gap。
@@ -56,7 +58,10 @@ impl BackfillStateStoreT for MySqlInboundEventStore {
              INNER JOIN secretary_accounts a ON a.id = g.account_id \
              LEFT JOIN secretary_gap_reclaim_schedule r ON r.gap_id = g.gap_id \
              WHERE g.status = 'uncertain' \
-               AND g.gap_ended_at IS NOT NULL \
+               AND (g.gap_ended_at IS NOT NULL OR EXISTS (\
+                   SELECT 1 FROM secretary_gap_signal_scopes s \
+                   WHERE s.gap_id = g.gap_id\
+               )) \
                AND (r.next_eligible_at IS NULL OR r.next_eligible_at <= ?) \
              ORDER BY g.updated_at ASC \
              LIMIT 1 \
@@ -296,9 +301,13 @@ impl BackfillStateStoreT for MySqlInboundEventStore {
         // 边界读 Gap 创建时的快照，而非领取时漂移的实时游标。
         let boundaries = BoundaryRow::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            "SELECT conversation_kind, platform_conversation_id, boundary_message_id \
-             FROM secretary_gap_boundaries \
-             WHERE gap_id = ?",
+            "SELECT b.conversation_kind, b.platform_conversation_id, b.boundary_message_id \
+             FROM secretary_gap_boundaries b \
+             INNER JOIN secretary_ingestion_gaps g ON g.gap_id = b.gap_id \
+             LEFT JOIN secretary_gap_signal_scopes s \
+               ON s.gap_id = b.gap_id AND s.conversation_id = b.conversation_id \
+             WHERE b.gap_id = ? AND (g.gap_ended_at IS NOT NULL OR s.gap_id IS NOT NULL) \
+             ORDER BY b.conversation_kind, b.platform_conversation_id",
             [gap_id.as_str().into()],
         ))
         .all(&transaction)

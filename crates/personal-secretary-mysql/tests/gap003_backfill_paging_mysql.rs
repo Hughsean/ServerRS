@@ -8,7 +8,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::{isolated_db, scalar_string};
+use common::{isolated_db, scalar_string, scalar_u64};
 use personal_secretary::{
     BackfillAnchor, BackfillAnomaly, BackfillBudget, BackfillContinuation, BackfillCursor,
     BackfillGapUseCase, BackfillHistoryItem, BackfillLease, BackfillPage, BackfillReadDirection,
@@ -40,9 +40,18 @@ where
 }
 
 fn envelope(account_id: &str, message_id: &str, sequence: i64) -> InboundMessageEnvelope {
+    envelope_for_group(account_id, message_id, "gap003-group", sequence)
+}
+
+fn envelope_for_group(
+    account_id: &str,
+    message_id: &str,
+    group_id: &str,
+    sequence: i64,
+) -> InboundMessageEnvelope {
     InboundMessageEnvelope::new(
         SourceMessageRef::new(MessageSource::NapCat, account_id, message_id).unwrap(),
-        ConversationRef::new(ConversationKind::Group, "gap003-group").unwrap(),
+        ConversationRef::new(ConversationKind::Group, group_id).unwrap(),
         VerifiedActor::new(VerifiedActorKind::External, "gap003-sender").unwrap(),
         sequence,
         format!("gap003 message {sequence}"),
@@ -221,6 +230,236 @@ async fn persisted_cursor_survives_lease_recovery_and_unproven_stop_keeps_gap_un
             )
             .await,
             "uncertain"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+struct TargetedScopeSource {
+    scopes: Mutex<Vec<BackfillScope>>,
+}
+
+#[async_trait]
+impl HistoryBackfillSourceT for TargetedScopeSource {
+    async fn fetch_page(
+        &self,
+        scope: &BackfillScope,
+        cursor: Option<&BackfillCursor>,
+        direction: BackfillReadDirection,
+        _page_size: u32,
+    ) -> Result<BackfillPage, BackfillSourceError> {
+        assert_eq!(direction, BackfillReadDirection::NewestToOldest);
+        assert!(
+            cursor.is_none(),
+            "unseen non-message conversation must start from the newest real history page"
+        );
+        self.scopes.lock().unwrap().push(scope.clone());
+        Ok(BackfillPage {
+            items: Vec::new(),
+            continuation: BackfillContinuation::UnprovenStop,
+        })
+    }
+
+    fn history_start_evidence_proven(&self) -> bool {
+        false
+    }
+
+    fn page_order_evidence_proven(&self) -> bool {
+        false
+    }
+
+    fn account_conversation_set_proven(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn non_message_signal_freezes_unseen_conversation_for_backfill() {
+    run_scenario("_gap003_nonmsg", |db| async move {
+        let account = SourceAccountRef::new(MessageSource::NapCat, "nonmsg-account").unwrap();
+        let target = ConversationRef::new(ConversationKind::Group, "nonmsg-group").unwrap();
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let epoch = inbound
+            .begin_connection(&account)
+            .await
+            .map_err(|error| format!("begin connection failed: {error}"))?;
+        inbound
+            .mark_connection_connected(&epoch)
+            .await
+            .map_err(|error| format!("mark connected failed: {error}"))?;
+        inbound
+            .mark_connection_uncertain_for_conversation(
+                &epoch,
+                IngestionGapReason::NonMessageReference,
+                &target,
+            )
+            .await
+            .map_err(|error| format!("persist non-message signal failed: {error}"))?;
+
+        let store: Arc<dyn BackfillStateStoreWithIngestionT> =
+            build_mysql_backfill_store(db.clone(), 60);
+        let source = Arc::new(TargetedScopeSource {
+            scopes: Mutex::new(Vec::new()),
+        });
+        let use_case = BackfillGapUseCase::new(
+            store,
+            source.clone(),
+            BackfillBudget {
+                page_size: 10,
+                max_pages_per_scope: 1,
+                max_events_per_run: 10,
+                max_concurrency: 1,
+                lease_secs: 60,
+                retry_initial_ms: 10,
+                retry_max_ms: 100,
+            },
+        );
+        let outcome = use_case
+            .run_one()
+            .await
+            .map_err(|error| format!("run targeted backfill failed: {error}"))?
+            .ok_or_else(|| "expected targeted gap claim".to_owned())?;
+
+        assert_eq!(outcome.gap_target_status, IngestionGapStatus::Uncertain);
+        assert_eq!(
+            source.scopes.lock().unwrap().as_slice(),
+            [BackfillScope {
+                account,
+                conversation: target,
+                boundary_cursor: Some(BackfillCursor::new(
+                    SourceAccountRef::new(MessageSource::NapCat, "nonmsg-account").unwrap(),
+                    BackfillAnchor::new(
+                        "__non_message_history_signal_no_prior_cursor__",
+                        String::new(),
+                    ),
+                )),
+            }]
+        );
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn online_non_message_gap_only_reads_signaled_scopes_and_preserves_real_boundary() {
+    run_scenario("_gap003_nonmsg_scopes", |db| async move {
+        let account =
+            SourceAccountRef::new(MessageSource::NapCat, "nonmsg-scopes-account").unwrap();
+        let known = ConversationRef::new(ConversationKind::Group, "target-known").unwrap();
+        let unseen = ConversationRef::new(ConversationKind::Group, "target-unseen").unwrap();
+        let unrelated = ConversationRef::new(ConversationKind::Group, "unrelated-known").unwrap();
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let epoch = inbound
+            .begin_connection(&account)
+            .await
+            .map_err(|error| format!("begin connection failed: {error}"))?;
+        inbound
+            .mark_connection_connected(&epoch)
+            .await
+            .map_err(|error| format!("mark connected failed: {error}"))?;
+        inbound
+            .insert_message_if_absent(
+                &envelope_for_group(
+                    "nonmsg-scopes-account",
+                    "known-real-boundary",
+                    &known.id,
+                    10,
+                )
+                .observed_in(epoch.clone()),
+            )
+            .await
+            .map_err(|error| format!("insert known cursor failed: {error}"))?;
+        inbound
+            .insert_message_if_absent(
+                &envelope_for_group(
+                    "nonmsg-scopes-account",
+                    "unrelated-real-boundary",
+                    &unrelated.id,
+                    11,
+                )
+                .observed_in(epoch.clone()),
+            )
+            .await
+            .map_err(|error| format!("insert unrelated cursor failed: {error}"))?;
+        let first_gap = inbound
+            .mark_connection_uncertain_for_conversation(
+                &epoch,
+                IngestionGapReason::NonMessageReference,
+                &known,
+            )
+            .await
+            .map_err(|error| format!("persist known signal failed: {error}"))?;
+        let second_gap = inbound
+            .mark_connection_uncertain_for_conversation(
+                &epoch,
+                IngestionGapReason::NonMessageReference,
+                &unseen,
+            )
+            .await
+            .map_err(|error| format!("persist unseen signal failed: {error}"))?;
+        assert_eq!(first_gap, second_gap, "one epoch must reuse one gap");
+
+        let store: Arc<dyn BackfillStateStoreWithIngestionT> =
+            build_mysql_backfill_store(db.clone(), 60);
+        let source = Arc::new(TargetedScopeSource {
+            scopes: Mutex::new(Vec::new()),
+        });
+        let use_case = BackfillGapUseCase::new(
+            store,
+            source.clone(),
+            BackfillBudget {
+                page_size: 10,
+                max_pages_per_scope: 1,
+                max_events_per_run: 10,
+                max_concurrency: 1,
+                lease_secs: 60,
+                retry_initial_ms: 10,
+                retry_max_ms: 100,
+            },
+        );
+        let outcome = use_case
+            .run_one()
+            .await
+            .map_err(|error| format!("run multi-scope backfill failed: {error}"))?
+            .ok_or_else(|| "expected multi-scope gap claim".to_owned())?;
+        assert_eq!(outcome.gap_target_status, IngestionGapStatus::Uncertain);
+
+        {
+            let scopes = source.scopes.lock().unwrap();
+            assert_eq!(scopes.len(), 2);
+            assert_eq!(scopes[0].conversation, known);
+            assert_eq!(
+                scopes[0]
+                    .boundary_cursor
+                    .as_ref()
+                    .map(|cursor| cursor.anchor.message_id.as_str()),
+                Some("known-real-boundary"),
+                "existing real cursor must not be overwritten by the sentinel"
+            );
+            assert_eq!(scopes[1].conversation, unseen);
+            assert_eq!(
+                scopes[1]
+                    .boundary_cursor
+                    .as_ref()
+                    .map(|cursor| cursor.anchor.message_id.as_str()),
+                Some("__non_message_history_signal_no_prior_cursor__")
+            );
+            assert!(
+                scopes.iter().all(|scope| scope.conversation != unrelated),
+                "an online gap must not scan an unrelated frozen conversation"
+            );
+        }
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT COUNT(*) AS value FROM secretary_gap_signal_scopes WHERE gap_id = ?",
+                vec![first_gap.as_str().into()],
+            )
+            .await,
+            2
         );
         Ok(())
     })

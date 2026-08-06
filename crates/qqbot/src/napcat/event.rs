@@ -146,6 +146,16 @@ pub struct PokeEvent {
     pub raw_event: Value,
 }
 
+/// 群文件上传通知。OneBot 通知只携带文件元数据，没有稳定 `message_id`；可引用的文件父消息
+/// 必须由对应群历史页恢复，不能把本通知伪装成 SourceEvent。
+#[derive(Debug, Clone)]
+pub struct GroupUploadEvent {
+    pub group_id: i64,
+    pub user_id: i64,
+    pub time: i64,
+    pub raw_event: Value,
+}
+
 /// 群消息撤回通知。`operator_id` 是执行撤回的人（群主/管理员或发送者本人），
 /// `user_id` 是被撤回消息的发送者，`message_id` 是被撤回消息的平台 ID。
 #[derive(Debug, Clone)]
@@ -175,6 +185,7 @@ pub enum NapCatEvent {
     GroupMemberIncrease(GroupMemberIncreaseEvent),
     GroupMemberDecrease(GroupMemberDecreaseEvent),
     Poke(PokeEvent),
+    GroupUpload(GroupUploadEvent),
     GroupRecall(GroupRecallEvent),
     FriendRecall(FriendRecallEvent),
 }

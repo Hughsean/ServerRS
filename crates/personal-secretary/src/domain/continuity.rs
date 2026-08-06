@@ -80,6 +80,8 @@ pub enum IngestionGapReason {
     DatabaseUnavailable,
     HistoryUnprovable,
     InvalidEvent,
+    /// 非消息通知表明某个会话可能已有可被 Reply 引用的历史消息，但通知自身没有稳定消息 ID。
+    NonMessageReference,
 }
 
 impl IngestionGapReason {
@@ -89,6 +91,7 @@ impl IngestionGapReason {
             Self::DatabaseUnavailable => "database_unavailable",
             Self::HistoryUnprovable => "history_unprovable",
             Self::InvalidEvent => "invalid_event",
+            Self::NonMessageReference => "non_message_reference",
         }
     }
 }

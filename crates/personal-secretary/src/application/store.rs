@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    ConnectionEndReason, ConnectionEpochId, InboundMessageEnvelope, IngestionGapId,
-    IngestionGapReason, SourceAccountRef,
+    ConnectionEndReason, ConnectionEpochId, ConversationRef, InboundMessageEnvelope,
+    IngestionGapId, IngestionGapReason, SourceAccountRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -110,6 +110,20 @@ pub trait IngestionContinuityStoreT: Send + Sync {
         connection_epoch_id: &ConnectionEpochId,
         reason: IngestionGapReason,
     ) -> Result<IngestionGapId, InboundEventStoreError>;
+
+    /// 在连接仍存活时，把一个没有稳定消息 ID 的协议通知转化为指定会话的历史回补范围。
+    ///
+    /// 默认保持既有账号级 Gap 行为，供不支持会话冻结的测试替身兼容；生产存储必须覆写，
+    /// 确保首次出现的会话也会进入该 Gap 的冻结 Scope。
+    async fn mark_connection_uncertain_for_conversation(
+        &self,
+        connection_epoch_id: &ConnectionEpochId,
+        reason: IngestionGapReason,
+        _conversation: &ConversationRef,
+    ) -> Result<IngestionGapId, InboundEventStoreError> {
+        self.mark_connection_uncertain(connection_epoch_id, reason)
+            .await
+    }
 }
 
 pub trait PersonalSecretaryStoreT: InboundEventStoreT + IngestionContinuityStoreT {}

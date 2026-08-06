@@ -256,6 +256,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_upload_is_forwarded_as_history_signal_not_message() {
+        let handler = Arc::new(RecordingHandler::default());
+        let listener = listener(Arc::clone(&handler));
+
+        feed(
+            &listener,
+            r#"{"post_type":"notice","notice_type":"group_upload","group_id":7,"user_id":8,"time":9,"file":{"id":"opaque","name":"sample.txt","size":1,"busid":102}}"#,
+        )
+        .await
+        .unwrap();
+
+        let events = handler.events.lock().unwrap();
+        let NapCatEvent::GroupUpload(event) = &events[0] else {
+            panic!("expected group upload event");
+        };
+        assert_eq!(event.group_id, 7);
+        assert_eq!(event.user_id, 8);
+        assert_eq!(event.time, 9);
+    }
+
+    #[tokio::test]
     async fn invalid_group_message_is_rejected_before_callback() {
         let handler = Arc::new(RecordingHandler::default());
         let listener = listener(Arc::clone(&handler));

@@ -8,14 +8,18 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::{
-    ConnectionEndReason, ConnectionEpochId, ConnectionEpochStatus, InboundEventStoreError,
-    IngestionContinuityStoreT, IngestionGapId, IngestionGapReason, IngestionGapStatus,
-    SourceAccountRef,
+    ConnectionEndReason, ConnectionEpochId, ConnectionEpochStatus, ConversationRef,
+    InboundEventStoreError, IngestionContinuityStoreT, IngestionGapId, IngestionGapReason,
+    IngestionGapStatus, SourceAccountRef,
 };
 
 use super::MySqlInboundEventStore;
 use super::entities::{secretary_connection_epochs, secretary_ingestion_gaps};
-use super::mysql_inbound::{ensure_account_ref, store_error};
+use super::mysql_inbound::{ensure_account_ref, ensure_conversation_ref, store_error};
+
+/// `secretary_gap_boundaries` 要求非空父锚点。此值只表示“没有入站游标可冻结”，不会传给
+/// NapCat 作为分页 cursor；回补会从最新页开始，并保持 `UnprovenStop` 直到有真实终点证据。
+pub(super) const NO_PRIOR_CURSOR_BOUNDARY: &str = "__non_message_history_signal_no_prior_cursor__";
 
 #[async_trait]
 impl IngestionContinuityStoreT for MySqlInboundEventStore {
@@ -178,45 +182,111 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
         connection_epoch_id: &ConnectionEpochId,
         reason: IngestionGapReason,
     ) -> Result<IngestionGapId, InboundEventStoreError> {
-        let transaction = self.db.begin().await.map_err(store_error)?;
-        let now = Utc::now().naive_utc();
-        let epoch = secretary_connection_epochs::Entity::find_by_id(
-            connection_epoch_id.as_str().to_owned(),
-        )
-        .one(&transaction)
-        .await
-        .map_err(store_error)?
-        .filter(|epoch| epoch.status == ConnectionEpochStatus::Connected.as_str())
-        .ok_or_else(|| {
-            InboundEventStoreError::InvalidData(
-                "only a connected epoch can be marked uncertain".into(),
-            )
-        })?;
-
-        let created = insert_gap_if_absent(
-            &transaction,
-            epoch.account_id,
-            connection_epoch_id,
-            reason.as_str(),
-            now,
-        )
-        .await?;
-        let gap = gap_for_epoch(&transaction, connection_epoch_id)
-            .await?
-            .ok_or(InboundEventStoreError::Unavailable)?;
-        if created {
-            snapshot_gap_boundaries(&transaction, gap.as_str(), epoch.account_id, now).await?;
-            freeze_directory_snapshot_for_gap(&transaction, gap.as_str(), epoch.account_id).await?;
-        }
-        transaction.commit().await.map_err(store_error)?;
-        tracing::warn!(
-            connection_epoch_id = %connection_epoch_id.as_str(),
-            gap_id = %gap.as_str(),
-            reason = reason.as_str(),
-            "连接周期已标记为消息连续性不确定"
-        );
-        Ok(gap)
+        mark_connection_uncertain_in_txn(self, connection_epoch_id, reason, None).await
     }
+
+    async fn mark_connection_uncertain_for_conversation(
+        &self,
+        connection_epoch_id: &ConnectionEpochId,
+        reason: IngestionGapReason,
+        conversation: &ConversationRef,
+    ) -> Result<IngestionGapId, InboundEventStoreError> {
+        mark_connection_uncertain_in_txn(self, connection_epoch_id, reason, Some(conversation))
+            .await
+    }
+}
+
+async fn mark_connection_uncertain_in_txn(
+    store: &MySqlInboundEventStore,
+    connection_epoch_id: &ConnectionEpochId,
+    reason: IngestionGapReason,
+    conversation: Option<&ConversationRef>,
+) -> Result<IngestionGapId, InboundEventStoreError> {
+    if conversation.is_some() && reason != IngestionGapReason::NonMessageReference {
+        return Err(InboundEventStoreError::InvalidData(
+            "conversation-scoped uncertainty requires a non-message reference".into(),
+        ));
+    }
+    let transaction = store.db.begin().await.map_err(store_error)?;
+    let now = Utc::now().naive_utc();
+    let epoch =
+        secretary_connection_epochs::Entity::find_by_id(connection_epoch_id.as_str().to_owned())
+            .one(&transaction)
+            .await
+            .map_err(store_error)?
+            .filter(|epoch| epoch.status == ConnectionEpochStatus::Connected.as_str())
+            .ok_or_else(|| {
+                InboundEventStoreError::InvalidData(
+                    "only a connected epoch can be marked uncertain".into(),
+                )
+            })?;
+
+    let created = insert_gap_if_absent(
+        &transaction,
+        epoch.account_id,
+        connection_epoch_id,
+        reason.as_str(),
+        now,
+    )
+    .await?;
+    let gap = gap_for_epoch(&transaction, connection_epoch_id)
+        .await?
+        .ok_or(InboundEventStoreError::Unavailable)?;
+    if created {
+        snapshot_gap_boundaries(&transaction, gap.as_str(), epoch.account_id, now).await?;
+        freeze_directory_snapshot_for_gap(&transaction, gap.as_str(), epoch.account_id).await?;
+    }
+    if let Some(conversation) = conversation {
+        let conversation_id =
+            ensure_conversation_ref(&transaction, epoch.account_id, conversation, now).await?;
+        // 已有游标边界优先：首次创建 Gap 时的 snapshot 会先写入真实锚点；只有未见过的
+        // 会话才写入此 sentinel，使其从最新页开始有界回补。
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "INSERT INTO secretary_gap_boundaries \
+                     (gap_id, account_id, conversation_id, conversation_kind, platform_conversation_id, \
+                      boundary_message_id, boundary_occurred_at_unix_secs, created_at, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?) \
+                     ON DUPLICATE KEY UPDATE gap_id = gap_id",
+                    [
+                        gap.as_str().into(),
+                        epoch.account_id.into(),
+                        conversation_id.into(),
+                        conversation.kind.as_str().into(),
+                        conversation.id.clone().into(),
+                        NO_PRIOR_CURSOR_BOUNDARY.into(),
+                        now.into(),
+                        now.into(),
+                    ],
+                ))
+            .await
+            .map_err(store_error)?;
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_gap_signal_scopes \
+                 (gap_id, conversation_id, signal_kind, created_at, updated_at) \
+                 VALUES (?, ?, 'non_message_reference', ?, ?) \
+                 ON DUPLICATE KEY UPDATE gap_id = gap_id",
+                [
+                    gap.as_str().into(),
+                    conversation_id.into(),
+                    now.into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+    }
+    transaction.commit().await.map_err(store_error)?;
+    tracing::warn!(
+        connection_epoch_id = %connection_epoch_id.as_str(),
+        gap_id = %gap.as_str(),
+        reason = reason.as_str(),
+        "连接周期已标记为消息连续性不确定"
+    );
+    Ok(gap)
 }
 
 pub(super) async fn insert_gap_if_absent(

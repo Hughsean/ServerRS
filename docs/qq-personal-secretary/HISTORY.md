@@ -5,12 +5,21 @@
 
 ## 当前阶段
 
+- **本轮（EVT-007-NONMSG-FILE，已完成）**：唯一授权群的真实文件上传证明 `group_upload` notice
+  没有稳定 `message_id`，而是由后续历史中的 `file` 段消息提供可引用父 ID；Reply 段 `data.id`
+  与该历史消息精确一致。协议层不伪造 SourceEvent，只发出有界会话历史信号；运行时持久化精确
+  scope 并在 handler 错误会被 transport 吞掉的边界上用独立 fatal 通道收敛到 Connection Gap。
+  MySQL 的在线回补只读取 signal scope，保留已有 cursor、支持同 epoch 多 scope，并以 FK/CHECK
+  fail-closed migration 保护 ledger。隔离 MySQL EVT-007 21/21、GAP-003 3/3 及六套回归全通过。
+  卡片/分享主动构造遭 NapCat 拒绝，保留为 `EVT-007-NONMSG-CARD` 等待真实样本。
+
 - **本轮（ENV-004 双账号只读复核，未完成）**：6099/6100 仅访问授权群历史；两个实例各返回 4 页
   `count=10`，原始数组均为旧到新，使用页首 opaque `message_seq` 可继续推进且页间不重复；把
   6099 cursor 交给 6100 返回 retcode 200。读取到短页后仍出现 1 条锚点重叠，不能把短页解释为
   确定性历史终点；`nc_get_packet_status` 两实例均 retcode 400/空数据。未重启 NapCat，不能声称
-  跨重启或 PacketBackend 兼容完成。两个实例目标群最近历史 44/45 条均无 Reply，EVT-007-NONMSG
-  仍等待真实业务样本。
+  PacketBackend 兼容完成。6099 重启前后授权群最近 10 条历史摘要一致且重启后
+  `online=true/good=true`，故跨重启可读性已有局部证据；空页语义和 PacketBackend 仍未完成。
+  此后取得真实群文件 Reply 样本，相关实现已在 `EVT-007-NONMSG-FILE` 收口。
 
 - **本轮（ENV-003 部分完成 + DB Baseline 修复）**：6099 在唯一授权群完成临时自身消息上报、
   Debug WebSocket 接收和历史回读；随后启动真实 `qqbot-server`，在随机隔离 QQBot schema 中确认

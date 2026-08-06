@@ -8,7 +8,7 @@ use tracing::debug;
 
 use super::super::{
     FriendRecallEvent, GroupMemberDecreaseEvent, GroupMemberIncreaseEvent, GroupRecallEvent,
-    NapCatError, NapCatEvent, NapCatEventHandler, PokeEvent,
+    GroupUploadEvent, NapCatError, NapCatEvent, NapCatEventHandler, PokeEvent,
 };
 use super::bounds::validate_actor_ids;
 use super::message_event::deserialize_message_id;
@@ -74,6 +74,17 @@ pub(crate) async fn handle_notice(
                 group_id: event.group_id,
                 user_id: event.user_id,
                 target_id: event.target_id,
+                time: event.time,
+                raw_event,
+            })
+        }
+        ("group_upload", _) => {
+            // NapCat 实测：通知只带 file{id,name,size,busid}，没有可用于 Reply 的 message_id。
+            // 把它交给宿主作为有界历史回补信号，而不是错误地持久化为一条消息事件。
+            validate_actor_ids(event.group_id, event.user_id, "group_upload notice")?;
+            NapCatEvent::GroupUpload(GroupUploadEvent {
+                group_id: event.group_id,
+                user_id: event.user_id,
                 time: event.time,
                 raw_event,
             })

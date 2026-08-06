@@ -19,8 +19,9 @@
   跟踪的 `.mcp.json` 未读取或触碰。
 - 当前状态：`GAP-003-A/B/C` 已完成实现与 Codex 独立复核。2026-08-06 双账号 NapCat 4.18.14
   实测确认 `reverseOrder=true` 才是向更旧读取，响应数组仍为旧到新；客户端已在协议边界归一化为
-  新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。空页原因、跨重启覆盖和
-  PacketBackend 行为仍属于 `EXTERNAL ENV-004`，完成前只能有界恢复候选事件，不能完成 Scope。
+  新到旧并保持末项 continuation。账号间 cursor 不可复用也已实测。6099 单次重启后的最近历史
+  可读已有局部证据；空页原因、完整跨重启分页覆盖和 PacketBackend 行为仍属于 `EXTERNAL ENV-004`，
+  完成前只能有界恢复候选事件，不能完成 Scope。
 - 当前评估：`GAP-007-A/B/C` 与 `GAP-007-IMPL-A/B/C/D` 已完成并通过 Codex 独立复核。普通消息
   callback 只做 bounded admission，blocking writer 在 `sync_all` 后产生 durable receipt，再进入统一
   MySQL ingestion；必需 Recall/Artifact hook 收敛后才推进连续 checkpoint。fatal 与关闭超时保留开放
@@ -36,8 +37,8 @@
   休眠或产品范围扩展的事项继续明确保留为 `EXTERNAL`/`DEFERRED`。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
-  真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
-  业务样本，`EVT-009` 已按产品决策取消。
+  真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG-FILE` 已由
+  授权群真实上传/Reply 样本完成；卡片仍等待真实业务样本，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
   所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
 
@@ -326,9 +327,17 @@
   `evt007_delayed_reply_mysql` 20 场景全绿（场景 20 同时覆盖正确迁移重放与列/索引/FK 三条
   fail-closed 负向重放）。
   所有 6 个回归套件全绿，Docker 验证完成。
-- [ ] `EVT-007-NONMSG` 非消息 Reply（文件、卡片、通知等）子先父后解析。必须先取得真实业务
-  样本并明确引用模型，不得在本切片顺带实现。2026-08-06 两实例对授权群的最近历史分别读取
-  44/45 条，仅含 text/image，Reply=0；没有可用的非消息 Reply 样本。
+- [x] `EVT-007-NONMSG-FILE` 群文件 Reply 子先父后解析。2026-08-06 在唯一授权群实测：
+  `group_upload` notice 只有 `file{id,name,size,busid}`、没有稳定 `message_id`，不得伪造成
+  `SourceEvent`；可引用父节点是群历史中的 `file` 段消息，其真实 `message_id` 与后续 Reply 段
+  `data.id` 一致。协议层仅产生 `GroupUpload` 类型化历史信号，runtime 以有界非阻塞队列持久化
+  精确会话的 `NonMessageReference` Gap；队列满/关闭经独立 fatal 通道结束 epoch，防止 transport
+  吞掉 handler 错误而静默漏信号。MySQL 只在在线状态回补 signal scope，已有真实 cursor 保留、
+  未见会话使用 sentinel 从最新页开始；连接结束后仍复用完整冻结 Scope。新增迁移
+  `20260806_qqbot_non_message_history_signals.sql` 建立受 FK/CHECK 约束的持久化 scope ledger。
+  隔离 MySQL 覆盖文件父子解析、未见会话、已有 cursor、多 scope 和未通知会话排除。
+- [ ] `EVT-007-NONMSG-CARD` 卡片/分享等非消息 Reply。两种主动构造的 JSON/share 卡片均被 NapCat
+  拒绝，尚无真实可引用样本；不得依赖猜测的 notice 或伪造 SourceEvent 实现。
 - [x] `EVT-009-CANCELLED` 产品决策不实施数据库消息正文静态加密、密钥轮换、历史重加密或
   密文搜索索引；不新增相关迁移、配置、Worker 和密钥依赖。现有
   `normal/local_only/envelope_only/never_long_term` 继续作为应用层内容保存与读取策略执行；
@@ -503,11 +512,12 @@
   权威状态证据前不得以 NapCat 能收到普通消息代替。
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
   PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
-  为旧到新且 cursor 受账号主体约束；空页语义、跨重启覆盖和 PacketBackend 行为尚未验证，
+  为旧到新且 cursor 受账号主体约束；空页语义、完整跨重启分页覆盖和 PacketBackend 行为尚未验证，
   不得由本次方向证据或 Fake/HTTP 测试推导为已完成。2026-08-06 续读两实例各 4 页
   `count=10`：原始页首 opaque `message_seq` 可连续推进且页序旧到新；跨账号复用 cursor 返回
   retcode 200。短页后仍返回 1 条锚点重叠，不能解释为历史终点；`nc_get_packet_status` 两实例均
-  返回 retcode 400/空数据。跨重启覆盖仍未执行，故继续保持未完成。
+  返回 retcode 400/空数据。6099 重启前后授权群最近 10 条历史摘要一致，且重启后
+  `online=true/good=true`；但空页原因和 PacketBackend 仍无证据，故继续保持未完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
   runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。

@@ -9,9 +9,9 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    ConnectionEpochId, ConnectionEpochStatus, InboundEventStoreError, InboundEventStoreT,
-    InboundMessageEnvelope, IngestMessageOutcome, IngestionCursorScope, SourceAccountRef,
-    SourceEventId,
+    ConnectionEpochId, ConnectionEpochStatus, ConversationRef, InboundEventStoreError,
+    InboundEventStoreT, InboundMessageEnvelope, IngestMessageOutcome, IngestionCursorScope,
+    SourceAccountRef, SourceEventId,
 };
 
 use super::entities::{
@@ -550,6 +550,17 @@ async fn ensure_conversation(
     message: &InboundMessageEnvelope,
     now: chrono::NaiveDateTime,
 ) -> Result<u64, InboundEventStoreError> {
+    ensure_conversation_ref(db, account_id, &message.conversation, now).await
+}
+
+/// 确保某个协议会话已持久化。连续性通知没有可入库的消息信封，仍需用此 helper 冻结
+/// 精确回补 Scope，避免退化为账号级无目标扫描。
+pub(super) async fn ensure_conversation_ref(
+    db: &sea_orm::DatabaseTransaction,
+    account_id: u64,
+    conversation: &ConversationRef,
+    now: chrono::NaiveDateTime,
+) -> Result<u64, InboundEventStoreError> {
     db.execute_raw(Statement::from_sql_and_values(
         DatabaseBackend::MySql,
         r#"INSERT INTO secretary_conversations
@@ -558,8 +569,8 @@ async fn ensure_conversation(
            ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)"#,
         [
             account_id.into(),
-            message.conversation.kind.as_str().into(),
-            message.conversation.id.clone().into(),
+            conversation.kind.as_str().into(),
+            conversation.id.clone().into(),
             MEMORY_NORMAL.into(),
             now.into(),
             now.into(),
@@ -569,14 +580,8 @@ async fn ensure_conversation(
         .map_err(store_error)?;
     secretary_conversations::Entity::find()
         .filter(secretary_conversations::Column::AccountId.eq(account_id))
-        .filter(
-            secretary_conversations::Column::ConversationKind
-                .eq(message.conversation.kind.as_str()),
-        )
-        .filter(
-            secretary_conversations::Column::PlatformConversationId
-                .eq(message.conversation.id.clone()),
-        )
+        .filter(secretary_conversations::Column::ConversationKind.eq(conversation.kind.as_str()))
+        .filter(secretary_conversations::Column::PlatformConversationId.eq(conversation.id.clone()))
         .one(db)
         .await
         .map_err(store_error)?

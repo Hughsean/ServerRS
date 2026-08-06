@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use personal_secretary::{
-    ArtifactUseCase, ConnectionEndReason, ConnectionEpochId, PersonalSecretaryStoreT,
-    RecallUseCase, SourceAccountRef,
+    ArtifactUseCase, ConnectionEndReason, ConnectionEpochId, ConversationRef, IngestionGapReason,
+    PersonalSecretaryStoreT, RecallUseCase, SourceAccountRef,
 };
 use qqbot::napcat::{NapCatConnectionObserver, NapCatError, NapCatEventHandler, NapCatListener};
 
@@ -23,7 +23,9 @@ use crate::ingestion_worker::{
 };
 
 use super::RuntimeError;
-use super::handlers::{MessageAdmission, PersonalSecretaryInboundHandler};
+use super::handlers::{
+    MessageAdmission, NonMessageHistorySignalQueue, PersonalSecretaryInboundHandler,
+};
 use super::health::{BackfillWake, ConnectionObserver};
 use super::shutdown::ShutdownSource;
 
@@ -150,10 +152,28 @@ pub(super) async fn run_connection_loop(
             );
             (MessageAdmission::Memory(queue), ingestion_worker, None)
         };
+        // `group_upload` 等通知没有稳定 message_id；回调只 try_send 到有界队列，专用任务
+        // 再把会话范围与连续性 Gap 一起持久化。transport 会记录并吞掉 handler 错误，因此队列
+        // 满/关闭还必须经独立 fatal 通道结束连接，由 epoch 结束路径创建普通 Gap。
+        let (non_message_signal_sender, non_message_signal_receiver) =
+            tokio::sync::mpsc::channel(16);
+        let (non_message_fatal_sender, mut non_message_fatal_receiver) =
+            tokio::sync::watch::channel(false);
+        let mut non_message_signal_worker = tokio::spawn(run_non_message_history_signal_worker(
+            non_message_signal_receiver,
+            Arc::clone(&store),
+            connection_epoch_id.clone(),
+            backfill_wake.clone(),
+            health_state.clone(),
+        ));
         let handler: Arc<dyn NapCatEventHandler> = Arc::new(PersonalSecretaryInboundHandler {
             mapper: NapCatInboundMapper::new(config.napcat.self_qq_id),
             admission,
             group_whitelist: Arc::clone(&group_whitelist),
+            non_message_history: NonMessageHistorySignalQueue::new(
+                non_message_signal_sender,
+                non_message_fatal_sender,
+            ),
             recall_handler: recall_handler.clone(),
         });
         let observer = Arc::new(ConnectionObserver::new(
@@ -206,8 +226,30 @@ pub(super) async fn run_connection_loop(
                 );
                 (ConnectionEndReason::ObserverRejected, false, Some(kind))
             }
+            changed = non_message_fatal_receiver.changed() => {
+                if changed.is_err() || !*non_message_fatal_receiver.borrow() {
+                    tracing::error!(
+                        error_code = "non_message_history_signal_fatal_channel_closed",
+                        "非消息历史回补 fatal 通道异常，结束当前连接周期"
+                    );
+                } else {
+                    tracing::error!(
+                        error_code = "non_message_history_signal_admission_failed",
+                        "非消息历史回补信号无法可靠接收，结束当前连接周期"
+                    );
+                }
+                (ConnectionEndReason::ObserverRejected, false, None)
+            }
         };
         drop(listener);
+        let non_message_signals_drained = drain_non_message_history_signal_worker(
+            &mut non_message_signal_worker,
+            Duration::from_secs(5),
+        )
+        .await;
+        if !non_message_signals_drained {
+            tracing::warn!("非消息历史回补信号未在连接结束期限内持久化；将由连接 Gap 继续恢复");
+        }
         let writer_drained = if let Some(writer) = spool_writer.as_mut() {
             drain_spool_writer(
                 writer,
@@ -426,6 +468,66 @@ async fn drain_ingestion_worker(
                 timeout_ms = timeout.as_millis(),
                 "持久化 Worker 未在期限内排空，将中止并依赖历史回补"
             );
+            worker.abort();
+            let _ = worker.await;
+            false
+        }
+    }
+}
+
+/// 单连接周期的非消息历史信号持久化任务。收到文件上传通知后，按会话创建或扩展同一 epoch
+/// 的 uncertain Gap；成功才唤醒既有回补 Worker。SQL 暂时失败时保持当前信号并有限退避，
+/// 回调线程始终不等待该 I/O。
+async fn run_non_message_history_signal_worker(
+    mut receiver: tokio::sync::mpsc::Receiver<ConversationRef>,
+    store: Arc<dyn PersonalSecretaryStoreT>,
+    connection_epoch_id: ConnectionEpochId,
+    backfill_wake: Option<Arc<BackfillWake>>,
+    health_state: Option<Arc<crate::health_runtime::RuntimeHealthState>>,
+) {
+    while let Some(conversation) = receiver.recv().await {
+        let mut retry_delay = Duration::from_millis(100);
+        loop {
+            match store
+                .mark_connection_uncertain_for_conversation(
+                    &connection_epoch_id,
+                    IngestionGapReason::NonMessageReference,
+                    &conversation,
+                )
+                .await
+            {
+                Ok(_) => {
+                    if let Some(wake) = &backfill_wake {
+                        wake.wake();
+                    }
+                    if let Some(health) = &health_state {
+                        health.set_uncertain_gaps(1);
+                    }
+                    break;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        error_code = "non_message_history_signal_persist_failed",
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "非消息历史回补信号暂未持久化，将重试"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay = retry_delay.saturating_mul(2).min(Duration::from_secs(2));
+                }
+            }
+        }
+    }
+}
+
+/// listener 已释放发送端后，等待非消息信号队列排空；超时必须 abort 并等待，避免 detached task。
+async fn drain_non_message_history_signal_worker(
+    worker: &mut tokio::task::JoinHandle<()>,
+    timeout: Duration,
+) -> bool {
+    match tokio::time::timeout(timeout, &mut *worker).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) => false,
+        Err(_) => {
             worker.abort();
             let _ = worker.await;
             false
