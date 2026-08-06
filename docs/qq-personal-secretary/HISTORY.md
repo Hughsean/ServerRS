@@ -5,6 +5,13 @@
 
 ## 当前阶段
 
+- **本轮（OPS-004，已完成）**：新增 `retry_failed_artifact_derivations` 类型化 L2 Action，
+  Owner 只能提交 1..=100 的批量预算和有界原因，不能指定事件、账号或任意过滤条件。MySQL
+  Effect 在单事务内复验托管账号、OwnerCommand、Action run、未过期租约和完整 proposal，按
+  `updated_at/source_event_id` 稳定锁定本账号最旧失败任务并重排为 pending，同时写入精确目标
+  集合的不可变审计与幂等 Receipt。真实隔离 MySQL 1/1 及 CMD-009 2/2、CMD-010 2/2、
+  Action Planner 6/6 回归通过；并修正一条与来源撤回后事实 fail-closed 契约冲突的旧测试断言。
+
 - **本轮（OPS-003，已完成）**：待处理 Owner 工作和跨线程搜索新增稳定 keyset 分页，分别按
   `due_at IS NULL → due_at → source_kind → source_id` 与
   `match_rank DESC → latest_at DESC → thread_id ASC` 排序；游标字段私有且反序列化复验，

@@ -11,9 +11,10 @@ use async_trait::async_trait;
 
 use crate::{
     AccountScopedParticipantRef, AgendaApplyRequest, AgendaError, AgendaItemId, AgendaMutation,
-    AgendaUseCase, ConversationMemoryModeInput, EventQuery, FollowUpControlEffectRequest,
-    FollowUpControlStoreError, FollowUpControlUseCase, HealthAggregator,
-    MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
+    AgendaUseCase, ArtifactReprocessEffectRequest, ArtifactReprocessStoreError,
+    ArtifactReprocessUseCase, ConversationMemoryModeInput, EventQuery,
+    FollowUpControlEffectRequest, FollowUpControlStoreError, FollowUpControlUseCase,
+    HealthAggregator, MemoryCandidateControlEffectRequest, MemoryCandidateControlStoreError,
     MemoryCandidateControlUseCase, MemoryCandidateUseCase, MemoryDeleteInput, MemoryFact,
     MemoryFactId, MemoryFactStatus, MemoryUseCase, NotificationPolicyEffectRequest,
     NotificationPolicyUseCase, QueryEffectResultV1, QueryEffectTypedEvent, RecentEventRef,
@@ -46,6 +47,7 @@ pub struct SecretaryActionEffectExecutor {
     memory_candidate: Option<Arc<MemoryCandidateUseCase>>,
     memory_candidate_control: Option<Arc<MemoryCandidateControlUseCase>>,
     thread_link_review: Option<Arc<ThreadLinkReviewUseCase>>,
+    artifact_reprocess: Option<Arc<ArtifactReprocessUseCase>>,
     command_source_event_id: Option<SourceEventId>,
     recent_events: Vec<RecentEventRef>,
     account: SourceAccountRef,
@@ -78,6 +80,7 @@ impl SecretaryActionEffectExecutor {
             memory_candidate: None,
             memory_candidate_control: None,
             thread_link_review: None,
+            artifact_reprocess: None,
             command_source_event_id: None,
             recent_events: Vec::new(),
             account,
@@ -200,6 +203,57 @@ impl SecretaryActionEffectExecutor {
     ) -> Self {
         self.thread_link_review = Some(thread_link_review);
         self
+    }
+
+    pub fn with_artifact_reprocess(
+        mut self,
+        artifact_reprocess: Arc<ArtifactReprocessUseCase>,
+        command_source_event_id: SourceEventId,
+    ) -> Self {
+        self.artifact_reprocess = Some(artifact_reprocess);
+        self.command_source_event_id = Some(command_source_event_id);
+        self
+    }
+
+    async fn execute_artifact_reprocess(
+        &self,
+        proposal: &crate::SecretaryActionProposal,
+        effect_id: &str,
+    ) -> Result<Option<SecretaryActionReceipt>, EffectError> {
+        if !matches!(
+            proposal.action,
+            SecretaryAction::RetryFailedArtifactDerivations { .. }
+        ) {
+            return Ok(None);
+        }
+        let use_case = self.artifact_reprocess.as_ref().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "ArtifactReprocessUseCase 未注入",
+            )
+        })?;
+        let command_source_event_id = self.command_source_event_id.clone().ok_or_else(|| {
+            EffectError::new(
+                EffectErrorKind::Permanent,
+                "Artifact 重处理需要原始 OwnerCommand 身份",
+            )
+        })?;
+        let proposal_json = serde_json::to_string(proposal)
+            .map_err(|error| EffectError::new(EffectErrorKind::Permanent, error.to_string()))?;
+        let receipt = use_case
+            .apply_effect(&ArtifactReprocessEffectRequest {
+                account: self.account.clone(),
+                command_source_event_id,
+                run_id: self.run_id.clone(),
+                lease_token: self.lease_token.clone(),
+                effect_id: effect_id.to_owned(),
+                proposal_id: proposal.proposal_id.clone(),
+                proposal_json,
+                action: proposal.action.clone(),
+            })
+            .await
+            .map_err(artifact_reprocess_effect_error)?;
+        Ok(Some(receipt))
     }
 
     async fn execute_follow_up_control(
@@ -1347,6 +1401,13 @@ impl EffectExecutor<SecretaryActionEffect> for SecretaryActionEffectExecutor {
             return Ok(receipt);
         }
         if let Some(mut receipt) = self
+            .execute_artifact_reprocess(&envelope.effect.proposal, &envelope.id.to_string())
+            .await?
+        {
+            receipt.tool_kind = Some(tool_kind);
+            return Ok(receipt);
+        }
+        if let Some(mut receipt) = self
             .execute_agenda(&envelope.effect.proposal, &envelope.id.to_string())
             .await?
         {
@@ -1477,6 +1538,16 @@ fn memory_candidate_control_effect_error(error: MemoryCandidateControlStoreError
         MemoryCandidateControlStoreError::Unauthorized
         | MemoryCandidateControlStoreError::LeaseLost
         | MemoryCandidateControlStoreError::InvalidData(_) => EffectErrorKind::Permanent,
+    };
+    EffectError::new(kind, error.to_string())
+}
+
+fn artifact_reprocess_effect_error(error: ArtifactReprocessStoreError) -> EffectError {
+    let kind = match error {
+        ArtifactReprocessStoreError::Database => EffectErrorKind::UnknownCommit,
+        ArtifactReprocessStoreError::Unauthorized
+        | ArtifactReprocessStoreError::LeaseLost
+        | ArtifactReprocessStoreError::InvalidData(_) => EffectErrorKind::Permanent,
     };
     EffectError::new(kind, error.to_string())
 }
@@ -1825,6 +1896,25 @@ fn is_owner_work_control_action(action: &SecretaryAction) -> bool {
     is_follow_up_control_action(action)
         || is_response_expectation_control_action(action)
         || is_memory_candidate_control_action(action)
+        || matches!(
+            action,
+            SecretaryAction::RetryFailedArtifactDerivations { .. }
+        )
+}
+
+#[cfg(test)]
+mod owner_control_route_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_reprocess_uses_dedicated_receipt_validation_path() {
+        assert!(is_owner_work_control_action(
+            &SecretaryAction::RetryFailedArtifactDerivations {
+                limit: 1,
+                reason: "retry".into(),
+            }
+        ));
+    }
 }
 
 /// 格式化事件检索结果为有界摘要（含来源、时间、Actor、摘录、命中数）。

@@ -469,6 +469,14 @@ fn validate_action(action: &SecretaryAction) -> Result<(), SecretaryAgentRuntime
             }
             bounded_text("thread control reason", reason, 1, 1_000)?;
         }
+        SecretaryAction::RetryFailedArtifactDerivations { limit, reason } => {
+            if !(1..=crate::MAX_ARTIFACT_REPROCESS_BATCH).contains(limit) {
+                return Err(SecretaryAgentRuntimeError::InvalidProposal(
+                    "artifact reprocess limit must be in 1..=100".into(),
+                ));
+            }
+            bounded_text("artifact reprocess reason", reason, 1, 1_000)?;
+        }
         SecretaryAction::SetThreadLifecycle {
             expected_status,
             target_status,

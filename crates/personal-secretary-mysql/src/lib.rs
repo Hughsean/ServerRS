@@ -166,6 +166,14 @@ pub fn build_mysql_artifact_store(db: DatabaseConnection) -> Arc<dyn crate::Arti
     Arc::new(repo::MySqlArtifactStore::new(db))
 }
 
+/// 构造 Owner 失败 Artifact 派生重处理仓储；账号授权、Action 租约、业务更新、
+/// 不可变审计与 Effect Receipt 在同一事务内复验并提交。
+pub fn build_mysql_artifact_reprocess_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::ArtifactReprocessStoreT> {
+    Arc::new(repo::MySqlArtifactReprocessStore::new(db))
+}
+
 /// 构造通知策略仓储。策略 Family/Revision、账号 epoch 与反馈写入均通过短事务持久化。
 #[allow(dead_code)]
 pub fn build_mysql_notification_policy_store(

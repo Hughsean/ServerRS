@@ -457,7 +457,12 @@
   查询和固定排序键，Owner 工具只接收本轮 `cursor_N` 临时引用（真实游标留在服务端），健康详情沿用 OPS-001/OPS-002 的有界
   HealthAggregator 快照。MySQL 隔离回归覆盖三页无重复/遗漏、同时间/相关性稳定排序、NULL 到期、
   账号隔离和查询游标错配拒绝。
-- [ ] `OPS-004` 提供失败派生任务的有界重处理入口，继续使用租约、fencing 和审计。
+- [x] `OPS-004` 提供失败 Artifact 派生任务的有界 Owner 重处理入口：L2 Action 只接收
+  `limit=1..=100` 与有界 reason，Effect 事务内复验托管账号、OwnerCommand、Action run、
+  未过期 lease token 和完整 proposal；按稳定顺序锁定本账号最旧失败任务并重排为 pending，
+  同事务写入精确目标集合的不可变审计与幂等 Effect Receipt。重复 Effect 不重复重排，伪造/
+  过期租约、跨账号目标和无效预算 fail-closed；真实隔离 MySQL 覆盖有界顺序、账号隔离、
+  fencing、幂等、迁移重放和审计原子性。
 - [ ] `OPS-005` 建立最小生产指标：入站吞吐、端到端延迟、队列/Spool backlog、LLM 调用率与成本、
   线程误关联反馈、提醒误报反馈。
 - [ ] `OPS-006` 使用合成数据压测高流量群，验证背压、批处理、内存和 Token 上限；不依赖真实 QQ。

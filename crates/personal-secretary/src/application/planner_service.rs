@@ -20,7 +20,7 @@ use tracing::{info, warn};
 
 use crate::{
     ActionLeaseToken, ActionRunContext, ActionRunId, ActionRunSeed, ActionStoreError, ActionStoreT,
-    ClaimedActionRun, Clock, FollowUpControlUseCase, OwnerResponseDraft,
+    ArtifactReprocessUseCase, ClaimedActionRun, Clock, FollowUpControlUseCase, OwnerResponseDraft,
     SecretaryActionEffectExecutor, SecretaryAgentState, SuspendedRunClaim, SystemClock, backoff_ms,
     build_action_graph,
 };
@@ -102,6 +102,7 @@ pub struct PlannerUseCase {
     memory_candidate: Option<Arc<crate::MemoryCandidateUseCase>>,
     memory_candidate_control: Option<Arc<crate::MemoryCandidateControlUseCase>>,
     thread_link_review: Option<Arc<crate::ThreadLinkReviewUseCase>>,
+    artifact_reprocess: Option<Arc<ArtifactReprocessUseCase>>,
     checkpoint_store_factory: Arc<dyn ActionCheckpointStoreFactoryT>,
     clock: Arc<dyn Clock>,
     /// 当前 LLM 端点是否已验证为本地回环。注入 ActionRunContext 供 PlanNode 和 Planner 使用。
@@ -133,6 +134,7 @@ impl PlannerUseCase {
             memory_candidate: None,
             memory_candidate_control: None,
             thread_link_review: None,
+            artifact_reprocess: None,
             checkpoint_store_factory: Arc::new(SharedCheckpointStoreFactory {
                 store: checkpoint_store,
             }),
@@ -235,6 +237,14 @@ impl PlannerUseCase {
         self
     }
 
+    pub fn with_artifact_reprocess(
+        mut self,
+        artifact_reprocess: Arc<ArtifactReprocessUseCase>,
+    ) -> Self {
+        self.artifact_reprocess = Some(artifact_reprocess);
+        self
+    }
+
     /// CTX-002 修复：注入已验证的本地回环标志，控制 local_only 内容是否对 LLM 可见。
     pub fn with_loopback(mut self, is_local_loopback: bool) -> Self {
         self.is_local_loopback = is_local_loopback;
@@ -263,6 +273,7 @@ impl PlannerUseCase {
             memory_candidate: None,
             memory_candidate_control: None,
             thread_link_review: None,
+            artifact_reprocess: None,
             checkpoint_store_factory: Arc::new(SharedCheckpointStoreFactory {
                 store: checkpoint_store,
             }),
@@ -407,6 +418,12 @@ impl PlannerUseCase {
         if let Some(thread_link_review) = &self.thread_link_review {
             effect_executor =
                 effect_executor.with_thread_link_review(Arc::clone(thread_link_review));
+        }
+        if let Some(artifact_reprocess) = &self.artifact_reprocess {
+            effect_executor = effect_executor.with_artifact_reprocess(
+                Arc::clone(artifact_reprocess),
+                claimed.command_source_event_id.clone(),
+            );
         }
         let effect_executor = Arc::new(effect_executor);
 
@@ -606,6 +623,12 @@ impl PlannerUseCase {
         if let Some(thread_link_review) = &self.thread_link_review {
             effect_executor =
                 effect_executor.with_thread_link_review(Arc::clone(thread_link_review));
+        }
+        if let Some(artifact_reprocess) = &self.artifact_reprocess {
+            effect_executor = effect_executor.with_artifact_reprocess(
+                Arc::clone(artifact_reprocess),
+                claimed.command_source_event_id.clone(),
+            );
         }
         let effect_executor = Arc::new(effect_executor);
         let context = Arc::new(ActionRunContext {

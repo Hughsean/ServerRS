@@ -67,6 +67,7 @@ pub enum SecretaryToolKind {
     RevokeThreadDecision,
     DismissThreadQuestion,
     ReconfirmThreadSemantics,
+    RetryFailedArtifactDerivations,
     SetThreadLifecycle,
     MergeThreads,
     SplitThread,
@@ -180,7 +181,8 @@ impl SecretaryToolKind {
             | Self::DismissResponseExpectations
             | Self::ApproveMemoryCandidate
             | Self::RejectMemoryCandidate
-            | Self::ReconfirmThreadSemantics => SecretaryToolPolicy {
+            | Self::ReconfirmThreadSemantics
+            | Self::RetryFailedArtifactDerivations => SecretaryToolPolicy {
                 risk: L2Impactful,
                 requires_confirmation: true,
                 // v1 没有自动撤销入口；不能向 Owner 暗示完成、关闭或审批可以自动恢复。
@@ -446,6 +448,13 @@ pub enum SecretaryAction {
         thread_id: crate::EventThreadId,
         reason: String,
     },
+    /// 将本账号最早的有限个失败 Artifact 派生任务重新置为 pending。
+    /// 实际目标集合由数据库在 Effect 事务内按稳定顺序锁定，Planner 不能指定
+    /// source_event_id 或跨账号范围。
+    RetryFailedArtifactDerivations {
+        limit: u16,
+        reason: String,
+    },
     SetThreadLifecycle {
         thread_id: crate::EventThreadId,
         expected_status: crate::ThreadStatus,
@@ -634,6 +643,9 @@ impl SecretaryAction {
             Self::RevokeThreadDecision { .. } => SecretaryToolKind::RevokeThreadDecision,
             Self::DismissThreadQuestion { .. } => SecretaryToolKind::DismissThreadQuestion,
             Self::ReconfirmThreadSemantics { .. } => SecretaryToolKind::ReconfirmThreadSemantics,
+            Self::RetryFailedArtifactDerivations { .. } => {
+                SecretaryToolKind::RetryFailedArtifactDerivations
+            }
             Self::SetThreadLifecycle { .. } => SecretaryToolKind::SetThreadLifecycle,
             Self::MergeThreads { .. } => SecretaryToolKind::MergeThreads,
             Self::SplitThread { .. } => SecretaryToolKind::SplitThread,

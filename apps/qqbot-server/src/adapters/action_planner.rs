@@ -114,7 +114,8 @@ merge_threads, split_thread,
 confirm_thread_decision, revoke_thread_decision, dismiss_thread_question,
 reconfirm_thread_semantics, set_thread_lifecycle, dismiss_follow_up, snooze_follow_up, dismiss_follow_ups,
 snooze_follow_ups, complete_follow_up, complete_follow_ups,
-dismiss_response_expectation, dismiss_response_expectations, list_memory_candidates,
+dismiss_response_expectation, dismiss_response_expectations, retry_failed_artifact_derivations,
+list_memory_candidates,
 approve_memory_candidate, reject_memory_candidate, list_projects, query_project, list_commitments。
 search_event_threads 与 list_pending_owner_work 的工具观察可能返回 next_cursor_ref（如 cursor_1）。
 继续翻页时必须在同一 tool 中把该临时引用原样放入 cursor 字段；第一页或没有 next_cursor_ref 时
@@ -151,6 +152,8 @@ approve_memory_candidate 必须提供 candidate_id、expected_candidate_version
 reject_memory_candidate 必须提供 candidate_id、expected_candidate_version
 （同样来自 vN，禁止从正文猜测版本）和 reason；批准与拒绝没有自动撤销机制，
 拒绝会使候选永久失效，必须由 Owner 明确确认；
+retry_failed_artifact_derivations 仅用于 Owner 明确要求重试失败的 Artifact 派生，必须提供
+limit（1..=100）和 reason；不得指定 source_event_id、账号或任意数据库过滤条件；
 merge_threads 必须提供 2..=10 个已登记的 thread_ref（字段 thread_ids）和 reason；数组第一项
 是 canonical，服务端会在 Effect 阶段重新读取完整线程成员并复验账号；
 split_thread 必须提供一个已登记的 thread_ref（字段 thread_id）、1..=100 个已登记的 event_ref
@@ -760,6 +763,16 @@ fn build_action(
                     .text
                     .clone()
                     .ok_or_else(|| PlannerError::InvalidOutput("missing reason".into()))?,
+            })
+        }
+        "retry_failed_artifact_derivations" => {
+            Ok(SecretaryAction::RetryFailedArtifactDerivations {
+                limit: raw.limit.ok_or_else(|| {
+                    PlannerError::InvalidOutput("missing artifact reprocess limit".into())
+                })?,
+                reason: raw.reason.clone().ok_or_else(|| {
+                    PlannerError::InvalidOutput("missing artifact reprocess reason".into())
+                })?,
             })
         }
         "set_thread_lifecycle" => {
@@ -1825,6 +1838,7 @@ fn tool_kind_display_name(kind: personal_secretary::SecretaryToolKind) -> &'stat
         RevokeThreadDecision => "撤销线程决策",
         DismissThreadQuestion => "忽略线程问题",
         ReconfirmThreadSemantics => "重新确认线程语义",
+        RetryFailedArtifactDerivations => "重试失败的产物派生",
         SetThreadLifecycle => "设置线程生命周期",
         MergeThreads => "合并线程",
         SplitThread => "拆分线程",
@@ -2416,6 +2430,42 @@ mod tests {
             }
             _ => panic!("expected Proposal"),
         }
+    }
+
+    #[tokio::test]
+    async fn artifact_reprocess_maps_only_bounded_account_scoped_fields() {
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"retry_failed_artifact_derivations",
+            "limit":25,
+            "reason":"Owner 确认重试修复后的失败任务",
+            "rationale":"有界恢复失败派生",
+            "evidence":["evt_1"]
+        }));
+        let output = planner.plan(&input()).await.unwrap();
+        match output {
+            PlannerOutput::Proposal(proposal) => assert_eq!(
+                proposal.action,
+                SecretaryAction::RetryFailedArtifactDerivations {
+                    limit: 25,
+                    reason: "Owner 确认重试修复后的失败任务".into(),
+                }
+            ),
+            other => panic!("unexpected output: {other:?}"),
+        }
+
+        let (planner, _client) = planner_with_response(json!({
+            "kind":"proposal",
+            "tool":"retry_failed_artifact_derivations",
+            "limit":101,
+            "reason":"超出预算",
+            "rationale":"x",
+            "evidence":["evt_1"]
+        }));
+        assert!(matches!(
+            planner.plan(&input()).await,
+            Err(PlannerError::InvalidOutput(_))
+        ));
     }
 
     #[tokio::test]

@@ -513,11 +513,20 @@ async fn candidate_approval_conflict_structured_receipt_no_overwrite() {
     let view_after_recall = memory
         .evidence(&existing_fact.fact_id, 800)
         .await
-        .expect("evidence after recall")
-        .expect("fact row still exists");
+        .expect("evidence after recall");
     assert!(
-        view_after_recall.sources.is_empty(),
-        "撤回来源必须从回读来源集合中消失"
+        view_after_recall.is_none(),
+        "任一关键来源撤回后，事实必须整体 fail-closed，不得返回残缺证据"
+    );
+    assert_eq!(
+        scalar_u64(
+            &db,
+            "SELECT COUNT(*) AS value FROM secretary_memory_facts WHERE fact_id = ?",
+            vec![existing_fact.fact_id.as_str().into()],
+        )
+        .await,
+        1,
+        "撤回来源不物理删除事实审计行"
     );
 
     drop_schema(&db, &schema).await;

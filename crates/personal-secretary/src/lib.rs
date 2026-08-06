@@ -7,6 +7,8 @@
 mod action_graph;
 #[path = "application/agenda_service.rs"]
 mod agenda_service;
+#[path = "application/artifact_reprocess_service.rs"]
+mod artifact_reprocess_service;
 #[path = "application/artifact_service.rs"]
 mod artifact_service;
 #[path = "application/backfill_service.rs"]
@@ -120,6 +122,10 @@ pub use artifact::{
     ArtifactAvailability, ArtifactEnvelope, ArtifactError, ArtifactId, ArtifactKind,
     MAX_DESCRIPTION_CHARS, MAX_DISPLAY_NAME_CHARS, MAX_FORWARD_NESTING, MAX_HASH_CHARS,
     MAX_MIME_TYPE_CHARS, MAX_PLATFORM_REFERENCE_CHARS,
+};
+pub use artifact_reprocess_service::{
+    ArtifactReprocessEffectRequest, ArtifactReprocessStoreError, ArtifactReprocessStoreT,
+    ArtifactReprocessUseCase, MAX_ARTIFACT_REPROCESS_BATCH, MAX_ARTIFACT_REPROCESS_REASON_CHARS,
 };
 pub use artifact_service::{ArtifactStoreError, ArtifactStoreT, ArtifactUseCase};
 pub use continuity::{
