@@ -9,7 +9,7 @@
 
 Owner 通过自然语言管理提醒策略，并对单条提醒标记重要或不重要。系统只决定是否向 Owner 创建通知候选的 Owner-only Outbox 记录；不调用 QQ、不向第三方发消息、不新增 HTTP 管理面，也不连接真实 QQ 平台。
 
-`personal-secretary` 保存协议无关的领域模型、求值器、用例和端口；`qqbot` 与 `qq-open-platform` 仅做协议映射；`qqbot-server` 实现 MySQL、Planner、Worker 和装配。所有迁移仅加入 `apps/qqbot-server/database/migrations`，测试仅连接随机 `qqbot_accept_*` schema。
+`personal-secretary` 保存协议无关的领域模型、求值器、用例和端口；`qqbot` 与 `qq-open-platform` 仅做协议映射；`qqbot-server` 实现 MySQL、Planner、Worker 和装配。所有迁移仅加入 `qqbot-server/database/migrations`，测试仅连接随机 `qqbot_accept_*` schema。
 
 ## 策略与数据模型
 

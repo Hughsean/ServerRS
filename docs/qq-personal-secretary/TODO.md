@@ -1,6 +1,6 @@
 # 个人 QQ 智能秘书执行看板
 
-> 最后整理：2026-08-06（Asia/Shanghai）
+> 最后整理：2026-08-07（Asia/Shanghai）
 > 本文件只保留当前工作、下一批切片、未完成项和外部阻塞。已完成事项及分钟级证据进入
 > [`HISTORY.md`](HISTORY.md) 与 [`history/`](history/)，不再在 TODO 中重复维护长篇交付报告。
 >
@@ -52,6 +52,11 @@
 - 当前数据库基线门禁：2026-08-07 00:16 Baseline v2 聚焦测试 1/1、迁移重放相关 MySQL
   27/27、QQBot Server 203 passed/3 ignored、workspace boundaries 24/24、相关 crate 严格 Clippy、
   workspace 全目标编译和 OPS-007 均通过；OPS-007 源/恢复对象均为 85，随机 schema 无残留。
+- 当前部署边界：仓库已收敛为 QQBot-only 的 7 成员 workspace，旧数字人应用、领域、AI、管理端、
+  数据库 SQL、代理和专属脚本/文档已删除。根 Compose 提供 QQBot + MySQL Baseline v2 + 持久
+  Spool 一键启动，并用容器内 loopback 代理连接宿主 NapCat。Compose 解析、release 镜像构建、
+  隔离 MySQL 83 表/2 View、QQBot 离线重连和 SIGTERM 零退出码烟测均已通过；测试卷已精确清理。
+  7 个 workspace 成员均已平铺到仓库根目录，只有 `architecture-tests` 保留在 `tools/`。
 
 ## 1. 立即执行顺序
 

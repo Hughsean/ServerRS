@@ -31,7 +31,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$databaseRoot = Join-Path $repoRoot "apps/qqbot-server/database"
+$databaseRoot = Join-Path $repoRoot "qqbot-server/database"
 $baseline = Join-Path $databaseRoot "baseline/20260806_qqbot_schema_v2.sql"
 $migrations = Join-Path $databaseRoot "migrations"
 $random = [Guid]::NewGuid().ToString("N").Substring(0, 12)

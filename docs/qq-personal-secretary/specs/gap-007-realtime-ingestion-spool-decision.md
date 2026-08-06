@@ -30,7 +30,7 @@ Worker 或 MySQL 恢复实现已存在。
 `MysqlCommitted` 的本地副本。
 
 当前 transport 的实情同样是边界的一部分：Text handler 返回错误时，
-`crates/qqbot/src/napcat/listener/transport.rs` 只记录 warning，随后返回 `Ok(false)` 继续读取。
+`qqbot/src/napcat/listener/transport.rs` 只记录 warning，随后返回 `Ok(false)` 继续读取。
 因此当前 `try_enqueue` 的 `Full` 不会自动终止连接或结束 epoch。NapCat 正向 WebSocket 没有
 逐消息 ACK；本地 handler 成功或失败都不能推导平台重投。
 

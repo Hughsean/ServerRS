@@ -1,7 +1,7 @@
 # NapCat 适配器架构（Continuity Recall v1）
 
-> 分支：`glm/qqbot-continuity-recall-v1`。本文件说明 `crates/qqbot` 协议适配层与
-> `apps/qqbot-server` 运行时分层在 Continuity Recall v1 阶段的结构。
+> 分支：`glm/qqbot-continuity-recall-v1`。本文件说明 `qqbot` 协议适配层与
+> `qqbot-server` 运行时分层在 Continuity Recall v1 阶段的结构。
 > **状态：B4/B3/B6/B7 领域层+基础设施+运行时装配完成**，单元测试+clippy+fmt+build+
 > workspace_boundaries 全绿；MySQL 集成测试受 action_planner_hardening 既有 DROP CHECK
 > 问题阻塞（非本轮引入）；实机 NapCat 13990/13991 当前在线。
@@ -11,7 +11,7 @@
 ## 1. 模块结构
 
 ```text
-crates/qqbot/src/napcat/
+qqbot/src/napcat/
 ├── mod.rs              # 模块入口与 re-export
 ├── api.rs              # 只读 HTTP 客户端 NapCatApiClient（固定只读 allowlist）
 ├── capabilities.rs     # B5 能力/版本探测，类型化 CapabilitySnapshot
@@ -28,7 +28,7 @@ crates/qqbot/src/napcat/
 ├── message_parser.rs  # CQ raw 回退解析与 normalize_text
 └── segments.rs         # B2 结构化 message 数组优先解析
 
-crates/personal-secretary/src/
+personal-secretary/src/
 ├── directory.rs       # B4 账号会话目录领域模型
 ├── directory_service.rs # B4 目录同步用例与端口
 ├── recall.rs          # B3 消息撤回领域模型（RecallEvent/Tombstone/CorrelationKey）
@@ -42,7 +42,7 @@ crates/personal-secretary/src/
     ├── mysql_recall.rs     # B3 MySQL 撤回仓储
     └── mysql_artifact.rs   # B6 MySQL Artifact 仓储
 
-apps/qqbot-server/src/
+qqbot-server/src/
 ├── config/             # A1 拆分 + 新增 directory_sync 配置段
 ├── runtime/            # A2 拆分 + handlers 新增撤回路径
 ├── bootstrap/          # A2 拆分 + thread_pipeline 装配 DirectorySyncWorker

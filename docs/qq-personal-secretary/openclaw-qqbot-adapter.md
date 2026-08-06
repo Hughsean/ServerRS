@@ -24,7 +24,7 @@ JavaScript 业务结构。
 
 ## 项目内实现
 
-`crates/qq-open-platform` 是纯协议适配器：
+`qq-open-platform` 是纯协议适配器：
 
 - 凭据类型的 Debug 输出永远遮蔽 Secret；
 - 每个 App 实例独立缓存 Token，并对并发刷新做 singleflight；

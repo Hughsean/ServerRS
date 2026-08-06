@@ -14,7 +14,7 @@ config.toml
 .env
 .env.*
 !.env.example
-apps/qqbot-server/config/qqbot.toml
+qqbot-server/config/qqbot.toml
 
 **/node_modules
 **/dist

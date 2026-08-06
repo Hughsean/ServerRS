@@ -5,6 +5,13 @@
 
 ## 当前阶段
 
+- **本轮（QQBot Compose + 单业务线收敛）**：删除旧数字人应用、领域 crate、专属 AI crate、
+  根数据库 SQL、管理端、代理、脚本和专属文档，workspace 收敛为 7 个 QQBot 相关成员。新增
+  QQBot 多阶段镜像、宿主 NapCat loopback 代理、MySQL 8.4 Baseline v2 初始化和独立 MySQL/Spool
+  命名卷；不复用、不删除现有 Docker 卷或业务数据。Compose 解析与 release 镜像构建通过；隔离
+  全栈生成 83 表/2 View，QQBot 在 NapCat 不可达时保持重连、无重启，并以 SIGTERM 零退出码关闭。
+  6 个应用/crate 已平铺到仓库根目录，仅架构测试保留在 `tools/`；平铺后 workspace 全目标编译、
+  严格 Clippy、Server 203/3 ignored、架构 21 和 release 镜像重建通过。
 - **本轮（QQBot Schema Baseline v2）**：将 v1 和 8 个已部署增量折叠为 83 表 + 2 View 的
   `20260806_qqbot_schema_v2.sql`。原 v1/增量完整归档到 `pre_v2`，活动迁移目录从 v2 重新起算；
   测试加载器对新库只执行 v2，对 v1 或完整 33 记录旧库补齐归档增量后登记采用 v2，对部分结构

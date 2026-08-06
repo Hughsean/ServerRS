@@ -11,8 +11,8 @@
 ## Global Constraints
 
 - 不调用 QQ、不向第三方发消息、不连接真实 QQ 平台、不使用 QQ 凭据、不新增 HTTP 管理面。
-- 仅修改 QQBot/Personal Secretary 路径；不触碰数字人、HP、数字人数据库或根目录 `config.example.toml`。QQBot 配置只允许修改 `apps/qqbot-server/config/qqbot.example.toml`。
-- 所有迁移仅加入 `apps/qqbot-server/database/migrations`；MySQL 测试仅使用随机 `qqbot_accept_*` schema，并在测试结束删除。
+- 仅修改 QQBot/Personal Secretary 路径；不触碰数字人、HP、数字人数据库或根目录 `config.example.toml`。QQBot 配置只允许修改 `qqbot-server/config/qqbot.example.toml`。
+- 所有迁移仅加入 `qqbot-server/database/migrations`；MySQL 测试仅使用随机 `qqbot_accept_*` schema，并在测试结束删除。
 - 策略与审计禁止保存聊天正文、OpenID、Token、数据库 URL、模型推理或未脱敏错误；所有 JSON、scope key、原因和 Artifact 都做领域与 SQL 双重字节上限。
 - `NotificationPolicyRevision` 永远不可变；启用、替换和停用仅通过 Family Head 指向 rule/tombstone Revision 推导。
 - 所有可选匹配字段使用 `Known(T) | Absent | Unknown`；绝不把 `Unknown` 降为 `Absent`。
@@ -29,20 +29,20 @@
 
 | 路径 | 职责 |
 |---|---|
-| `crates/personal-secretary/src/notification_policy.rs` | ID、三态字段、候选、Family/Revision、反馈、Decision、时段、类型化校验与纯求值器。 |
-| `crates/personal-secretary/src/notification_policy_service.rs` | 用例编排、端口、三阶段评估契约与统一授权函数。 |
-| `crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs` | MySQL 实现：Family CAS、epoch、评估领取/提交、Outbox 原子写入。 |
-| `crates/personal-secretary/src/infra/repo/entities/secretary_notification_*.rs` | 新表 SeaORM entity，严格映射 `BIGINT UNSIGNED -> u64`。 |
-| `crates/personal-secretary/src/agent_runtime/{action,validation}.rs` | 新 Action、风险等级、Proposal 的有界结构校验。 |
-| `crates/personal-secretary/src/action_graph/effect_executor.rs` | 最终 Effect 授权和通知策略用例调用。 |
-| `crates/personal-secretary/src/{planner,planner_service}.rs` | Planner 白名单、Action Graph 返回真实 Response Draft。 |
-| `apps/qqbot-server/database/migrations/20260728_owner_notification_policy_feedback_v1.sql` | 所有策略/候选/请求/Decision/反馈表、Outbox 扩展、约束、索引。 |
-| `apps/qqbot-server/src/notification_policy_worker.rs` | 可取消的 Evaluation Request 扫描 worker，退避且不直接发送。 |
-| `apps/qqbot-server/src/bootstrap/notification_policy.rs` | MySQL store/use case/worker 装配。 |
-| `apps/qqbot-server/src/{runtime/mod.rs,bootstrap/workers.rs,config/workers.rs}` | 启动、关闭和配置接线。 |
-| `apps/qqbot-server/config/qqbot.example.toml` | QQBot 独立 Worker 配置样例；不得修改根目录 `config.example.toml`。 |
-| `apps/qqbot-server/database/test_support/qqbot_migrations.rs` | 共享且唯一的测试迁移加载器：稳定排序、迁移记录表和幂等哨兵；四个 MySQL 测试入口通过 `#[path = "..."]` 复用。 |
-| `apps/qqbot-server/tests/{qqbot_acceptance_runtime.rs,qqbot_acceptance_migrations.rs}`、`crates/personal-secretary/tests/{qqbot_acceptance_mysql.rs,mysql_ingestion.rs,mysql_action_planner.rs}` | 隔离 MySQL 真实链路、并发、故障注入与无外发验收。 |
+| `personal-secretary/src/notification_policy.rs` | ID、三态字段、候选、Family/Revision、反馈、Decision、时段、类型化校验与纯求值器。 |
+| `personal-secretary/src/notification_policy_service.rs` | 用例编排、端口、三阶段评估契约与统一授权函数。 |
+| `personal-secretary/src/infra/repo/mysql_notification_policy.rs` | MySQL 实现：Family CAS、epoch、评估领取/提交、Outbox 原子写入。 |
+| `personal-secretary/src/infra/repo/entities/secretary_notification_*.rs` | 新表 SeaORM entity，严格映射 `BIGINT UNSIGNED -> u64`。 |
+| `personal-secretary/src/agent_runtime/{action,validation}.rs` | 新 Action、风险等级、Proposal 的有界结构校验。 |
+| `personal-secretary/src/action_graph/effect_executor.rs` | 最终 Effect 授权和通知策略用例调用。 |
+| `personal-secretary/src/{planner,planner_service}.rs` | Planner 白名单、Action Graph 返回真实 Response Draft。 |
+| `qqbot-server/database/migrations/20260728_owner_notification_policy_feedback_v1.sql` | 所有策略/候选/请求/Decision/反馈表、Outbox 扩展、约束、索引。 |
+| `qqbot-server/src/notification_policy_worker.rs` | 可取消的 Evaluation Request 扫描 worker，退避且不直接发送。 |
+| `qqbot-server/src/bootstrap/notification_policy.rs` | MySQL store/use case/worker 装配。 |
+| `qqbot-server/src/{runtime/mod.rs,bootstrap/workers.rs,config/workers.rs}` | 启动、关闭和配置接线。 |
+| `qqbot-server/config/qqbot.example.toml` | QQBot 独立 Worker 配置样例；不得修改根目录 `config.example.toml`。 |
+| `qqbot-server/database/test_support/qqbot_migrations.rs` | 共享且唯一的测试迁移加载器：稳定排序、迁移记录表和幂等哨兵；四个 MySQL 测试入口通过 `#[path = "..."]` 复用。 |
+| `qqbot-server/tests/{qqbot_acceptance_runtime.rs,qqbot_acceptance_migrations.rs}`、`personal-secretary/tests/{qqbot_acceptance_mysql.rs,mysql_ingestion.rs,mysql_action_planner.rs}` | 隔离 MySQL 真实链路、并发、故障注入与无外发验收。 |
 | `docs/qq-personal-secretary/{TODO.md,HISTORY.md,specs/...}` | 证据驱动更新任务、能力状态和规格。 |
 
 计划中的 `TODO.md` 只是现有文档文件名，不是未决实现占位符。
@@ -50,9 +50,9 @@
 ### Task 1: 建立通知策略领域类型与三态 MatchKey
 
 **Files:**
-- Create: `crates/personal-secretary/src/notification_policy.rs`
-- Modify: `crates/personal-secretary/src/lib.rs`
-- Test: `crates/personal-secretary/src/notification_policy.rs` (`#[cfg(test)]`)
+- Create: `personal-secretary/src/notification_policy.rs`
+- Modify: `personal-secretary/src/lib.rs`
+- Test: `personal-secretary/src/notification_policy.rs` (`#[cfg(test)]`)
 
 **Consumes:** `SourceAccountRef`、`SourceEventId`、`ConversationRef`、`Clock`。
 
@@ -147,8 +147,8 @@ Expected: exit 0。
 ### Task 2: 实现纯策略优先级、静默时段与 DST 原因
 
 **Files:**
-- Modify: `crates/personal-secretary/src/notification_policy.rs`
-- Test: `crates/personal-secretary/src/notification_policy.rs`
+- Modify: `personal-secretary/src/notification_policy.rs`
+- Test: `personal-secretary/src/notification_policy.rs`
 
 **Consumes:** Task 1 的 `NotificationMatchKeyV1`、Family Head rule、注入 `Clock`。
 
@@ -224,9 +224,9 @@ Expected: PASS，覆盖 Known/Absent/Unknown、跨午夜、`America/New_York` 20
 ### Task 3: 定义策略、评估和授权端口
 
 **Files:**
-- Create: `crates/personal-secretary/src/notification_policy_service.rs`
-- Modify: `crates/personal-secretary/src/lib.rs`
-- Test: `crates/personal-secretary/src/notification_policy_service.rs`
+- Create: `personal-secretary/src/notification_policy_service.rs`
+- Modify: `personal-secretary/src/lib.rs`
+- Test: `personal-secretary/src/notification_policy_service.rs`
 
 **Consumes:** Task 1–2 领域类型、`Clock`、Action Run identity。
 
@@ -282,21 +282,21 @@ Expected: PASS。
 ### Task 4: 新增 MySQL migration 和 SeaORM entities
 
 **Files:**
-- Create: `apps/qqbot-server/database/migrations/20260728_owner_notification_policy_feedback_v1.sql`
-- Create: `apps/qqbot-server/database/test_support/qqbot_migrations.rs`
-- Modify: `apps/qqbot-server/tests/qqbot_acceptance_runtime.rs`
-- Modify: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
-- Modify: `crates/personal-secretary/tests/mysql_ingestion.rs`
-- Modify: `crates/personal-secretary/tests/mysql_action_planner.rs`
-- Create: `apps/qqbot-server/tests/qqbot_acceptance_migrations.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_policy_families.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_policy_revisions.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_candidates.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_evaluation_requests.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_decisions.rs`
-- Create: `crates/personal-secretary/src/infra/repo/entities/secretary_notification_feedback.rs`
-- Modify: `crates/personal-secretary/src/infra/repo/entities/mod.rs`
-- Test: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Create: `qqbot-server/database/migrations/20260728_owner_notification_policy_feedback_v1.sql`
+- Create: `qqbot-server/database/test_support/qqbot_migrations.rs`
+- Modify: `qqbot-server/tests/qqbot_acceptance_runtime.rs`
+- Modify: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Modify: `personal-secretary/tests/mysql_ingestion.rs`
+- Modify: `personal-secretary/tests/mysql_action_planner.rs`
+- Create: `qqbot-server/tests/qqbot_acceptance_migrations.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_policy_families.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_policy_revisions.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_candidates.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_evaluation_requests.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_decisions.rs`
+- Create: `personal-secretary/src/infra/repo/entities/secretary_notification_feedback.rs`
+- Modify: `personal-secretary/src/infra/repo/entities/mod.rs`
+- Test: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
 
 **Consumes:** MySQL schema conventions in `20260727_personal_secretary_owner_agenda.sql`。
 
@@ -360,10 +360,10 @@ Expected: PASS，测试 schema 名称以 `qqbot_accept_` 开头且 teardown 成�
 ### Task 5: 实现 MySQL Family/Revision、policy_epoch 与反馈持久化
 
 **Files:**
-- Create: `crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs`
-- Modify: `crates/personal-secretary/src/infra/repo/mod.rs`
-- Modify: `crates/personal-secretary/src/infra/mod.rs`
-- Test: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Create: `personal-secretary/src/infra/repo/mysql_notification_policy.rs`
+- Modify: `personal-secretary/src/infra/repo/mod.rs`
+- Modify: `personal-secretary/src/infra/mod.rs`
+- Test: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
 
 **Consumes:** Task 3 port、Task 4 entities。
 
@@ -402,9 +402,9 @@ Expected: PASS，包含重复 OwnerCommand 幂等、Family CAS 冲突、tombston
 ### Task 6: 实现 Evaluation Request 三阶段、epoch fencing 与原子 Decision/Outbox
 
 **Files:**
-- Modify: `crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs`
-- Modify: `crates/personal-secretary/src/notification_policy_service.rs`
-- Test: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Modify: `personal-secretary/src/infra/repo/mysql_notification_policy.rs`
+- Modify: `personal-secretary/src/notification_policy_service.rs`
+- Test: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
 
 **Consumes:** Tasks 2–5。
 
@@ -461,11 +461,11 @@ Expected: PASS，含 lease late commit、UnknownCommit 重新观察、restart re
 ### Task 7: 将 Agenda 和 FollowUp 改为候选源而非直接 Outbox
 
 **Files:**
-- Modify: `crates/personal-secretary/src/agenda_service.rs`
-- Modify: `crates/personal-secretary/src/infra/repo/mysql_agenda.rs`
-- Modify: `crates/personal-secretary/src/follow_up_service.rs`
-- Modify: `crates/personal-secretary/src/infra/repo/mysql_follow_up.rs`
-- Test: `crates/personal-secretary/tests/mysql_ingestion.rs`
+- Modify: `personal-secretary/src/agenda_service.rs`
+- Modify: `personal-secretary/src/infra/repo/mysql_agenda.rs`
+- Modify: `personal-secretary/src/follow_up_service.rs`
+- Modify: `personal-secretary/src/infra/repo/mysql_follow_up.rs`
+- Test: `personal-secretary/tests/mysql_ingestion.rs`
 
 **Consumes:** `NotificationPolicyStoreT::ensure_candidate`。
 
@@ -497,12 +497,12 @@ Expected: PASS；既有 Agenda/FollowUp 行为测试调整为断言 candidate + 
 ### Task 8: 扩展 Action Graph、Planner 白名单与统一最终授权
 
 **Files:**
-- Modify: `crates/personal-secretary/src/agent_runtime/action.rs`
-- Modify: `crates/personal-secretary/src/agent_runtime/validation.rs`
-- Modify: `crates/personal-secretary/src/planner.rs`
-- Modify: `crates/personal-secretary/src/action_graph/effect_executor.rs`
-- Modify: `crates/personal-secretary/src/planner_service.rs`
-- Test: `crates/personal-secretary/src/action_graph/tests.rs`
+- Modify: `personal-secretary/src/agent_runtime/action.rs`
+- Modify: `personal-secretary/src/agent_runtime/validation.rs`
+- Modify: `personal-secretary/src/planner.rs`
+- Modify: `personal-secretary/src/action_graph/effect_executor.rs`
+- Modify: `personal-secretary/src/planner_service.rs`
+- Test: `personal-secretary/src/action_graph/tests.rs`
 
 **Consumes:** Tasks 1–3 use case 和 authorization function。
 
@@ -543,10 +543,10 @@ Expected: PASS，含 L2 suspend→persisted checkpoint→restart→single CAS re
 ### Task 9: 生成有界 Response Artifact 与 List/Explain/Disable 真实结果
 
 **Files:**
-- Modify: `crates/personal-secretary/src/agent_runtime/response.rs`
-- Modify: `crates/personal-secretary/src/planner_service.rs`
-- Modify: `crates/personal-secretary/src/infra/repo/mysql_notification_policy.rs`
-- Test: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Modify: `personal-secretary/src/agent_runtime/response.rs`
+- Modify: `personal-secretary/src/planner_service.rs`
+- Modify: `personal-secretary/src/infra/repo/mysql_notification_policy.rs`
+- Test: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
 
 **Consumes:** Task 8 receipts、Policy/Decision summary。
 
@@ -576,16 +576,16 @@ Expected: PASS。
 ### Task 10: 配置、worker、bootstrap 与运行期关闭接线
 
 **Files:**
-- Create: `apps/qqbot-server/src/notification_policy_worker.rs`
-- Create: `apps/qqbot-server/src/bootstrap/notification_policy.rs`
-- Modify: `apps/qqbot-server/src/lib.rs`
-- Modify: `apps/qqbot-server/src/bootstrap/mod.rs`
-- Modify: `apps/qqbot-server/src/bootstrap/workers.rs`
-- Modify: `apps/qqbot-server/src/config/workers.rs`
-- Modify: `apps/qqbot-server/src/config/app.rs`
-- Modify: `apps/qqbot-server/src/runtime/mod.rs`
-- Modify: `apps/qqbot-server/config/qqbot.example.toml`
-- Test: `apps/qqbot-server/src/notification_policy_worker.rs`, `apps/qqbot-server/src/config/tests.rs`
+- Create: `qqbot-server/src/notification_policy_worker.rs`
+- Create: `qqbot-server/src/bootstrap/notification_policy.rs`
+- Modify: `qqbot-server/src/lib.rs`
+- Modify: `qqbot-server/src/bootstrap/mod.rs`
+- Modify: `qqbot-server/src/bootstrap/workers.rs`
+- Modify: `qqbot-server/src/config/workers.rs`
+- Modify: `qqbot-server/src/config/app.rs`
+- Modify: `qqbot-server/src/runtime/mod.rs`
+- Modify: `qqbot-server/config/qqbot.example.toml`
+- Test: `qqbot-server/src/notification_policy_worker.rs`, `qqbot-server/src/config/tests.rs`
 
 **Consumes:** `NotificationPolicyUseCase`、MySQL store、existing WorkerHandle lifecycle。
 
@@ -615,7 +615,7 @@ pub struct NotificationPolicyConfig {
 }
 ```
 
-默认值必须有界；validate：scan 1,000..=3,600,000，batch 1..=1,000，lease 1..=3,600，max attempts 1..=100，retry initial > 0 且 max >= initial。只同步更新 `apps/qqbot-server/config/qqbot.example.toml`，不得新增环境变量或修改根目录 `config.example.toml`。
+默认值必须有界；validate：scan 1,000..=3,600,000，batch 1..=1,000，lease 1..=3,600，max attempts 1..=100，retry initial > 0 且 max >= initial。只同步更新 `qqbot-server/config/qqbot.example.toml`，不得新增环境变量或修改根目录 `config.example.toml`。
 
 - [ ] **Step 3: 实现 worker。**
 
@@ -634,10 +634,10 @@ Expected: PASS。
 ### Task 11: 完整 MySQL 运行时验收与故障注入
 
 **Files:**
-- Modify: `apps/qqbot-server/tests/qqbot_acceptance_runtime.rs`
-- Modify: `crates/personal-secretary/tests/qqbot_acceptance_mysql.rs`
-- Modify: `crates/personal-secretary/tests/mysql_ingestion.rs`
-- Modify: `crates/personal-secretary/tests/mysql_action_planner.rs`
+- Modify: `qqbot-server/tests/qqbot_acceptance_runtime.rs`
+- Modify: `personal-secretary/tests/qqbot_acceptance_mysql.rs`
+- Modify: `personal-secretary/tests/mysql_ingestion.rs`
+- Modify: `personal-secretary/tests/mysql_action_planner.rs`
 - Modify: `scripts/verify-qqbot-acceptance.ps1`（仅新增本地隔离测试调用；不改 L4/L5 attestation）
 
 **Consumes:** 全部实现。
@@ -648,7 +648,7 @@ Expected: PASS。
 
 `verify-qqbot-acceptance.ps1` 负责唯一的 schema 生命周期：创建随机 `qqbot_accept_*` schema、设置 `QQBOT_TEST_DATABASE_URL`，并在 `finally` 删除。Rust 测试只验证当前 schema 名称匹配 `^qqbot_accept_[A-Za-z0-9_]+$`，绝不自行 `DROP DATABASE`，避免同一进程的后续测试失去 schema；缺少 URL 时必须明确报 prerequisite。独立运行 Rust 测试也必须经该包装脚本或显式提供已隔离的 `qqbot_accept_*` URL。
 
-固定创建 `apps/qqbot-server/database/test_support/qqbot_migrations.rs` 作为唯一共享加载器；`qqbot_acceptance_mysql.rs`、`qqbot_acceptance_runtime.rs`、`mysql_ingestion.rs`、`mysql_action_planner.rs` 均通过 `#[path = "../../apps/qqbot-server/database/test_support/qqbot_migrations.rs"]`（按各测试文件调整相对路径）引入同一模块。加载器按文件名前缀严格排序，维护迁移记录表与幂等哨兵；新增 migration 只登记一次，并用重复加载测试断言第二次不重复执行且所有新表、列、索引已存在。
+固定创建 `qqbot-server/database/test_support/qqbot_migrations.rs` 作为唯一共享加载器；`qqbot_acceptance_mysql.rs`、`qqbot_acceptance_runtime.rs`、`mysql_ingestion.rs`、`mysql_action_planner.rs` 均通过 `#[path = "../../qqbot-server/database/test_support/qqbot_migrations.rs"]`（按各测试文件调整相对路径）引入同一模块。加载器按文件名前缀严格排序，维护迁移记录表与幂等哨兵；新增 migration 只登记一次，并用重复加载测试断言第二次不重复执行且所有新表、列、索引已存在。
 
 - [ ] **Step 2: 编写端到端用例。**
 

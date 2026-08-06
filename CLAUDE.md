@@ -21,9 +21,8 @@
 
 ## 2. 应用与数据边界
 
-- 数字人和 QQBot 是完全独立的业务：独立 crate/进程、配置、数据库、迁移、运行容器和文档。
-- QQBot 迁移只能位于 `apps/qqbot-server/database/migrations`，不得修改数字人 `init.sql`。
-- QQBot 不得通过 feature 接入数字人服务器，也不得复用数字人的数据库表或配置文件。
+- 本仓库只维护 QQBot 个人智能秘书业务；已删除的旧业务目录、依赖和数据库不得重新引入。
+- QQBot 迁移只能位于 `qqbot-server/database/migrations`，数据库基线位于同应用目录。
 - Git 主分支名称是区分大小写的 `Main`，不得擅自创建或合并到 `main`。
 - NapCat 业务适配保持只读；禁止增加群聊/私聊发送、戳一戳或其他第三方主动操作。
 - QQ 开放平台只允许向已绑定 Owner 投递；代表 Owner 联系第三方属于延期能力，必须重新评审。

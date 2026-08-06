@@ -8,7 +8,7 @@
 ## 当前 ServerRS 对接方式
 
 - NapCat 是独立的 `qqbot-server` 应用，不再是数字人服务器的 Cargo feature。
-- `crates/qqbot` 只保留 HTTP API、正向 WebSocket、CQ 解析和类型化协议事件。
+- `qqbot` 只保留 HTTP API、正向 WebSocket、CQ 解析和类型化协议事件。
 - 连接参数来自独立 `qqbot.toml` 的 `[napcat]`，也可通过 `NAPCAT_*` 环境变量覆盖。
 - 当前占位 handler 不回复、不持久化；旧 QQBot 业务与数据库代码已经删除。
 - 后续业务只需实现 `NapCatEventHandler`，不需要修改协议适配器。

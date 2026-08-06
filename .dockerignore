@@ -1,0 +1,13 @@
+.git
+.github
+.mcp.json
+.env
+target
+data
+**/.env
+**/qqbot.toml
+**/node_modules
+web
+nginx
+database
+docs

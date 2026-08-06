@@ -93,7 +93,7 @@ Reply 1 条；四条均关联连接周期，Reply 的 `reply_to_event_id` 成功
 
 ## 当前实现边界
 
-`crates/qqbot::napcat::NapCatApiClient` 已移除个人账号发送、戳一戳和撤回能力，只公开读取
+`qqbot::napcat::NapCatApiClient` 已移除个人账号发送、戳一戳和撤回能力，只公开读取
 操作。历史消息 ID、序列号和账号 ID 统一解析为字符串，避免 64 位 ID 在其他语言或 JSON
 链路中丢失精度；单页数量限制为 1–100。
 
