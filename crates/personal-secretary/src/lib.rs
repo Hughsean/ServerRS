@@ -183,7 +183,9 @@ pub use memory_candidate_service::{
     MemoryCandidateExtractorT, MemoryCandidateRun, MemoryCandidateStoreT, MemoryCandidateUseCase,
     MemoryCandidateUseCaseError,
 };
-pub use memory_service::{MemoryStoreT, MemoryUseCase, MemoryUseCaseError};
+pub use memory_service::{
+    MemoryEffectRequest, MemoryEffectStoreError, MemoryStoreT, MemoryUseCase, MemoryUseCaseError,
+};
 pub use notification_policy::{
     ConversationMode, ConversationNotificationRule, DecisionReason, EvaluationInput,
     EvaluationPlan, EvaluationRequestId, EventKind, MAX_CANONICAL_SCOPE_KEY_BYTES,

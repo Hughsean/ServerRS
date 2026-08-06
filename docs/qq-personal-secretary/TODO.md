@@ -437,7 +437,11 @@
   Owner QQ 投递仍属于 `EXTERNAL`，仅在轮换凭据后验收。
 - [ ] `CMD-002` 完成 QQ 开放平台真实联机、Gateway Resume 和 Owner 回执验收；执行前必须通知
   用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。
-- [ ] `CMD-003` 将剩余写命令逐项接入统一 OwnerBinding、同账号、Resume 与 Effect 复验边界。
+- [x] `CMD-003` 已完成本地可验证的剩余写命令收口：记忆纠正、删除、TTL 修订和会话记忆模式
+  统一进入专用原子 Effect 事务，在业务变更与 Receipt 之间复验 OwnerBinding、同账号、原始
+  OwnerCommand、Action lease 和完整 proposal；重复 Effect、碰撞、跨账号、过期租约与 Binding
+  撤销均 fail-closed。L3 `SendOwnerMessage` 的真实 QQ 投递仍属于 `CMD-002/EXTERNAL`，不在
+  本地收口范围内。
 - [ ] `CMD-004` 补真实自然语言到现有类型化 Action 的关键映射质量，不新增不受约束的自由工具。
 - [x] `CMD-008` 已接入线程拆分/合并的 QQ Owner 自然语言入口：Planner 只接受已登记的
   `thread_ref`/`event_ref`，L2 Gate 继续复用现有 Suspend/Resume；Effect 阶段由线程变更

@@ -11,6 +11,14 @@
   控制账号保持不变。Recall/Realtime Spool 的空 backlog 换钥各 1/1，旧代文件未退役时新钥
   必须拒绝打开。所有随机 schema 与临时文件均已清理，数字人库和现有 QQBot 业务库未触碰。
 
+- **本轮（CMD-003，已完成）**：记忆纠正、删除、TTL 修订和会话记忆模式四类剩余 Owner 写
+  Action 改由专用 MySQL Effect 事务执行；事务内锁定托管账号，复验未过期 Action lease、
+  原始 OwnerCommand、唯一 active OwnerBinding、完整 proposal 与目标账号，再原子提交业务
+  变更和幂等 Receipt。会话模式失效时排除当前运行，避免把正在执行的 Owner Effect 自身撤销。
+  新增隔离 MySQL CMD-003 场景覆盖四类成功写入、重复回放、Effect 碰撞、跨账号、过期租约、
+  Binding 撤销及无副作用；真实场景 1/1 通过。L3 `SendOwnerMessage` 仍等待 CMD-002 的外部
+  QQ 投递验收。
+
 - **本轮（OPS-006，已完成）**：新增无需真实 QQ/NapCat/MySQL/模型的确定性合成负载门禁。
   20,000 条消息在首次 await 前突发灌入容量 512 的 callback 队列，精确收敛为 512 条入队和
   19,488 条明确背压；Worker 以 8 个 64 条事务批次排空，最大批次不越界，queue depth 与

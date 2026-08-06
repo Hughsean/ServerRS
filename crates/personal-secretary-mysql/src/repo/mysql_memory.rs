@@ -10,8 +10,10 @@ use uuid::Uuid;
 use crate::{
     ContentTrustLevel, ConversationDerivedStateInvalidation, ConversationMemoryModeInput,
     ConversationMemoryModeReceipt, InboundEventStoreError, MemoryDeleteInput, MemoryDeleteReceipt,
-    MemoryFact, MemoryFactId, MemoryFactStatus, MemoryFactView, MemorySourceExcerpt, MemoryStoreT,
-    MemoryWriteReceipt, SourceAccountRef, SourceEventId, validate_memory_fact,
+    MemoryEffectRequest, MemoryEffectStoreError, MemoryFact, MemoryFactId, MemoryFactStatus,
+    MemoryFactView, MemorySourceExcerpt, MemoryStoreT, MemoryWriteReceipt, SecretaryAction,
+    SecretaryActionProposal, SecretaryActionReceipt, SourceAccountRef, SourceEventId,
+    validate_memory_fact,
 };
 
 use super::mysql_inbound::store_error;
@@ -553,6 +555,7 @@ impl MemoryStoreT for MySqlMemoryStore {
             context.account_row_id,
             context.conversation_row_id,
             input.mode,
+            None,
         )
         .await?;
         transaction.commit().await.map_err(store_error)?;
@@ -569,6 +572,493 @@ impl MemoryStoreT for MySqlMemoryStore {
             invalidated,
         })
     }
+
+    async fn apply_owner_effect(
+        &self,
+        request: &MemoryEffectRequest,
+    ) -> Result<SecretaryActionReceipt, MemoryEffectStoreError> {
+        if let Some(receipt) = load_memory_effect_receipt(&self.db, request).await? {
+            return Ok(receipt);
+        }
+        let transaction = self.db.begin().await.map_err(memory_effect_database)?;
+        let account = AccountRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT id FROM secretary_accounts WHERE source_channel = ? AND platform_account_id = ? FOR UPDATE",
+            [
+                request.account.channel.as_str().into(),
+                request.account.account_id.clone().into(),
+            ],
+        ))
+        .one(&transaction)
+        .await
+        .map_err(memory_effect_database)?
+        .ok_or_else(|| {
+            MemoryEffectStoreError::InvalidData("memory effect account was not found".into())
+        })?;
+        let lease = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "UPDATE secretary_action_runs SET updated_at = UTC_TIMESTAMP(6) \
+                 WHERE run_id = ? AND lease_token = ? AND status = 'running' \
+                   AND lease_expires_at >= UTC_TIMESTAMP(6) AND account_id = ? \
+                   AND command_source_event_id = ?",
+                [
+                    request.run_id.as_str().into(),
+                    request.lease_token.as_str().into(),
+                    account.id.into(),
+                    request.command_source_event_id.as_str().into(),
+                ],
+            ))
+            .await
+            .map_err(memory_effect_database)?;
+        if lease.rows_affected() != 1 {
+            return Err(MemoryEffectStoreError::LeaseLost);
+        }
+        super::owner_authorization::verify_owner_command(
+            &transaction,
+            &request.command_source_event_id,
+            account.id,
+        )
+        .await
+        .map_err(|error| match error {
+            super::owner_authorization::OwnerAuthError::Unauthorized => {
+                MemoryEffectStoreError::Unauthorized
+            }
+            super::owner_authorization::OwnerAuthError::Database => {
+                MemoryEffectStoreError::Database
+            }
+        })?;
+        if let Some(receipt) = load_memory_effect_receipt(&transaction, request).await? {
+            transaction.commit().await.map_err(memory_effect_database)?;
+            return Ok(receipt);
+        }
+
+        let result_ref = apply_memory_owner_action(&transaction, request, account.id).await?;
+        let inserted = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT IGNORE INTO secretary_action_effect_receipts \
+                 (effect_id, run_id, proposal_json, result_ref) VALUES (?, ?, ?, ?)",
+                [
+                    request.effect_id.clone().into(),
+                    request.run_id.as_str().into(),
+                    request.proposal_json.clone().into(),
+                    result_ref.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(memory_effect_database)?;
+        if inserted.rows_affected() != 1 {
+            let receipt = load_memory_effect_receipt(&transaction, request)
+                .await?
+                .ok_or(MemoryEffectStoreError::Database)?;
+            transaction.commit().await.map_err(memory_effect_database)?;
+            return Ok(receipt);
+        }
+        transaction.commit().await.map_err(memory_effect_database)?;
+        Ok(SecretaryActionReceipt {
+            proposal_id: request.proposal_id.clone(),
+            result_ref,
+            tool_kind: Some(request.action.kind()),
+        })
+    }
+}
+
+async fn apply_memory_owner_action(
+    db: &sea_orm::DatabaseTransaction,
+    request: &MemoryEffectRequest,
+    account_id: u64,
+) -> Result<String, MemoryEffectStoreError> {
+    match &request.action {
+        SecretaryAction::CorrectMemoryFact {
+            fact_id,
+            replacement,
+            confidence_bps,
+            source_event_ids,
+            valid_until_unix_secs,
+        } => {
+            ensure_future_memory_expiry(*valid_until_unix_secs, request.now_unix_secs)?;
+            let previous = lock_owner_memory_fact(db, fact_id, account_id).await?;
+            let new_id = deterministic_owner_memory_fact_id(&request.effect_id)?;
+            let fact = MemoryFact {
+                fact_id: new_id.clone(),
+                account: request.account.clone(),
+                subject_key: previous.subject_key,
+                payload: replacement.clone(),
+                status: MemoryFactStatus::Confirmed,
+                confidence_bps: *confidence_bps,
+                source_event_ids: source_event_ids.clone(),
+                valid_until_unix_secs: *valid_until_unix_secs,
+                supersedes_fact_id: Some(fact_id.clone()),
+            };
+            append_owner_memory_revision(db, account_id, &fact).await?;
+            Ok(format!("记忆已修正，新版本 {}", new_id.as_str()))
+        }
+        SecretaryAction::SetMemoryFactTtl {
+            fact_id,
+            valid_until_unix_secs,
+        } => {
+            ensure_future_memory_expiry(*valid_until_unix_secs, request.now_unix_secs)?;
+            let previous = lock_owner_memory_fact(db, fact_id, account_id).await?;
+            let new_id = deterministic_owner_memory_fact_id(&request.effect_id)?;
+            let fact = MemoryFact {
+                fact_id: new_id.clone(),
+                account: request.account.clone(),
+                subject_key: previous.subject_key,
+                payload: previous.payload,
+                status: MemoryFactStatus::Confirmed,
+                confidence_bps: previous.confidence_bps,
+                source_event_ids: previous.source_event_ids,
+                valid_until_unix_secs: *valid_until_unix_secs,
+                supersedes_fact_id: Some(fact_id.clone()),
+            };
+            append_owner_memory_revision(db, account_id, &fact).await?;
+            Ok(match valid_until_unix_secs {
+                Some(value) => {
+                    format!("记忆有效期已设置为 {value}，新版本 {}", new_id.as_str())
+                }
+                None => format!("记忆有效期已取消，新版本 {}", new_id.as_str()),
+            })
+        }
+        SecretaryAction::DeleteMemoryFact { fact_id, reason } => {
+            let previous = lock_owner_memory_fact(db, fact_id, account_id).await?;
+            if let Some(existing) = MemoryDeletionRow::find_by_statement(
+                Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "SELECT command_source_event_id, reason FROM secretary_memory_deletions WHERE fact_id = ? FOR UPDATE",
+                    [fact_id.as_str().into()],
+                ),
+            )
+            .one(db)
+            .await
+            .map_err(memory_effect_database)?
+            {
+                if existing.command_source_event_id != request.command_source_event_id.as_str()
+                    || existing.reason != *reason
+                {
+                    return Err(MemoryEffectStoreError::InvalidData(
+                        "memory fact already has a different immutable deletion record".into(),
+                    ));
+                }
+            } else {
+                let actor = CommandActorRow::find_by_statement(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "SELECT actor_platform_id FROM secretary_source_events WHERE source_event_id = ? FOR UPDATE",
+                    [request.command_source_event_id.as_str().into()],
+                ))
+                .one(db)
+                .await
+                .map_err(memory_effect_database)?
+                .ok_or(MemoryEffectStoreError::Unauthorized)?;
+                db.execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "INSERT INTO secretary_memory_deletions \
+                     (fact_id, command_source_event_id, owner_actor_id, reason) VALUES (?, ?, ?, ?)",
+                    [
+                        fact_id.as_str().into(),
+                        request.command_source_event_id.as_str().into(),
+                        actor.actor_platform_id.into(),
+                        reason.clone().into(),
+                    ],
+                ))
+                .await
+                .map_err(memory_effect_database)?;
+            }
+            if matches!(
+                previous.status,
+                MemoryFactStatus::Proposed | MemoryFactStatus::Confirmed
+            ) {
+                let updated = db
+                    .execute_raw(Statement::from_sql_and_values(
+                        DatabaseBackend::MySql,
+                        "UPDATE secretary_memory_facts SET fact_status = 'deleted' \
+                         WHERE fact_id = ? AND account_id = ? \
+                           AND fact_status IN ('proposed', 'confirmed')",
+                        [fact_id.as_str().into(), account_id.into()],
+                    ))
+                    .await
+                    .map_err(memory_effect_database)?;
+                if updated.rows_affected() != 1 {
+                    return Err(MemoryEffectStoreError::LeaseLost);
+                }
+            } else if previous.status != MemoryFactStatus::Deleted {
+                return Err(MemoryEffectStoreError::InvalidData(
+                    "memory fact is no longer active and cannot be deleted".into(),
+                ));
+            }
+            Ok(format!(
+                "记忆 {} 已删除；原始聊天记录未删除",
+                fact_id.as_str()
+            ))
+        }
+        SecretaryAction::SetConversationMemoryMode { conversation, mode } => {
+            let context =
+                ConversationModeContextRow::find_by_statement(Statement::from_sql_and_values(
+                    DatabaseBackend::MySql,
+                    "SELECT ? AS account_row_id, id AS conversation_row_id, memory_mode, \
+                            'owner_command' AS message_role \
+                     FROM secretary_conversations \
+                     WHERE account_id = ? AND conversation_kind = ? \
+                       AND platform_conversation_id = ? FOR UPDATE",
+                    [
+                        account_id.into(),
+                        account_id.into(),
+                        conversation.kind.as_str().into(),
+                        conversation.id.clone().into(),
+                    ],
+                ))
+                .one(db)
+                .await
+                .map_err(memory_effect_database)?
+                .ok_or_else(|| {
+                    MemoryEffectStoreError::InvalidData(
+                        "conversation was not found in the managed account".into(),
+                    )
+                })?;
+            let previous_mode = parse_content_trust_level(&context.memory_mode)
+                .map_err(map_memory_inbound_effect_error)?;
+            if previous_mode != *mode {
+                let updated = db
+                    .execute_raw(Statement::from_sql_and_values(
+                        DatabaseBackend::MySql,
+                        "UPDATE secretary_conversations SET memory_mode = ? WHERE id = ? AND memory_mode = ?",
+                        [
+                            mode.as_str().into(),
+                            context.conversation_row_id.into(),
+                            previous_mode.as_str().into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(memory_effect_database)?;
+                if updated.rows_affected() != 1 {
+                    return Err(MemoryEffectStoreError::LeaseLost);
+                }
+                reconcile_conversation_visibility_in_txn(
+                    db,
+                    account_id,
+                    context.conversation_row_id,
+                    *mode,
+                    Some(request.run_id.as_str()),
+                )
+                .await
+                .map_err(map_memory_inbound_effect_error)?;
+            }
+            Ok(format!("会话长期记忆模式已设置为 {}", mode.as_str()))
+        }
+        _ => Err(MemoryEffectStoreError::InvalidData(
+            "action is not an Owner memory mutation".into(),
+        )),
+    }
+}
+
+async fn lock_owner_memory_fact<C: ConnectionTrait>(
+    db: &C,
+    fact_id: &MemoryFactId,
+    account_id: u64,
+) -> Result<MemoryFact, MemoryEffectStoreError> {
+    let row = OwnerMemoryFactRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT account_id, CAST(fact_json AS CHAR) AS fact_json, fact_status \
+         FROM secretary_memory_facts WHERE fact_id = ? FOR UPDATE",
+        [fact_id.as_str().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(memory_effect_database)?
+    .ok_or_else(|| MemoryEffectStoreError::InvalidData("memory fact was not found".into()))?;
+    if row.account_id != account_id {
+        return Err(MemoryEffectStoreError::InvalidData(
+            "memory fact cannot cross managed accounts".into(),
+        ));
+    }
+    let mut fact: MemoryFact = serde_json::from_str(&row.fact_json)
+        .map_err(|_| MemoryEffectStoreError::InvalidData("stored memory fact is invalid".into()))?;
+    fact.status = parse_fact_status(&row.fact_status).map_err(map_memory_inbound_effect_error)?;
+    Ok(fact)
+}
+
+async fn append_owner_memory_revision<C: ConnectionTrait>(
+    db: &C,
+    account_id: u64,
+    fact: &MemoryFact,
+) -> Result<(), MemoryEffectStoreError> {
+    validate_memory_fact(fact)
+        .map_err(|error| MemoryEffectStoreError::InvalidData(error.to_string()))?;
+    let previous_id = fact.supersedes_fact_id.as_ref().ok_or_else(|| {
+        MemoryEffectStoreError::InvalidData("Owner memory revision must supersede a fact".into())
+    })?;
+    for source_event_id in &fact.source_event_ids {
+        let source = MemorySourceRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT event.account_id, conversation.memory_mode, content.content_mode
+               FROM secretary_source_events event
+               JOIN secretary_conversations conversation ON conversation.id = event.conversation_id
+               JOIN secretary_message_contents content ON content.source_event_id = event.source_event_id
+               WHERE event.source_event_id = ? FOR UPDATE"#,
+            [source_event_id.as_str().into()],
+        ))
+        .one(db)
+        .await
+        .map_err(memory_effect_database)?
+        .ok_or_else(|| {
+            MemoryEffectStoreError::InvalidData("memory source event was not found".into())
+        })?;
+        if source.account_id != account_id {
+            return Err(MemoryEffectStoreError::InvalidData(
+                "memory source event cannot cross managed accounts".into(),
+            ));
+        }
+        if !matches!(source.memory_mode.as_str(), "normal" | "local_only")
+            || !matches!(source.content_mode.as_str(), "normal" | "local_only")
+        {
+            return Err(MemoryEffectStoreError::InvalidData(
+                "content policy forbids long-term memory derivation".into(),
+            ));
+        }
+    }
+    let previous = PreviousFactRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT account_id, fact_kind, subject_key, fact_status \
+         FROM secretary_memory_facts WHERE fact_id = ? FOR UPDATE",
+        [previous_id.as_str().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(memory_effect_database)?
+    .ok_or_else(|| {
+        MemoryEffectStoreError::InvalidData("superseded memory fact was not found".into())
+    })?;
+    if previous.account_id != account_id
+        || previous.fact_kind != fact.payload.kind()
+        || previous.subject_key != fact.subject_key
+        || !matches!(previous.fact_status.as_str(), "proposed" | "confirmed")
+    {
+        return Err(MemoryEffectStoreError::InvalidData(
+            "superseded memory fact is outside the account or no longer active".into(),
+        ));
+    }
+    let updated = db
+        .execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "UPDATE secretary_memory_facts SET fact_status = 'superseded' \
+             WHERE fact_id = ? AND account_id = ? \
+               AND fact_status IN ('proposed', 'confirmed')",
+            [previous_id.as_str().into(), account_id.into()],
+        ))
+        .await
+        .map_err(memory_effect_database)?;
+    if updated.rows_affected() != 1 {
+        return Err(MemoryEffectStoreError::LeaseLost);
+    }
+    let fact_json = serde_json::to_string(fact)
+        .map_err(|_| MemoryEffectStoreError::InvalidData("cannot serialize memory fact".into()))?;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        r#"INSERT INTO secretary_memory_facts
+           (fact_id, account_id, fact_kind, subject_key, fact_json, fact_status,
+            confidence_bps, valid_until_unix_secs, supersedes_fact_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        [
+            fact.fact_id.as_str().into(),
+            account_id.into(),
+            fact.payload.kind().into(),
+            fact.subject_key.clone().into(),
+            fact_json.into(),
+            fact.status.as_str().into(),
+            fact.confidence_bps.into(),
+            fact.valid_until_unix_secs.into(),
+            previous_id.as_str().into(),
+        ],
+    ))
+    .await
+    .map_err(memory_effect_database)?;
+    for source_event_id in &fact.source_event_ids {
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_memory_fact_sources (fact_id, source_event_id) VALUES (?, ?)",
+            [
+                fact.fact_id.as_str().into(),
+                source_event_id.as_str().into(),
+            ],
+        ))
+        .await
+        .map_err(memory_effect_database)?;
+    }
+    Ok(())
+}
+
+async fn load_memory_effect_receipt<C: ConnectionTrait>(
+    db: &C,
+    request: &MemoryEffectRequest,
+) -> Result<Option<SecretaryActionReceipt>, MemoryEffectStoreError> {
+    let row = MemoryEffectReceiptRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::MySql,
+        "SELECT run_id, CAST(proposal_json AS CHAR) AS proposal_json, result_ref \
+         FROM secretary_action_effect_receipts WHERE effect_id = ?",
+        [request.effect_id.clone().into()],
+    ))
+    .one(db)
+    .await
+    .map_err(memory_effect_database)?;
+    row.map(|row| {
+        let proposal: SecretaryActionProposal = serde_json::from_str(&row.proposal_json)
+            .map_err(|_| MemoryEffectStoreError::Database)?;
+        if row.run_id != request.run_id.as_str()
+            || proposal.proposal_id != request.proposal_id
+            || proposal.action != request.action
+        {
+            return Err(MemoryEffectStoreError::InvalidData(
+                "effect receipt belongs to a different memory action".into(),
+            ));
+        }
+        Ok(SecretaryActionReceipt {
+            proposal_id: proposal.proposal_id,
+            result_ref: row.result_ref,
+            tool_kind: Some(request.action.kind()),
+        })
+    })
+    .transpose()
+}
+
+fn deterministic_owner_memory_fact_id(
+    effect_id: &str,
+) -> Result<MemoryFactId, MemoryEffectStoreError> {
+    MemoryFactId::new(
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("memory-effect:{effect_id}").as_bytes(),
+        )
+        .to_string(),
+    )
+    .map_err(|error| MemoryEffectStoreError::InvalidData(error.to_string()))
+}
+
+fn ensure_future_memory_expiry(
+    value: Option<i64>,
+    now_unix_secs: i64,
+) -> Result<(), MemoryEffectStoreError> {
+    if value.is_some_and(|expiry| expiry <= now_unix_secs) {
+        return Err(MemoryEffectStoreError::InvalidData(
+            "memory expiry must be later than the trusted clock".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn memory_effect_database(_: sea_orm::DbErr) -> MemoryEffectStoreError {
+    MemoryEffectStoreError::Database
+}
+
+fn map_memory_inbound_effect_error(error: InboundEventStoreError) -> MemoryEffectStoreError {
+    match error {
+        InboundEventStoreError::Unavailable | InboundEventStoreError::Database(_) => {
+            MemoryEffectStoreError::Database
+        }
+        InboundEventStoreError::LeaseLost => MemoryEffectStoreError::LeaseLost,
+        InboundEventStoreError::InvalidData(message) => {
+            MemoryEffectStoreError::InvalidData(message)
+        }
+    }
 }
 
 async fn reconcile_conversation_visibility_in_txn(
@@ -576,6 +1066,7 @@ async fn reconcile_conversation_visibility_in_txn(
     account_id: u64,
     conversation_id: u64,
     mode: ContentTrustLevel,
+    excluded_action_run_id: Option<&str>,
 ) -> Result<ConversationDerivedStateInvalidation, InboundEventStoreError> {
     let mut report = ConversationDerivedStateInvalidation::default();
 
@@ -620,6 +1111,7 @@ async fn reconcile_conversation_visibility_in_txn(
                run.worker_id = NULL, run.last_error = 'source_content_restricted',
                run.updated_at = CURRENT_TIMESTAMP(6)
            WHERE run.account_id = ? AND run.status IN ('pending', 'running', 'suspended')
+             AND (? IS NULL OR run.run_id <> ?)
              AND EXISTS (
                  SELECT 1 FROM secretary_source_events event
                  WHERE event.conversation_id = ?
@@ -628,7 +1120,12 @@ async fn reconcile_conversation_visibility_in_txn(
                        NULL, '$[*].source_event_id'
                    ) IS NOT NULL
              )"#,
-        [account_id.into(), conversation_id.into()],
+        [
+            account_id.into(),
+            excluded_action_run_id.map(str::to_owned).into(),
+            excluded_action_run_id.map(str::to_owned).into(),
+            conversation_id.into(),
+        ],
     )
     .await?;
 
@@ -1002,6 +1499,25 @@ struct ConversationModeContextRow {
     conversation_row_id: u64,
     memory_mode: String,
     message_role: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct OwnerMemoryFactRow {
+    account_id: u64,
+    fact_json: String,
+    fact_status: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct CommandActorRow {
+    actor_platform_id: String,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct MemoryEffectReceiptRow {
+    run_id: String,
+    proposal_json: String,
+    result_ref: String,
 }
 
 #[derive(Debug, FromQueryResult)]
