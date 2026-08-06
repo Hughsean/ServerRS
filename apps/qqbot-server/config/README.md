@@ -67,6 +67,11 @@ QQ 开放平台配置位于 `[qq_open_platform]`，参考 OpenClaw QQBot 通道�
 `client_secret_file`。TOML 中的 `client_secret` 字段会被拒绝。不要把真实组合 Token 写进命令
 历史、文档或 Git；已经在聊天或终端暴露的 Secret 必须先轮换。
 
+官方通道的主动消息与被动回复是两条不同边界：主动消息没有可用的 Gateway 消息上下文，若 POST
+结果不明确必须进入 `unknown_commit`，禁止盲目重发；被动回复必须使用同一 Gateway 事件提供的
+权威 `msg_id`，并按目标类型使用平台允许的 `msg_seq`。调用方不得从日志、历史记录或外部输入拼装
+回复消息 ID。C2C 事件消息 ID 只在平台规定的有效期内使用，过期或缺少上下文时应拒绝发送。
+
 生产环境建议在 MySQL URL 中使用 `ssl-mode=required`；QQBot 的独立 SeaORM 依赖已启用
 Rustls。若本地数据库不支持 TLS，应显式评估认证方式，不要为了联通而关闭服务端安全控制。
 

@@ -461,10 +461,11 @@
 
 - [x] `FUP-007` 本地已完成账号隔离、租约 fencing、重试、送达回执和 `unknown_commit`；真实
   Owner QQ 投递仍属于 `EXTERNAL`，仅在轮换凭据后验收。
-- [ ] `CMD-002` 完成 QQ 开放平台真实联机、Gateway Resume 和 Owner 回执验收；执行前必须通知
+- [x] `CMD-002` 完成 QQ 开放平台真实联机、Gateway Resume 和 Owner 回执验收；执行前必须通知
   用户并确认本地凭据，禁止写入 Git、TOML、日志或文档。2026-08-06 22:35 新凭据真实换取 Token、
   Gateway Identify 和持久会话 Resume 均成功；Owner C2C 投递返回官方 `500/11255`，按既有分类为
-  `unknown_commit`，未盲目重试。需用户确认是否实际收到，或先向机器人发送消息后再做被动回复验收。
+  `unknown_commit`，未盲目重试。用户随后向机器人发起 C2C 消息；服务使用该 Gateway 事件的权威
+  消息 ID 完成被动回复，平台返回非空回执，真实交互闭环已于 22:56 完成。
 - [x] `CMD-003` 已完成本地可验证的剩余写命令收口：记忆纠正、删除、TTL 修订和会话记忆模式
   统一进入专用原子 Effect 事务，在业务变更与 Receipt 之间复验 OwnerBinding、同账号、原始
   OwnerCommand、Action lease 和完整 proposal；重复 Effect、碰撞、跨账号、过期租约与 Binding
@@ -546,9 +547,9 @@
   PacketBackend 兼容仍无正向证据，生产继续以 `UnprovenStop`/uncertain fail-closed，本项保持未完成。
 - [x] `EXTERNAL QA-004-CANCELLED` 远端 protected Environment、受保护 runner 签名密钥和 branch
   protection required check 属于未来发布治理，按产品决定停止，不属于当前上线收尾目标。
-- [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；新凭据已用于 Token 与 Gateway
-  正向验收，但首次 Owner C2C 主动投递返回 `500/11255`/`unknown_commit`，不得自动重发；等待用户
-  对账是否收到，并需由用户向机器人发起一次消息后继续被动回复验收。
+- [x] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；新凭据已用于 Token、Gateway
+  Identify/Resume 和真实 C2C 验收。首次主动投递返回 `500/11255`/`unknown_commit`，未自动重发；
+  用户随后向机器人发起消息，基于该 Gateway 事件权威消息 ID 的被动回复成功并取得非空平台回执。
 - [ ] `EXTERNAL OPS-LIVE` 电脑休眠/断网/NapCat 退出的实机恢复演练。NapCat 进程重启已真实证明
   WebUI 与业务端口分阶段恢复且 6099 本次需要用户手动确认登录后才恢复；电脑休眠与物理网络断开
   仍需用户参与，不能以进程重启代替。

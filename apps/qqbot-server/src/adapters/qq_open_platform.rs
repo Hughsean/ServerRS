@@ -292,6 +292,7 @@ fn delivery_error_code(error: &QqApiError) -> &'static str {
         QqApiError::InvalidEndpoint => "invalid_endpoint",
         QqApiError::InvalidTarget => "invalid_target",
         QqApiError::InvalidContent => "invalid_content",
+        QqApiError::InvalidReplyContext => "invalid_reply_context",
         QqApiError::Unauthorized => "unauthorized",
         QqApiError::RateLimited => "rate_limited",
         QqApiError::Rejected { .. } => "provider_rejected",
@@ -551,6 +552,14 @@ mod tests {
         assert_eq!(
             classify_delivery_failure(&QqApiError::RateLimited),
             NotificationFailureKind::Retryable
+        );
+    }
+
+    #[test]
+    fn invalid_reply_context_has_a_stable_redacted_error_code() {
+        assert_eq!(
+            delivery_error_code(&QqApiError::InvalidReplyContext),
+            "invalid_reply_context"
         );
     }
 }
