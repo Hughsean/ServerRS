@@ -5,6 +5,14 @@
 
 ## 当前阶段
 
+- **本轮（OPS-005，已完成）**：现有 `HealthAggregator` 新增最小生产指标，不建立平行监控体系。
+  入站累计记录入队/提交量及从进队到 MySQL commit 的 count/sum/max/last 延迟，累计计数供外部按
+  时间窗口差分为吞吐率；既有队列、Recall/Realtime Spool backlog 保持同一快照。所有 LLM
+  消费者共享调用、成功/失败、Token、usage 缺失和延迟指标；只有显式成对配置输入/输出单价时
+  才输出微美元估算成本。反馈按托管账号只统计已批准并成功应用的 split 结构纠错和
+  `important=false` 通知反馈。Docker MySQL 账号隔离 1/1、qqbot-server 189 passed/3 ignored，
+  受影响严格 Clippy、workspace check、领域与架构回归均通过。
+
 - **本轮（OPS-004，已完成）**：新增 `retry_failed_artifact_derivations` 类型化 L2 Action，
   Owner 只能提交 1..=100 的批量预算和有界原因，不能指定事件、账号或任意过滤条件。MySQL
   Effect 在单事务内复验托管账号、OwnerCommand、Action run、未过期租约和完整 proposal，按

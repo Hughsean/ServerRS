@@ -25,6 +25,9 @@ pub struct LlmConfig {
     pub temperature: f64,
     pub max_candidates_per_kind: usize,
     pub reasoning_mode: LlmReasoningMode,
+    /// 可选的每百万 token 微美元单价；两项同时配置后才估算成本。
+    pub input_cost_microusd_per_million_tokens: Option<u64>,
+    pub output_cost_microusd_per_million_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -50,6 +53,8 @@ impl Default for LlmConfig {
             temperature: 0.1,
             max_candidates_per_kind: 20,
             reasoning_mode: LlmReasoningMode::ProviderDefault,
+            input_cost_microusd_per_million_tokens: None,
+            output_cost_microusd_per_million_tokens: None,
         }
     }
 }
@@ -115,6 +120,23 @@ impl LlmConfig {
         if !(1..=100).contains(&self.max_candidates_per_kind) {
             return Err(ConfigError::Invalid(
                 "llm.max_candidates_per_kind must be in 1..=100".into(),
+            ));
+        }
+        if self.input_cost_microusd_per_million_tokens.is_some()
+            != self.output_cost_microusd_per_million_tokens.is_some()
+        {
+            return Err(ConfigError::Invalid(
+                "llm input/output cost prices must be configured together".into(),
+            ));
+        }
+        if self
+            .input_cost_microusd_per_million_tokens
+            .into_iter()
+            .chain(self.output_cost_microusd_per_million_tokens)
+            .any(|value| value > 1_000_000_000_000)
+        {
+            return Err(ConfigError::Invalid(
+                "llm token cost price must be <= 1000000000000 microusd per million tokens".into(),
             ));
         }
         Ok(())

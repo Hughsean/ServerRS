@@ -76,6 +76,8 @@ async fn run_with_shutdown(
     let infra = bootstrap::infra::assemble_infra(&config, &config_dir).await?;
 
     let mut handles = WorkerHandles::new();
+    // 所有 LLM 消费者共享一份进程内累计指标，避免按 Worker 割裂调用量与 Token。
+    let llm_metrics = std::sync::Arc::new(crate::llm::LlmMetrics::default());
 
     if let Err(error) = bootstrap::workers::reconcile_legacy_notification_outbox(
         infra.db.clone(),
@@ -146,6 +148,7 @@ async fn run_with_shutdown(
         infra.db.clone(),
         &config,
         infra.account.clone(),
+        std::sync::Arc::clone(&llm_metrics),
     )
     .await
     {
@@ -246,13 +249,22 @@ async fn run_with_shutdown(
     };
 
     let health_aggregator = std::sync::Arc::new(
-        crate::health_runtime::build_runtime_health_aggregator_with_spools(
+        crate::health_runtime::build_runtime_health_aggregator_with_spools_and_llm(
             std::sync::Arc::clone(&health_state),
             std::sync::Arc::clone(&recall_spool_telemetry),
             realtime_spool.as_ref().map(|spool| spool.telemetry()),
             config.health.cache_ttl_secs,
             config.health.worker_success_stale_secs,
             Some(std::sync::Arc::clone(&ingestion_metrics)),
+            Some(crate::health_runtime::LlmHealthMetricsConfig {
+                metrics: std::sync::Arc::clone(&llm_metrics),
+                input_price_microusd_per_million_tokens: config
+                    .llm
+                    .input_cost_microusd_per_million_tokens,
+                output_price_microusd_per_million_tokens: config
+                    .llm
+                    .output_cost_microusd_per_million_tokens,
+            }),
         ),
     );
     if config.health.enabled {
@@ -282,6 +294,7 @@ async fn run_with_shutdown(
         &config,
         infra.account.clone(),
         Some(std::sync::Arc::clone(&health_aggregator)),
+        std::sync::Arc::clone(&llm_metrics),
     )
     .await
     {

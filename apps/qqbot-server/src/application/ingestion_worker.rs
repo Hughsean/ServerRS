@@ -193,10 +193,17 @@ pub struct IngestionMetrics {
     pub overflow_pending: AtomicU64,
     pub last_success_at: AtomicU64,
     pub last_failure_at: AtomicU64,
+    pub enqueued: AtomicU64,
+    pub committed: AtomicU64,
+    pub commit_latency_count: AtomicU64,
+    pub commit_latency_sum_ms: AtomicU64,
+    pub commit_latency_max_ms: AtomicU64,
+    pub last_commit_latency_ms: AtomicU64,
 }
 
 impl IngestionMetrics {
     fn record_enqueue(&self, queue_capacity: usize, sender: &mpsc::Sender<TimestampedEnvelope>) {
+        saturating_increment(&self.enqueued);
         self.queue_capacity
             .store(queue_capacity as u64, Ordering::Release);
         let depth = queue_capacity.saturating_sub(sender.capacity());
@@ -215,8 +222,21 @@ impl IngestionMetrics {
     }
 
     fn record_drop(&self) {
-        self.dropped.fetch_add(1, Ordering::AcqRel);
+        saturating_increment(&self.dropped);
         self.overflow_pending.store(1, Ordering::Release);
+    }
+
+    fn record_committed(&self, enqueued_at: impl IntoIterator<Item = Instant>) {
+        for started in enqueued_at {
+            let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            saturating_increment(&self.committed);
+            saturating_increment(&self.commit_latency_count);
+            saturating_add(&self.commit_latency_sum_ms, elapsed_ms);
+            self.commit_latency_max_ms
+                .fetch_max(elapsed_ms, Ordering::AcqRel);
+            self.last_commit_latency_ms
+                .store(elapsed_ms, Ordering::Release);
+        }
     }
 
     pub fn snapshot(&self) -> IngestionMetricSnapshot {
@@ -235,8 +255,24 @@ impl IngestionMetrics {
             overflow_pending: self.overflow_pending.load(Ordering::Acquire),
             last_success_at: self.last_success_at.load(Ordering::Acquire),
             last_failure_at: self.last_failure_at.load(Ordering::Acquire),
+            enqueued: self.enqueued.load(Ordering::Acquire),
+            committed: self.committed.load(Ordering::Acquire),
+            commit_latency_count: self.commit_latency_count.load(Ordering::Acquire),
+            commit_latency_sum_ms: self.commit_latency_sum_ms.load(Ordering::Acquire),
+            commit_latency_max_ms: self.commit_latency_max_ms.load(Ordering::Acquire),
+            last_commit_latency_ms: self.last_commit_latency_ms.load(Ordering::Acquire),
         }
     }
+}
+
+fn saturating_increment(value: &AtomicU64) {
+    saturating_add(value, 1);
+}
+
+fn saturating_add(value: &AtomicU64, amount: u64) {
+    let _ = value.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        Some(current.saturating_add(amount))
+    });
 }
 
 #[derive(Debug, Clone, Default)]
@@ -256,6 +292,12 @@ pub struct IngestionMetricSnapshot {
     pub overflow_pending: u64,
     pub last_success_at: u64,
     pub last_failure_at: u64,
+    pub enqueued: u64,
+    pub committed: u64,
+    pub commit_latency_count: u64,
+    pub commit_latency_sum_ms: u64,
+    pub commit_latency_max_ms: u64,
+    pub last_commit_latency_ms: u64,
 }
 
 // ── WorkerReport ─────────────────────────────────────────────────────────
@@ -618,16 +660,20 @@ async fn process_batch_with_retry(
         .await;
     }
     // 将整批推入二分队列（有界迭代，绝不递归爆栈）。
-    let mut queue: VecDeque<Vec<InboundMessageEnvelope>> = VecDeque::new();
-    queue.push_back(batch.iter().map(|item| item.envelope.clone()).collect());
+    let mut queue: VecDeque<Vec<usize>> = VecDeque::new();
+    queue.push_back((0..batch.len()).collect());
 
     let mut retry_delay = Duration::from_millis(config.retry_initial_ms);
     let max_retry_delay = Duration::from_millis(config.retry_max_ms);
 
-    while let Some(mut current_batch) = queue.pop_front() {
-        if current_batch.is_empty() {
+    while let Some(mut current_indexes) = queue.pop_front() {
+        if current_indexes.is_empty() {
             continue;
         }
+        let current_batch = current_indexes
+            .iter()
+            .map(|index| batch[*index].envelope.clone())
+            .collect::<Vec<_>>();
         persist_overflow_gap(store, connection_epoch_id, overflow, metrics).await;
 
         let mut attempt = 0_u64;
@@ -657,6 +703,11 @@ async fn process_batch_with_retry(
                     metrics
                         .last_success_at
                         .store(current_unix_secs(), Ordering::Release);
+                    metrics.record_committed(
+                        current_indexes
+                            .iter()
+                            .map(|index| batch[*index].enqueued_at),
+                    );
 
                     if let Some(health) = health_reporter {
                         health.mark_worker_success(current_unix_secs());
@@ -713,11 +764,11 @@ async fn process_batch_with_retry(
                         break; // 此子批次处理完成（跳过）
                     }
                     // 长度 > 1：事务已回滚，二分继续定位。
-                    let mid = current_batch.len() / 2;
-                    let right = current_batch.split_off(mid);
+                    let mid = current_indexes.len() / 2;
+                    let right = current_indexes.split_off(mid);
                     // 按原顺序：先左半后右半（保持入队顺序）。
                     queue.push_front(right);
-                    queue.push_front(current_batch);
+                    queue.push_front(current_indexes);
                     tracing::debug!(
                         batch_len_left = mid,
                         batch_len_right = queue.front().map(|b| b.len()).unwrap_or(0),
@@ -802,6 +853,7 @@ async fn process_spooled_batch_with_retry(
             }
         }
     };
+    metrics.record_committed(batch.iter().map(|item| item.enqueued_at));
 
     let mut progress = Vec::with_capacity(batch.len());
     for (item, outcome) in batch.iter().zip(&outcomes) {
@@ -1511,6 +1563,7 @@ mod tests {
             shutdown_drain_timeout_secs: 1,
         };
         let store_port: Arc<dyn PersonalSecretaryStoreT> = store.clone();
+        let metrics = Arc::new(IngestionMetrics::default());
         let (queue, worker) = spawn_ingestion_worker(
             store_port,
             ConnectionEpochId::new("epoch-poison").unwrap(),
@@ -1519,7 +1572,7 @@ mod tests {
             None,
             0,
             None,
-            None,
+            Some(Arc::clone(&metrics)),
         );
 
         queue.try_enqueue(message("msg-ok-1")).unwrap();
@@ -1553,6 +1606,7 @@ mod tests {
             shutdown_drain_timeout_secs: 1,
         };
         let store_port: Arc<dyn PersonalSecretaryStoreT> = store.clone();
+        let metrics = Arc::new(IngestionMetrics::default());
         let (queue, worker) = spawn_ingestion_worker(
             store_port,
             ConnectionEpochId::new("epoch-batch").unwrap(),
@@ -1561,7 +1615,7 @@ mod tests {
             None,
             0,
             None,
-            None,
+            Some(Arc::clone(&metrics)),
         );
 
         for i in 0..3 {
@@ -1576,6 +1630,14 @@ mod tests {
         assert_eq!(report.duplicates, 1);
         assert_eq!(report.batches_committed, 1, "3 条消息应在 1 个批次中提交");
         assert_eq!(store.insert_attempts.load(Ordering::Acquire), 1);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.enqueued, 3);
+        assert_eq!(snapshot.committed, 3);
+        assert_eq!(snapshot.commit_latency_count, 3);
+        assert!(
+            snapshot.commit_latency_max_ms >= snapshot.last_commit_latency_ms,
+            "max latency must include the latest committed message"
+        );
     }
 
     /// 测试场景 1 的扩展：1000 条合成消息 → 多个批次。

@@ -23,7 +23,9 @@ use sea_orm::DatabaseConnection;
 use crate::backfill::spawn_backfill_worker;
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
-use crate::llm::{LlmMemoryCandidateExtractor, LlmThreadSemanticExtractor, OpenAiCompatibleClient};
+use crate::llm::{
+    LlmMemoryCandidateExtractor, LlmMetrics, LlmThreadSemanticExtractor, OpenAiCompatibleClient,
+};
 use crate::memory_candidates::spawn_memory_candidates_worker;
 use crate::reply_reconcile_worker::spawn_reply_reconcile_worker;
 use crate::runtime::RuntimeError;
@@ -37,6 +39,7 @@ pub(crate) async fn assemble_thread_workers(
     db: DatabaseConnection,
     config: &AppConfig,
     account: SourceAccountRef,
+    llm_metrics: Arc<LlmMetrics>,
 ) -> Result<(), RuntimeError> {
     if config.thread_projection.enabled {
         let policy =
@@ -63,7 +66,7 @@ pub(crate) async fn assemble_thread_workers(
     if config.thread_semantics.enabled {
         let extractor: Arc<dyn ThreadSemanticExtractorT> = if config.llm.enabled {
             let client = Arc::new(
-                OpenAiCompatibleClient::new(&config.llm)
+                OpenAiCompatibleClient::new_with_metrics(&config.llm, Arc::clone(&llm_metrics))
                     .map_err(|error| RuntimeError::Llm(error.to_string()))?,
             );
             tracing::info!(
@@ -126,7 +129,7 @@ pub(crate) async fn assemble_thread_workers(
     if config.memory_candidates.enabled {
         let extractor: Arc<dyn MemoryCandidateExtractorT> = if config.llm.enabled {
             let client = Arc::new(
-                OpenAiCompatibleClient::new(&config.llm)
+                OpenAiCompatibleClient::new_with_metrics(&config.llm, Arc::clone(&llm_metrics))
                     .map_err(|error| RuntimeError::Llm(error.to_string()))?,
             );
             tracing::info!(

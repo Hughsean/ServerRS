@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -36,15 +37,104 @@ const SEMANTIC_SYSTEM_PROMPT: &str = r#"你是个人 QQ 智能秘书的语义候
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LlmUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-    total_tokens: Option<u64>,
+    pub(crate) prompt_tokens: Option<u64>,
+    pub(crate) completion_tokens: Option<u64>,
+    pub(crate) total_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct StructuredLlmResponse {
     pub(crate) value: Value,
     pub(crate) usage: LlmUsage,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LlmMetrics {
+    calls: AtomicU64,
+    successes: AtomicU64,
+    failures: AtomicU64,
+    usage_missing: AtomicU64,
+    prompt_tokens: AtomicU64,
+    completion_tokens: AtomicU64,
+    total_tokens: AtomicU64,
+    latency_count: AtomicU64,
+    latency_sum_ms: AtomicU64,
+    latency_max_ms: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LlmMetricSnapshot {
+    pub calls: u64,
+    pub successes: u64,
+    pub failures: u64,
+    pub usage_missing: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub latency_count: u64,
+    pub latency_sum_ms: u64,
+    pub latency_max_ms: u64,
+}
+
+impl LlmMetrics {
+    fn record(&self, result: &Result<StructuredLlmResponse, LlmClientError>, elapsed_ms: u64) {
+        saturating_increment(&self.calls);
+        saturating_increment(&self.latency_count);
+        saturating_add(&self.latency_sum_ms, elapsed_ms);
+        self.latency_max_ms.fetch_max(elapsed_ms, Ordering::AcqRel);
+        match result {
+            Ok(response) => {
+                saturating_increment(&self.successes);
+                let usage = &response.usage;
+                if usage.prompt_tokens.is_none()
+                    || usage.completion_tokens.is_none()
+                    || usage.total_tokens.is_none()
+                {
+                    saturating_increment(&self.usage_missing);
+                }
+                if let Some(value) = usage.prompt_tokens {
+                    saturating_add(&self.prompt_tokens, value);
+                }
+                if let Some(value) = usage.completion_tokens {
+                    saturating_add(&self.completion_tokens, value);
+                }
+                if let Some(value) = usage.total_tokens {
+                    saturating_add(&self.total_tokens, value);
+                }
+            }
+            Err(_) => saturating_increment(&self.failures),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> LlmMetricSnapshot {
+        LlmMetricSnapshot {
+            calls: self.calls.load(Ordering::Acquire),
+            successes: self.successes.load(Ordering::Acquire),
+            failures: self.failures.load(Ordering::Acquire),
+            usage_missing: self.usage_missing.load(Ordering::Acquire),
+            prompt_tokens: self.prompt_tokens.load(Ordering::Acquire),
+            completion_tokens: self.completion_tokens.load(Ordering::Acquire),
+            total_tokens: self.total_tokens.load(Ordering::Acquire),
+            latency_count: self.latency_count.load(Ordering::Acquire),
+            latency_sum_ms: self.latency_sum_ms.load(Ordering::Acquire),
+            latency_max_ms: self.latency_max_ms.load(Ordering::Acquire),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, result: &Result<StructuredLlmResponse, LlmClientError>) {
+        self.record(result, 7);
+    }
+}
+
+fn saturating_increment(value: &AtomicU64) {
+    saturating_add(value, 1);
+}
+
+fn saturating_add(value: &AtomicU64, amount: u64) {
+    let _ = value.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        Some(current.saturating_add(amount))
+    });
 }
 
 #[async_trait]
@@ -66,10 +156,19 @@ pub(crate) struct OpenAiCompatibleClient {
     max_output_tokens: u32,
     max_response_bytes: usize,
     reasoning_mode: LlmReasoningMode,
+    metrics: Arc<LlmMetrics>,
 }
 
 impl OpenAiCompatibleClient {
+    #[cfg(test)]
     pub(crate) fn new(config: &LlmConfig) -> Result<Self, LlmClientError> {
+        Self::new_with_metrics(config, Arc::new(LlmMetrics::default()))
+    }
+
+    pub(crate) fn new_with_metrics(
+        config: &LlmConfig,
+        metrics: Arc<LlmMetrics>,
+    ) -> Result<Self, LlmClientError> {
         let endpoint = chat_completions_url(&config.base_url)?;
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(config.connect_timeout_secs))
@@ -90,6 +189,7 @@ impl OpenAiCompatibleClient {
             max_output_tokens: config.max_output_tokens,
             max_response_bytes: config.max_response_bytes,
             reasoning_mode: config.reasoning_mode,
+            metrics,
         })
     }
 
@@ -105,93 +205,103 @@ impl StructuredLlmClientT for OpenAiCompatibleClient {
         system_prompt: &str,
         input: &Value,
     ) -> Result<StructuredLlmResponse, LlmClientError> {
-        let input_json = serde_json::to_string(input)
-            .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
-        let user_content = prepare_user_content(input_json, self.reasoning_mode);
-        let input_chars = system_prompt.chars().count() + user_content.chars().count();
-        if input_chars > self.max_input_chars {
-            return Err(LlmClientError::InputLimit {
-                actual: input_chars,
-                maximum: self.max_input_chars,
-            });
-        }
-        let body = ChatCompletionRequest {
-            model: &self.model,
-            messages: [
-                ChatMessage {
-                    role: "system",
-                    content: system_prompt,
-                },
-                ChatMessage {
-                    role: "user",
-                    content: &user_content,
-                },
-            ],
-            temperature: self.temperature,
-            max_tokens: self.max_output_tokens,
-            stream: false,
-            response_format: ResponseFormat {
-                kind: "json_object",
-            },
-            think: (self.reasoning_mode == LlmReasoningMode::QwenNoThink).then_some(false),
-        };
-        let mut request = self.http.post(self.endpoint.clone()).json(&body);
-        if let Some(api_key) = &self.api_key {
-            request = request.bearer_auth(api_key);
-        }
         let started = Instant::now();
-        let response = request.send().await.map_err(|error| {
-            if error.is_timeout() {
-                LlmClientError::Timeout
-            } else {
-                LlmClientError::Transport(error.to_string())
+        let result = async {
+            let input_json = serde_json::to_string(input)
+                .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
+            let user_content = prepare_user_content(input_json, self.reasoning_mode);
+            let input_chars = system_prompt.chars().count() + user_content.chars().count();
+            if input_chars > self.max_input_chars {
+                return Err(LlmClientError::InputLimit {
+                    actual: input_chars,
+                    maximum: self.max_input_chars,
+                });
             }
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(match status {
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => LlmClientError::Unauthorized,
-                StatusCode::TOO_MANY_REQUESTS => LlmClientError::RateLimited,
-                _ => LlmClientError::Rejected(status.as_u16()),
-            });
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > self.max_response_bytes as u64)
-        {
-            return Err(LlmClientError::ResponseLimit);
-        }
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|error| LlmClientError::Transport(error.to_string()))?;
-            if bytes.len().saturating_add(chunk.len()) > self.max_response_bytes {
+            let body = ChatCompletionRequest {
+                model: &self.model,
+                messages: [
+                    ChatMessage {
+                        role: "system",
+                        content: system_prompt,
+                    },
+                    ChatMessage {
+                        role: "user",
+                        content: &user_content,
+                    },
+                ],
+                temperature: self.temperature,
+                max_tokens: self.max_output_tokens,
+                stream: false,
+                response_format: ResponseFormat {
+                    kind: "json_object",
+                },
+                think: (self.reasoning_mode == LlmReasoningMode::QwenNoThink).then_some(false),
+            };
+            let mut request = self.http.post(self.endpoint.clone()).json(&body);
+            if let Some(api_key) = &self.api_key {
+                request = request.bearer_auth(api_key);
+            }
+            let response = request.send().await.map_err(|error| {
+                if error.is_timeout() {
+                    LlmClientError::Timeout
+                } else {
+                    LlmClientError::Transport(error.to_string())
+                }
+            })?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(match status {
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                        LlmClientError::Unauthorized
+                    }
+                    StatusCode::TOO_MANY_REQUESTS => LlmClientError::RateLimited,
+                    _ => LlmClientError::Rejected(status.as_u16()),
+                });
+            }
+            if response
+                .content_length()
+                .is_some_and(|length| length > self.max_response_bytes as u64)
+            {
                 return Err(LlmClientError::ResponseLimit);
             }
-            bytes.extend_from_slice(&chunk);
+            let mut bytes = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| LlmClientError::Transport(error.to_string()))?;
+                if bytes.len().saturating_add(chunk.len()) > self.max_response_bytes {
+                    return Err(LlmClientError::ResponseLimit);
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let response: ChatCompletionResponse = serde_json::from_slice(&bytes)
+                .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
+            let choice = response
+                .choices
+                .into_iter()
+                .next()
+                .ok_or(LlmClientError::MissingChoice)?;
+            let content = content_as_text(choice.message.content)?;
+            let value = extract_json_object(&content)?;
+            let usage: LlmUsage = response.usage.unwrap_or_default().into();
+            tracing::debug!(
+                model = self.model,
+                endpoint_host = self.endpoint_host(),
+                input_chars,
+                response_bytes = bytes.len(),
+                prompt_tokens = ?usage.prompt_tokens,
+                completion_tokens = ?usage.completion_tokens,
+                total_tokens = ?usage.total_tokens,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "LLM 结构化补全成功"
+            );
+            Ok(StructuredLlmResponse { value, usage })
         }
-        let response: ChatCompletionResponse = serde_json::from_slice(&bytes)
-            .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or(LlmClientError::MissingChoice)?;
-        let content = content_as_text(choice.message.content)?;
-        let value = extract_json_object(&content)?;
-        let usage: LlmUsage = response.usage.unwrap_or_default().into();
-        tracing::debug!(
-            model = self.model,
-            endpoint_host = self.endpoint_host(),
-            input_chars,
-            response_bytes = bytes.len(),
-            prompt_tokens = ?usage.prompt_tokens,
-            completion_tokens = ?usage.completion_tokens,
-            total_tokens = ?usage.total_tokens,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "LLM 结构化补全成功"
+        .await;
+        self.metrics.record(
+            &result,
+            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         );
-        Ok(StructuredLlmResponse { value, usage })
+        result
     }
 }
 
@@ -1130,6 +1240,34 @@ mod tests {
                 source_event_id: SourceEventId::new("event-1").unwrap(),
             },
         }
+    }
+
+    #[test]
+    fn llm_metrics_count_usage_missing_and_saturate_cost_inputs() {
+        let metrics = LlmMetrics::default();
+        let complete = Ok(StructuredLlmResponse {
+            value: serde_json::json!({}),
+            usage: LlmUsage {
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                total_tokens: Some(15),
+            },
+        });
+        metrics.record_for_test(&complete);
+        let missing = Ok(StructuredLlmResponse {
+            value: serde_json::json!({}),
+            usage: LlmUsage::default(),
+        });
+        metrics.record_for_test(&missing);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.calls, 2);
+        assert_eq!(snapshot.successes, 2);
+        assert_eq!(snapshot.failures, 0);
+        assert_eq!(snapshot.usage_missing, 1);
+        assert_eq!(snapshot.prompt_tokens, 10);
+        assert_eq!(snapshot.completion_tokens, 5);
+        assert_eq!(snapshot.total_tokens, 15);
+        assert_eq!(snapshot.latency_sum_ms, 14);
     }
 
     #[tokio::test]

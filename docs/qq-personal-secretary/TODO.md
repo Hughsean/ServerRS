@@ -463,8 +463,11 @@
   同事务写入精确目标集合的不可变审计与幂等 Effect Receipt。重复 Effect 不重复重排，伪造/
   过期租约、跨账号目标和无效预算 fail-closed；真实隔离 MySQL 覆盖有界顺序、账号隔离、
   fencing、幂等、迁移重放和审计原子性。
-- [ ] `OPS-005` 建立最小生产指标：入站吞吐、端到端延迟、队列/Spool backlog、LLM 调用率与成本、
-  线程误关联反馈、提醒误报反馈。
+- [x] `OPS-005` 建立最小生产指标：复用固定无标签 `HealthAggregator` 快照，暴露入站累计入队/
+  提交量、MySQL commit 端到端延迟、队列及 Recall/Realtime Spool backlog；所有 LLM 消费者共享
+  调用成功/失败、Token、usage 缺失和延迟计数，只有同时配置输入/输出每百万 Token 微美元单价时
+  才估算成本，未配置不伪造价格。反馈指标按托管账号统计 Owner 已批准且成功应用的 split 结构
+  纠错与明确 `important=false` 的提醒反馈；merge、拒绝/未完成 split 和普通反馈均不误算。
 - [ ] `OPS-006` 使用合成数据压测高流量群，验证背压、批处理、内存和 Token 上限；不依赖真实 QQ。
 - [ ] `OPS-007` 演练 QQBot 独立数据库备份恢复、密钥轮换、数据导出和彻底删除；禁止触碰数字人库。
 

@@ -35,6 +35,9 @@ max_output_tokens = 2000
 max_response_bytes = 1048576
 temperature = 0.1
 max_candidates_per_kind = 20
+# 可选 USD 成本估算；两项必须同时配置。未配置时成本指标明确为不可用。
+# input_cost_microusd_per_million_tokens = 0
+# output_cost_microusd_per_million_tokens = 0
 
 [ingestion]
 queue_capacity = 1024

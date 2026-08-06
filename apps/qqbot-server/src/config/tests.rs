@@ -123,6 +123,60 @@ max_candidates_per_kind = 10
 }
 
 #[test]
+fn accepts_pairwise_llm_cost_configuration() {
+    let config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3:8b"
+input_cost_microusd_per_million_tokens = 1000000
+output_cost_microusd_per_million_tokens = 2000000
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.llm.input_cost_microusd_per_million_tokens,
+        Some(1_000_000)
+    );
+    assert_eq!(
+        config.llm.output_cost_microusd_per_million_tokens,
+        Some(2_000_000)
+    );
+}
+
+#[test]
+fn rejects_one_sided_llm_cost_configuration() {
+    let error = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3:8b"
+input_cost_microusd_per_million_tokens = 1000000
+"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("configured together"));
+}
+
+#[test]
 fn rejects_llm_secret_in_toml_and_remote_plain_http() {
     let secret_error = toml::from_str::<AppConfig>(
         r#"

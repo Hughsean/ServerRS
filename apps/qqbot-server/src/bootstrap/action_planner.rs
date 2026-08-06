@@ -27,7 +27,7 @@ use sea_orm::DatabaseConnection;
 use crate::action_planner_worker::spawn_action_planner_worker;
 use crate::bootstrap::workers::WorkerHandles;
 use crate::config::AppConfig;
-use crate::llm::OpenAiCompatibleClient;
+use crate::llm::{LlmMetrics, OpenAiCompatibleClient};
 use crate::runtime::RuntimeError;
 
 /// LLM 禁用时的保守 Action Planner：总是返回 NoAction，不执行任何动作。
@@ -49,6 +49,7 @@ pub(crate) async fn assemble_action_planner(
     config: &AppConfig,
     account: SourceAccountRef,
     health: Option<Arc<personal_secretary::HealthAggregator>>,
+    llm_metrics: Arc<LlmMetrics>,
 ) -> Result<Option<Arc<PlannerUseCase>>, RuntimeError> {
     if !config.action_planner.enabled {
         tracing::info!("Action Planner 已禁用（action_planner.enabled=false）");
@@ -58,7 +59,7 @@ pub(crate) async fn assemble_action_planner(
     let is_loopback = config.llm_endpoint_verified_loopback();
     let planner: Arc<dyn ActionPlannerT> = if config.llm.enabled {
         let client = Arc::new(
-            OpenAiCompatibleClient::new(&config.llm)
+            OpenAiCompatibleClient::new_with_metrics(&config.llm, llm_metrics)
                 .map_err(|error| RuntimeError::Llm(error.to_string()))?,
         );
         Arc::new(

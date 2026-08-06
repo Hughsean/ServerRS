@@ -303,6 +303,22 @@ pub(super) fn apply_llm_env(config: &mut LlmConfig) -> Result<(), ConfigError> {
             }
         };
     }
+    for (name, target) in [
+        (
+            "QQBOT_LLM_INPUT_COST_MICROUSD_PER_MILLION_TOKENS",
+            &mut config.input_cost_microusd_per_million_tokens,
+        ),
+        (
+            "QQBOT_LLM_OUTPUT_COST_MICROUSD_PER_MILLION_TOKENS",
+            &mut config.output_cost_microusd_per_million_tokens,
+        ),
+    ] {
+        if let Ok(value) = std::env::var(name) {
+            *target = Some(value.parse().map_err(|_| {
+                ConfigError::Invalid(format!("{name} must be a non-negative integer"))
+            })?);
+        }
+    }
     Ok(())
 }
 

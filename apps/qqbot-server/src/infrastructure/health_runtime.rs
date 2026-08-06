@@ -43,6 +43,8 @@ struct BackfillHealthSample {
     anomalies: u64,
     budget_exhausted_runs: u64,
     failure_code: u8,
+    thread_misassociation_feedback: u64,
+    reminder_false_positive_feedback: u64,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +67,8 @@ pub struct RuntimeHealthState {
     worker_started: AtomicBool,
     last_database_success_unix: AtomicU64,
     last_worker_success_unix: AtomicU64,
+    thread_misassociation_feedback: AtomicU64,
+    reminder_false_positive_feedback: AtomicU64,
 }
 
 impl RuntimeHealthState {
@@ -124,6 +128,10 @@ impl RuntimeHealthState {
             .store(sample.budget_exhausted_runs, Ordering::Release);
         self.backfill_failure_code
             .store(sample.failure_code, Ordering::Release);
+        self.thread_misassociation_feedback
+            .store(sample.thread_misassociation_feedback, Ordering::Release);
+        self.reminder_false_positive_feedback
+            .store(sample.reminder_false_positive_feedback, Ordering::Release);
     }
 
     fn mark_database_failure(&self) {
@@ -150,6 +158,12 @@ struct DatabaseProducer(Arc<RuntimeHealthState>);
 struct RecallSpoolProducer(Arc<RecallSpoolTelemetry>);
 struct RealtimeSpoolProducer(Arc<crate::realtime_spool::RealtimeSpoolTelemetry>);
 struct IngestionMetricsProducer(Arc<crate::ingestion_worker::IngestionMetrics>);
+struct LlmMetricsProducer {
+    metrics: Arc<crate::llm::LlmMetrics>,
+    input_price_microusd_per_million_tokens: Option<u64>,
+    output_price_microusd_per_million_tokens: Option<u64>,
+}
+struct FeedbackProducer(Arc<RuntimeHealthState>);
 struct WorkerProducer {
     state: Arc<RuntimeHealthState>,
     stale_secs: u64,
@@ -291,6 +305,43 @@ impl HealthSnapshotProducer for DatabaseProducer {
                 _ => None,
             },
             metrics: BTreeMap::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl HealthSnapshotProducer for FeedbackProducer {
+    fn name(&self) -> &'static str {
+        "owner_feedback"
+    }
+
+    async fn health(&self) -> SubsystemHealth {
+        let observed = self.0.history_observed.load(Ordering::Acquire);
+        let mut metrics = BTreeMap::new();
+        metrics.insert(
+            "thread_misassociation_feedback".into(),
+            self.0
+                .thread_misassociation_feedback
+                .load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "reminder_false_positive_feedback".into(),
+            self.0
+                .reminder_false_positive_feedback
+                .load(Ordering::Acquire),
+        );
+        SubsystemHealth {
+            name: self.name().into(),
+            status: if observed {
+                HealthStatus::Healthy
+            } else {
+                HealthStatus::Uncertain
+            },
+            last_success_at_unix_secs: nonzero_time(
+                self.0.last_database_success_unix.load(Ordering::Acquire),
+            ),
+            last_error: (!observed).then(|| "not_observed".into()),
+            metrics,
         }
     }
 }
@@ -447,6 +498,29 @@ impl HealthSnapshotProducer for IngestionMetricsProducer {
         metrics.insert("batches_committed".into(), snapshot.batches_committed);
         metrics.insert("last_batch_size".into(), snapshot.last_batch_size);
         metrics.insert("overflow_pending".into(), snapshot.overflow_pending);
+        metrics.insert("enqueued".into(), snapshot.enqueued);
+        metrics.insert("committed".into(), snapshot.committed);
+        metrics.insert("commit_latency_count".into(), snapshot.commit_latency_count);
+        metrics.insert(
+            "commit_latency_sum_ms".into(),
+            snapshot.commit_latency_sum_ms,
+        );
+        metrics.insert(
+            "commit_latency_max_ms".into(),
+            snapshot.commit_latency_max_ms,
+        );
+        metrics.insert(
+            "last_commit_latency_ms".into(),
+            snapshot.last_commit_latency_ms,
+        );
+        metrics.insert(
+            "commit_latency_avg_ms_x1000".into(),
+            snapshot
+                .commit_latency_sum_ms
+                .saturating_mul(1_000)
+                .checked_div(snapshot.commit_latency_count.max(1))
+                .unwrap_or(0),
+        );
         let status = if snapshot.last_failure_at > snapshot.last_success_at {
             HealthStatus::Degraded
         } else if snapshot.accepted == 0 && snapshot.duplicates == 0 && snapshot.invalid == 0 {
@@ -459,6 +533,80 @@ impl HealthSnapshotProducer for IngestionMetricsProducer {
             status,
             last_success_at_unix_secs: nonzero_time(snapshot.last_success_at),
             last_error: (snapshot.overflow_pending > 0).then(|| "overflow_detected".into()),
+            metrics,
+        }
+    }
+}
+
+fn token_cost_microusd(tokens: u64, price: Option<u64>) -> u64 {
+    price
+        .map(|price| {
+            ((tokens as u128)
+                .saturating_mul(price as u128)
+                .checked_div(1_000_000)
+                .unwrap_or(0))
+            .min(u64::MAX as u128) as u64
+        })
+        .unwrap_or(0)
+}
+
+#[async_trait]
+impl HealthSnapshotProducer for LlmMetricsProducer {
+    fn name(&self) -> &'static str {
+        "llm"
+    }
+
+    async fn health(&self) -> SubsystemHealth {
+        let snapshot = self.metrics.snapshot();
+        let mut metrics = BTreeMap::new();
+        metrics.insert("calls_total".into(), snapshot.calls);
+        metrics.insert("successes".into(), snapshot.successes);
+        metrics.insert("failures".into(), snapshot.failures);
+        metrics.insert("usage_missing".into(), snapshot.usage_missing);
+        metrics.insert("prompt_tokens".into(), snapshot.prompt_tokens);
+        metrics.insert("completion_tokens".into(), snapshot.completion_tokens);
+        metrics.insert("total_tokens".into(), snapshot.total_tokens);
+        metrics.insert("latency_count".into(), snapshot.latency_count);
+        metrics.insert("latency_sum_ms".into(), snapshot.latency_sum_ms);
+        metrics.insert("latency_max_ms".into(), snapshot.latency_max_ms);
+        metrics.insert(
+            "latency_avg_ms_x1000".into(),
+            snapshot
+                .latency_sum_ms
+                .saturating_mul(1_000)
+                .checked_div(snapshot.latency_count.max(1))
+                .unwrap_or(0),
+        );
+        let cost_configured = u64::from(
+            self.input_price_microusd_per_million_tokens.is_some()
+                && self.output_price_microusd_per_million_tokens.is_some(),
+        );
+        metrics.insert("cost_configured".into(), cost_configured);
+        if cost_configured == 1 {
+            metrics.insert(
+                "estimated_cost_microusd".into(),
+                token_cost_microusd(
+                    snapshot.prompt_tokens,
+                    self.input_price_microusd_per_million_tokens,
+                )
+                .saturating_add(token_cost_microusd(
+                    snapshot.completion_tokens,
+                    self.output_price_microusd_per_million_tokens,
+                )),
+            );
+        }
+        SubsystemHealth {
+            name: self.name().into(),
+            status: if snapshot.calls == 0 {
+                HealthStatus::Uncertain
+            } else if snapshot.failures > 0 && snapshot.successes == 0 {
+                HealthStatus::Degraded
+            } else {
+                HealthStatus::Healthy
+            },
+            last_success_at_unix_secs: None,
+            last_error: (snapshot.failures > 0 && snapshot.successes == 0)
+                .then(|| "llm_calls_failed".into()),
             metrics,
         }
     }
@@ -485,6 +633,7 @@ pub fn build_runtime_health_aggregator(
     let mut aggregator = HealthAggregator::new(Duration::from_secs(cache_ttl_secs.max(1)));
     aggregator.add_producer(Arc::new(WebsocketProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(HistoryProducer(Arc::clone(&state))));
+    aggregator.add_producer(Arc::new(FeedbackProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(DatabaseProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(WorkerProducer {
         state,
@@ -506,6 +655,7 @@ pub fn build_runtime_health_aggregator_with_recall_spool(
     let mut aggregator = HealthAggregator::new(Duration::from_secs(cache_ttl_secs.max(1)));
     aggregator.add_producer(Arc::new(WebsocketProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(HistoryProducer(Arc::clone(&state))));
+    aggregator.add_producer(Arc::new(FeedbackProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(DatabaseProducer(Arc::clone(&state))));
     aggregator.add_producer(Arc::new(RecallSpoolProducer(recall_spool)));
     aggregator.add_producer(Arc::new(WorkerProducer {
@@ -526,8 +676,34 @@ pub fn build_runtime_health_aggregator_with_spools(
     worker_success_stale_secs: u64,
     ingestion_metrics: Option<Arc<crate::ingestion_worker::IngestionMetrics>>,
 ) -> HealthAggregator {
-    let mut aggregator = build_runtime_health_aggregator_with_recall_spool(
+    build_runtime_health_aggregator_with_spools_and_llm(
         state,
+        recall_spool,
+        realtime_spool,
+        cache_ttl_secs,
+        worker_success_stale_secs,
+        ingestion_metrics,
+        None,
+    )
+}
+
+pub(crate) struct LlmHealthMetricsConfig {
+    pub metrics: Arc<crate::llm::LlmMetrics>,
+    pub input_price_microusd_per_million_tokens: Option<u64>,
+    pub output_price_microusd_per_million_tokens: Option<u64>,
+}
+
+pub(crate) fn build_runtime_health_aggregator_with_spools_and_llm(
+    state: Arc<RuntimeHealthState>,
+    recall_spool: Arc<RecallSpoolTelemetry>,
+    realtime_spool: Option<Arc<crate::realtime_spool::RealtimeSpoolTelemetry>>,
+    cache_ttl_secs: u64,
+    worker_success_stale_secs: u64,
+    ingestion_metrics: Option<Arc<crate::ingestion_worker::IngestionMetrics>>,
+    llm: Option<LlmHealthMetricsConfig>,
+) -> HealthAggregator {
+    let mut aggregator = build_runtime_health_aggregator_with_recall_spool(
+        Arc::clone(&state),
         recall_spool,
         cache_ttl_secs,
         worker_success_stale_secs,
@@ -536,12 +712,22 @@ pub fn build_runtime_health_aggregator_with_spools(
     if let Some(telemetry) = realtime_spool {
         aggregator.add_producer(Arc::new(RealtimeSpoolProducer(telemetry)));
     }
+    if let Some(llm) = llm {
+        aggregator.add_producer(Arc::new(LlmMetricsProducer {
+            metrics: llm.metrics,
+            input_price_microusd_per_million_tokens: llm.input_price_microusd_per_million_tokens,
+            output_price_microusd_per_million_tokens: llm.output_price_microusd_per_million_tokens,
+        }));
+    }
     aggregator
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[path = "../../../../../crates/personal-secretary-mysql/tests/common/mod.rs"]
+    mod mysql_common;
 
     #[tokio::test]
     async fn recall_spool_producer_reports_bounded_numeric_metrics() {
@@ -570,6 +756,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ingestion_health_exposes_throughput_and_latency_without_identity_labels() {
+        let metrics = Arc::new(crate::ingestion_worker::IngestionMetrics::default());
+        metrics.enqueued.store(20, Ordering::Release);
+        metrics.committed.store(18, Ordering::Release);
+        metrics.commit_latency_count.store(18, Ordering::Release);
+        metrics.commit_latency_sum_ms.store(900, Ordering::Release);
+        metrics.commit_latency_max_ms.store(120, Ordering::Release);
+        metrics.accepted.store(18, Ordering::Release);
+        let health = IngestionMetricsProducer(metrics).health().await;
+        assert_eq!(health.metrics.get("enqueued"), Some(&20));
+        assert_eq!(health.metrics.get("committed"), Some(&18));
+        assert_eq!(health.metrics.get("commit_latency_max_ms"), Some(&120));
+        assert!(health.metrics.keys().all(|key| !key.contains("account")));
+    }
+
+    #[tokio::test]
+    async fn llm_health_reports_configured_cost_only_with_prices() {
+        let metrics = Arc::new(crate::llm::LlmMetrics::default());
+        let response = Ok(crate::llm::StructuredLlmResponse {
+            value: serde_json::json!({}),
+            usage: crate::llm::LlmUsage {
+                prompt_tokens: Some(1_000_000),
+                completion_tokens: Some(500_000),
+                total_tokens: Some(1_500_000),
+            },
+        });
+        metrics.record_for_test(&response);
+        let producer = LlmMetricsProducer {
+            metrics,
+            input_price_microusd_per_million_tokens: Some(2_000_000),
+            output_price_microusd_per_million_tokens: Some(4_000_000),
+        };
+        let health = producer.health().await;
+        assert_eq!(
+            health.metrics.get("estimated_cost_microusd"),
+            Some(&4_000_000)
+        );
+        assert_eq!(health.metrics.get("cost_configured"), Some(&1));
+    }
+
+    #[tokio::test]
     async fn history_health_reports_bounded_backfill_progress_and_failure_code() {
         let state = RuntimeHealthState::new();
         state.mark_database_sample(
@@ -585,6 +812,8 @@ mod tests {
                 anomalies: 1,
                 budget_exhausted_runs: 1,
                 failure_code: FAILURE_HISTORY_UNPROVABLE,
+                thread_misassociation_feedback: 0,
+                reminder_false_positive_feedback: 0,
             },
         );
 
@@ -640,6 +869,151 @@ mod tests {
         let health = HistoryProducer(state).health().await;
         assert_eq!(health.status, HealthStatus::Uncertain);
         assert_eq!(health.last_error.as_deref(), Some("backfill_sample_failed"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires QQBOT_TEST_DATABASE_URL pointing to an isolated qqbot_accept_* schema"]
+    async fn production_feedback_metrics_are_strictly_account_scoped() {
+        let (db, schema) = mysql_common::isolated_db("_ops005").await;
+        let outcome = tokio::spawn(feedback_account_scope_scenario(db.clone())).await;
+        mysql_common::drop_schema(&db, &schema).await;
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => panic!("OPS-005 feedback scenario must pass: {message}"),
+            Err(panic) => std::panic::resume_unwind(panic.into_panic()),
+        }
+    }
+
+    async fn feedback_account_scope_scenario(db: DatabaseConnection) -> Result<(), String> {
+        use personal_secretary::{Clock, SystemClock, VerifiedActorKind};
+        use personal_secretary_mysql::build_mysql_inbound_event_store;
+
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let managed_a = format!("ops005-a-{suffix}");
+        let managed_b = format!("ops005-b-{suffix}");
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let now = SystemClock.now_unix_secs();
+        let event_a = mysql_common::insert_group_message(
+            &inbound,
+            &managed_a,
+            "ops005-message-a",
+            "group-a",
+            "member-a",
+            VerifiedActorKind::External,
+            now,
+            "测试消息",
+        )
+        .await;
+        let event_b = mysql_common::insert_group_message(
+            &inbound,
+            &managed_b,
+            "ops005-message-b",
+            "group-b",
+            "member-b",
+            VerifiedActorKind::External,
+            now,
+            "另一个账号的测试消息",
+        )
+        .await;
+
+        let account_a = mysql_common::scalar_u64(
+            &db,
+            "SELECT id AS value FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+            vec![managed_a.clone().into()],
+        )
+        .await;
+        let account_b = mysql_common::scalar_u64(
+            &db,
+            "SELECT id AS value FROM secretary_accounts WHERE source_channel = 'napcat' AND platform_account_id = ?",
+            vec![managed_b.clone().into()],
+        )
+        .await;
+
+        for (ordinal, account_id, event_id) in [
+            (0_u8, account_a, event_a.as_str()),
+            (1, account_b, event_b.as_str()),
+            (2, account_b, event_b.as_str()),
+        ] {
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_thread_mutation_proposals (proposal_id, account_id, mutation_kind, proposal_status, impact_json, decision, command_source_event_id, effect_id) VALUES (?, ?, 'split', 'applied', JSON_OBJECT(), 'approve', ?, ?)",
+                vec![
+                    uuid::Uuid::new_v4().to_string().into(),
+                    account_id.into(),
+                    event_id.to_owned().into(),
+                    format!("ops005-effect-{ordinal}-{suffix}").into(),
+                ],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "INSERT INTO secretary_thread_mutation_proposals (proposal_id, account_id, mutation_kind, proposal_status, impact_json, decision, command_source_event_id) VALUES (?, ?, 'merge', 'applied', JSON_OBJECT(), 'approve', ?), (?, ?, 'split', 'rejected', JSON_OBJECT(), 'reject', ?)",
+            vec![
+                uuid::Uuid::new_v4().to_string().into(),
+                account_a.into(),
+                event_a.as_str().into(),
+                uuid::Uuid::new_v4().to_string().into(),
+                account_a.into(),
+                event_a.as_str().into(),
+            ],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+
+        for (ordinal, account_id, event_id, important) in [
+            (0_u8, account_a, event_a.as_str(), false),
+            (1, account_a, event_a.as_str(), true),
+            (2, account_b, event_b.as_str(), false),
+        ] {
+            let candidate_id = uuid::Uuid::new_v4().to_string();
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_notification_candidates (notification_candidate_id, account_id, source_kind, source_id, source_version, match_key_json) VALUES (?, ?, 'agenda', ?, 1, JSON_OBJECT())",
+                vec![
+                    candidate_id.clone().into(),
+                    account_id.into(),
+                    uuid::Uuid::new_v4().to_string().into(),
+                ],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
+                "INSERT INTO secretary_notification_feedback (feedback_id, account_id, notification_candidate_id, important, promote_to_rule, command_source_event_id, audit_summary) VALUES (?, ?, ?, ?, 0, ?, 'owner notification feedback')",
+                vec![
+                    uuid::Uuid::new_v4().to_string().into(),
+                    account_id.into(),
+                    candidate_id.into(),
+                    important.into(),
+                    event_id.to_owned().into(),
+                ],
+            ))
+            .await
+            .map_err(|error| format!("feedback {ordinal}: {error}"))?;
+        }
+
+        let sample_a = sample_backfill_health(&db, &mysql_common::account(&managed_a))
+            .await
+            .map_err(|_| "account A health sampling failed".to_owned())?;
+        if sample_a.thread_misassociation_feedback != 1
+            || sample_a.reminder_false_positive_feedback != 1
+        {
+            return Err(format!(
+                "account A metrics leaked or misclassified: thread={}, reminder={}",
+                sample_a.thread_misassociation_feedback, sample_a.reminder_false_positive_feedback
+            ));
+        }
+        let sample_b = sample_backfill_health(&db, &mysql_common::account(&managed_b))
+            .await
+            .map_err(|_| "account B health sampling failed".to_owned())?;
+        if sample_b.thread_misassociation_feedback != 2
+            || sample_b.reminder_false_positive_feedback != 1
+        {
+            return Err("account B metrics did not remain independently scoped".into());
+        }
+        Ok(())
     }
 }
 
@@ -774,6 +1148,29 @@ async fn sample_backfill_health(
     };
     let account_id = account_row.try_get::<u64>("", "id").map_err(|_| ())?;
 
+    let feedback_row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT
+                 CAST((SELECT COUNT(*)
+                       FROM secretary_thread_mutation_proposals proposal
+                       WHERE proposal.account_id = ?
+                         AND proposal.mutation_kind = 'split'
+                         AND proposal.proposal_status = 'applied'
+                         AND proposal.decision = 'approve'
+                         AND proposal.command_source_event_id IS NOT NULL) AS SIGNED)
+                   AS thread_misassociation_feedback,
+                 CAST((SELECT COUNT(*)
+                       FROM secretary_notification_feedback feedback
+                       WHERE feedback.account_id = ?
+                         AND feedback.important = 0) AS SIGNED)
+                   AS reminder_false_positive_feedback"#,
+            [account_id.into(), account_id.into()],
+        ))
+        .await
+        .map_err(|_| ())?
+        .ok_or(())?;
+
     let gap_row = db
         .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
@@ -884,6 +1281,14 @@ async fn sample_backfill_health(
             .as_deref()
             .map(failure_code_from_text)
             .unwrap_or(FAILURE_NONE),
+        thread_misassociation_feedback: non_negative(
+            &feedback_row,
+            "thread_misassociation_feedback",
+        )?,
+        reminder_false_positive_feedback: non_negative(
+            &feedback_row,
+            "reminder_false_positive_feedback",
+        )?,
     })
 }
 
