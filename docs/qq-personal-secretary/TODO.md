@@ -27,6 +27,11 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
+- 当前实机证据：`EXTERNAL ENV-003` 的 6099 自身消息上报、授权群历史回读及
+  `qqbot-server -> 隔离 QQBot MySQL -> SourceEvent/正文/线程` 完整派生链已通过；测试结束后
+  `reportSelfMessage=false`、HTTP 3000/WS 6700 原配置已恢复，随机 schema 和临时文件无残留。
+  6100 的 Debug adapter 可读授权群历史但账号当前离线，发送按 OneBot retcode 200 拒绝；免打扰
+  状态仍缺少权威证据，因此 ENV-003 暂不勾选。
 - 下一步：继续可独立执行的 NapCat 实机验证与剩余外部事项；需要 QQ 开放平台新凭据、实际断网/
   休眠或产品范围扩展的事项继续明确保留为 `EXTERNAL`/`DEFERRED`。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
@@ -491,6 +496,10 @@
 
 - [ ] `EXTERNAL ENV-002` 轮换已经暴露的 QQ 开放平台 Secret，并通过本地环境变量或忽略文件配置。
 - [ ] `EXTERNAL ENV-003` NapCat 实机确认免打扰消息、自身消息上报和一条新消息完整派生链。
+  2026-08-06 已完成后两项：6099 临时开启 `reportSelfMessage` 后在唯一授权群发送消息，WebSocket
+  收到自身事件且历史回读成功；随机隔离 QQBot schema 中 SourceEvent、正文投影和线程成员均落库，
+  随后完整恢复配置并清理 schema/临时文件。剩余仅为确认该群测试时确实处于免打扰状态；没有
+  权威状态证据前不得以 NapCat 能收到普通消息代替。
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
   PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
   为旧到新且 cursor 受账号主体约束；空页语义、跨重启覆盖和 PacketBackend 行为尚未验证，

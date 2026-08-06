@@ -5,6 +5,15 @@
 
 ## 当前阶段
 
+- **本轮（ENV-003 部分完成 + DB Baseline 修复）**：6099 在唯一授权群完成临时自身消息上报、
+  Debug WebSocket 接收和历史回读；随后启动真实 `qqbot-server`，在随机隔离 QQBot schema 中确认
+  同一唯一消息形成 SourceEvent、正文投影和线程成员。测试结束后原 OneBot 配置、随机 schema 和
+  临时文件全部恢复/清理。过程中发现全新 Baseline 未插入 legacy Owner Outbox reconciliation
+  单例租约，导致首次启动必然 fail-closed；Baseline 已补幂等种子，既有旧 Baseline 由增量迁移
+  `20260806_qqbot_notification_reconciliation_seed.sql` 收敛，隔离加载器在全部迁移后增加回归断言。
+  真实 EVT-006 MySQL 1/1、OPS-007 全套演练、all-targets check、严格 Clippy 和架构测试 24/24
+  均通过。免打扰状态尚无权威证据，ENV-003 保持未完成；6100 当前账号离线，发送按类型化结果拒绝。
+
 - **本轮（CMD-004，已完成）**：在 Action Planner 适配器增加高置信度中文只读意图的严格完整
   短语路由，稳定覆盖秘书状态、待处理事项、未来安排、通知规则、记忆、线程关联、项目和承诺。
   路由只生成既有类型化 Proposal，仍经过统一输入校验、Action 白名单、Graph 和 Receipt；不做

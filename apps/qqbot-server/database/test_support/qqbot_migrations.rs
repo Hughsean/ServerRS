@@ -94,6 +94,7 @@ pub async fn try_apply_qqbot_migrations(
         try_apply_sql_file(db, &path).await?;
         try_record_migration(db, migration_name).await?;
     }
+    assert_reconciliation_lease_seeded(db).await;
     Ok(())
 }
 
@@ -126,6 +127,24 @@ async fn ensure_baseline(db: &DatabaseConnection, database_dir: &std::path::Path
     let baseline_path = database_dir.join("baseline").join(BASELINE_FILE_NAME);
     apply_sql_file(db, &baseline_path).await;
     record_migration(db, BASELINE_RECORD_NAME).await;
+}
+
+async fn assert_reconciliation_lease_seeded(db: &DatabaseConnection) {
+    let seeded = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::MySql,
+            "SELECT 1 FROM secretary_notification_reconciliation_leases \
+             WHERE lease_name = 'legacy_owner_outbox_v1' LIMIT 1",
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("failed to verify notification reconciliation lease seed: {error}")
+        })
+        .is_some();
+    assert!(
+        seeded,
+        "QQBot baseline must seed the legacy Owner Outbox reconciliation lease"
+    );
 }
 
 async fn apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) {

@@ -775,6 +775,9 @@ CREATE TABLE IF NOT EXISTS `secretary_notification_reconciliation_leases` (
   CONSTRAINT `chk_secretary_notification_reconciliation_lease_name` CHECK ((`lease_name` = _utf8mb4'legacy_owner_outbox_v1'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Legacy Owner Outbox reconciliation singleton lease';
 
+INSERT IGNORE INTO `secretary_notification_reconciliation_leases` (`lease_name`)
+VALUES ('legacy_owner_outbox_v1');
+
 CREATE TABLE IF NOT EXISTS `secretary_owner_bindings` (
   `binding_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   `managed_account_id` bigint unsigned NOT NULL,
