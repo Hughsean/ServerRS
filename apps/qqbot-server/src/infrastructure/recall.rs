@@ -681,6 +681,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_recall_spool_can_be_rotated_only_after_old_file_is_removed() {
+        let temp = TempDir::new().unwrap();
+        let old = config(&temp, [21; 32]);
+        let wal = RecallWal::open(&old, RecallSpoolTelemetry::new(old.max_bytes)).unwrap();
+        assert!(wal.events(&wal.snapshot().unwrap()).unwrap().is_empty());
+        drop(wal);
+
+        let rotated = config(&temp, [22; 32]);
+        assert!(
+            RecallWal::open(&rotated, RecallSpoolTelemetry::new(rotated.max_bytes)).is_err(),
+            "changing a key while the old spool header exists must fail closed"
+        );
+
+        std::fs::remove_file(&old.path).unwrap();
+        let reopened =
+            RecallWal::open(&rotated, RecallSpoolTelemetry::new(rotated.max_bytes)).unwrap();
+        assert!(
+            reopened
+                .events(&reopened.snapshot().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn spool_rejects_capacity_before_acknowledgement() {
         let temp = TempDir::new().unwrap();
         let mut config = config(&temp, [4; 32]);

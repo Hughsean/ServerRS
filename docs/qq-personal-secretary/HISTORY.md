@@ -5,6 +5,12 @@
 
 ## 当前阶段
 
+- **本轮（OPS-007，已完成）**：新增 fail-closed 运维演练脚本，只允许专用 QQBot MySQL 容器与
+  随机 `qqbot_accept_ops007_*` schema。真实完成 Baseline/增量加载、单事务备份、异名恢复、
+  84 个对象与规范数据比对、单账号 JSONL 导出、账号彻底删除及所有显式账号引用残留扫描；
+  控制账号保持不变。Recall/Realtime Spool 的空 backlog 换钥各 1/1，旧代文件未退役时新钥
+  必须拒绝打开。所有随机 schema 与临时文件均已清理，数字人库和现有 QQBot 业务库未触碰。
+
 - **本轮（OPS-006，已完成）**：新增无需真实 QQ/NapCat/MySQL/模型的确定性合成负载门禁。
   20,000 条消息在首次 await 前突发灌入容量 512 的 callback 队列，精确收敛为 512 条入队和
   19,488 条明确背压；Worker 以 8 个 64 条事务批次排空，最大批次不越界，queue depth 与

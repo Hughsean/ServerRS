@@ -27,7 +27,7 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：继续收口 `CMD-003/CMD-004` 与 `OPS-007` 的本地可验证部分。
+- 下一步：继续收口 `CMD-003/CMD-004` 的本地可验证部分。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
@@ -472,7 +472,12 @@
   精确接收 512 条，其余 19,488 条同步返回明确背压；已接收消息以 8 个 64 条事务批次全部排空，
   单批不越界，queue depth/in-flight 最终归零。LLM 聚焦测试同时证明超限输入在网络请求前
   fail-closed，配置的输出 Token 上限进入客户端请求边界；不依赖真实 QQ、NapCat、MySQL 或模型。
-- [ ] `OPS-007` 演练 QQBot 独立数据库备份恢复、密钥轮换、数据导出和彻底删除；禁止触碰数字人库。
+- [x] `OPS-007` 完成 QQBot 独立数据库与 Spool 密钥轮换演练。脚本强制使用
+  `serverrs-qqbot-mysql` 和随机 `qqbot_accept_ops007_*` schema：Baseline+增量加载后执行
+  `mysqldump --single-transaction --hex-blob`、异名恢复及 84 个对象/规范数据比对；按账号导出
+  JSONL 后删除目标账号，扫描所有显式账号引用并确认正文级联清除、控制账号不受影响。Recall 与
+  Realtime Spool 证明旧代文件存在时换钥 fail-closed，只有服务停机、pending/quarantine 均为零并
+  安全退役旧代文件后才能启用新钥。演练未触碰数字人库、现有 QQBot 业务库或真实数据。
 
 ## 6. 外部阻塞与人工验收
 

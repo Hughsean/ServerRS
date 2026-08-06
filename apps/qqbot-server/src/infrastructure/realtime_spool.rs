@@ -1655,6 +1655,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_spool_can_be_rotated_only_after_old_generation_is_removed() {
+        let temp = TempDir::new().unwrap();
+        install_key("QQBOT_TEST_MESSAGE_SPOOL_ROTATE_A", 61);
+        install_key("QQBOT_TEST_MESSAGE_SPOOL_ROTATE_B", 62);
+        let old_config = config(&temp, "QQBOT_TEST_MESSAGE_SPOOL_ROTATE_A");
+        let old = RealtimeMessageSpool::open(old_config.clone()).unwrap();
+        assert!(old.spool.recover_pending().unwrap().is_empty());
+        drop(old);
+
+        let new_config = config(&temp, "QQBOT_TEST_MESSAGE_SPOOL_ROTATE_B");
+        let mismatch = RealtimeMessageSpool::open(new_config.clone())
+            .err()
+            .expect("changing a key without retiring the old generation must fail closed");
+        assert_eq!(mismatch.kind, RealtimeSpoolFatalKind::KeyUnavailable);
+
+        std::fs::remove_file(&old_config.wal_path).unwrap();
+        if old_config.checkpoint_path.exists() {
+            std::fs::remove_file(&old_config.checkpoint_path).unwrap();
+        }
+        let rotated = RealtimeMessageSpool::open(new_config).unwrap();
+        assert!(rotated.recovery.frames.is_empty());
+        assert!(rotated.spool.recover_pending().unwrap().is_empty());
+    }
+
+    #[test]
     fn only_final_incomplete_tail_is_truncated() {
         let temp = TempDir::new().unwrap();
         install_key("QQBOT_TEST_MESSAGE_SPOOL_KEY_3", 4);
