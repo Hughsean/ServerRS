@@ -327,7 +327,8 @@
   fail-closed 负向重放）。
   所有 6 个回归套件全绿，Docker 验证完成。
 - [ ] `EVT-007-NONMSG` 非消息 Reply（文件、卡片、通知等）子先父后解析。必须先取得真实业务
-  样本并明确引用模型，不得在本切片顺带实现。
+  样本并明确引用模型，不得在本切片顺带实现。2026-08-06 两实例对授权群的最近历史分别读取
+  44/45 条，仅含 text/image，Reply=0；没有可用的非消息 Reply 样本。
 - [x] `EVT-009-CANCELLED` 产品决策不实施数据库消息正文静态加密、密钥轮换、历史重加密或
   密文搜索索引；不新增相关迁移、配置、Worker 和密钥依赖。现有
   `normal/local_only/envelope_only/never_long_term` 继续作为应用层内容保存与读取策略执行；
@@ -503,7 +504,10 @@
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
   PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
   为旧到新且 cursor 受账号主体约束；空页语义、跨重启覆盖和 PacketBackend 行为尚未验证，
-  不得由本次方向证据或 Fake/HTTP 测试推导为已完成。
+  不得由本次方向证据或 Fake/HTTP 测试推导为已完成。2026-08-06 续读两实例各 4 页
+  `count=10`：原始页首 opaque `message_seq` 可连续推进且页序旧到新；跨账号复用 cursor 返回
+  retcode 200。短页后仍返回 1 条锚点重叠，不能解释为历史终点；`nc_get_packet_status` 两实例均
+  返回 retcode 400/空数据。跨重启覆盖仍未执行，故继续保持未完成。
 - [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
   runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。

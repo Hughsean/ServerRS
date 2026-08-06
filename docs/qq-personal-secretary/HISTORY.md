@@ -5,6 +5,13 @@
 
 ## 当前阶段
 
+- **本轮（ENV-004 双账号只读复核，未完成）**：6099/6100 仅访问授权群历史；两个实例各返回 4 页
+  `count=10`，原始数组均为旧到新，使用页首 opaque `message_seq` 可继续推进且页间不重复；把
+  6099 cursor 交给 6100 返回 retcode 200。读取到短页后仍出现 1 条锚点重叠，不能把短页解释为
+  确定性历史终点；`nc_get_packet_status` 两实例均 retcode 400/空数据。未重启 NapCat，不能声称
+  跨重启或 PacketBackend 兼容完成。两个实例目标群最近历史 44/45 条均无 Reply，EVT-007-NONMSG
+  仍等待真实业务样本。
+
 - **本轮（ENV-003 部分完成 + DB Baseline 修复）**：6099 在唯一授权群完成临时自身消息上报、
   Debug WebSocket 接收和历史回读；随后启动真实 `qqbot-server`，在随机隔离 QQBot schema 中确认
   同一唯一消息形成 SourceEvent、正文投影和线程成员。测试结束后原 OneBot 配置、随机 schema 和
