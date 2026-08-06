@@ -1872,7 +1872,7 @@ fn format_secretary_status(
     let mut details = Vec::new();
     for subsystem in health.subsystems.iter().take(12) {
         let mut detail = format!("{}={}", subsystem.name, subsystem.status.as_str());
-        for (key, value) in subsystem.metrics.iter().take(8) {
+        for (key, value) in subsystem.metrics.iter().take(12) {
             detail.push_str(&format!(" {key}:{value}"));
         }
         if let Some(error) = subsystem.last_error.as_deref() {
@@ -2311,6 +2311,9 @@ mod tests {
     fn secretary_status_includes_bounded_runtime_health_without_identifiers() {
         let mut metrics = BTreeMap::new();
         metrics.insert("queue_depth".into(), 7);
+        for index in 0..9 {
+            metrics.insert(format!("bounded_metric_{index:02}"), index);
+        }
         let health = HealthSnapshot::new(
             vec![SubsystemHealth {
                 name: "websocket".into(),
@@ -2337,7 +2340,9 @@ mod tests {
         };
         let output = format_secretary_status(&status, Some(&health));
         assert!(output.contains("运行健康：degraded"));
-        assert!(output.contains("websocket=degraded queue_depth:7"));
+        assert!(output.contains("websocket=degraded"));
+        assert!(output.contains("queue_depth:7"));
+        assert!(output.contains("bounded_metric_08:8"));
         assert!(!output.contains("account-must-not-be-rendered"));
         assert!(!output.contains("epoch-must-not-be-rendered"));
         assert!(output.chars().count() <= 1800);

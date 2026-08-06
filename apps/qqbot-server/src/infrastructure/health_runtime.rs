@@ -23,12 +23,43 @@ const UNKNOWN: u8 = 0;
 const HEALTHY: u8 = 1;
 const DEGRADED: u8 = 2;
 
+const FAILURE_NONE: u8 = 0;
+const FAILURE_SAMPLE_FAILED: u8 = 1;
+const FAILURE_QUEUE_OVERFLOW: u8 = 2;
+const FAILURE_DATABASE_UNAVAILABLE: u8 = 3;
+const FAILURE_HISTORY_UNPROVABLE: u8 = 4;
+const FAILURE_INVALID_EVENT: u8 = 5;
+const FAILURE_UNKNOWN: u8 = 6;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BackfillHealthSample {
+    uncertain_gaps: u64,
+    backfilling_gaps: u64,
+    unrecoverable_gaps: u64,
+    pages_read: u64,
+    events_read: u64,
+    accepted: u64,
+    duplicates: u64,
+    anomalies: u64,
+    budget_exhausted_runs: u64,
+    failure_code: u8,
+}
+
 #[derive(Debug, Default)]
 pub struct RuntimeHealthState {
     websocket_observed: AtomicBool,
     websocket_connected: AtomicBool,
     history_observed: AtomicBool,
     uncertain_gaps: AtomicU64,
+    backfilling_gaps: AtomicU64,
+    unrecoverable_gaps: AtomicU64,
+    backfill_pages_read: AtomicU64,
+    backfill_events_read: AtomicU64,
+    backfill_accepted: AtomicU64,
+    backfill_duplicates: AtomicU64,
+    backfill_anomalies: AtomicU64,
+    backfill_budget_exhausted_runs: AtomicU64,
+    backfill_failure_code: AtomicU8,
     database_state: AtomicU8,
     workers_state: AtomicU8,
     worker_started: AtomicBool,
@@ -68,16 +99,38 @@ impl RuntimeHealthState {
         self.workers_state.store(DEGRADED, Ordering::Release);
     }
 
-    fn mark_database_sample(&self, now_unix: u64, uncertain_gaps: u64) {
+    fn mark_database_sample(&self, now_unix: u64, sample: BackfillHealthSample) {
         self.database_state.store(HEALTHY, Ordering::Release);
         self.last_database_success_unix
             .store(now_unix, Ordering::Release);
-        self.set_uncertain_gaps(uncertain_gaps);
+        self.history_observed.store(true, Ordering::Release);
+        self.uncertain_gaps
+            .store(sample.uncertain_gaps, Ordering::Release);
+        self.backfilling_gaps
+            .store(sample.backfilling_gaps, Ordering::Release);
+        self.unrecoverable_gaps
+            .store(sample.unrecoverable_gaps, Ordering::Release);
+        self.backfill_pages_read
+            .store(sample.pages_read, Ordering::Release);
+        self.backfill_events_read
+            .store(sample.events_read, Ordering::Release);
+        self.backfill_accepted
+            .store(sample.accepted, Ordering::Release);
+        self.backfill_duplicates
+            .store(sample.duplicates, Ordering::Release);
+        self.backfill_anomalies
+            .store(sample.anomalies, Ordering::Release);
+        self.backfill_budget_exhausted_runs
+            .store(sample.budget_exhausted_runs, Ordering::Release);
+        self.backfill_failure_code
+            .store(sample.failure_code, Ordering::Release);
     }
 
     fn mark_database_failure(&self) {
         self.database_state.store(DEGRADED, Ordering::Release);
         self.history_observed.store(false, Ordering::Release);
+        self.backfill_failure_code
+            .store(FAILURE_SAMPLE_FAILED, Ordering::Release);
     }
 }
 
@@ -137,22 +190,84 @@ impl HealthSnapshotProducer for HistoryProducer {
 
     async fn health(&self) -> SubsystemHealth {
         let observed = self.0.history_observed.load(Ordering::Acquire);
-        let count = self.0.uncertain_gaps.load(Ordering::Acquire);
+        let uncertain_gaps = self.0.uncertain_gaps.load(Ordering::Acquire);
+        let backfilling_gaps = self.0.backfilling_gaps.load(Ordering::Acquire);
+        let unrecoverable_gaps = self.0.unrecoverable_gaps.load(Ordering::Acquire);
+        let mut metrics = BTreeMap::new();
+        metrics.insert("uncertain_gaps".into(), uncertain_gaps);
+        metrics.insert("backfilling_gaps".into(), backfilling_gaps);
+        metrics.insert("unrecoverable_gaps".into(), unrecoverable_gaps);
+        metrics.insert(
+            "backfill_pages_read".into(),
+            self.0.backfill_pages_read.load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "backfill_events_read".into(),
+            self.0.backfill_events_read.load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "backfill_accepted".into(),
+            self.0.backfill_accepted.load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "backfill_duplicates".into(),
+            self.0.backfill_duplicates.load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "backfill_anomalies".into(),
+            self.0.backfill_anomalies.load(Ordering::Acquire),
+        );
+        metrics.insert(
+            "backfill_budget_exhausted_runs".into(),
+            self.0
+                .backfill_budget_exhausted_runs
+                .load(Ordering::Acquire),
+        );
+        let failure_code = self.0.backfill_failure_code.load(Ordering::Acquire);
         SubsystemHealth {
             name: self.name().into(),
             status: if !observed {
                 HealthStatus::Uncertain
-            } else if count == 0 {
+            } else if uncertain_gaps == 0 && backfilling_gaps == 0 && unrecoverable_gaps == 0 {
                 HealthStatus::Healthy
             } else {
                 HealthStatus::Degraded
             },
-            last_success_at_unix_secs: None,
-            last_error: (!observed)
-                .then(|| "not_observed".into())
-                .or_else(|| (count > 0).then(|| "uncertain_gaps_present".into())),
-            metrics: BTreeMap::new(),
+            last_success_at_unix_secs: nonzero_time(
+                self.0.last_database_success_unix.load(Ordering::Acquire),
+            ),
+            last_error: if !observed {
+                Some(
+                    if failure_code == FAILURE_SAMPLE_FAILED {
+                        "backfill_sample_failed"
+                    } else {
+                        "not_observed"
+                    }
+                    .into(),
+                )
+            } else if uncertain_gaps == 0 && backfilling_gaps == 0 && unrecoverable_gaps == 0 {
+                None
+            } else {
+                history_failure_code(failure_code)
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        (unrecoverable_gaps > 0).then_some("unrecoverable_gaps_present".into())
+                    })
+                    .or_else(|| (uncertain_gaps > 0).then_some("uncertain_gaps_present".into()))
+            },
+            metrics,
         }
+    }
+}
+
+fn history_failure_code(code: u8) -> Option<&'static str> {
+    match code {
+        FAILURE_QUEUE_OVERFLOW => Some("backfill_queue_overflow"),
+        FAILURE_DATABASE_UNAVAILABLE => Some("backfill_database_unavailable"),
+        FAILURE_HISTORY_UNPROVABLE => Some("backfill_history_unprovable"),
+        FAILURE_INVALID_EVENT => Some("backfill_invalid_event"),
+        FAILURE_UNKNOWN => Some("backfill_failure_unknown"),
+        _ => None,
     }
 }
 
@@ -453,6 +568,79 @@ mod tests {
         assert_eq!(health.status, HealthStatus::Healthy);
         assert_eq!(health.last_error, None);
     }
+
+    #[tokio::test]
+    async fn history_health_reports_bounded_backfill_progress_and_failure_code() {
+        let state = RuntimeHealthState::new();
+        state.mark_database_sample(
+            123,
+            BackfillHealthSample {
+                uncertain_gaps: 2,
+                backfilling_gaps: 1,
+                unrecoverable_gaps: 0,
+                pages_read: 7,
+                events_read: 80,
+                accepted: 12,
+                duplicates: 68,
+                anomalies: 1,
+                budget_exhausted_runs: 1,
+                failure_code: FAILURE_HISTORY_UNPROVABLE,
+            },
+        );
+
+        let health = HistoryProducer(state).health().await;
+        assert_eq!(health.status, HealthStatus::Degraded);
+        assert_eq!(health.last_success_at_unix_secs, Some(123));
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("backfill_history_unprovable")
+        );
+        assert_eq!(health.metrics.get("uncertain_gaps"), Some(&2));
+        assert_eq!(health.metrics.get("backfilling_gaps"), Some(&1));
+        assert_eq!(health.metrics.get("backfill_pages_read"), Some(&7));
+        assert_eq!(health.metrics.get("backfill_events_read"), Some(&80));
+        assert_eq!(health.metrics.get("backfill_accepted"), Some(&12));
+        assert_eq!(health.metrics.get("backfill_duplicates"), Some(&68));
+        assert_eq!(health.metrics.get("backfill_anomalies"), Some(&1));
+        assert_eq!(
+            health.metrics.get("backfill_budget_exhausted_runs"),
+            Some(&1)
+        );
+    }
+
+    #[tokio::test]
+    async fn history_health_redacts_unknown_failure_text_and_sampling_errors() {
+        let state = RuntimeHealthState::new();
+        state.mark_database_sample(
+            123,
+            BackfillHealthSample {
+                uncertain_gaps: 1,
+                failure_code: failure_code_from_text("mysql://secret/path"),
+                ..BackfillHealthSample::default()
+            },
+        );
+        let health = HistoryProducer(Arc::clone(&state)).health().await;
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("backfill_failure_unknown")
+        );
+
+        state.mark_database_sample(
+            124,
+            BackfillHealthSample {
+                failure_code: FAILURE_HISTORY_UNPROVABLE,
+                ..BackfillHealthSample::default()
+            },
+        );
+        let health = HistoryProducer(Arc::clone(&state)).health().await;
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert_eq!(health.last_error, None);
+
+        state.mark_database_failure();
+        let health = HistoryProducer(state).health().await;
+        assert_eq!(health.status, HealthStatus::Uncertain);
+        assert_eq!(health.last_error.as_deref(), Some("backfill_sample_failed"));
+    }
 }
 
 #[derive(Clone)]
@@ -527,8 +715,8 @@ async fn run_health_worker(
             return;
         }
         let now = now_unix();
-        match sample_uncertain_gaps(&db, &account).await {
-            Ok(count) => state.mark_database_sample(now as u64, count),
+        match sample_backfill_health(&db, &account).await {
+            Ok(sample) => state.mark_database_sample(now as u64, sample),
             Err(()) => state.mark_database_failure(),
         }
         aggregator.invalidate_cache();
@@ -563,28 +751,150 @@ async fn run_health_worker(
     }
 }
 
-async fn sample_uncertain_gaps(
+async fn sample_backfill_health(
     db: &DatabaseConnection,
     account: &SourceAccountRef,
-) -> Result<u64, ()> {
-    let row = db
+) -> Result<BackfillHealthSample, ()> {
+    let account_row = db
         .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            r#"SELECT COUNT(*) AS value
-               FROM secretary_ingestion_gaps gap
-               JOIN secretary_accounts account ON account.id = gap.account_id
-               WHERE account.source_channel = ? AND account.platform_account_id = ?
-                 AND gap.status IN ('uncertain', 'backfilling', 'unrecoverable')"#,
+            r#"SELECT id
+               FROM secretary_accounts
+               WHERE source_channel = ? AND platform_account_id = ?
+               LIMIT 1"#,
             [
                 account.channel.as_str().into(),
                 account.account_id.clone().into(),
             ],
         ))
         .await
+        .map_err(|_| ())?;
+    let Some(account_row) = account_row else {
+        return Ok(BackfillHealthSample::default());
+    };
+    let account_id = account_row.try_get::<u64>("", "id").map_err(|_| ())?;
+
+    let gap_row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT
+                 CAST(COALESCE(SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS uncertain_gaps,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'backfilling' THEN 1 ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS backfilling_gaps,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'unrecoverable' THEN 1 ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS unrecoverable_gaps
+               FROM secretary_ingestion_gaps
+               WHERE account_id = ?"#,
+            [account_id.into()],
+        ))
+        .await
         .map_err(|_| ())?
         .ok_or(())?;
-    let value = row.try_get::<i64>("", "value").map_err(|_| ())?;
-    u64::try_from(value).map_err(|_| ())
+
+    let run_row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' THEN pages_read ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS pages_read,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' THEN events_read ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS events_read,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' THEN accepted ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS accepted,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' THEN duplicates ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS duplicates,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' THEN anomaly_count ELSE 0 END), 0)
+                   AS SIGNED)
+                   AS anomalies,
+                 CAST(COALESCE(SUM(CASE WHEN status = 'running' AND budget_exhausted = 1
+                                   THEN 1 ELSE 0 END), 0) AS SIGNED)
+                   AS budget_exhausted_runs
+               FROM secretary_backfill_runs
+               WHERE account_id = ?"#,
+            [account_id.into()],
+        ))
+        .await
+        .map_err(|_| ())?
+        .ok_or(())?;
+
+    let failure_row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT run.failure_class
+               FROM secretary_backfill_runs run
+               JOIN secretary_ingestion_gaps gap ON gap.gap_id = run.gap_id
+               WHERE run.account_id = ?
+                 AND run.failure_class IS NOT NULL
+                 AND gap.status IN ('uncertain', 'backfilling', 'unrecoverable')
+               ORDER BY run.updated_at DESC, run.backfill_run_id DESC
+               LIMIT 1"#,
+            [account_id.into()],
+        ))
+        .await
+        .map_err(|_| ())?;
+    let failure_class = failure_row
+        .as_ref()
+        .and_then(|row| row.try_get::<String>("", "failure_class").ok());
+
+    let gap_failure_row = if failure_class.is_none() {
+        db.query_one_raw(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            r#"SELECT reason
+               FROM secretary_ingestion_gaps
+               WHERE account_id = ? AND status IN ('uncertain', 'backfilling', 'unrecoverable')
+               ORDER BY updated_at DESC, gap_id DESC
+               LIMIT 1"#,
+            [account_id.into()],
+        ))
+        .await
+        .map_err(|_| ())?
+    } else {
+        None
+    };
+    let failure_class = failure_class.or_else(|| {
+        gap_failure_row
+            .as_ref()
+            .and_then(|row| row.try_get::<String>("", "reason").ok())
+    });
+
+    fn non_negative(row: &sea_orm::QueryResult, column: &str) -> Result<u64, ()> {
+        let value = row.try_get::<i64>("", column).map_err(|_| ())?;
+        u64::try_from(value).map_err(|_| ())
+    }
+
+    Ok(BackfillHealthSample {
+        uncertain_gaps: non_negative(&gap_row, "uncertain_gaps")?,
+        backfilling_gaps: non_negative(&gap_row, "backfilling_gaps")?,
+        unrecoverable_gaps: non_negative(&gap_row, "unrecoverable_gaps")?,
+        pages_read: non_negative(&run_row, "pages_read")?,
+        events_read: non_negative(&run_row, "events_read")?,
+        accepted: non_negative(&run_row, "accepted")?,
+        duplicates: non_negative(&run_row, "duplicates")?,
+        anomalies: non_negative(&run_row, "anomalies")?,
+        budget_exhausted_runs: non_negative(&run_row, "budget_exhausted_runs")?,
+        failure_code: failure_class
+            .as_deref()
+            .map(failure_code_from_text)
+            .unwrap_or(FAILURE_NONE),
+    })
+}
+
+fn failure_code_from_text(value: &str) -> u8 {
+    match value {
+        "queue_overflow" => FAILURE_QUEUE_OVERFLOW,
+        "database_unavailable" => FAILURE_DATABASE_UNAVAILABLE,
+        "history_unprovable" => FAILURE_HISTORY_UNPROVABLE,
+        "invalid_event" => FAILURE_INVALID_EVENT,
+        _ => FAILURE_UNKNOWN,
+    }
 }
 
 fn now_unix() -> i64 {

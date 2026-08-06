@@ -448,8 +448,11 @@
 - [x] `OPS-001` 把 WebSocket、Worker、Recall/Realtime Spool、入站指标和 Gap 的安全有界快照
   并入 Owner 状态查询；仅展示固定子系统名、四态状态和有界数值，不暴露账号、epoch、路径、
   正文或凭据。
-- [ ] `OPS-002` 展示回补进度和关键失败原因；日志只允许类型化错误，不输出正文、Token、OpenID、
-  数据库 URL、密钥或本地敏感路径。
+- [x] `OPS-002` 展示回补进度和关键失败原因；健康采样按托管账号区分
+  `uncertain/backfilling/unrecoverable` Gap，输出活跃回补的页数、事件、Accepted、Duplicate、
+  anomaly 和预算耗尽计数；`failure_class/reason` 只映射为固定错误码，未知值统一为
+  `backfill_failure_unknown`。日志和 Owner 查询不输出正文、Token、OpenID、数据库 URL、密钥或
+  本地敏感路径；Owner 查询继续只读取 HealthAggregator 缓存，不额外触发 SQL。
 - [ ] `OPS-003` 完成待处理事项与线程的分页、跨线程聚合和运行期健康详情。
 - [ ] `OPS-004` 提供失败派生任务的有界重处理入口，继续使用租约、fencing 和审计。
 - [ ] `OPS-005` 建立最小生产指标：入站吞吐、端到端延迟、队列/Spool backlog、LLM 调用率与成本、

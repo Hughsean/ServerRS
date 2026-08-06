@@ -5,6 +5,12 @@
 
 ## 当前阶段
 
+- **本轮（OPS-002，已完成）**：健康 Worker 现在按托管账号采样 `uncertain`、`backfilling`、
+  `unrecoverable` Gap，以及活跃回补运行的页数、事件、Accepted、Duplicate、anomaly 和预算耗尽
+  计数；最近失败原因只经过固定 allowlist 映射，未知文本统一为 `backfill_failure_unknown`，采样
+  失败为 `backfill_sample_failed`。Owner 状态仍读取缓存快照，不触发额外 SQL；未新增迁移。
+  `qqbot-server` 健康单测 4/4、严格 Clippy 与格式检查通过，Docker MySQL 聚合 SQL 只读验证通过。
+
 - 主干分支：`Main`；GAP-003-A/B/C 独立提交 `7278677` 及其前置 QQBot 开发线已收口，尚未
   推送远端。QQBot 运行数据库使用独立容器、独立数据库和
   独立持久化卷，不复用数字人数据库。
