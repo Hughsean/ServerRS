@@ -41,7 +41,11 @@
   授权群真实上传/Reply 样本完成；`EVT-007-NONMSG-CARD` 也已由真实 Ark/JSON 卡片证明为普通
   消息 Reply 并完成历史解析收口，`EVT-009` 已按产品决策取消。
 - 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
-  所有第三方自动回复继续延期；群管理员只是群角色，不构成系统 Owner。
+  所有第三方自动回复已按产品决定停止；群管理员只是群角色，不构成系统 Owner。
+- 当前本地门禁：2026-08-06 22:03 独立重跑 `fmt`、`diff check`、workspace all-targets check、
+  QQBot 五个 crate 严格 Clippy、领域 293/293、NapCat 71/71、QQBot Server 198 passed/3 ignored、
+  workspace boundaries 24/24；Docker MySQL 保留的 19 个测试目标共 52/52 真实通过，所有随机
+  `qqbot_accept_evt007_*` schema 均已清理。
 
 ## 1. 立即执行顺序
 
@@ -516,7 +520,9 @@
   随后完整恢复配置并清理 schema/临时文件。剩余仅为确认该群测试时确实处于免打扰状态；没有
   权威状态证据前不得以 NapCat 能收到普通消息代替。2026-08-06 20:30 对 6099 执行真实进程重启
   后账号未自动恢复登录；20:56 用户在 WebUI 完成登录确认，OneBot HTTP `3001`、WS `6701` 和
-  授权群历史读取已恢复。剩余仍是免打扰状态的权威人机验收。
+  授权群历史读取已恢复。22:03 权威读取确认 6099 与 6100 的授权群 `cmdUinMsgMask` 均为
+  `1（接收并提醒）`，且 NapCat 4.18.14 未注册 `set_group_msg_mask` action，无法由现有只读/Debug
+  边界切换；需用户在 QQ 客户端把任一测试账号切为 `4（接收不提醒）` 后再完成收消息验收。
 - [ ] `EXTERNAL ENV-004` NapCat 双账号历史多页方向、空页原因、跨重启覆盖和
   PacketBackend 兼容。双账号 NapCat 4.18.14 已确认向旧方向必须使用 `reverseOrder=true`、返回数组
   为旧到新且 cursor 受账号主体约束；空页语义、完整跨重启分页覆盖和 PacketBackend 行为尚未验证，
@@ -534,8 +540,8 @@
   作为 continuation 安全复用，应用层账号绑定保持不变。两实例都明确报告当前 QQ
   `9.9.33-51802-x64` 与 NapCat `v4.18.14` 的 PacketBackend 不兼容。空页原因、稳定自动重登和
   PacketBackend 兼容仍无正向证据，生产继续以 `UnprovenStop`/uncertain fail-closed，本项保持未完成。
-- [ ] `EXTERNAL QA-004` 如未来恢复远端发布门禁，再配置 GitHub protected Environment、受保护
-  runner 的可信签名密钥以及 branch protection required check；当前不阻塞本地业务开发。
+- [x] `EXTERNAL QA-004-CANCELLED` 远端 protected Environment、受保护 runner 签名密钥和 branch
+  protection required check 属于未来发布治理，按产品决定停止，不属于当前上线收尾目标。
 - [ ] `EXTERNAL CMD-LIVE` QQ 开放平台真实 Owner 投递和交互回执；不得使用已暴露凭据。
 - [ ] `EXTERNAL OPS-LIVE` 电脑休眠/断网/NapCat 退出的实机恢复演练。NapCat 进程重启已真实证明
   WebUI 与业务端口分阶段恢复且 6099 本次需要用户手动确认登录后才恢复；电脑休眠与物理网络断开
