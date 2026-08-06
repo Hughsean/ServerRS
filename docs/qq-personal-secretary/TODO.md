@@ -27,7 +27,7 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：继续收口 `CMD-003/CMD-004/CMD-008` 与 `OPS-002..OPS-007` 的本地可验证部分。
+- 下一步：继续收口 `CMD-003/CMD-004` 与 `OPS-007` 的本地可验证部分。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
@@ -468,7 +468,10 @@
   调用成功/失败、Token、usage 缺失和延迟计数，只有同时配置输入/输出每百万 Token 微美元单价时
   才估算成本，未配置不伪造价格。反馈指标按托管账号统计 Owner 已批准且成功应用的 split 结构
   纠错与明确 `important=false` 的提醒反馈；merge、拒绝/未完成 split 和普通反馈均不误算。
-- [ ] `OPS-006` 使用合成数据压测高流量群，验证背压、批处理、内存和 Token 上限；不依赖真实 QQ。
+- [x] `OPS-006` 使用 20,000 条合成突发消息验证高流量群边界：首次 await 前容量 512 的队列
+  精确接收 512 条，其余 19,488 条同步返回明确背压；已接收消息以 8 个 64 条事务批次全部排空，
+  单批不越界，queue depth/in-flight 最终归零。LLM 聚焦测试同时证明超限输入在网络请求前
+  fail-closed，配置的输出 Token 上限进入客户端请求边界；不依赖真实 QQ、NapCat、MySQL 或模型。
 - [ ] `OPS-007` 演练 QQBot 独立数据库备份恢复、密钥轮换、数据导出和彻底删除；禁止触碰数字人库。
 
 ## 6. 外部阻塞与人工验收

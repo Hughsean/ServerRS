@@ -5,6 +5,11 @@
 
 ## 当前阶段
 
+- **本轮（OPS-006，已完成）**：新增无需真实 QQ/NapCat/MySQL/模型的确定性合成负载门禁。
+  20,000 条消息在首次 await 前突发灌入容量 512 的 callback 队列，精确收敛为 512 条入队和
+  19,488 条明确背压；Worker 以 8 个 64 条事务批次排空，最大批次不越界，queue depth 与
+  in-flight 回到零。LLM 客户端验证超限输入在网络请求前拒绝，并保留配置的输出 Token 上限。
+
 - **本轮（OPS-005，已完成）**：现有 `HealthAggregator` 新增最小生产指标，不建立平行监控体系。
   入站累计记录入队/提交量及从进队到 MySQL commit 的 count/sum/max/last 延迟，累计计数供外部按
   时间窗口差分为吞吐率；既有队列、Recall/Realtime Spool backlog 保持同一快照。所有 LLM

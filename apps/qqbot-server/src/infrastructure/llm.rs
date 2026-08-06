@@ -1440,6 +1440,33 @@ mod tests {
         assert_eq!(adapted, format!("{original}\n/no_think"));
     }
 
+    /// OPS-006：超限输入必须在发起网络请求前 fail-closed，输出 Token 上限必须保留在客户端配置中。
+    #[tokio::test]
+    async fn openai_client_enforces_configured_input_and_output_budgets() {
+        let config = LlmConfig {
+            enabled: true,
+            base_url: "http://127.0.0.1:9/v1".into(),
+            model: "synthetic-load-model".into(),
+            max_input_chars: 1_000,
+            max_output_tokens: 321,
+            ..LlmConfig::default()
+        };
+        let client = OpenAiCompatibleClient::new(&config).unwrap();
+        assert_eq!(client.max_output_tokens, 321);
+
+        let error = client
+            .complete_json(&"x".repeat(1_001), &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LlmClientError::InputLimit {
+                actual,
+                maximum: 1_000
+            } if actual > 1_000
+        ));
+    }
+
     fn candidate_event(
         account: &SourceAccountRef,
         source_event_id: &str,

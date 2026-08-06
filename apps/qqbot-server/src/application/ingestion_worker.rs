@@ -1258,6 +1258,7 @@ mod tests {
         results: Mutex<VecDeque<Vec<IngestMessageOutcome>>>,
         errors: Mutex<VecDeque<InboundEventStoreError>>,
         insert_attempts: AtomicU64,
+        max_batch_size: AtomicU64,
     }
 
     #[async_trait]
@@ -1274,6 +1275,8 @@ mod tests {
             messages: &[InboundMessageEnvelope],
         ) -> Result<Vec<IngestMessageOutcome>, InboundEventStoreError> {
             self.insert_attempts.fetch_add(1, Ordering::AcqRel);
+            self.max_batch_size
+                .fetch_max(messages.len() as u64, Ordering::AcqRel);
             if let Some(error) = self.errors.lock().unwrap().pop_front() {
                 return Err(error);
             }
@@ -1437,6 +1440,7 @@ mod tests {
             results: Mutex::new(VecDeque::from([vec![accepted("evt-hook")]])),
             errors: Mutex::new(VecDeque::new()),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let recall_store = Arc::new(FailingRecallStore::default());
         let recall_port: Arc<dyn RecallStoreT> = recall_store.clone();
@@ -1498,6 +1502,7 @@ mod tests {
                 InboundEventStoreError::Unavailable,
             ])),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let config = IngestionConfig {
             queue_capacity: 1,
@@ -1553,6 +1558,7 @@ mod tests {
                 InboundEventStoreError::InvalidData("poison_isolated".into()),
             ])),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let config = IngestionConfig {
             queue_capacity: 4,
@@ -1596,6 +1602,7 @@ mod tests {
             ]])),
             errors: Mutex::new(VecDeque::new()),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let config = IngestionConfig {
             queue_capacity: 8,
@@ -1654,6 +1661,7 @@ mod tests {
             results: Mutex::new(VecDeque::from(accepted_results)),
             errors: Mutex::new(VecDeque::new()),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let config = IngestionConfig {
             queue_capacity: 1024,
@@ -1691,6 +1699,84 @@ mod tests {
         );
     }
 
+    /// OPS-006：高流量群的突发 callback 必须保持有界；容量之外的消息明确返回背压，
+    /// 不能无界堆积或伪装成已接收。该测试刻意在首次 await 前完成全部入队，保证负载可重复。
+    #[tokio::test]
+    async fn synthetic_burst_20k_is_bounded_by_queue_and_batch_limits() {
+        const TOTAL_MESSAGES: usize = 20_000;
+        const QUEUE_CAPACITY: usize = 512;
+        const BATCH_SIZE: usize = 64;
+
+        let accepted_results: Vec<Vec<IngestMessageOutcome>> = (0..QUEUE_CAPACITY / BATCH_SIZE)
+            .map(|batch_idx| {
+                (0..BATCH_SIZE)
+                    .map(|index| accepted(&format!("evt-load-{batch_idx}-{index}")))
+                    .collect()
+            })
+            .collect();
+        let store = Arc::new(BatchStore {
+            results: Mutex::new(VecDeque::from(accepted_results)),
+            errors: Mutex::new(VecDeque::new()),
+            insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
+        });
+        let config = IngestionConfig {
+            queue_capacity: QUEUE_CAPACITY,
+            batch_size: BATCH_SIZE,
+            batch_flush_ms: 1,
+            retry_initial_ms: 1,
+            retry_max_ms: 2,
+            shutdown_drain_timeout_secs: 1,
+        };
+        let metrics = Arc::new(IngestionMetrics::default());
+        let store_port: Arc<dyn PersonalSecretaryStoreT> = store.clone();
+        let (queue, worker) = spawn_ingestion_worker(
+            store_port,
+            ConnectionEpochId::new("epoch-load-20k").unwrap(),
+            config,
+            None,
+            None,
+            0,
+            None,
+            Some(Arc::clone(&metrics)),
+        );
+
+        let mut enqueued = 0_u64;
+        let mut backpressured = 0_u64;
+        for index in 0..TOTAL_MESSAGES {
+            match queue.try_enqueue(message(&format!("load-{index:05}"))) {
+                Ok(()) => enqueued += 1,
+                Err(IngestionEnqueueError::Full) => backpressured += 1,
+                Err(IngestionEnqueueError::Closed) => panic!("worker queue closed during burst"),
+            }
+        }
+        assert_eq!(enqueued, QUEUE_CAPACITY as u64);
+        assert_eq!(enqueued + backpressured, TOTAL_MESSAGES as u64);
+        drop(queue);
+
+        let report = worker.await.unwrap();
+        let snapshot = metrics.snapshot();
+        assert_eq!(report.accepted, QUEUE_CAPACITY as u64);
+        assert_eq!(report.dropped, backpressured);
+        assert_eq!(
+            report.batches_committed,
+            (QUEUE_CAPACITY / BATCH_SIZE) as u64
+        );
+        assert_eq!(snapshot.high_watermark, QUEUE_CAPACITY as u64);
+        assert_eq!(snapshot.queue_depth, 0);
+        assert_eq!(snapshot.in_flight, 0);
+        assert_eq!(snapshot.committed, QUEUE_CAPACITY as u64);
+        assert_eq!(
+            store.max_batch_size.load(Ordering::Acquire),
+            BATCH_SIZE as u64,
+            "单事务微批不得超过配置上限"
+        );
+        assert_eq!(
+            store.insert_attempts.load(Ordering::Acquire),
+            (QUEUE_CAPACITY / BATCH_SIZE) as u64
+        );
+    }
+
     #[tokio::test]
     async fn queue_depth_high_watermark_tracked_across_enqueue_and_drain() {
         // 100 条消息，batch_size=50，至少 2 批。每批预填正确数量的结果。
@@ -1705,6 +1791,7 @@ mod tests {
             results: Mutex::new(VecDeque::from(results)),
             errors: Mutex::new(VecDeque::new()),
             insert_attempts: AtomicU64::new(0),
+            max_batch_size: AtomicU64::new(0),
         });
         let config = IngestionConfig {
             queue_capacity: 256,
