@@ -266,7 +266,7 @@ async fn run_scenario(db: DatabaseConnection) {
     ))
     .await
     .expect("remove THR-010 migration record for replay");
-    common::try_apply_qqbot_migrations(&db)
+    common::try_replay_folded_migration(&db, "20260806_qqbot_thread_semantic_reconfirmation.sql")
         .await
         .expect("THR-010 migration must be safely replayable");
 }

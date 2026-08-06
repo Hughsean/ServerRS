@@ -72,6 +72,19 @@ pub async fn try_apply_qqbot_migrations(db: &DatabaseConnection) -> Result<(), S
     .await
 }
 
+pub async fn try_replay_folded_migration(
+    db: &DatabaseConnection,
+    migration_name: &str,
+) -> Result<(), String> {
+    qqbot_migrations::try_replay_folded_migration(
+        db,
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/qqbot-server/database/migrations"),
+        migration_name,
+    )
+    .await
+}
+
 #[allow(dead_code)] // 仅被部分 MySQL 测试 target 引用（cmd009/project_commitment）
 pub async fn drop_schema(db: &DatabaseConnection, schema: &str) {
     db.execute_unprepared(&format!("DROP DATABASE IF EXISTS `{schema}`"))

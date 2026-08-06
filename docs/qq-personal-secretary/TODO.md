@@ -49,6 +49,9 @@
   QQBot 五个 crate 严格 Clippy、领域 293/293、NapCat 71/71、QQBot Server 198 passed/3 ignored、
   workspace boundaries 24/24；Docker MySQL 保留的 19 个测试目标共 52/52 真实通过，所有随机
   `qqbot_accept_evt007_*` schema 均已清理。
+- 当前数据库基线门禁：2026-08-07 00:16 Baseline v2 聚焦测试 1/1、迁移重放相关 MySQL
+  27/27、QQBot Server 203 passed/3 ignored、workspace boundaries 24/24、相关 crate 严格 Clippy、
+  workspace 全目标编译和 OPS-007 均通过；OPS-007 源/恢复对象均为 85，随机 schema 无残留。
 
 ## 1. 立即执行顺序
 
@@ -78,6 +81,12 @@
 - [x] `DB-BASELINE-VERIFY` 已验证旧 33 迁移链与新基线的归一化 `SHOW CREATE` 语义哈希一致；
   空库加载、重复加载、完整旧链采用、部分结构拒绝、Recall WAL 恢复和 workspace boundaries
   均真实通过。4 个本切片随机 schema 已精确清理，未触碰既有业务库或其他测试库。
+- [x] `DB-BASELINE-002` 将 Baseline v1 与其后的 8 个增量合并为
+  `baseline/20260806_qqbot_schema_v2.sql`（83 表 + 2 View）。原 v1 与 8 个已部署增量完整移入
+  `archive/pre_v2`；活动 `migrations/` 只接受 v2 后增量，避免新库重复执行已折叠 DDL。
+- [x] `DB-BASELINE-002-VERIFY` 隔离 MySQL 已覆盖空库 v2、重复加载、v1 + 8 归档增量升级、
+  完整 33 条旧迁移记录采用、归一化 `SHOW CREATE` 等价和部分/无管理结构 fail-closed。升级只由
+  测试加载器服务随机 `qqbot_accept_*` schema；未改写现有业务 schema。
 
 - [x] `MEM-011` 完成结构化记忆候选生产、持久化、Owner 查询/批准/拒绝、来源引用、版本 fencing、
   Suspend/Resume、Effect Receipt 与响应产物；确认不会把未审批候选当成长期事实。

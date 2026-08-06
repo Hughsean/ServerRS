@@ -697,8 +697,8 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
     );
 
     let qqbot_database = workspace_root().join("apps/qqbot-server/database");
-    let baseline = qqbot_database.join("baseline/20260803_qqbot_schema_v1.sql");
-    assert!(baseline.is_file(), "QQBot Schema Baseline v1 is missing");
+    let baseline = qqbot_database.join("baseline/20260806_qqbot_schema_v2.sql");
+    assert!(baseline.is_file(), "QQBot Schema Baseline v2 is missing");
     let baseline_sql = fs::read_to_string(baseline).expect("QQBot baseline must be readable");
     for required_object in [
         "secretary_accounts",
@@ -720,6 +720,36 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
     assert_eq!(
         archived_migrations, 33,
         "QQBot pre-v1 archive must retain all 33 historical migrations"
+    );
+    let pre_v2_files = fs::read_dir(qqbot_database.join("archive/pre_v2"))
+        .expect("QQBot pre-v2 migration archive must be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        pre_v2_files,
+        BTreeSet::from([
+            "20260803_qqbot_schema_v1.sql".into(),
+            "20260804_qqbot_reply_reconcile.sql".into(),
+            "20260805_qqbot_realtime_spool_recovery.sql".into(),
+            "20260806_qqbot_artifact_reprocess.sql".into(),
+            "20260806_qqbot_non_message_history_signals.sql".into(),
+            "20260806_qqbot_notification_reconciliation_seed.sql".into(),
+            "20260806_qqbot_thread_decision_revision_paging.sql".into(),
+            "20260806_qqbot_thread_link_structured_references.sql".into(),
+            "20260806_qqbot_thread_semantic_reconfirmation.sql".into(),
+            "README.md".into(),
+        ]),
+        "QQBot pre-v2 archive must contain exactly Baseline v1 and its eight folded migrations"
+    );
+    let active_migrations = fs::read_dir(qqbot_database.join("migrations"))
+        .expect("QQBot post-v2 migrations directory must be readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
+        .count();
+    assert_eq!(
+        active_migrations, 0,
+        "folded v1-to-v2 SQL must not remain in the active migrations directory"
     );
     assert!(
         qqbot_database.join("migrations/README.md").is_file(),

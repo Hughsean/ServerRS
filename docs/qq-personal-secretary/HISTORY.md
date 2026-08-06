@@ -5,6 +5,11 @@
 
 ## 当前阶段
 
+- **本轮（QQBot Schema Baseline v2）**：将 v1 和 8 个已部署增量折叠为 83 表 + 2 View 的
+  `20260806_qqbot_schema_v2.sql`。原 v1/增量完整归档到 `pre_v2`，活动迁移目录从 v2 重新起算；
+  测试加载器对新库只执行 v2，对 v1 或完整 33 记录旧库补齐归档增量后登记采用 v2，对部分结构
+  fail-closed。真实 MySQL 已通过基线 1/1、相关迁移回归 27/27 和 OPS-007；相关 crate 严格 Clippy、
+  workspace 全目标编译、QQBot Server 203 passed/3 ignored、架构 24/24。未修改业务 schema。
 - **本轮（DeepSeek 官方 Provider）**：`[llm]` 新增显式 `deepseek` Provider，端点固定为官方
   `https://api.deepseek.com/v1`，使用独立 `QQBOT_DEEPSEEK_API_KEY`/本地密钥文件并在缺失时
   fail-closed；自定义端点和 Ollama 专用推理模式均被拒绝。现有 OpenAI-compatible/Ollama 配置兼容，

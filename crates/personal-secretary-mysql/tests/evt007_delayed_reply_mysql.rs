@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{isolated_db, scalar_string, scalar_u64, try_apply_qqbot_migrations};
+use common::{isolated_db, scalar_string, scalar_u64};
 use personal_secretary::{
     ClaimKind, ContentSegment, ConversationKind, ConversationRef, DeterministicThreadPlanner,
     DeterministicThreadPolicy, InboundMessageEnvelope, MediaKind, MessageSource, RichContentKind,
@@ -2764,7 +2764,7 @@ async fn candidate_queue_bounded_non_reply_excluded_mainline_cleanup() {
         )
         .await
         .map_err(|e| format!("delete migration record failed: {e}"))?;
-        try_apply_qqbot_migrations(&db)
+        common::try_replay_folded_migration(&db, "20260804_qqbot_reply_reconcile.sql")
             .await
             .map_err(|e| format!("positive migration replay failed: {e}"))?;
         // 重放后仍无候选行（所有 pending 已解析）。
@@ -2805,9 +2805,10 @@ async fn candidate_queue_bounded_non_reply_excluded_mainline_cleanup() {
         )
         .await
         .map_err(|e| format!("install wrong reconcile index order failed: {e}"))?;
-        let index_error = try_apply_qqbot_migrations(&db)
-            .await
-            .expect_err("wrong reconcile index order must fail the complete migration");
+        let index_error =
+            common::try_replay_folded_migration(&db, "20260804_qqbot_reply_reconcile.sql")
+                .await
+                .expect_err("wrong reconcile index order must fail the complete migration");
         assert_migration_schema_error(&index_error, 3, "索引顺序");
         assert_eq!(
             reply_reconcile_migration_record_count(&db).await,
@@ -2833,9 +2834,10 @@ async fn candidate_queue_bounded_non_reply_excluded_mainline_cleanup() {
         )
         .await
         .map_err(|e| format!("install wrong reconcile FK rule failed: {e}"))?;
-        let fk_error = try_apply_qqbot_migrations(&db)
-            .await
-            .expect_err("wrong reconcile FK rule must fail the complete migration");
+        let fk_error =
+            common::try_replay_folded_migration(&db, "20260804_qqbot_reply_reconcile.sql")
+                .await
+                .expect_err("wrong reconcile FK rule must fail the complete migration");
         assert_migration_schema_error(&fk_error, 4, "FK 删除规则");
         assert_eq!(
             reply_reconcile_migration_record_count(&db).await,
@@ -2859,9 +2861,10 @@ async fn candidate_queue_bounded_non_reply_excluded_mainline_cleanup() {
         )
         .await
         .map_err(|e| format!("restore FK and install wrong column length failed: {e}"))?;
-        let column_error = try_apply_qqbot_migrations(&db)
-            .await
-            .expect_err("wrong reconcile column length must fail the complete migration");
+        let column_error =
+            common::try_replay_folded_migration(&db, "20260804_qqbot_reply_reconcile.sql")
+                .await
+                .expect_err("wrong reconcile column length must fail the complete migration");
         assert_migration_schema_error(&column_error, 2, "列结构");
         assert_eq!(
             reply_reconcile_migration_record_count(&db).await,

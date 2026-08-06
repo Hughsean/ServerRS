@@ -1,17 +1,29 @@
 //! QQBot MySQL 测试共用 Schema 加载器。
 //!
-//! 全新 schema 只执行 Baseline v1 与其后的增量迁移。压缩前已完整应用 33 个历史迁移的
-//! schema 会在验证迁移记录完整后登记为已采用 Baseline；部分迁移或无记录的既有业务表会
-//! fail-closed，避免在未知结构上误跑基线。
+//! 全新 schema 只执行 Baseline v2 与其后的增量迁移。Baseline v1 或压缩前完整 33 迁移链
+//! 会从 pre-v2 归档补齐折叠迁移后登记采用 v2；部分迁移或无记录的既有业务表会 fail-closed，
+//! 避免在未知结构上误跑基线。
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
 const MIGRATION_RECORDS_TABLE: &str = "qqbot_test_schema_migrations";
-const BASELINE_FILE_NAME: &str = "20260803_qqbot_schema_v1.sql";
-const BASELINE_RECORD_NAME: &str = "baseline:20260803_qqbot_schema_v1.sql";
+const CURRENT_BASELINE_FILE_NAME: &str = "20260806_qqbot_schema_v2.sql";
+const CURRENT_BASELINE_RECORD_NAME: &str = "baseline:20260806_qqbot_schema_v2.sql";
+const LEGACY_BASELINE_RECORD_NAME: &str = "baseline:20260803_qqbot_schema_v1.sql";
 static MIGRATION_LOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+const FOLDED_V1_TO_V2_MIGRATIONS: &[&str] = &[
+    "20260804_qqbot_reply_reconcile.sql",
+    "20260805_qqbot_realtime_spool_recovery.sql",
+    "20260806_qqbot_artifact_reprocess.sql",
+    "20260806_qqbot_non_message_history_signals.sql",
+    "20260806_qqbot_notification_reconciliation_seed.sql",
+    "20260806_qqbot_thread_decision_revision_paging.sql",
+    "20260806_qqbot_thread_link_structured_references.sql",
+    "20260806_qqbot_thread_semantic_reconfirmation.sql",
+];
 
 const PRE_V1_MIGRATIONS: &[&str] = &[
     "20260723_personal_secretary_ingestion.sql",
@@ -73,7 +85,7 @@ pub async fn try_apply_qqbot_migrations(
             migrations_dir.display()
         )
     });
-    ensure_baseline(db, database_dir).await;
+    try_ensure_baseline(db, database_dir).await?;
 
     let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(migrations_dir)
         .map_err(|error| format!("failed to read migrations directory: {error}"))?
@@ -98,35 +110,86 @@ pub async fn try_apply_qqbot_migrations(
     Ok(())
 }
 
-async fn ensure_baseline(db: &DatabaseConnection, database_dir: &std::path::Path) {
-    if migration_is_applied(db, BASELINE_RECORD_NAME).await {
-        return;
+/// 显式重放一个已折叠迁移，仅供迁移幂等和结构漂移负向测试使用。
+#[allow(dead_code)]
+pub async fn try_replay_folded_migration(
+    db: &DatabaseConnection,
+    migrations_dir: &std::path::Path,
+    migration_name: &str,
+) -> Result<(), String> {
+    let _guard = MIGRATION_LOAD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    ensure_migration_records_table(db).await;
+    if !FOLDED_V1_TO_V2_MIGRATIONS.contains(&migration_name) {
+        return Err(format!(
+            "migration is not part of the v1-to-v2 archive: {migration_name}"
+        ));
+    }
+    let database_dir = migrations_dir.parent().ok_or_else(|| {
+        format!(
+            "migrations directory has no database parent: {}",
+            migrations_dir.display()
+        )
+    })?;
+    try_apply_sql_file(
+        db,
+        &database_dir.join("archive/pre_v2").join(migration_name),
+    )
+    .await?;
+    if !migration_is_applied(db, migration_name).await {
+        try_record_migration(db, migration_name).await?;
+    }
+    Ok(())
+}
+
+async fn try_ensure_baseline(
+    db: &DatabaseConnection,
+    database_dir: &std::path::Path,
+) -> Result<(), String> {
+    if migration_is_applied(db, CURRENT_BASELINE_RECORD_NAME).await {
+        return Ok(());
     }
 
+    let has_legacy_baseline = migration_is_applied(db, LEGACY_BASELINE_RECORD_NAME).await;
+
     let applied_legacy = count_applied_legacy_migrations(db).await;
-    if applied_legacy == PRE_V1_MIGRATIONS.len() {
-        // 已完成旧链的数据库与 Baseline v1 结构等价，只登记采用关系，不重放任何 DDL。
-        record_migration(db, BASELINE_RECORD_NAME).await;
-        return;
+    if has_legacy_baseline || applied_legacy == PRE_V1_MIGRATIONS.len() {
+        apply_folded_v1_to_v2_migrations(db, database_dir).await?;
+        try_record_migration(db, CURRENT_BASELINE_RECORD_NAME).await?;
+        return Ok(());
     }
 
     let object_count = secretary_object_count(db).await;
-    assert_eq!(
-        object_count,
-        0,
-        "QQBot schema contains {object_count} secretary_* objects but only {applied_legacy}/{} pre-v1 migrations; refusing to apply baseline over a partial or unmanaged schema",
-        PRE_V1_MIGRATIONS.len()
-    );
-    assert_eq!(
-        applied_legacy,
-        0,
-        "empty QQBot schema unexpectedly contains {applied_legacy}/{} pre-v1 migration records",
-        PRE_V1_MIGRATIONS.len()
-    );
+    if object_count != 0 || applied_legacy != 0 {
+        return Err(format!(
+            "QQBot schema contains {object_count} secretary_* objects and {applied_legacy}/{} pre-v1 migration records without an authoritative baseline; refusing to apply v2 over a partial or unmanaged schema",
+            PRE_V1_MIGRATIONS.len()
+        ));
+    }
 
-    let baseline_path = database_dir.join("baseline").join(BASELINE_FILE_NAME);
-    apply_sql_file(db, &baseline_path).await;
-    record_migration(db, BASELINE_RECORD_NAME).await;
+    let baseline_path = database_dir
+        .join("baseline")
+        .join(CURRENT_BASELINE_FILE_NAME);
+    try_apply_sql_file(db, &baseline_path).await?;
+    try_record_migration(db, CURRENT_BASELINE_RECORD_NAME).await?;
+    Ok(())
+}
+
+async fn apply_folded_v1_to_v2_migrations(
+    db: &DatabaseConnection,
+    database_dir: &std::path::Path,
+) -> Result<(), String> {
+    let archive_dir = database_dir.join("archive/pre_v2");
+    for migration_name in FOLDED_V1_TO_V2_MIGRATIONS {
+        if migration_is_applied(db, migration_name).await {
+            continue;
+        }
+        try_apply_sql_file(db, &archive_dir.join(migration_name)).await?;
+        try_record_migration(db, migration_name).await?;
+    }
+    Ok(())
 }
 
 async fn assert_reconciliation_lease_seeded(db: &DatabaseConnection) {
@@ -145,12 +208,6 @@ async fn assert_reconciliation_lease_seeded(db: &DatabaseConnection) {
         seeded,
         "QQBot baseline must seed the legacy Owner Outbox reconciliation lease"
     );
-}
-
-async fn apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) {
-    try_apply_sql_file(db, path)
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 async fn try_apply_sql_file(db: &DatabaseConnection, path: &std::path::Path) -> Result<(), String> {
@@ -192,12 +249,6 @@ async fn ensure_migration_records_table(db: &DatabaseConnection) {
     ))
     .await
     .unwrap_or_else(|error| panic!("failed to create migration records table: {error}"));
-}
-
-async fn record_migration(db: &DatabaseConnection, migration_name: &str) {
-    try_record_migration(db, migration_name)
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 async fn try_record_migration(db: &DatabaseConnection, migration_name: &str) -> Result<(), String> {

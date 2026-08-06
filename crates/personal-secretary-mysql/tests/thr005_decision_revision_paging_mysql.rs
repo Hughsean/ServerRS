@@ -220,7 +220,7 @@ async fn run_scenario(db: DatabaseConnection) {
     ))
     .await
     .expect("remove THR-005 migration record for replay");
-    common::try_apply_qqbot_migrations(&db)
+    common::try_replay_folded_migration(&db, MIGRATION_NAME)
         .await
         .expect("THR-005 index rebuild must be safely replayable");
     verify_revision_index(&db).await;
