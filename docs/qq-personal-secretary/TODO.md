@@ -27,7 +27,8 @@
   epoch/WAL 并 fail-closed，启动先按账号领取、续租、replay、checkpoint，再原子结束 epoch、创建或
   复用 uncertain Gap。健康快照只暴露有界数值与类型化错误。
 - 当前架构判断：不可变 `SourceEvent`、内容信封和语义投影方向保持不变，不进行全量重写。
-- 下一步：继续收口 `CMD-003/CMD-004` 的本地可验证部分。
+- 下一步：继续可独立执行的 NapCat 实机验证与剩余外部事项；需要 QQ 开放平台新凭据、实际断网/
+  休眠或产品范围扩展的事项继续明确保留为 `EXTERNAL`/`DEFERRED`。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG` 等待真实
@@ -442,7 +443,10 @@
   OwnerCommand、Action lease 和完整 proposal；重复 Effect、碰撞、跨账号、过期租约与 Binding
   撤销均 fail-closed。L3 `SendOwnerMessage` 的真实 QQ 投递仍属于 `CMD-002/EXTERNAL`，不在
   本地收口范围内。
-- [ ] `CMD-004` 补真实自然语言到现有类型化 Action 的关键映射质量，不新增不受约束的自由工具。
+- [x] `CMD-004` 已为无需实体、时间或版本解析的高频中文只读命令增加严格完整短语路由，覆盖秘书
+  状态、待处理事项、近期安排、通知规则、长期记忆、待审批记忆、线程关联候选、项目与承诺。
+  所有结果仍生成现有类型化 Proposal 并经过 Action Graph/白名单/Receipt；混合写指令、带目标
+  查询、SQL/发送意图、Replan 和已有工作上下文不命中确定性路由，继续交由受约束 Planner 或澄清。
 - [x] `CMD-008` 已接入线程拆分/合并的 QQ Owner 自然语言入口：Planner 只接受已登记的
   `thread_ref`/`event_ref`，L2 Gate 继续复用现有 Suspend/Resume；Effect 阶段由线程变更
   Store 重新读取完整影响预览，并在同一 OwnerBinding、账号和幂等 Effect 边界内提交。

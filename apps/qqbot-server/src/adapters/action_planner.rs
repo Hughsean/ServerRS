@@ -22,7 +22,8 @@ use personal_secretary::{
     MemoryPayload, OpenQuestionId, PendingOwnerWorkCursor, PlannerError, PlannerInput,
     PlannerOutput, PlatformIdentityKind, QueryEffectNextCursor, ResponseExpectationControlTarget,
     ResponseExpectationId, SecretaryAction, SecretaryActionProposal, SourceEventId, SystemClock,
-    ThreadDecisionId, ThreadSearchCursor, ThreadStatus, validate_planner_output,
+    ThreadDecisionId, ThreadSearchCursor, ThreadStatus, validate_planner_input,
+    validate_planner_output,
 };
 
 use crate::llm::{LlmClientError, OpenAiCompatibleClient, StructuredLlmClientT};
@@ -333,9 +334,100 @@ impl LlmActionPlanner {
     }
 }
 
+/// CMD-004：对无需实体解析、时间解析或版本读取的高频中文只读命令提供确定性路由。
+///
+/// 这里刻意只接受完整短语，不做子串、模糊或关键词评分：追加指令、写命令、带目标的查询、
+/// Replan 和任何已有工作上下文都继续交给受约束的 LLM Planner。返回值仍是标准
+/// `SecretaryActionProposal`，后续继续经过 Action Graph、白名单和 Receipt 边界。
+fn deterministic_readonly_intent(
+    input: &PlannerInput,
+) -> Result<Option<PlannerOutput>, PlannerError> {
+    if input.replan_round != 0 || !input.observations.is_empty() || input.working_context.is_some()
+    {
+        return Ok(None);
+    }
+
+    let command = canonical_short_command(&input.command.normalized_text);
+    let action = match command.as_str() {
+        "查看秘书状态" | "秘书状态" | "查看系统状态" | "系统状态" => {
+            SecretaryAction::GetSecretaryStatus
+        }
+        "查看待处理事项" | "列出待处理事项" | "有哪些待处理事项" => {
+            SecretaryAction::ListPendingOwnerWork {
+                limit: 10,
+                cursor: None,
+            }
+        }
+        "查看未来24小时安排" | "未来24小时有什么安排" | "列出未来24小时安排" => {
+            SecretaryAction::ListUpcomingItems {
+                horizon_secs: 86_400,
+            }
+        }
+        "查看未来七天安排" | "未来七天有什么安排" | "列出未来七天安排" => {
+            SecretaryAction::ListUpcomingItems {
+                horizon_secs: 7 * 86_400,
+            }
+        }
+        "查看通知规则" | "列出通知规则" | "有哪些通知规则" => {
+            SecretaryAction::ListNotificationPolicies { limit: 20 }
+        }
+        "查看长期记忆" | "列出长期记忆" | "你记住了什么" => {
+            SecretaryAction::ListMemoryFacts { limit: 20 }
+        }
+        "查看待审批记忆" | "列出待审批记忆" | "有哪些待审批记忆" => {
+            SecretaryAction::ListMemoryCandidates {
+                status: Some(MemoryCandidateStatus::Proposed),
+                kind: None,
+                limit: 20,
+            }
+        }
+        "查看线程关联候选" | "列出线程关联候选" | "有哪些线程关联候选" => {
+            SecretaryAction::ListThreadLinkCandidates { limit: 20 }
+        }
+        "查看项目列表" | "列出所有项目" | "有哪些项目" => {
+            SecretaryAction::ListProjects { limit: 20 }
+        }
+        "查看承诺列表" | "列出所有承诺" | "有哪些承诺" => {
+            SecretaryAction::ListCommitments {
+                status: None,
+                due_since_unix_secs: None,
+                due_until_unix_secs: None,
+                promisor: None,
+                beneficiary: None,
+                limit: 20,
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    let proposal = SecretaryActionProposal::new(
+        action,
+        "高置信度中文只读意图",
+        vec![input.command.source_event_id.clone()],
+        None,
+    )
+    .map_err(|error| PlannerError::InvalidOutput(error.to_string()))?;
+    let output = PlannerOutput::Proposal(proposal);
+    validate_planner_output(&output)?;
+    Ok(Some(output))
+}
+
+fn canonical_short_command(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch| matches!(ch, '。' | '！' | '？' | '!' | '?' | '，' | ','))
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
+}
+
 #[async_trait]
 impl ActionPlannerT for LlmActionPlanner {
     async fn plan(&self, input: &PlannerInput) -> Result<PlannerOutput, PlannerError> {
+        validate_planner_input(input)?;
+        if let Some(output) = deterministic_readonly_intent(input)? {
+            return Ok(output);
+        }
         // 构建临时引用映射和 LLM 视图
         let (
             event_views,
@@ -2110,7 +2202,8 @@ mod tests {
     use super::*;
     use personal_secretary::{
         AgentEventView, ContentTrustLevel, ConversationKind, ConversationRef, MessageRole,
-        MessageSource, PlannerCommandEvent, SourceAccountRef, SourceEventId, ThreadActorRef,
+        MessageSource, PlannerCommandEvent, SecretaryToolKind, SourceAccountRef, SourceEventId,
+        ThreadActorRef,
     };
     use serde_json::json;
     use std::sync::Mutex;
@@ -2201,6 +2294,87 @@ mod tests {
             is_local_loopback: false,
         };
         (planner, client)
+    }
+
+    #[tokio::test]
+    async fn cmd004_high_confidence_chinese_readonly_intents_are_deterministic() {
+        let cases = [
+            ("查看秘书状态。", SecretaryToolKind::GetSecretaryStatus),
+            (
+                " 有哪些待处理事项？ ",
+                SecretaryToolKind::ListPendingOwnerWork,
+            ),
+            (
+                "未来 24 小时有什么安排",
+                SecretaryToolKind::ListUpcomingItems,
+            ),
+            ("列出未来七天安排", SecretaryToolKind::ListUpcomingItems),
+            (
+                "有哪些通知规则",
+                SecretaryToolKind::ListNotificationPolicies,
+            ),
+            ("你记住了什么？", SecretaryToolKind::ListMemoryFacts),
+            ("查看待审批记忆", SecretaryToolKind::ListMemoryCandidates),
+            (
+                "查看线程关联候选",
+                SecretaryToolKind::ListThreadLinkCandidates,
+            ),
+            ("有哪些项目", SecretaryToolKind::ListProjects),
+            ("有哪些承诺", SecretaryToolKind::ListCommitments),
+        ];
+
+        for (command, expected_kind) in cases {
+            let (planner, client) =
+                planner_with_response(json!({"kind":"no_action","reason":"不应调用模型"}));
+            let mut planner_input = input();
+            planner_input.command.normalized_text = command.into();
+            let output = planner.plan(&planner_input).await.unwrap();
+            let PlannerOutput::Proposal(proposal) = output else {
+                panic!("{command} 应映射为类型化 Proposal");
+            };
+            assert_eq!(proposal.action.kind(), expected_kind, "command={command}");
+            assert_eq!(
+                proposal.action.kind().policy().risk,
+                personal_secretary::SecretaryRiskLevel::L0ReadOnly
+            );
+            assert_eq!(
+                proposal.source_event_ids,
+                vec![planner_input.command.source_event_id.clone()]
+            );
+            assert!(proposal.idempotency_key.is_none());
+            assert!(client.calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn cmd004_deterministic_route_never_guesses_writes_targets_or_replan() {
+        let fallback_commands = [
+            "查看秘书状态并删除所有记忆",
+            "把提醒改到明天",
+            "批准这个记忆",
+            "查询张三负责什么",
+            "查看项目列表，然后发送给群里",
+            "执行 SQL 查看秘书状态",
+        ];
+        for command in fallback_commands {
+            let (planner, client) =
+                planner_with_response(json!({"kind":"no_action","reason":"保守处理"}));
+            let mut planner_input = input();
+            planner_input.command.normalized_text = command.into();
+            let output = planner.plan(&planner_input).await.unwrap();
+            assert!(matches!(output, PlannerOutput::NoAction { .. }));
+            assert_eq!(client.calls.lock().unwrap().len(), 1, "command={command}");
+        }
+
+        let (planner, client) =
+            planner_with_response(json!({"kind":"no_action","reason":"继续 Replan"}));
+        let mut replan = input();
+        replan.command.normalized_text = "查看秘书状态".into();
+        replan.replan_round = 1;
+        replan.remaining_query_budget = 1;
+        let output = planner.plan(&replan).await.unwrap();
+        assert!(matches!(output, PlannerOutput::NoAction { .. }));
+        assert_eq!(client.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
