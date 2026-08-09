@@ -28,6 +28,9 @@ Baseline v2 包含 83 张 `secretary_*` 表和 2 个 View，只保存最终 DDL�
 - `archive/pre_v1/` 和 `archive/pre_v2/` 永不参与全新数据库加载，也不得用于生产环境选择性修表。
 - 后续每个结构变化继续新增一个小型增量 SQL；不要持续改写 Baseline v2。
 
+根目录 Compose 使用一次性 `qqbot-migrate` 服务维护生产侧 `qqbot_schema_migrations` 账本；MySQL
+健康且全部未登记增量成功后才启动 QQBot。迁移失败会阻止业务容器启动，不会跳过失败项或删除数据。
+
 测试加载器会用 `qqbot_test_schema_migrations` 记录 Baseline 和后续增量，只服务随机隔离测试
 schema。生产运行仍只读取 `QQBOT_DATABASE_URL` 或 `qqbot.toml` 的 `[database]`，数据库中不保存
 Token、App Secret 或数据库 URL。

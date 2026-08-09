@@ -31,7 +31,7 @@ reasoning_mode = "provider_default"
 # 也可取消下一行注释，改用对应 Provider 的本地密钥文件。密钥不得写入 TOML。
 # api_key_file = "D:/private/qqbot-llm-api-key.txt"
 connect_timeout_secs = 10
-request_timeout_secs = 60
+request_timeout_secs = 20
 max_input_chars = 60000
 max_output_tokens = 2000
 max_response_bytes = 1048576
@@ -50,7 +50,9 @@ retry_max_ms = 5000
 shutdown_drain_timeout_secs = 10
 
 [backfill]
-enabled = true
+enabled = false
+# 北京时间自然日；显式启用 Backfill 时必填。当天 00:00:00 起的数据允许入库。
+earliest_date = "2026-03-01"
 page_size = 100
 max_pages_per_scope = 20
 max_events_per_run = 2000
@@ -115,7 +117,7 @@ retry_initial_ms = 500
 retry_max_ms = 10000
 
 [follow_up]
-enabled = true
+enabled = false
 scan_interval_ms = 30000
 horizon_secs = 604800
 # 外部联系人开放问题在未见本人回复多久后形成 Owner 提醒候选（默认 4 小时）。
@@ -129,7 +131,7 @@ retry_max_ms = 60000
 [agenda]
 # 仅为已到期且仍为当前版本的 Owner Agenda 生成统一策略 Candidate。
 # 只有 Notification Policy 判定为 Remind 后才会写入 Outbox。
-enabled = true
+enabled = false
 scan_interval_ms = 30000
 batch_size = 200
 retry_initial_ms = 1000
@@ -137,7 +139,7 @@ retry_max_ms = 60000
 
 [notification_policy]
 # 统一领取 Evaluation Request 并执行纯策略求值；不直接调用 QQ transport。
-enabled = true
+enabled = false
 worker_id = "qqbot-notification-policy-v1"
 batch_size = 100
 lease_secs = 60
@@ -195,8 +197,17 @@ owner_openid = ""
 reconnect_initial_ms = 1000
 reconnect_max_ms = 60000
 notification_lease_secs = 60
+lifecycle_notifications = true
+proactive_notifications = false
+
+[admin]
+# Docker 会通过环境变量启用并绑定容器端口；非容器运行默认只监听回环地址。
+enabled = false
+bind = "127.0.0.1"
+port = 8080
+session_ttl_secs = 28800
 
 [whitelist]
-# 群白名单 JSON 文件路径。不配则不启用白名单（处理所有群消息）。
+# 群白名单 JSON 文件路径。未配置、文件缺失或空数组都拒绝全部群；私聊始终观察。
 # 文件格式：{"groups": [群号1, 群号2, ...]}
-# whitelist_file = "whitelist/group_whitelist.json"
+whitelist_file = "data/group-whitelist.json"

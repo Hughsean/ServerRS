@@ -18,6 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+STOPSIGNAL SIGTERM
 COPY --from=builder /build/target/release/qqbot-server /usr/local/bin/qqbot-server
 COPY qqbot-server/config/qqbot.example.toml /app/config/qqbot.toml
 COPY docker/qqbot-entrypoint.sh /usr/local/bin/qqbot-entrypoint

@@ -1,7 +1,6 @@
 # Baseline v2 之后的增量迁移
 
-本目录只放 `20260806_qqbot_schema_v2.sql` 之后的新迁移，并按文件名字典序执行。当前没有
-v2 后增量 SQL。
+本目录只放 `20260806_qqbot_schema_v2.sql` 之后的新迁移，并按文件名字典序执行。
 
 - 文件名使用 `YYYYMMDD_qqbot_<meaning>.sql`；同一天存在依赖时增加可排序序号。
 - 禁止把 `archive/pre_v1` 或 `archive/pre_v2` 中的迁移移回本目录，禁止修改已部署的增量文件。
