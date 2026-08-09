@@ -83,6 +83,8 @@
   `degraded`，实机明细确认原因为 13 个 uncertain Gap、5 个 backfilling Gap，原因码
   `backfill_history_unprovable`，不是 LLM、MySQL 或 WebSocket。Compose 日志改用项目专用
   `QQBOT_RUST_LOG`，稳定健康状态不再每 30 秒重复 WARN，周期明细保留为 INFO。
+- 当前提交收口：2026-08-09 20:40 将既有 Owner 回复、Owner observation、Backfill 截止日期、
+  Baseline v2 与架构边界测试独立归档为聚焦测试提交；不恢复旧验收矩阵，也不把测试数量作为完成目标。
 
 ## 1. 立即执行顺序
 

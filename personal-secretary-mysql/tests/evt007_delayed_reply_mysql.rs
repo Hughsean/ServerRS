@@ -1712,6 +1712,7 @@ async fn backfill_use_case_resolves_delayed_reply() {
             max_pages_per_scope: 20,
             max_events_per_run: 2000,
             max_concurrency: 2,
+            earliest_occurred_at_unix_secs: None,
             lease_secs: 60,
             retry_initial_ms: 1,
             retry_max_ms: 2,

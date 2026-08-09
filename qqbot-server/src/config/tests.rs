@@ -47,6 +47,31 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
     assert!(!config.llm.enabled);
     assert_eq!(config.llm.provider, LlmProvider::OpenAiCompatible);
     assert_eq!(config.llm.base_url, "http://127.0.0.1:11434/v1");
+    assert!(!config.follow_up.enabled);
+    assert!(!config.agenda.enabled);
+    assert!(!config.notification_policy.enabled);
+    assert!(!config.qq_open_platform.proactive_notifications);
+}
+
+#[test]
+fn proactive_owner_notifications_are_explicit_opt_in() {
+    let config = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[qq_open_platform]
+proactive_notifications = true
+"#,
+    )
+    .unwrap();
+
+    assert!(config.qq_open_platform.proactive_notifications);
 }
 
 #[test]
@@ -192,6 +217,33 @@ max_candidates_per_kind = 10
     assert!(config.llm.enabled);
     assert_eq!(config.llm.model, "qwen3:8b");
     assert_eq!(config.llm.reasoning_mode, LlmReasoningMode::QwenNoThink);
+}
+
+#[test]
+fn rejects_llm_request_timeout_that_can_outlive_action_graph() {
+    let error = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[llm]
+enabled = true
+model = "qwen3:8b"
+request_timeout_secs = 30
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("before the Action Graph deadline")
+    );
 }
 
 #[test]
@@ -554,11 +606,75 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
     )
     .unwrap();
 
-    assert!(config.backfill.enabled);
+    assert!(!config.backfill.enabled);
+    assert!(config.backfill.earliest_date.is_none());
     assert_eq!(config.backfill.page_size, 100);
     assert_eq!(config.backfill.max_concurrency, 2);
     // 默认配置必须能构造出合法的有界预算。
     assert!(config.backfill.budget().is_ok());
+}
+
+#[test]
+fn enabled_backfill_requires_a_valid_shanghai_earliest_date() {
+    let missing = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+enabled = true
+"#,
+    )
+    .unwrap_err();
+    assert!(missing.to_string().contains("earliest_date is required"));
+
+    let invalid = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+enabled = true
+earliest_date = "03/01/2026"
+"#,
+    )
+    .unwrap_err();
+    assert!(invalid.to_string().contains("YYYY-MM-DD"));
+
+    let valid = parse(
+        r#"
+[napcat]
+ws_url = "ws://127.0.0.1:6700"
+http_base_url = "http://127.0.0.1:3000"
+self_qq_id = 12345
+
+[database]
+url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
+
+[backfill]
+enabled = true
+earliest_date = "2026-03-01"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        valid
+            .backfill
+            .budget()
+            .unwrap()
+            .earliest_occurred_at_unix_secs,
+        Some(1_772_294_400)
+    );
 }
 
 #[test]
@@ -863,6 +979,7 @@ fn backfill_env_overrides_only_use_qqbot_prefix() {
     // SAFETY: 单线程单元测试，仅在测试期间临时设置后立即移除。
     unsafe {
         std::env::set_var("QQBOT_BACKFILL_PAGE_SIZE", "50");
+        std::env::set_var("QQBOT_BACKFILL_EARLIEST_DATE", "2026-03-01");
     }
     let config: AppConfig = toml::from_str(
         r#"
@@ -880,9 +997,11 @@ url = "mysql://serverrs:password@127.0.0.1:3306/serverrs_qq"
     config.apply_env_overrides().unwrap();
     config.validate(std::path::Path::new(".")).unwrap();
     assert_eq!(config.backfill.page_size, 50);
+    assert_eq!(config.backfill.earliest_date.as_deref(), Some("2026-03-01"));
     // SAFETY: 同上，测试结束清理。
     unsafe {
         std::env::remove_var("QQBOT_BACKFILL_PAGE_SIZE");
+        std::env::remove_var("QQBOT_BACKFILL_EARLIEST_DATE");
     }
 }
 
@@ -923,8 +1042,8 @@ fn whitelist_rejects_non_listed_group() {
 }
 
 #[test]
-fn whitelist_empty_config_means_no_filtering() {
-    // 不配 whitelist_file 时返回空集合，表示不启用白名单（放行所有群）。
+fn whitelist_empty_config_denies_all_groups() {
+    // 不配 whitelist_file 时返回空集合；运行时将其解释为拒绝全部群。
     let config = WhitelistConfig::default();
     let groups = config.load_groups(std::path::Path::new(".")).unwrap();
     assert!(groups.is_empty());
@@ -942,24 +1061,32 @@ fn whitelist_deduplicates_repeated_group_ids() {
 }
 
 #[test]
-fn whitelist_rejects_empty_groups_array() {
+fn whitelist_accepts_empty_groups_array_as_fail_closed_default() {
     let file = write_whitelist_json(&[]);
     let config = WhitelistConfig {
         whitelist_file: Some(file.path().to_path_buf()),
     };
-    let result = config.validate(std::path::Path::new("."));
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("不能为空"));
+    config.validate(std::path::Path::new(".")).unwrap();
+    assert!(
+        config
+            .load_groups(std::path::Path::new("."))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
-fn whitelist_rejects_nonexistent_file() {
+fn whitelist_accepts_nonexistent_file_as_initial_empty_state() {
     let config = WhitelistConfig {
         whitelist_file: Some(PathBuf::from("/nonexistent/whitelist.json")),
     };
-    let result = config.validate(std::path::Path::new("."));
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("不存在"));
+    config.validate(std::path::Path::new(".")).unwrap();
+    assert!(
+        config
+            .load_groups(std::path::Path::new("."))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

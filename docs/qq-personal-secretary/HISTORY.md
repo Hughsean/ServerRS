@@ -5,6 +5,10 @@
 
 ## 当前阶段
 
+- **2026-08-09 20:40（聚焦回归证据分批归档）**：将 Owner 被动回复、Owner observation、
+  Backfill 截止日期、Baseline v2 增量采用和架构边界的现有聚焦测试从生产实现中独立成测试提交；
+  未新增验收矩阵或低价值重复测试，`.mcp.json`、凭据和真实 QQ 数据均未进入提交。
+
 - **本轮（容器日志可见性与健康告警去重）**：确认宿主 PowerShell 的全局 `RUST_LOG=warn` 覆盖
   Compose 默认值，导致正常 INFO 全部隐藏。Compose 改用项目专用 `QQBOT_RUST_LOG`，容器内部仍
   注入标准 `RUST_LOG`。健康聚合仅在进入或切换非健康状态时 WARN，稳定状态周期采样降为 INFO；

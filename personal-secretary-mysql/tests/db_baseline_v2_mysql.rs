@@ -64,7 +64,7 @@ async fn baseline_v2_load_upgrade_and_fail_closed_paths_are_equivalent() {
         common::try_apply_qqbot_migrations(&fresh)
             .await
             .expect("v2 baseline reload must be idempotent");
-        assert_schema_shape(&fresh, 83, 2).await;
+        assert_schema_shape(&fresh, 84, 2).await;
         assert_eq!(record_count(&fresh, CURRENT_BASELINE_RECORD).await, 1);
         assert_eq!(folded_record_count(&fresh).await, 0);
         assert_seeded(&fresh).await;
@@ -128,7 +128,13 @@ async fn baseline_v2_load_upgrade_and_fail_closed_paths_are_equivalent() {
         );
         assert_eq!(record_count(&partial, CURRENT_BASELINE_RECORD).await, 0);
 
-        assert!(sql_files(&migrations_dir).is_empty());
+        assert_eq!(
+            sql_files(&migrations_dir)
+                .into_iter()
+                .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["20260807_qqbot_owner_response_delivery.sql"]
+        );
     });
 
     let result = task.await;

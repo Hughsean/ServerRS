@@ -190,6 +190,7 @@ async fn persisted_cursor_survives_lease_recovery_and_unproven_stop_keeps_gap_un
             max_pages_per_scope: 10,
             max_events_per_run: 100,
             max_concurrency: 1,
+            earliest_occurred_at_unix_secs: None,
             lease_secs: 60,
             retry_initial_ms: 10,
             retry_max_ms: 100,
@@ -230,6 +231,132 @@ async fn persisted_cursor_survives_lease_recovery_and_unproven_stop_keeps_gap_un
             )
             .await,
             "uncertain"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn configured_cutoff_skips_older_events_and_persistently_suspends_the_gap() {
+    run_scenario("_gap003_cutoff", |db| async move {
+        let account = SourceAccountRef::new(MessageSource::NapCat, "cutoff-account").unwrap();
+        let inbound = build_mysql_inbound_event_store(db.clone());
+        let epoch = inbound
+            .begin_connection(&account)
+            .await
+            .map_err(|error| format!("begin connection failed: {error}"))?;
+        inbound
+            .mark_connection_connected(&epoch)
+            .await
+            .map_err(|error| format!("mark connected failed: {error}"))?;
+        inbound
+            .insert_message_if_absent(
+                &envelope("cutoff-account", "cutoff-boundary", 50).observed_in(epoch.clone()),
+            )
+            .await
+            .map_err(|error| format!("insert boundary failed: {error}"))?;
+        inbound
+            .mark_connection_uncertain(&epoch, IngestionGapReason::QueueOverflow)
+            .await
+            .map_err(|error| format!("mark uncertain failed: {error}"))?;
+        let next_epoch = inbound
+            .begin_connection(&account)
+            .await
+            .map_err(|error| format!("begin reconnect failed: {error}"))?;
+        inbound
+            .mark_connection_connected(&next_epoch)
+            .await
+            .map_err(|error| format!("mark reconnect connected failed: {error}"))?;
+
+        let source = Arc::new(UnprovenPagingSource {
+            page: Mutex::new(Some(BackfillPage {
+                items: vec![
+                    BackfillHistoryItem {
+                        envelope: envelope("cutoff-account", "cutoff-new", 200),
+                        anchor: BackfillAnchor::new("cutoff-new", "200"),
+                    },
+                    BackfillHistoryItem {
+                        envelope: envelope("cutoff-account", "cutoff-old", 100),
+                        anchor: BackfillAnchor::new("cutoff-old", "100"),
+                    },
+                ],
+                continuation: BackfillContinuation::Next(BackfillCursor::new(
+                    account.clone(),
+                    BackfillAnchor::new("cutoff-old", "100"),
+                )),
+            })),
+            cursors: Mutex::new(Vec::new()),
+        });
+        let store: Arc<dyn BackfillStateStoreWithIngestionT> =
+            build_mysql_backfill_store(db.clone(), 60);
+        let source_port: Arc<dyn HistoryBackfillSourceT> = source.clone();
+        let use_case = BackfillGapUseCase::new(
+            store.clone(),
+            source_port,
+            BackfillBudget {
+                page_size: 100,
+                max_pages_per_scope: 10,
+                max_events_per_run: 100,
+                max_concurrency: 1,
+                earliest_occurred_at_unix_secs: Some(150),
+                lease_secs: 60,
+                retry_initial_ms: 10,
+                retry_max_ms: 100,
+            },
+        );
+
+        let outcome = use_case
+            .run_one()
+            .await
+            .map_err(|error| format!("cutoff backfill failed: {error}"))?
+            .ok_or_else(|| "expected a claimable cutoff gap".to_owned())?;
+
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::ConfiguredCutoffReached)
+        );
+        assert_eq!(source.cursors.lock().unwrap().as_slice(), [None]);
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT COUNT(*) AS value FROM secretary_source_events \
+                 WHERE platform_event_id = 'cutoff-new'",
+                vec![],
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT COUNT(*) AS value FROM secretary_source_events \
+                 WHERE platform_event_id = 'cutoff-old'",
+                vec![],
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            scalar_u64(
+                &db,
+                "SELECT YEAR(next_eligible_at) AS value \
+                 FROM secretary_gap_reclaim_schedule WHERE gap_id = ?",
+                vec![outcome.gap_id.as_str().into()],
+            )
+            .await,
+            9999
+        );
+        assert!(
+            store
+                .claim_next_gap(BackfillLease::new(60))
+                .await
+                .map_err(|error| format!("second claim failed: {error}"))?
+                .is_none(),
+            "a cutoff-suspended gap must not be claimed again"
         );
         Ok(())
     })
@@ -311,6 +438,7 @@ async fn non_message_signal_freezes_unseen_conversation_for_backfill() {
                 max_pages_per_scope: 1,
                 max_events_per_run: 10,
                 max_concurrency: 1,
+                earliest_occurred_at_unix_secs: None,
                 lease_secs: 60,
                 retry_initial_ms: 10,
                 retry_max_ms: 100,
@@ -415,6 +543,7 @@ async fn online_non_message_gap_only_reads_signaled_scopes_and_preserves_real_bo
                 max_pages_per_scope: 1,
                 max_events_per_run: 10,
                 max_concurrency: 1,
+                earliest_occurred_at_unix_secs: None,
                 lease_secs: 60,
                 retry_initial_ms: 10,
                 retry_max_ms: 100,

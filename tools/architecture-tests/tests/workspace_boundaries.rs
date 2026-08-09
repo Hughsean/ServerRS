@@ -693,14 +693,20 @@ fn qqbot_database_is_owned_by_the_qqbot_application() {
         .expect("QQBot post-v2 migrations directory must be readable")
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
-        .count();
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        active_migrations, 0,
-        "folded v1-to-v2 SQL must not remain in the active migrations directory"
+        active_migrations,
+        BTreeSet::from(["20260807_qqbot_owner_response_delivery.sql".into()]),
+        "active migrations must contain only reviewed post-v2 increments"
     );
     assert!(
         qqbot_database.join("migrations/README.md").is_file(),
         "QQBot post-baseline migrations directory must remain application-owned"
+    );
+    assert!(
+        qqbot_database.join("run-migrations.sh").is_file(),
+        "QQBot production migration runner must remain database-owned"
     );
 }
 
