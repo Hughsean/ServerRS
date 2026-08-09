@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "dbx": {
+      "command": "D:\\Dev\\GlobalApps\\apps\\NodeJS-LTS\\current\\node.exe",
+      "args": [
+        "D:\\Dev\\GlobalApps\\persist\\NodeJS-LTS\\bin\\node_modules\\@dbx-app\\mcp-server\\bin\\dbx-mcp-server.js"
+      ]
+    }
+  }
+
+}
