@@ -90,6 +90,13 @@ pub(super) fn apply_backfill_env(config: &mut BackfillConfig) -> Result<(), Conf
             retry_max_ms => "QQBOT_BACKFILL_RETRY_MAX_MS",
         },
     );
+    if let Ok(value) = std::env::var("QQBOT_BACKFILL_EARLIEST_DATE") {
+        config.earliest_date = if value.trim().is_empty() {
+            None
+        } else {
+            Some(value.trim().to_owned())
+        };
+    }
     Ok(())
 }
 
@@ -337,7 +344,11 @@ pub(super) fn apply_qq_open_platform_env(
     config: &mut QqOpenPlatformConfig,
 ) -> Result<(), ConfigError> {
     apply_env_fields!(config;
-        bool { enabled => "QQBOT_OPEN_PLATFORM_ENABLED" },
+        bool {
+            enabled => "QQBOT_OPEN_PLATFORM_ENABLED",
+            lifecycle_notifications => "QQBOT_OPEN_PLATFORM_LIFECYCLE_NOTIFICATIONS",
+            proactive_notifications => "QQBOT_OPEN_PLATFORM_PROACTIVE_NOTIFICATIONS",
+        },
         non_empty {
             app_id => "QQBOT_OPEN_PLATFORM_APP_ID",
             owner_openid => "QQBOT_OPEN_PLATFORM_OWNER_OPENID",

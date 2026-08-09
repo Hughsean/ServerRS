@@ -390,6 +390,7 @@ impl BackfillGapUseCase {
             }
 
             let mut stop_at_boundary = false;
+            let mut configured_cutoff_reached = false;
             for item in &page.items {
                 if *total_events >= self.budget.max_events_per_run {
                     progress.anomalies.push(BackfillAnomaly::BudgetExhausted);
@@ -398,6 +399,15 @@ impl BackfillGapUseCase {
                 }
                 *total_events += 1;
                 progress.events_read += 1;
+
+                if self
+                    .budget
+                    .earliest_occurred_at_unix_secs
+                    .is_some_and(|cutoff| item.envelope.occurred_at_unix_secs < cutoff)
+                {
+                    configured_cutoff_reached = true;
+                    continue;
+                }
 
                 // 请求方向本身不能证明具体协议实现的响应顺序。顺序未验证时仍可
                 // 有界恢复候选事件，但不能用页内位置完成 Scope 或跳过后续事件。
@@ -434,6 +444,14 @@ impl BackfillGapUseCase {
                     // 页内顺序为新到旧；边界及预算停止点之后的更旧消息不得写入。
                     break;
                 }
+            }
+
+            if configured_cutoff_reached {
+                push_unique(
+                    &mut progress.anomalies,
+                    BackfillAnomaly::ConfiguredCutoffReached,
+                );
+                break;
             }
 
             if stop_at_boundary || budget_exhausted {
@@ -644,8 +662,8 @@ mod tests {
     use super::*;
     use crate::{
         BackfillHistoryItem, ConnectionEpochId, ConversationKind, ConversationRef,
-        InboundMessageEnvelope, IngestionGapId, MessageSource, SourceAccountRef, SourceMessageRef,
-        VerifiedActor, VerifiedActorKind,
+        InboundMessageEnvelope, IngestionGapId, MessageSource, ReclaimPolicy, SourceAccountRef,
+        SourceMessageRef, VerifiedActor, VerifiedActorKind,
     };
 
     fn budget() -> BackfillBudget {
@@ -654,6 +672,7 @@ mod tests {
             max_pages_per_scope: 20,
             max_events_per_run: 2000,
             max_concurrency: 2,
+            earliest_occurred_at_unix_secs: None,
             lease_secs: 60,
             retry_initial_ms: 1,
             retry_max_ms: 2,
@@ -669,11 +688,21 @@ mod tests {
     }
 
     fn hist_item(account_id: &str, msg_id: &str, seq: &str, conv_id: &str) -> BackfillHistoryItem {
+        hist_item_at(account_id, msg_id, seq, conv_id, 1_800_000_000)
+    }
+
+    fn hist_item_at(
+        account_id: &str,
+        msg_id: &str,
+        seq: &str,
+        conv_id: &str,
+        occurred_at_unix_secs: i64,
+    ) -> BackfillHistoryItem {
         let envelope = InboundMessageEnvelope::new(
             SourceMessageRef::new(MessageSource::NapCat, account_id, msg_id).unwrap(),
             ConversationRef::new(ConversationKind::Group, conv_id).unwrap(),
             VerifiedActor::new(VerifiedActorKind::External, "sender-1").unwrap(),
-            1_800_000_000,
+            occurred_at_unix_secs,
             "",
             Vec::new(),
         )
@@ -986,6 +1015,44 @@ mod tests {
         assert_eq!(
             store.finalizations()[0].gap_target_status,
             IngestionGapStatus::VerifiedComplete
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_cutoff_skips_older_messages_stops_paging_and_suspends_reclaim() {
+        let store = Arc::new(FakeStore::default());
+        let source = Arc::new(FakeSource::new(false));
+        store.state.lock().unwrap().known_scopes = vec![known_scope("g1", None)];
+        store.state.lock().unwrap().claimable.push_back(claimed_gap(
+            "run-cutoff",
+            "gap-cutoff",
+            "acc-1",
+        ));
+        source.queue(page(
+            vec![
+                hist_item_at("acc-1", "new-enough", "20", "g1", 1_700_000_000),
+                hist_item_at("acc-1", "too-old", "10", "g1", 1_600_000_000),
+            ],
+            BackfillContinuation::Next(cursor("acc-1", "too-old", "10")),
+        ));
+        let mut cutoff_budget = budget();
+        cutoff_budget.earliest_occurred_at_unix_secs = Some(1_650_000_000);
+
+        let outcome = build(store.clone(), source.clone(), cutoff_budget)
+            .run_one()
+            .await
+            .unwrap()
+            .expect("a claimable gap must be processed");
+
+        assert!(store.has_message("acc-1", "new-enough", "g1"));
+        assert!(!store.has_message("acc-1", "too-old", "g1"));
+        assert_eq!(source.fetch_log().len(), 1);
+        assert_eq!(outcome.completeness, HistoryCompleteness::Unprovable);
+        assert_eq!(outcome.reclaim_policy(), ReclaimPolicy::Suspended);
+        assert!(
+            outcome.evidence.scopes[0]
+                .anomalies
+                .contains(&BackfillAnomaly::ConfiguredCutoffReached)
         );
     }
 

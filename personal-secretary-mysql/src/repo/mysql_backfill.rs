@@ -685,7 +685,7 @@ impl BackfillStateStoreT for MySqlInboundEventStore {
         // - Backoff(secs)：Gap 保持 uncertain，设置 next_eligible_at = now + secs。
         // - Suspended：Gap 保持 uncertain，设置极远未来 next_eligible_at，停止自动重试。
         //   用于 KnownScopesComplete：Gap 边界已冻结，重跑无新证据。
-        match outcome.completeness.reclaim_policy() {
+        match outcome.reclaim_policy() {
             ReclaimPolicy::Terminal => {
                 transaction
                     .execute_raw(Statement::from_sql_and_values(

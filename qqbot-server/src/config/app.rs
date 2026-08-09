@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::ConfigError;
 use super::action_planner::ActionPlannerConfig;
+use super::admin::AdminConfig;
 use super::database::DatabaseConfig;
 use super::env::{
     apply_agenda_env, apply_artifact_env, apply_backfill_env, apply_follow_up_env,
@@ -32,6 +33,8 @@ use super::workers::{
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub admin: AdminConfig,
     pub napcat: NapCatConfig,
     pub database: DatabaseConfig,
     #[serde(default)]
@@ -172,6 +175,14 @@ impl AppConfig {
                 retry_max_ms => "QQBOT_ACTION_PLANNER_RETRY_MAX_MS",
             },
         );
+        apply_env_fields!(&mut self.admin;
+            bool { enabled => "QQBOT_ADMIN_ENABLED" },
+            non_empty { bind => "QQBOT_ADMIN_BIND" },
+            positive {
+                port => "QQBOT_ADMIN_PORT",
+                session_ttl_secs => "QQBOT_ADMIN_SESSION_TTL_SECS",
+            },
+        );
         apply_qq_open_platform_env(&mut self.qq_open_platform)?;
         apply_whitelist_env(&mut self.whitelist)?;
         Ok(())
@@ -295,6 +306,8 @@ impl AppConfig {
         self.llm.validate()?;
         self.qq_open_platform.validate()?;
         self.whitelist.validate(config_dir)?;
+        self.admin
+            .validate(self.whitelist.whitelist_file.is_some())?;
         self.action_planner.validate()?;
         self.memory_candidates.validate()?;
         Ok(())

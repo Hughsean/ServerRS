@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use personal_secretary::{
     AccountScopedParticipantRef, ActionPlannerT, Clock, CommitmentStatus, ContentTrustLevel,
@@ -334,7 +334,7 @@ impl LlmActionPlanner {
     }
 }
 
-/// CMD-004：对无需实体解析、时间解析或版本读取的高频中文只读命令提供确定性路由。
+/// CMD-004：对无需实体解析、时间解析或版本读取的高频中文命令提供确定性路由。
 ///
 /// 这里刻意只接受完整短语，不做子串、模糊或关键词评分：追加指令、写命令、带目标的查询、
 /// Replan 和任何已有工作上下文都继续交给受约束的 LLM Planner。返回值仍是标准
@@ -348,6 +348,11 @@ fn deterministic_readonly_intent(
     }
 
     let command = canonical_short_command(&input.command.normalized_text);
+    if matches!(command.as_str(), "你好" | "您好" | "在吗") {
+        return Ok(Some(PlannerOutput::NoAction {
+            reason: "你好，我在线。有什么需要我处理？".into(),
+        }));
+    }
     let action = match command.as_str() {
         "查看秘书状态" | "秘书状态" | "查看系统状态" | "系统状态" => {
             SecretaryAction::GetSecretaryStatus
@@ -459,11 +464,23 @@ impl ActionPlannerT for LlmActionPlanner {
         })
         .map_err(|e| PlannerError::LlmCall(e.to_string()))?;
 
-        let response = self
+        let response = match self
             .client
             .complete_json(ACTION_PLANNER_SYSTEM_PROMPT, &llm_input)
             .await
-            .map_err(map_llm_error)?;
+        {
+            Ok(response) => response,
+            Err(error) if error.transient_code().is_some() => {
+                warn!(
+                    error_code = error.safe_code(),
+                    "LLM Action Planner 暂时不可用，返回不执行动作的安全回复"
+                );
+                return Ok(PlannerOutput::NoAction {
+                    reason: "模型服务暂时不可用，请稍后重试。".into(),
+                });
+            }
+            Err(error) => return Err(map_llm_error(error)),
+        };
 
         debug!(usage = ?response.usage, "LLM action planner response received");
         self.map_output(input, response.value, &temp_ref_map)
@@ -492,9 +509,9 @@ fn map_llm_error(error: LlmClientError) -> PlannerError {
     use LlmClientError::*;
     match error {
         Timeout => PlannerError::Timeout,
-        Configuration(msg) => PlannerError::LlmCall(msg),
+        Configuration(_) => PlannerError::LlmCall("configuration".into()),
         InputLimit { .. } => PlannerError::LlmCall("input exceeds limit".into()),
-        Transport(msg) => PlannerError::LlmCall(msg),
+        Transport(_) => PlannerError::LlmCall("transport".into()),
         Unauthorized => PlannerError::LlmCall("unauthorized".into()),
         RateLimited => PlannerError::LlmCall("rate limited".into()),
         Rejected(code) => PlannerError::LlmCall(format!("rejected: {code}")),
@@ -502,7 +519,7 @@ fn map_llm_error(error: LlmClientError) -> PlannerError {
         MissingChoice => PlannerError::UnparseableOutput("no choice".into()),
         MissingContent => PlannerError::UnparseableOutput("no content".into()),
         MissingJson => PlannerError::UnparseableOutput("no json".into()),
-        InvalidResponse(msg) => PlannerError::UnparseableOutput(msg),
+        InvalidResponse(_) => PlannerError::UnparseableOutput("invalid response".into()),
     }
 }
 
@@ -2268,6 +2285,23 @@ mod tests {
         calls: Mutex<Vec<serde_json::Value>>,
     }
 
+    struct FailingClient {
+        error: Mutex<Option<LlmClientError>>,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl StructuredLlmClientT for FailingClient {
+        async fn complete_json(
+            &self,
+            _system_prompt: &str,
+            _input: &serde_json::Value,
+        ) -> Result<crate::llm::StructuredLlmResponse, LlmClientError> {
+            *self.calls.lock().unwrap() += 1;
+            Err(self.error.lock().unwrap().take().unwrap())
+        }
+    }
+
     #[async_trait]
     impl StructuredLlmClientT for FakeClient {
         async fn complete_json(
@@ -2294,6 +2328,66 @@ mod tests {
             is_local_loopback: false,
         };
         (planner, client)
+    }
+
+    fn planner_with_error(error: LlmClientError) -> (LlmActionPlanner, Arc<FailingClient>) {
+        let client = Arc::new(FailingClient {
+            error: Mutex::new(Some(error)),
+            calls: Mutex::new(0),
+        });
+        let planner = LlmActionPlanner {
+            client: client.clone(),
+            clock: Arc::new(SystemClock),
+            is_local_loopback: false,
+        };
+        (planner, client)
+    }
+
+    #[tokio::test]
+    async fn exact_greetings_return_local_response_without_calling_llm() {
+        for greeting in ["你好", "您好。", " 在吗？ "] {
+            let (planner, client) =
+                planner_with_response(json!({"kind":"no_action","reason":"不应调用模型"}));
+            let mut planner_input = input();
+            planner_input.command.normalized_text = greeting.into();
+
+            let output = planner.plan(&planner_input).await.unwrap();
+
+            let PlannerOutput::NoAction { reason } = output else {
+                panic!("问候必须返回 NoAction");
+            };
+            assert_eq!(reason, "你好，我在线。有什么需要我处理？");
+            assert!(client.calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_llm_failures_return_safe_response_without_action() {
+        for error in [
+            LlmClientError::Timeout,
+            LlmClientError::Transport("sensitive transport details".into()),
+            LlmClientError::RateLimited,
+            LlmClientError::MissingContent,
+            LlmClientError::InvalidResponse("sensitive response details".into()),
+        ] {
+            let (planner, client) = planner_with_error(error);
+            let output = planner.plan(&input()).await.unwrap();
+            let PlannerOutput::NoAction { reason } = output else {
+                panic!("临时 LLM 故障不得生成动作");
+            };
+            assert_eq!(reason, "模型服务暂时不可用，请稍后重试。");
+            assert_eq!(*client.calls.lock().unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn permanent_llm_authentication_failure_remains_fail_closed() {
+        let (planner, client) = planner_with_error(LlmClientError::Unauthorized);
+
+        let error = planner.plan(&input()).await.unwrap_err();
+
+        assert!(matches!(error, PlannerError::LlmCall(ref code) if code == "unauthorized"));
+        assert_eq!(*client.calls.lock().unwrap(), 1);
     }
 
     #[tokio::test]

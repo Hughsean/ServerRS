@@ -125,6 +125,10 @@ pub struct BackfillBudget {
     pub max_pages_per_scope: u32,
     pub max_events_per_run: u32,
     pub max_concurrency: u32,
+    /// 允许进入统一入站存储的最早事件时间（Unix 秒，含该秒）。`None` 只允许用于
+    /// 禁用 Backfill 的配置或确定性测试来源。
+    #[serde(default)]
+    pub earliest_occurred_at_unix_secs: Option<i64>,
     pub lease_secs: u64,
     pub retry_initial_ms: u64,
     pub retry_max_ms: u64,
@@ -283,6 +287,8 @@ pub enum BackfillAnomaly {
     PermissionDenied,
     /// 达到页数或事件数预算上限，无法继续证明连续性。
     BudgetExhausted,
+    /// 已读到运维配置的历史时间下界；更旧消息不入库，且该 Gap 停止自动重扫。
+    ConfiguredCutoffReached,
 }
 
 impl BackfillAnomaly {
@@ -337,6 +343,16 @@ impl BackfillEvidence {
     /// 任意 Scope 命中永久不可恢复异常。
     pub fn any_unrecoverable(&self) -> bool {
         self.scopes.iter().any(ScopeEvidence::is_unrecoverable)
+    }
+
+    /// 任一 Scope 已命中配置的硬时间下界。继续自动重跑不会产生新证据，只会从最新页
+    /// 重复读取，因此基础设施层必须挂起该 Gap。
+    pub fn configured_cutoff_reached(&self) -> bool {
+        self.scopes.iter().any(|scope| {
+            scope
+                .anomalies
+                .contains(&BackfillAnomaly::ConfiguredCutoffReached)
+        })
     }
 }
 
@@ -494,6 +510,8 @@ pub enum BackfillConfigError {
     TooLarge(&'static str),
     #[error("backfill.retry_max_ms must be >= retry_initial_ms")]
     RetryMaxBelowInitial,
+    #[error("backfill.earliest_occurred_at_unix_secs must not be negative")]
+    EarliestOccurredAtBeforeUnixEpoch,
 }
 
 impl BackfillBudget {
@@ -501,6 +519,12 @@ impl BackfillBudget {
     pub fn validate(&self) -> Result<(), BackfillConfigError> {
         if self.page_size == 0 || self.page_size > 100 {
             return Err(BackfillConfigError::PageSizeOutOfRange);
+        }
+        if self
+            .earliest_occurred_at_unix_secs
+            .is_some_and(|value| value < 0)
+        {
+            return Err(BackfillConfigError::EarliestOccurredAtBeforeUnixEpoch);
         }
         check_positive(self.max_pages_per_scope, "max_pages_per_scope")?;
         check_positive(self.max_events_per_run, "max_events_per_run")?;
@@ -595,6 +619,17 @@ pub struct BackfillOutcome {
     pub failure_class: Option<String>,
 }
 
+impl BackfillOutcome {
+    /// 配置下界是确定性停止条件，命中后不允许按普通 `Unprovable` 的短退避重新扫描。
+    pub fn reclaim_policy(&self) -> ReclaimPolicy {
+        if self.evidence.configured_cutoff_reached() {
+            ReclaimPolicy::Suspended
+        } else {
+            self.completeness.reclaim_policy()
+        }
+    }
+}
+
 /// 历史来源端口错误。外层 NapCat 适配器把协议/传输错误映射到本类型。
 #[derive(Debug, Error)]
 pub enum BackfillSourceError {
@@ -632,6 +667,7 @@ mod tests {
             max_pages_per_scope: 20,
             max_events_per_run: 2000,
             max_concurrency: 2,
+            earliest_occurred_at_unix_secs: None,
             lease_secs: 60,
             retry_initial_ms: 500,
             retry_max_ms: 10_000,

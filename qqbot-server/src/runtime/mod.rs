@@ -79,11 +79,12 @@ async fn run_with_shutdown(
     // 所有 LLM 消费者共享一份进程内累计指标，避免按 Worker 割裂调用量与 Token。
     let llm_metrics = std::sync::Arc::new(crate::llm::LlmMetrics::default());
 
-    if let Err(error) = bootstrap::workers::reconcile_legacy_notification_outbox(
-        infra.db.clone(),
-        &config.notification_policy,
-    )
-    .await
+    if config.qq_open_platform.proactive_notifications
+        && let Err(error) = bootstrap::workers::reconcile_legacy_notification_outbox(
+            infra.db.clone(),
+            &config.notification_policy,
+        )
+        .await
     {
         let _ = &error;
         tracing::error!(
@@ -91,6 +92,19 @@ async fn run_with_shutdown(
             "legacy Owner Outbox 协调失败或存在活跃租约，拒绝启动任何投递相关 Worker"
         );
         return Err(error);
+    }
+
+    if config.admin.enabled {
+        handles.admin_web = Some(
+            crate::admin_web::spawn_admin_web(
+                config.admin.clone(),
+                std::sync::Arc::clone(&infra.group_whitelist),
+                config.napcat.http_base_url.clone(),
+            )
+            .await
+            .map_err(RuntimeError::Config)?,
+        );
+        tracing::info!(port = config.admin.port, "本机管理员页面已启动");
     }
 
     let notification_policy_use_case = std::sync::Arc::new(NotificationPolicyUseCase::new(

@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use chrono::{NaiveDate, TimeZone};
+use chrono_tz::Asia::Shanghai;
 use personal_secretary::BackfillBudget;
 use serde::Deserialize;
 
@@ -71,6 +73,8 @@ fn default_ingestion_shutdown_drain_timeout_secs() -> u64 {
 #[serde(deny_unknown_fields, default)]
 pub struct BackfillConfig {
     pub enabled: bool,
+    /// 北京时间自然日，格式 `YYYY-MM-DD`。启用 Backfill 时必须显式配置。
+    pub earliest_date: Option<String>,
     pub page_size: u32,
     pub max_pages_per_scope: u32,
     pub max_events_per_run: u32,
@@ -83,7 +87,10 @@ pub struct BackfillConfig {
 impl Default for BackfillConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            // 真实 NapCat 的空页与完整分页证据尚未闭合。默认启用会让 unprovable Gap
+            // 周期性重扫同一历史页，因此必须由运维在完成实机验证后显式开启。
+            enabled: false,
+            earliest_date: None,
             page_size: 100,
             max_pages_per_scope: 20,
             max_events_per_run: 2000,
@@ -104,6 +111,7 @@ impl BackfillConfig {
             max_pages_per_scope: self.max_pages_per_scope,
             max_events_per_run: self.max_events_per_run,
             max_concurrency: self.max_concurrency,
+            earliest_occurred_at_unix_secs: self.earliest_cutoff_unix_secs()?,
             lease_secs: self.lease_secs,
             retry_initial_ms: self.retry_initial_ms,
             retry_max_ms: self.retry_max_ms,
@@ -111,6 +119,12 @@ impl BackfillConfig {
     }
 
     fn validate_budget(&self) -> Result<(), ConfigError> {
+        if self.enabled && self.earliest_date.is_none() {
+            return Err(ConfigError::Invalid(
+                "backfill.earliest_date is required when backfill is enabled".into(),
+            ));
+        }
+        self.earliest_cutoff_unix_secs()?;
         if self.page_size == 0 || self.page_size > 100 {
             return Err(ConfigError::Invalid(
                 "backfill.page_size must be between 1 and 100".into(),
@@ -147,6 +161,35 @@ impl BackfillConfig {
             ));
         }
         Ok(())
+    }
+
+    fn earliest_cutoff_unix_secs(&self) -> Result<Option<i64>, ConfigError> {
+        let Some(value) = self.earliest_date.as_deref() else {
+            return Ok(None);
+        };
+        let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+            ConfigError::Invalid(
+                "backfill.earliest_date must use YYYY-MM-DD in Asia/Shanghai".into(),
+            )
+        })?;
+        let local_midnight = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+            ConfigError::Invalid("backfill.earliest_date is outside the supported range".into())
+        })?;
+        let timestamp = Shanghai
+            .from_local_datetime(&local_midnight)
+            .single()
+            .ok_or_else(|| {
+                ConfigError::Invalid(
+                    "backfill.earliest_date cannot be represented in Asia/Shanghai".into(),
+                )
+            })?
+            .timestamp();
+        if timestamp < 0 {
+            return Err(ConfigError::Invalid(
+                "backfill.earliest_date must not be before 1970-01-01".into(),
+            ));
+        }
+        Ok(Some(timestamp))
     }
 }
 
@@ -355,7 +398,7 @@ pub struct AgendaConfig {
 impl Default for AgendaConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             scan_interval_ms: 30_000,
             batch_size: 200,
             retry_initial_ms: 1_000,
@@ -402,7 +445,7 @@ pub struct FollowUpConfig {
 impl Default for FollowUpConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             scan_interval_ms: 30_000,
             horizon_secs: 604_800,
             response_timeout_secs: 14_400,
@@ -545,7 +588,7 @@ pub struct NotificationPolicyConfig {
 impl Default for NotificationPolicyConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             worker_id: "qqbot-notification-policy-v1".into(),
             batch_size: 100,
             lease_secs: 60,

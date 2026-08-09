@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use personal_secretary::ACTION_GRAPH_DEADLINE_MS;
 use serde::Deserialize;
 
 use super::ConfigError;
@@ -12,6 +13,10 @@ use super::validation::is_loopback_host;
 
 pub(crate) const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 pub(crate) const DEEPSEEK_OFFICIAL_BASE_URL: &str = "https://api.deepseek.com/v1";
+const ACTION_GRAPH_SAFETY_MARGIN_SECS: u64 = 5;
+/// LLM 必须更早结束，为 Action Graph 的状态落库和回复构建留出余量。
+pub(crate) const MAX_LLM_REQUEST_TIMEOUT_SECS: u64 =
+    ACTION_GRAPH_DEADLINE_MS / 1_000 - ACTION_GRAPH_SAFETY_MARGIN_SECS;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -60,7 +65,7 @@ impl Default for LlmConfig {
             model: String::new(),
             api_key_file: None,
             connect_timeout_secs: 10,
-            request_timeout_secs: 60,
+            request_timeout_secs: 20,
             max_input_chars: 60_000,
             max_output_tokens: 2_000,
             max_response_bytes: 1_048_576,
@@ -120,12 +125,15 @@ impl LlmConfig {
                 ));
             }
         }
-        if !(1..=300).contains(&self.connect_timeout_secs)
-            || !(1..=600).contains(&self.request_timeout_secs)
-        {
+        if !(1..=300).contains(&self.connect_timeout_secs) {
             return Err(ConfigError::Invalid(
-                "llm timeouts must be positive and bounded".into(),
+                "llm.connect_timeout_secs must be in 1..=300".into(),
             ));
+        }
+        if !(1..=MAX_LLM_REQUEST_TIMEOUT_SECS).contains(&self.request_timeout_secs) {
+            return Err(ConfigError::Invalid(format!(
+                "llm.request_timeout_secs must be in 1..={MAX_LLM_REQUEST_TIMEOUT_SECS} so the LLM request ends before the Action Graph deadline"
+            )));
         }
         if !(1_000..=1_000_000).contains(&self.max_input_chars) {
             return Err(ConfigError::Invalid(

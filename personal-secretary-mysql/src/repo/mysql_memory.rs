@@ -193,7 +193,6 @@ impl MemoryStoreT for MySqlMemoryStore {
         }
         transaction.commit().await.map_err(store_error)?;
         info!(
-            fact_id = fact.fact_id.as_str(),
             kind = fact.payload.kind(),
             sources = fact.source_event_ids.len(),
             "source-backed structured memory fact persisted"
@@ -470,11 +469,7 @@ impl MemoryStoreT for MySqlMemoryStore {
             [input.fact_id.as_str().into()],
         )).await.map_err(store_error)?;
         transaction.commit().await.map_err(store_error)?;
-        info!(
-            fact_id = input.fact_id.as_str(),
-            command_source_event_id = input.command_source_event_id.as_str(),
-            "derived memory deleted by authorized owner command"
-        );
+        info!("derived memory deleted by authorized owner command");
         Ok(MemoryDeleteReceipt {
             fact_id: input.fact_id.clone(),
             changed: true,

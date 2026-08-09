@@ -5,7 +5,6 @@
 //! 连接结束后排空 ingestion Worker、`finish_connection` 产生 Gap 并唤醒回补，
 //! 然后按有上限的指数退避无限重连。关闭信号在任何等待点都能抢占。
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,7 +38,7 @@ pub(super) async fn run_connection_loop(
     account: SourceAccountRef,
     config: &AppConfig,
     handles: &mut WorkerHandles,
-    group_whitelist: Arc<HashSet<i64>>,
+    group_whitelist: Arc<crate::group_whitelist::GroupWhitelist>,
     backfill_wake: Option<Arc<BackfillWake>>,
     recall_handler: Option<Arc<crate::recall::RecallHandler>>,
     recall_use_case: Option<Arc<RecallUseCase>>,
@@ -309,10 +308,8 @@ pub(super) async fn run_connection_loop(
                 return Err(error.into());
             }
         };
-        if let Some(gap_id) = gap_id {
+        if gap_id.is_some() {
             tracing::warn!(
-                gap_id = %gap_id.as_str(),
-                connection_epoch_id = %connection_epoch_id.as_str(),
                 reason = reason.as_str(),
                 "NapCat 连接结束，已创建待历史回补验证的不确定空窗"
             );
@@ -456,7 +453,6 @@ async fn drain_ingestion_worker(
         }
         Ok(Err(error)) => {
             tracing::error!(
-                connection_epoch_id = %connection_epoch_id.as_str(),
                 error = %error,
                 "持久化 Worker 异常退出；连接空窗将保持 uncertain"
             );
@@ -464,7 +460,6 @@ async fn drain_ingestion_worker(
         }
         Err(_) => {
             tracing::warn!(
-                connection_epoch_id = %connection_epoch_id.as_str(),
                 timeout_ms = timeout.as_millis(),
                 "持久化 Worker 未在期限内排空，将中止并依赖历史回补"
             );

@@ -13,6 +13,7 @@ use thiserror::Error;
 #[macro_use]
 mod env;
 mod action_planner;
+mod admin;
 mod app;
 mod database;
 mod llm;
@@ -23,12 +24,14 @@ mod whitelist;
 mod workers;
 
 pub use action_planner::ActionPlannerConfig;
+pub use admin::AdminConfig;
 pub use app::AppConfig;
 pub use database::DatabaseConfig;
 pub use llm::{LlmConfig, LlmProvider, LlmReasoningMode};
 pub use napcat::NapCatConfig;
 pub use qq_open_platform::QqOpenPlatformConfig;
 pub use whitelist::WhitelistConfig;
+pub(crate) use whitelist::WhitelistFile;
 pub use workers::{
     AgendaConfig, ArtifactConfig, BackfillConfig, DirectorySyncConfig, FollowUpConfig,
     HealthConfig, IngestionConfig, MemoryCandidatesConfig, NotificationPolicyConfig,

@@ -25,6 +25,9 @@ use crate::{
     build_action_graph,
 };
 
+/// Action Graph 的统一总期限。上层 LLM 配置必须在此期限前结束请求。
+pub const ACTION_GRAPH_DEADLINE_MS: u64 = 30_000;
+
 /// Planner 用例错误。
 #[derive(Debug, Error)]
 pub enum PlannerUseCaseError {
@@ -142,7 +145,7 @@ impl PlannerUseCase {
             is_local_loopback: false,
             lease_secs,
             max_steps: 16,
-            deadline_ms: 30_000,
+            deadline_ms: ACTION_GRAPH_DEADLINE_MS,
         }
     }
 
@@ -281,7 +284,7 @@ impl PlannerUseCase {
             is_local_loopback: false,
             lease_secs,
             max_steps: 16,
-            deadline_ms: 30_000,
+            deadline_ms: ACTION_GRAPH_DEADLINE_MS,
         }
     }
 

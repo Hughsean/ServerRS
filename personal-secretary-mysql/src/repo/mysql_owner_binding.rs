@@ -46,6 +46,27 @@ impl OwnerBindingStoreT for MySqlOwnerBindingStore {
         transaction
             .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::MySql,
+                r#"UPDATE secretary_owner_bindings existing
+                   JOIN secretary_accounts managed ON managed.id = existing.managed_account_id
+                   JOIN secretary_accounts command ON command.id = existing.command_account_id
+                   SET existing.status = 'revoked'
+                   WHERE existing.status = 'active'
+                     AND existing.owner_actor_id <> ?
+                     AND managed.source_channel = ? AND managed.platform_account_id = ?
+                     AND command.source_channel = ? AND command.platform_account_id = ?"#,
+                [
+                    binding.owner_actor_id.clone().into(),
+                    binding.managed_account.channel.as_str().into(),
+                    binding.managed_account.account_id.clone().into(),
+                    binding.command_account.channel.as_str().into(),
+                    binding.command_account.account_id.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(store_error)?;
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::MySql,
                 r#"INSERT INTO secretary_owner_bindings
                  (binding_id, managed_account_id, command_account_id, owner_actor_id, status)
                SELECT ?, managed.id, command.id, ?, 'active'
@@ -67,9 +88,6 @@ impl OwnerBindingStoreT for MySqlOwnerBindingStore {
         transaction.commit().await.map_err(store_error)?;
         tracing::info!(
             managed_channel = binding.managed_account.channel.as_str(),
-            managed_account = binding.managed_account.account_id,
-            command_account = binding.command_account.account_id,
-            owner_actor_id = binding.owner_actor_id,
             "local QQ Open Platform owner binding ensured"
         );
         Ok(())

@@ -3,7 +3,6 @@
 //! 所有 Worker 装配之前必须完成白名单加载，避免文件读取失败时遗留 Worker。
 //! 白名单为空表示不启用过滤（放行所有群）；非空集合内群号必须为正整数。
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,6 +11,7 @@ use personal_secretary_mysql::build_mysql_inbound_event_store;
 use sea_orm::{ConnectOptions, Database};
 
 use crate::config::AppConfig;
+use crate::group_whitelist::GroupWhitelist;
 use crate::runtime::RuntimeError;
 
 /// 基础设施装配产物：数据库连接、入站仓储、账号引用与群白名单。
@@ -21,7 +21,7 @@ pub(crate) struct InfraGraph {
     pub(crate) db: sea_orm::DatabaseConnection,
     pub(crate) store: Arc<dyn PersonalSecretaryStoreT>,
     pub(crate) account: SourceAccountRef,
-    pub(crate) group_whitelist: Arc<HashSet<i64>>,
+    pub(crate) group_whitelist: Arc<GroupWhitelist>,
 }
 
 /// 连接 QQBot 独立 MySQL、构造入站事件仓储、解析账号引用并加载群白名单。
@@ -39,17 +39,19 @@ pub(crate) async fn assemble_infra(
         SourceAccountRef::new(MessageSource::NapCat, config.napcat.self_qq_id.to_string())?;
 
     // 在启动任何 Worker 之前加载群白名单，避免文件读取失败时遗留 Worker。
-    let group_whitelist = Arc::new(
-        config
-            .whitelist
-            .load_groups(config_dir)
-            .map_err(|error| RuntimeError::Config(error.to_string()))?,
-    );
-    if group_whitelist.is_empty() {
-        tracing::info!("群白名单未启用（whitelist.whitelist_file 未配置），将处理所有群消息");
+    let loaded_groups = config
+        .whitelist
+        .load_groups(config_dir)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let group_whitelist = Arc::new(GroupWhitelist::new(
+        config.whitelist.resolve_path(config_dir),
+        loaded_groups,
+    ));
+    if group_whitelist.snapshot().is_empty() {
+        tracing::info!("群观察白名单为空；默认不处理任何群消息，私聊仍全部观察");
     } else {
         tracing::info!(
-            group_count = group_whitelist.len(),
+            group_count = group_whitelist.snapshot().len(),
             "群白名单已启用，只处理白名单内群的消息"
         );
     }

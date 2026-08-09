@@ -151,6 +151,13 @@ pub fn build_mysql_owner_binding_store(
     Arc::new(repo::MySqlOwnerBindingStore::new(db))
 }
 
+/// 构造 QQ 开放平台 Owner 被动回复 Outbox 仓储。
+pub fn build_mysql_owner_response_delivery_store(
+    db: DatabaseConnection,
+) -> Arc<dyn crate::OwnerResponseDeliveryStoreT> {
+    Arc::new(repo::MySqlOwnerResponseDeliveryStore::new(db))
+}
+
 /// 构造账号会话目录快照仓储。快照绑定 account_id，幂等，跨重启恢复。
 pub fn build_mysql_directory_store(db: DatabaseConnection) -> Arc<dyn crate::DirectoryStoreT> {
     Arc::new(repo::MySqlDirectoryStore::new(db))

@@ -1,7 +1,7 @@
 //! NapCat 事件到个人秘书入站边界的映射与白名单过滤。
 //!
 //! 统一身份后先幂等落库（由 ingestion Worker 完成），只有新事件才进入后续处理。
-//! 群白名单非空时只处理白名单内群消息与群撤回；为空表示不启用白名单（放行所有群）。
+//! 群消息与群撤回只处理白名单内群；空白名单拒绝全部群。私聊始终放行。
 
 use std::sync::Arc;
 
@@ -9,6 +9,7 @@ use personal_secretary::{ConversationKind, ConversationRef};
 use qqbot::napcat::{NapCatError, NapCatEvent, NapCatEventHandler};
 
 use super::realtime_spool_runtime::RealtimeSpoolAdmissionQueue;
+use crate::group_whitelist::GroupWhitelist;
 use crate::inbound::NapCatInboundMapper;
 use crate::ingestion_worker::IngestionQueue;
 use crate::recall::RecallHandler;
@@ -67,18 +68,18 @@ impl MessageAdmission {
 pub struct PersonalSecretaryInboundHandler {
     pub mapper: NapCatInboundMapper,
     pub admission: MessageAdmission,
-    /// 群白名单。非空时只处理白名单内群的消息；为空表示不启用白名单（放行所有群）。
-    pub group_whitelist: Arc<std::collections::HashSet<i64>>,
+    /// 可由管理员页面运行期更新的群观察白名单。
+    pub group_whitelist: Arc<GroupWhitelist>,
     /// 文件上传等没有稳定消息 ID 的通知触发有界历史回补；由连接周期 Worker 持久化。
     pub(crate) non_message_history: NonMessageHistorySignalQueue,
     /// 撤回处理器。可选：未装配时撤回通知只记录日志。
     pub recall_handler: Option<Arc<RecallHandler>>,
 }
 
-/// 判断群消息/群撤回是否应被处理。白名单为空时放行所有群（不启用过滤）。
+/// 判断群消息/群撤回是否应被处理。白名单为空时拒绝全部群。
 /// 这是一个纯函数，便于单元测试。
-fn should_accept_group_message(group_id: i64, whitelist: &std::collections::HashSet<i64>) -> bool {
-    whitelist.is_empty() || whitelist.contains(&group_id)
+fn should_accept_group_message(group_id: i64, whitelist: &GroupWhitelist) -> bool {
+    whitelist.contains(group_id)
 }
 
 #[async_trait::async_trait]
@@ -87,7 +88,7 @@ impl NapCatEventHandler for PersonalSecretaryInboundHandler {
         match event {
             NapCatEvent::GroupMessage(event) => {
                 if !should_accept_group_message(event.group_id, &self.group_whitelist) {
-                    tracing::debug!(group_id = event.group_id, "群消息不在白名单内，跳过");
+                    tracing::debug!("群消息不在白名单内，跳过");
                     return Ok(());
                 }
                 self.admission
@@ -98,23 +99,15 @@ impl NapCatEventHandler for PersonalSecretaryInboundHandler {
                 .admission
                 .try_admit(self.mapper.map_private(event)?)
                 .map_err(|error| NapCatError::Handler(error.to_string()))?,
-            NapCatEvent::GroupMemberIncrease(event) => tracing::info!(
-                group_id = event.group_id,
-                user_id = event.user_id,
-                "NapCat 入群通知已接收；QQBot 业务尚未接入"
-            ),
-            NapCatEvent::GroupMemberDecrease(event) => tracing::info!(
-                group_id = event.group_id,
-                user_id = event.user_id,
-                sub_type = %event.sub_type,
-                "NapCat 退群通知已接收；QQBot 业务尚未接入"
-            ),
-            NapCatEvent::Poke(event) => tracing::info!(
-                group_id = event.group_id,
-                user_id = event.user_id,
-                target_id = ?event.target_id,
-                "NapCat 戳一戳通知已接收；QQBot 业务尚未接入"
-            ),
+            NapCatEvent::GroupMemberIncrease(_) => {
+                tracing::info!("NapCat 入群通知已接收；QQBot 业务尚未接入")
+            }
+            NapCatEvent::GroupMemberDecrease(_) => {
+                tracing::info!("NapCat 退群通知已接收；QQBot 业务尚未接入")
+            }
+            NapCatEvent::Poke(_) => {
+                tracing::info!("NapCat 戳一戳通知已接收；QQBot 业务尚未接入")
+            }
             NapCatEvent::GroupUpload(event) => {
                 if !should_accept_group_message(event.group_id, &self.group_whitelist) {
                     tracing::debug!("群文件通知不在白名单内，跳过历史回补信号");
@@ -131,22 +124,17 @@ impl NapCatEventHandler for PersonalSecretaryInboundHandler {
             }
             NapCatEvent::GroupRecall(event) => {
                 if !should_accept_group_message(event.group_id, &self.group_whitelist) {
-                    tracing::debug!(group_id = event.group_id, "群撤回不在白名单内，跳过");
+                    tracing::debug!("群撤回不在白名单内，跳过");
                     return Ok(());
                 }
-                tracing::info!(
-                    group_id = event.group_id,
-                    user_id = event.user_id,
-                    operator_id = ?event.operator_id,
-                    "NapCat 群消息撤回通知已接收"
-                );
+                tracing::info!("NapCat 群消息撤回通知已接收");
                 if let Some(handler) = &self.recall_handler {
                     // 只做非阻塞入队；失败向上返回，禁止吞掉。
                     handler.handle_group_recall(event).await?;
                 }
             }
             NapCatEvent::FriendRecall(event) => {
-                tracing::info!(user_id = event.user_id, "NapCat 好友消息撤回通知已接收");
+                tracing::info!("NapCat 好友消息撤回通知已接收");
                 if let Some(handler) = &self.recall_handler {
                     handler.handle_friend_recall(event).await?;
                 }
@@ -164,6 +152,7 @@ mod tests {
     fn whitelist_allows_listed_group() {
         let mut whitelist = std::collections::HashSet::new();
         whitelist.insert(671260344);
+        let whitelist = GroupWhitelist::new(None, whitelist);
         assert!(should_accept_group_message(671260344, &whitelist));
     }
 
@@ -171,7 +160,14 @@ mod tests {
     fn whitelist_rejects_non_listed_group() {
         let mut whitelist = std::collections::HashSet::new();
         whitelist.insert(671260344);
+        let whitelist = GroupWhitelist::new(None, whitelist);
         assert!(!should_accept_group_message(999999999, &whitelist));
+    }
+
+    #[test]
+    fn empty_whitelist_rejects_every_group() {
+        let whitelist = GroupWhitelist::new(None, std::collections::HashSet::new());
+        assert!(!should_accept_group_message(1, &whitelist));
     }
 
     #[tokio::test]

@@ -747,7 +747,6 @@ impl ReplanDecisionNode {
                 )
                 .unwrap_or_else(|error| {
                     tracing::warn!(
-                        fact_id = conflict_result.fact_id.as_str(),
                         error = %error,
                         "冲突回读上下文构造失败，降级为无效上下文"
                     );
@@ -762,11 +761,7 @@ impl ReplanDecisionNode {
                 "记忆候选与现行记忆存在冲突，但现行事实已不存在或不可见，请人工复核。",
             ),
             Err(error) => {
-                tracing::warn!(
-                    fact_id = conflict_result.fact_id.as_str(),
-                    error = %error,
-                    "冲突回读失败"
-                );
+                tracing::warn!(error = %error, "冲突回读失败");
                 fallback(
                     MemoryConflictReasonCode::ReReadFailed,
                     "记忆候选与现行记忆存在冲突，但回读现行事实失败，请稍后重试。",

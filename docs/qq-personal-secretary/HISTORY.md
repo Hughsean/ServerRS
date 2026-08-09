@@ -5,6 +5,49 @@
 
 ## 当前阶段
 
+- **本轮（容器日志可见性与健康告警去重）**：确认宿主 PowerShell 的全局 `RUST_LOG=warn` 覆盖
+  Compose 默认值，导致正常 INFO 全部隐藏。Compose 改用项目专用 `QQBOT_RUST_LOG`，容器内部仍
+  注入标准 `RUST_LOG`。健康聚合仅在进入或切换非健康状态时 WARN，稳定状态周期采样降为 INFO；
+  INFO/WARN 日志同步移除账号、群、参与者、事件、Gap、连接周期和记忆事实标识。实机定位当前降级
+  来自 `backfill_history_unprovable`，不是 LLM、MySQL 或 WebSocket。
+
+- **本轮（Owner 回复识别与 Backfill 热循环止损）**：只读审计确认 23 条历史待回复提醒之后均存在
+  NapCat Owner 发言，原 SQL 只识别 `assistant_output`。私聊现按同账号、同会话和严格时间顺序识别
+  `owner_observation`，群聊仅接受同线程或显式 Reply。另确认真实 NapCat 在分页证据不可证明时会
+  周期性重领 Gap，累计形成 1130 次运行和约 61.9 万条扫描；Backfill 默认及 Compose 均改为关闭，
+  避免继续触发 NapCat 引用消息兼容警告。新增北京时间 `YYYY-MM-DD` 硬截止日期：启用 Backfill
+  时必填，早于下界的事件不入库，命中后停止翻页并持久化挂起 Gap。领域 296/296、Server 218
+  passed/3 ignored、截止日期隔离 MySQL 1/1、严格 Clippy 与架构门禁通过。当前本机 `.env` 后续又
+  显式启用 Backfill 并把下界设为 `2026-06-01`；13:23 部署观察 40 秒内 run 数从 1275 增至 1281，
+  该运行时覆盖会继续产生数据库写入，不改变公开默认关闭的产品边界。
+
+- **本轮（主动提醒默认关闭）**：实机确认 23 条无关提醒均为历史 `response_expectation` 候选分别
+  产生的 `owner_policy_reminder`，不是同一投递重试。新增独立主动投递开关并默认关闭，同时把
+  Follow-up、Agenda、Notification Policy 生产 Worker 默认关闭；Compose 显式 fail-closed。
+  Owner 被动回复和上线/下线通知不受影响，历史送达记录保留审计。最终容器跨原扫描周期观察后
+  delivered 保持 23，可投递、待求值候选和请求均为 0。
+
+- **本轮（DeepSeek 可用性降级）**：修复官方 API 响应慢于 Action Graph 期限导致 Owner 消息持续
+  重试的问题。精确问候不再调用模型；模型超时、传输、限流、空选择、空正文和无效响应返回不执行
+  Action 的安全回复，线程语义转用既有保守提取器。认证/配置错误仍 fail-closed。请求默认 20 秒、
+  最大 25 秒，并由共享 Graph 期限常量计算，严格早于 30 秒 Graph 期限；日志仅保留类型化错误码。
+  DeepSeek 官网确认 V4 默认高强度 Thinking 且 JSON Output 可能偶发空正文后，结构化请求现显式发送
+  `thinking.type=disabled`，空正文仅在原总期限内重试一次，`finish_reason` 脱敏后记录；仍失败才进入
+  原有安全降级。fake HTTP 3/3、真实 `deepseek-v4-flash` 来源约束语义提取 1/1 通过。最终镜像部署后
+  容器重启计数为 0，观察期没有再出现 `missing_content`、线程语义或 Action Planner 的 LLM 降级。
+
+- **本轮（上线生命周期、群 Owner 回复与本机管理页）**：官方平台启动/优雅关闭分别向 Owner
+  发送上线/下线通知；群内只有配置 Owner 明确 @Bot 才产生 `OwnerCommand`，回复目标从权威 raw
+  event 恢复。NapCat 私聊全部观察，群聊改为运行期 fail-closed 白名单。新增仅回环管理员页面，
+  从 NapCat 七项只读能力中的 `get_group_list` 获取群目录并持久化增删白名单。实机读取 123 个群，
+  0→1→0 增删恢复通过；生命周期通知均送达，SIGTERM 1.47 秒退出且 exit=0。
+
+- **本轮（仅 Owner 的 QQ 开放平台秘书对话）**：完成的 `OwnerResponseDraft` 不再只落库；新增独立
+  `secretary_owner_response_outbox`，以托管账号、开放平台 Bot、权威 `OwnerCommand`、C2C raw event
+  和 active OwnerBinding 五重条件领取，并通过原消息 `msg_id` 被动回复 Owner。租约 fencing、回复
+  窗口过期、退避、永久失败和 `unknown_commit` 均持久化。Compose 新增幂等增量迁移屏障；NapCat
+  仍只读，普通用户与群消息仍不自动回复。
+
 - **本轮（QQBot Compose + 单业务线收敛）**：删除旧数字人应用、领域 crate、专属 AI crate、
   根数据库 SQL、管理端、代理、脚本和专属文档，workspace 收敛为 7 个 QQBot 相关成员。新增
   QQBot 多阶段镜像、宿主 NapCat loopback 代理、MySQL 8.4 Baseline v2 初始化和独立 MySQL/Spool

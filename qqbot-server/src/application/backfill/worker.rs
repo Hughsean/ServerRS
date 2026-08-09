@@ -167,13 +167,26 @@ async fn run_worker<R: BackfillRunner + 'static>(
         let scan_result = scan_once(&use_case, max_concurrency, &shutdown).await;
         for outcome in &scan_result.outcomes {
             tracing::info!(
-                backfill_run_id = %outcome.run_id.as_str(),
-                gap_id = %outcome.gap_id.as_str(),
                 completeness = outcome.completeness.as_str(),
                 gap_target_status = outcome.gap_target_status.as_str(),
-                pages_read = outcome.evidence.scopes.iter().map(|s| s.pages_read).sum::<u32>(),
-                accepted = outcome.evidence.scopes.iter().map(|s| s.accepted).sum::<u32>(),
-                duplicates = outcome.evidence.scopes.iter().map(|s| s.duplicates).sum::<u32>(),
+                pages_read = outcome
+                    .evidence
+                    .scopes
+                    .iter()
+                    .map(|s| s.pages_read)
+                    .sum::<u32>(),
+                accepted = outcome
+                    .evidence
+                    .scopes
+                    .iter()
+                    .map(|s| s.accepted)
+                    .sum::<u32>(),
+                duplicates = outcome
+                    .evidence
+                    .scopes
+                    .iter()
+                    .map(|s| s.duplicates)
+                    .sum::<u32>(),
                 budget_exhausted = outcome.evidence.budget_exhausted,
                 "历史回补运行已结束"
             );
@@ -380,6 +393,7 @@ mod tests {
     fn config() -> BackfillConfig {
         BackfillConfig {
             enabled: true,
+            earliest_date: Some("2026-03-01".into()),
             page_size: 10,
             max_pages_per_scope: 5,
             max_events_per_run: 100,

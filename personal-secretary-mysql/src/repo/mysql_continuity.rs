@@ -102,10 +102,7 @@ impl IngestionContinuityStoreT for MySqlInboundEventStore {
             .map_err(store_error)?;
 
         transaction.commit().await.map_err(store_error)?;
-        tracing::info!(
-            connection_epoch_id = %connection_epoch_id.as_str(),
-            "接入连接周期已标记为 connected"
-        );
+        tracing::info!("接入连接周期已标记为 connected");
         Ok(())
     }
 
@@ -280,12 +277,7 @@ async fn mark_connection_uncertain_in_txn(
             .map_err(store_error)?;
     }
     transaction.commit().await.map_err(store_error)?;
-    tracing::warn!(
-        connection_epoch_id = %connection_epoch_id.as_str(),
-        gap_id = %gap.as_str(),
-        reason = reason.as_str(),
-        "连接周期已标记为消息连续性不确定"
-    );
+    tracing::warn!(reason = reason.as_str(), "连接周期已标记为消息连续性不确定");
     Ok(gap)
 }
 

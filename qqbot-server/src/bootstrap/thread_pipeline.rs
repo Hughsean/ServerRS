@@ -78,8 +78,12 @@ pub(crate) async fn assemble_thread_workers(
                 "LLM 有界线程语义提取已启用；模型输出仍须通过来源与领域策略校验"
             );
             Arc::new(
-                LlmThreadSemanticExtractor::from_openai(client, config.llm.max_candidates_per_kind)
-                    .map_err(|error| RuntimeError::Llm(error.to_string()))?,
+                LlmThreadSemanticExtractor::from_openai(
+                    client,
+                    config.llm.max_candidates_per_kind,
+                    config.thread_semantics.max_event_chars,
+                )
+                .map_err(|error| RuntimeError::Llm(error.to_string()))?,
             )
         } else {
             tracing::info!("LLM 已禁用；线程语义使用保守零模型提取器");

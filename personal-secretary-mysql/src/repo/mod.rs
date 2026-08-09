@@ -15,6 +15,7 @@ mod mysql_memory_candidate_control;
 mod mysql_notification_candidate_producer;
 mod mysql_notification_policy;
 mod mysql_owner_binding;
+mod mysql_owner_response_delivery;
 mod mysql_realtime_spool;
 mod mysql_recall;
 mod mysql_reconcile;
@@ -41,6 +42,7 @@ pub(crate) use mysql_memory_candidate_control::MySqlMemoryCandidateControlStore;
 #[allow(dead_code)]
 pub(crate) use mysql_notification_policy::MySqlNotificationPolicyStore;
 pub(crate) use mysql_owner_binding::MySqlOwnerBindingStore;
+pub(crate) use mysql_owner_response_delivery::MySqlOwnerResponseDeliveryStore;
 pub(crate) use mysql_recall::MySqlRecallStore;
 pub(crate) use mysql_response_expectation_control::MySqlResponseExpectationControlStore;
 pub(crate) use mysql_retriever::MySqlRetrieverStore;

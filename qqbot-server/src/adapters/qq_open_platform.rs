@@ -6,9 +6,10 @@ use chrono::{DateTime, Utc};
 use personal_secretary::{
     ContentSegment, ConversationKind, ConversationRef, FollowUpUseCase, InboundEventStoreT,
     InboundMessageEnvelope, IngestMessageOutcome, MessageSource, NotificationFailureKind,
-    OwnerBinding, OwnerBindingStoreT, OwnerNotificationContent, SecretaryActionResumeInput,
-    SecretaryApprovalDecision, SourceAccountRef, SourceMessageRef, VerifiedActor,
-    VerifiedActorKind,
+    OwnerBinding, OwnerBindingStoreT, OwnerNotificationContent, OwnerResponseDeliveryScope,
+    OwnerResponseDeliveryStoreT, OwnerResponseDeliveryUseCase, OwnerResponseTarget,
+    SecretaryActionResumeInput, SecretaryApprovalDecision, SourceAccountRef, SourceMessageRef,
+    VerifiedActor, VerifiedActorKind,
 };
 use qq_open_platform::{
     GatewayEventHandlerT, GatewayRunError, GatewaySessionStoreT, QqApiError, QqGatewayClient,
@@ -31,6 +32,7 @@ pub(crate) struct OfficialPlatformPorts {
     owner_bindings: Arc<dyn OwnerBindingStoreT>,
     session_store: Arc<dyn GatewaySessionStoreT>,
     raw_events: Arc<dyn OfficialRawEventStoreT>,
+    owner_responses: Arc<dyn OwnerResponseDeliveryStoreT>,
 }
 
 impl OfficialPlatformPorts {
@@ -39,12 +41,14 @@ impl OfficialPlatformPorts {
         owner_bindings: Arc<dyn OwnerBindingStoreT>,
         session_store: Arc<dyn GatewaySessionStoreT>,
         raw_events: Arc<dyn OfficialRawEventStoreT>,
+        owner_responses: Arc<dyn OwnerResponseDeliveryStoreT>,
     ) -> Self {
         Self {
             inbound,
             owner_bindings,
             session_store,
             raw_events,
+            owner_responses,
         }
     }
 }
@@ -69,6 +73,7 @@ pub(crate) async fn spawn_official_platform(
         owner_bindings,
         session_store,
         raw_events,
+        owner_responses,
     } = ports;
     let credentials = config
         .credentials()
@@ -76,6 +81,15 @@ pub(crate) async fn spawn_official_platform(
     let api = Arc::new(QqOpenPlatformClient::new(credentials)?);
     let command_account = SourceAccountRef::new(MessageSource::QqOpenPlatform, api.app_id())
         .map_err(|error| GatewayRunError::Protocol(error.to_string()))?;
+    let owner_response_delivery = Arc::new(OwnerResponseDeliveryUseCase::new(
+        owner_responses,
+        OwnerResponseDeliveryScope::new(
+            managed_account.clone(),
+            command_account.clone(),
+            config.owner_openid.clone(),
+        )
+        .map_err(|error| GatewayRunError::Protocol(error.to_string()))?,
+    ));
     owner_bindings
         .ensure_owner_binding(&OwnerBinding {
             managed_account: managed_account.clone(),
@@ -103,6 +117,7 @@ pub(crate) async fn spawn_official_platform(
         gateway,
         api,
         follow_up,
+        owner_response_delivery,
         managed_account,
         config,
         receiver,
@@ -114,20 +129,204 @@ async fn run_official_workers(
     gateway: Arc<QqGatewayClient>,
     api: Arc<QqOpenPlatformClient>,
     follow_up: Arc<FollowUpUseCase>,
+    owner_response_delivery: Arc<OwnerResponseDeliveryUseCase>,
     managed_account: SourceAccountRef,
     config: QqOpenPlatformConfig,
     shutdown: watch::Receiver<bool>,
 ) {
     let mut tasks = JoinSet::new();
     tasks.spawn(run_gateway_loop(gateway, config.clone(), shutdown.clone()));
-    tasks.spawn(run_outbox_loop(
+    if config.proactive_notifications {
+        tasks.spawn(run_outbox_loop(
+            Arc::clone(&api),
+            follow_up,
+            managed_account,
+            config.clone(),
+            shutdown.clone(),
+        ));
+    } else {
+        tracing::info!("Owner 主动业务提醒已禁用；被动回复与生命周期通知保持启用");
+    }
+    if config.lifecycle_notifications {
+        tasks.spawn(run_lifecycle_notifications(
+            Arc::clone(&api),
+            config.owner_openid.clone(),
+            shutdown.clone(),
+        ));
+    }
+    tasks.spawn(run_owner_response_loop(
         api,
-        follow_up,
-        managed_account,
+        owner_response_delivery,
         config,
         shutdown,
     ));
     while tasks.join_next().await.is_some() {}
+}
+
+const OWNER_RESPONSE_SCAN_INTERVAL: Duration = Duration::from_millis(250);
+const OWNER_RESPONSE_MAX_AGE_SECS: u64 = 240;
+
+async fn run_owner_response_loop(
+    api: Arc<QqOpenPlatformClient>,
+    delivery: Arc<OwnerResponseDeliveryUseCase>,
+    config: QqOpenPlatformConfig,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        let result = delivery
+            .claim_pending_response(
+                unix_now(),
+                config.notification_lease_secs,
+                OWNER_RESPONSE_MAX_AGE_SECS,
+            )
+            .await;
+        match result {
+            Ok(Some(response)) => {
+                let text = render_owner_response(&response.draft);
+                if text.is_empty() {
+                    let _ = delivery
+                        .mark_response_failed(
+                            &response.response_id,
+                            &response.lease_token,
+                            "empty_response",
+                            NotificationFailureKind::Permanent,
+                        )
+                        .await;
+                    continue;
+                }
+                let target = match &response.target {
+                    OwnerResponseTarget::C2c => QqTarget::C2c {
+                        user_openid: config.owner_openid.clone(),
+                    },
+                    OwnerResponseTarget::Group { group_openid } => QqTarget::Group {
+                        group_openid: group_openid.clone(),
+                    },
+                };
+                match api
+                    .send_text_reply(&target, &text, &response.reply_to_platform_message_id, 1)
+                    .await
+                {
+                    Ok(receipt) => {
+                        if let Err(error) = delivery
+                            .mark_response_delivered(
+                                &response.response_id,
+                                &response.lease_token,
+                                &receipt.platform_message_id,
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                error = %error,
+                                error_code = "owner_response_receipt_persistence_failed",
+                                "Owner 被动回复已提交，但本地回执持久化失败"
+                            );
+                        } else {
+                            tracing::info!("Owner 被动回复已送达");
+                        }
+                    }
+                    Err(error) => {
+                        let failure_kind = classify_delivery_failure(&error);
+                        let error_code = delivery_error_code(&error);
+                        if let Err(store_error) = delivery
+                            .mark_response_failed(
+                                &response.response_id,
+                                &response.lease_token,
+                                error_code,
+                                failure_kind,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %store_error,
+                                error_code,
+                                "Owner 被动回复失败状态持久化失败"
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                error = %error,
+                error_code = "owner_response_claim_failed",
+                "Owner 被动回复领取失败"
+            ),
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { return; }
+            }
+            _ = tokio::time::sleep(OWNER_RESPONSE_SCAN_INTERVAL) => {}
+        }
+    }
+}
+
+const LIFECYCLE_NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(8);
+
+async fn run_lifecycle_notifications(
+    api: Arc<QqOpenPlatformClient>,
+    owner_openid: String,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let target = QqTarget::C2c {
+        user_openid: owner_openid,
+    };
+    send_lifecycle_notification(&api, &target, "秘书已上线", "online").await;
+    loop {
+        if *shutdown.borrow() || shutdown.changed().await.is_err() {
+            break;
+        }
+    }
+    send_lifecycle_notification(&api, &target, "秘书正在安全下线", "offline").await;
+}
+
+async fn send_lifecycle_notification(
+    api: &QqOpenPlatformClient,
+    target: &QqTarget,
+    content: &str,
+    stage: &'static str,
+) {
+    match tokio::time::timeout(
+        LIFECYCLE_NOTIFICATION_TIMEOUT,
+        api.send_text(target, content),
+    )
+    .await
+    {
+        Ok(Ok(_)) => tracing::info!(stage, "Owner 生命周期通知已送达"),
+        Ok(Err(error)) => tracing::warn!(
+            stage,
+            error_code = delivery_error_code(&error),
+            "Owner 生命周期通知发送失败"
+        ),
+        Err(_) => tracing::warn!(
+            stage,
+            error_code = "lifecycle_notification_timeout",
+            "Owner 生命周期通知发送超时"
+        ),
+    }
+}
+
+fn render_owner_response(draft: &personal_secretary::OwnerResponseDraft) -> String {
+    const MAX_CHARS: usize = 4_000;
+    const TRUNCATED_SUFFIX: &str = "\n\n（内容已截断）";
+
+    let text = draft
+        .segments()
+        .iter()
+        .map(personal_secretary::ResponseSegment::text)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.chars().count() <= MAX_CHARS {
+        return text;
+    }
+    let prefix_chars = MAX_CHARS.saturating_sub(TRUNCATED_SUFFIX.chars().count());
+    let mut truncated = text.chars().take(prefix_chars).collect::<String>();
+    truncated.push_str(TRUNCATED_SUFFIX);
+    truncated
 }
 
 async fn run_gateway_loop(
@@ -446,8 +645,13 @@ impl OfficialInboundHandler {
 #[async_trait]
 impl GatewayEventHandlerT for OfficialInboundHandler {
     async fn persist(&self, event: QqGatewayEvent) -> Result<(), GatewayRunError> {
-        let is_owner = event.event_kind == QqGatewayEventKind::C2cMessage
-            && event.sender_openid == self.owner_openid;
+        let is_owner = is_owner_command(&event, &self.owner_openid);
+        if event.event_kind == QqGatewayEventKind::C2cMessage && !is_owner {
+            tracing::warn!(
+                error_code = "owner_openid_mismatch",
+                "QQ 开放平台 C2C 发送者不是配置 Owner；仅持久化观察，不创建 Action 或回复"
+            );
+        }
         let conversation = match event.event_kind {
             QqGatewayEventKind::C2cMessage if is_owner => {
                 ConversationRef::new(ConversationKind::OwnerControl, &event.sender_openid)
@@ -455,6 +659,10 @@ impl GatewayEventHandlerT for OfficialInboundHandler {
             QqGatewayEventKind::C2cMessage => {
                 ConversationRef::new(ConversationKind::Private, &event.sender_openid)
             }
+            QqGatewayEventKind::GroupAtMessage if is_owner => ConversationRef::new(
+                ConversationKind::OwnerControl,
+                event.group_openid.as_deref().unwrap_or_default(),
+            ),
             QqGatewayEventKind::GroupAtMessage | QqGatewayEventKind::GroupMessage => {
                 ConversationRef::new(
                     ConversationKind::Group,
@@ -529,8 +737,6 @@ impl GatewayEventHandlerT for OfficialInboundHandler {
             }
         }
         tracing::info!(
-            app_id = event.app_id,
-            message_id = event.platform_message_id,
             owner_command = is_owner,
             duplicate = matches!(outcome, IngestMessageOutcome::Duplicate { .. }),
             "QQ Open Platform event durably admitted"
@@ -539,9 +745,51 @@ impl GatewayEventHandlerT for OfficialInboundHandler {
     }
 }
 
+fn is_owner_command(event: &QqGatewayEvent, owner_openid: &str) -> bool {
+    event.sender_openid == owner_openid
+        && matches!(
+            event.event_kind,
+            QqGatewayEventKind::C2cMessage | QqGatewayEventKind::GroupAtMessage
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gateway_event(kind: QqGatewayEventKind, sender: &str) -> QqGatewayEvent {
+        QqGatewayEvent {
+            app_id: "app".into(),
+            event_kind: kind,
+            platform_message_id: "message".into(),
+            sender_openid: sender.into(),
+            group_openid: Some("group".into()),
+            content: "content".into(),
+            timestamp: "2026-08-07T00:00:00Z".into(),
+            mentions: Vec::new(),
+            raw_envelope: "{}".into(),
+        }
+    }
+
+    #[test]
+    fn only_owner_c2c_or_explicit_group_at_is_a_command() {
+        assert!(is_owner_command(
+            &gateway_event(QqGatewayEventKind::C2cMessage, "owner"),
+            "owner"
+        ));
+        assert!(is_owner_command(
+            &gateway_event(QqGatewayEventKind::GroupAtMessage, "owner"),
+            "owner"
+        ));
+        assert!(!is_owner_command(
+            &gateway_event(QqGatewayEventKind::GroupMessage, "owner"),
+            "owner"
+        ));
+        assert!(!is_owner_command(
+            &gateway_event(QqGatewayEventKind::GroupAtMessage, "external"),
+            "owner"
+        ));
+    }
 
     #[test]
     fn ambiguous_post_failures_never_retry_blindly() {
@@ -561,5 +809,40 @@ mod tests {
             delivery_error_code(&QqApiError::InvalidReplyContext),
             "invalid_reply_context"
         );
+    }
+
+    #[test]
+    fn owner_response_segments_are_joined_for_passive_reply() {
+        let draft = personal_secretary::OwnerResponseDraft::new(
+            vec![
+                personal_secretary::ResponseSegment::Summary {
+                    text: "第一段".into(),
+                },
+                personal_secretary::ResponseSegment::Summary {
+                    text: "第二段".into(),
+                },
+            ],
+            Vec::new(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(render_owner_response(&draft), "第一段\n\n第二段");
+    }
+
+    #[test]
+    fn owner_response_is_truncated_to_platform_character_limit() {
+        let draft = personal_secretary::OwnerResponseDraft::new(
+            (0..5)
+                .map(|_| personal_secretary::ResponseSegment::Summary {
+                    text: "文".repeat(1_000),
+                })
+                .collect(),
+            Vec::new(),
+            1,
+        )
+        .unwrap();
+        let rendered = render_owner_response(&draft);
+        assert_eq!(rendered.chars().count(), 4_000);
+        assert!(rendered.ends_with("（内容已截断）"));
     }
 }

@@ -22,6 +22,10 @@ pub struct QqOpenPlatformConfig {
     pub reconnect_initial_ms: u64,
     pub reconnect_max_ms: u64,
     pub notification_lease_secs: u64,
+    /// 进程启动与收到优雅关闭信号时向 Owner 发送状态通知。
+    pub lifecycle_notifications: bool,
+    /// 主动投递 Follow-up、Agenda 和策略提醒。默认关闭，必须由 Owner 显式启用。
+    pub proactive_notifications: bool,
 }
 
 impl Default for QqOpenPlatformConfig {
@@ -35,6 +39,8 @@ impl Default for QqOpenPlatformConfig {
             reconnect_initial_ms: 1_000,
             reconnect_max_ms: 60_000,
             notification_lease_secs: 60,
+            lifecycle_notifications: true,
+            proactive_notifications: false,
         }
     }
 }

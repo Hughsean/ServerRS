@@ -729,6 +729,23 @@ mod tests {
     #[path = "../../../../personal-secretary-mysql/tests/common/mod.rs"]
     mod mysql_common;
 
+    #[test]
+    fn health_warning_is_emitted_only_when_entering_a_non_healthy_status() {
+        assert!(should_warn_health_status(None, HealthStatus::Uncertain));
+        assert!(!should_warn_health_status(
+            Some(HealthStatus::Uncertain),
+            HealthStatus::Uncertain
+        ));
+        assert!(should_warn_health_status(
+            Some(HealthStatus::Uncertain),
+            HealthStatus::Degraded
+        ));
+        assert!(!should_warn_health_status(
+            Some(HealthStatus::Degraded),
+            HealthStatus::Healthy
+        ));
+    }
+
     #[tokio::test]
     async fn recall_spool_producer_reports_bounded_numeric_metrics() {
         let telemetry = RecallSpoolTelemetry::new(1_000);
@@ -1084,6 +1101,7 @@ async fn run_health_worker(
         interval_ms = config.log_interval_ms,
         "B7 健康采样 Worker 已启动"
     );
+    let mut previous_overall_status = None;
     loop {
         if *shutdown.borrow() {
             return;
@@ -1096,19 +1114,25 @@ async fn run_health_worker(
         aggregator.invalidate_cache();
         let snapshot = aggregator.snapshot(now).await;
         let _ = publisher.send(snapshot.clone());
-        if snapshot.overall_status == HealthStatus::Healthy {
+        let status_changed = previous_overall_status != Some(snapshot.overall_status);
+        if should_warn_health_status(previous_overall_status, snapshot.overall_status) {
+            warn!(
+                previous = previous_overall_status
+                    .map(HealthStatus::as_str)
+                    .unwrap_or("none"),
+                overall = snapshot.overall_status.as_str(),
+                subsystem_count = snapshot.subsystems.len(),
+                "runtime health status changed"
+            );
+        } else {
             info!(
                 overall = snapshot.overall_status.as_str(),
                 subsystem_count = snapshot.subsystems.len(),
-                "runtime health snapshot"
-            );
-        } else {
-            warn!(
-                overall = snapshot.overall_status.as_str(),
-                subsystem_count = snapshot.subsystems.len(),
+                status_changed,
                 "runtime health snapshot"
             );
         }
+        previous_overall_status = Some(snapshot.overall_status);
         for subsystem in &snapshot.subsystems {
             info!(
                 subsystem = %subsystem.name,
@@ -1123,6 +1147,10 @@ async fn run_health_worker(
             _ = tokio::time::sleep(Duration::from_millis(config.log_interval_ms.max(1_000))) => {}
         }
     }
+}
+
+fn should_warn_health_status(previous: Option<HealthStatus>, current: HealthStatus) -> bool {
+    current != HealthStatus::Healthy && previous != Some(current)
 }
 
 async fn sample_backfill_health(

@@ -55,7 +55,6 @@ async fn run_worker(
     mut shutdown: watch::Receiver<bool>,
 ) {
     info!(
-        account_id = %account.account_id,
         scan_interval_ms = config.scan_interval_ms,
         snapshot_ttl_secs = config.snapshot_ttl_secs,
         "B4 目录同步 Worker 已启动"

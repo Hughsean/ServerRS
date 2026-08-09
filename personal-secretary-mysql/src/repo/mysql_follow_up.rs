@@ -244,15 +244,28 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                                  FROM secretary_thread_question_sources question_source
                                  JOIN secretary_source_events asked
                                    ON asked.source_event_id = question_source.source_event_id
-                                 JOIN secretary_thread_events reply_member
-                                   ON reply_member.thread_id = expectation.thread_id
                                  JOIN secretary_source_events reply
-                                   ON reply.source_event_id = reply_member.source_event_id
+                                   ON reply.account_id = asked.account_id
+                                  AND reply.conversation_id = asked.conversation_id
+                                 JOIN secretary_conversations conversation
+                                   ON conversation.id = asked.conversation_id
+                                 LEFT JOIN secretary_thread_events reply_member
+                                   ON reply_member.source_event_id = reply.source_event_id
                                  WHERE question_source.question_id = expectation.source_question_id
-                                   AND reply.message_role = 'assistant_output'
                                    AND (reply.occurred_at_unix_secs > asked.occurred_at_unix_secs
                                         OR (reply.occurred_at_unix_secs = asked.occurred_at_unix_secs
                                             AND reply.source_event_id > asked.source_event_id))
+                                   AND (
+                                       (reply.message_role = 'assistant_output'
+                                        AND reply_member.thread_id = expectation.thread_id)
+                                       OR
+                                       (reply.message_role = 'owner_observation'
+                                        AND (
+                                            conversation.conversation_kind = 'private'
+                                            OR reply_member.thread_id = expectation.thread_id
+                                            OR reply.reply_to_event_id = asked.source_event_id
+                                        ))
+                                   )
                              )
                          )
                        ORDER BY expectation.updated_at, expectation.expectation_id
@@ -305,14 +318,27 @@ impl FollowUpStoreT for MySqlFollowUpStore {
                      AND source.occurred_at_unix_secs + ? <= ?
                      AND NOT EXISTS (
                          SELECT 1
-                         FROM secretary_thread_events reply_member
-                         JOIN secretary_source_events reply
-                           ON reply.source_event_id = reply_member.source_event_id
-                         WHERE reply_member.thread_id = question.thread_id
-                           AND reply.message_role = 'assistant_output'
+                         FROM secretary_source_events reply
+                         JOIN secretary_conversations conversation
+                           ON conversation.id = source.conversation_id
+                         LEFT JOIN secretary_thread_events reply_member
+                           ON reply_member.source_event_id = reply.source_event_id
+                         WHERE reply.account_id = source.account_id
+                           AND reply.conversation_id = source.conversation_id
                            AND (reply.occurred_at_unix_secs > source.occurred_at_unix_secs
                                 OR (reply.occurred_at_unix_secs = source.occurred_at_unix_secs
                                     AND reply.source_event_id > source.source_event_id))
+                           AND (
+                               (reply.message_role = 'assistant_output'
+                                AND reply_member.thread_id = question.thread_id)
+                               OR
+                               (reply.message_role = 'owner_observation'
+                                AND (
+                                    conversation.conversation_kind = 'private'
+                                    OR reply_member.thread_id = question.thread_id
+                                    OR reply.reply_to_event_id = source.source_event_id
+                                ))
+                           )
                      )
                    GROUP BY thread.account_id, question.question_id, question.thread_id
                    ORDER BY MIN(source.occurred_at_unix_secs), question.question_id

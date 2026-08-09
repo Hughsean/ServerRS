@@ -120,20 +120,13 @@ impl IngestionQueue {
                 let dropped_count = self.overflow.record_drop();
                 self.metrics.record_drop();
                 tracing::warn!(
-                    connection_epoch_id = %self.connection_epoch_id.as_str(),
-                    platform_message_id = %platform_message_id,
-                    conversation_id = %conversation_id,
                     dropped_count,
                     "个人秘书持久化队列已满，消息未入队并将创建 uncertain Gap"
                 );
                 Err(IngestionEnqueueError::Full)
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::error!(
-                    connection_epoch_id = %self.connection_epoch_id.as_str(),
-                    platform_message_id = %platform_message_id,
-                    "个人秘书持久化队列已关闭"
-                );
+                tracing::error!("个人秘书持久化队列已关闭");
                 Err(IngestionEnqueueError::Closed)
             }
         }
@@ -751,16 +744,11 @@ async fn process_batch_with_retry(
                             .await
                         {
                             tracing::error!(
-                                connection_epoch_id = %connection_epoch_id.as_str(),
                                 error_code = inbound_error_code(&gap_error),
                                 "无法为非法队列消息持久化 uncertain Gap"
                             );
                         }
-                        tracing::warn!(
-                            connection_epoch_id = %connection_epoch_id.as_str(),
-                            platform_message_id = %current_batch[0].source.message_id,
-                            "单条非法消息已隔离并跳过，创建 InvalidEvent uncertain Gap"
-                        );
+                        tracing::warn!("单条非法消息已隔离并跳过，创建 InvalidEvent uncertain Gap");
                         break; // 此子批次处理完成（跳过）
                     }
                     // 长度 > 1：事务已回滚，二分继续定位。
@@ -787,7 +775,6 @@ async fn process_batch_with_retry(
                     }
                     if attempt == 1 || attempt.is_power_of_two() {
                         tracing::warn!(
-                            connection_epoch_id = %connection_epoch_id.as_str(),
                             batch_len = current_batch.len(),
                             attempt,
                             retry_delay_ms = retry_delay.as_millis(),
@@ -1157,18 +1144,13 @@ async fn persist_overflow_gap(
         .mark_connection_uncertain(connection_epoch_id, IngestionGapReason::QueueOverflow)
         .await
     {
-        Ok(gap_id) => {
+        Ok(_) => {
             overflow.mark_gap_persisted();
             metrics.overflow_pending.store(
                 u64::from(overflow.gap_needs_persistence()),
                 Ordering::Release,
             );
-            tracing::warn!(
-                connection_epoch_id = %connection_epoch_id.as_str(),
-                gap_id = %gap_id.as_str(),
-                dropped_count,
-                "队列溢出已持久化为 uncertain Gap"
-            );
+            tracing::warn!(dropped_count, "队列溢出已持久化为 uncertain Gap");
         }
         Err(error) => {
             let _ = error;

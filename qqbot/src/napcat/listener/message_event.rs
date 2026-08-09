@@ -167,7 +167,7 @@ pub(crate) async fn handle_message(
                 raw_event,
             };
 
-            info!(group_id, user_id, at_bot, is_self, "收到 NapCat 群消息事件");
+            info!(at_bot, is_self, "收到 NapCat 群消息事件");
             handler.handle(NapCatEvent::GroupMessage(message)).await
         }
         "private" => {
@@ -198,7 +198,7 @@ pub(crate) async fn handle_message(
                 raw_event,
             };
 
-            info!(user_id, peer_id, is_self, "收到 NapCat 私聊消息事件");
+            info!(is_self, "收到 NapCat 私聊消息事件");
             handler.handle(NapCatEvent::PrivateMessage(message)).await
         }
         _ => unreachable!("message type was checked before validation"),

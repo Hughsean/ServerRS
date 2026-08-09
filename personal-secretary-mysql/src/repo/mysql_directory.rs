@@ -347,10 +347,7 @@ impl DirectoryStoreT for MySqlDirectoryStore {
         .map_err(db_err)?;
 
         let Some(row) = row else {
-            warn!(
-                gap_id = gap_id.as_str(),
-                "无目录快照可冻结，Gap 将无目录证据"
-            );
+            warn!("无目录快照可冻结，Gap 将无目录证据");
             return Ok(None);
         };
 

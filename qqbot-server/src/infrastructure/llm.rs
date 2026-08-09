@@ -7,13 +7,13 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use personal_secretary::{
     ClaimKind, ClaimedThreadSemanticBatch, CommitmentMemory, CommitmentStatus,
-    INITIAL_CANDIDATE_VERSION, MemoryCandidate, MemoryCandidateBatch, MemoryCandidateEvent,
-    MemoryCandidateExtractorError, MemoryCandidateExtractorT, MemoryCandidateId,
-    MemoryCandidateSource, MemoryCandidateStatus, MemoryCandidateVersion, MemoryPayload,
-    OpenQuestionCandidate, OpenQuestionId, PersonMemory, ProjectMemory, SourceEventId,
-    ThreadActorRef, ThreadClaimCandidate, ThreadClaimId, ThreadDecisionCandidate, ThreadDecisionId,
-    ThreadSemanticExtractorError, ThreadSemanticExtractorT, ThreadSemanticPatch,
-    candidate_fingerprint, validate_semantic_patch,
+    ConservativeThreadSemanticExtractor, INITIAL_CANDIDATE_VERSION, MemoryCandidate,
+    MemoryCandidateBatch, MemoryCandidateEvent, MemoryCandidateExtractorError,
+    MemoryCandidateExtractorT, MemoryCandidateId, MemoryCandidateSource, MemoryCandidateStatus,
+    MemoryCandidateVersion, MemoryPayload, OpenQuestionCandidate, OpenQuestionId, PersonMemory,
+    ProjectMemory, SourceEventId, ThreadActorRef, ThreadClaimCandidate, ThreadClaimId,
+    ThreadDecisionCandidate, ThreadDecisionId, ThreadSemanticExtractorError,
+    ThreadSemanticExtractorT, ThreadSemanticPatch, candidate_fingerprint, validate_semantic_patch,
 };
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -149,12 +149,14 @@ pub(crate) trait StructuredLlmClientT: Send + Sync {
 pub(crate) struct OpenAiCompatibleClient {
     http: Client,
     endpoint: Url,
+    provider: LlmProvider,
     model: String,
     api_key: Option<String>,
     temperature: f64,
     max_input_chars: usize,
     max_output_tokens: u32,
     max_response_bytes: usize,
+    request_timeout: Duration,
     reasoning_mode: LlmReasoningMode,
     metrics: Arc<LlmMetrics>,
 }
@@ -185,12 +187,14 @@ impl OpenAiCompatibleClient {
         Ok(Self {
             http,
             endpoint,
+            provider: config.provider,
             model: config.model.clone(),
             api_key,
             temperature: config.temperature,
             max_input_chars: config.max_input_chars,
             max_output_tokens: config.max_output_tokens,
             max_response_bytes: config.max_response_bytes,
+            request_timeout: Duration::from_secs(config.request_timeout_secs),
             reasoning_mode: config.reasoning_mode,
             metrics,
         })
@@ -232,84 +236,39 @@ impl StructuredLlmClientT for OpenAiCompatibleClient {
                     maximum: self.max_input_chars,
                 });
             }
-            let body = ChatCompletionRequest {
-                model: &self.model,
-                messages: [
-                    ChatMessage {
-                        role: "system",
-                        content: system_prompt,
-                    },
-                    ChatMessage {
-                        role: "user",
-                        content: &user_content,
-                    },
-                ],
-                temperature: self.temperature,
-                max_tokens: self.max_output_tokens,
-                stream: false,
-                response_format: ResponseFormat {
-                    kind: "json_object",
-                },
-                think: (self.reasoning_mode == LlmReasoningMode::QwenNoThink).then_some(false),
-            };
-            let mut request = self.http.post(self.endpoint.clone()).json(&body);
-            if let Some(api_key) = &self.api_key {
-                request = request.bearer_auth(api_key);
-            }
-            let response = request.send().await.map_err(|error| {
-                if error.is_timeout() {
-                    LlmClientError::Timeout
-                } else {
-                    LlmClientError::Transport(error.to_string())
+            let deadline = tokio::time::Instant::now() + self.request_timeout;
+            for attempt in 1..=2 {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(LlmClientError::Timeout);
                 }
-            })?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(match status {
-                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                        LlmClientError::Unauthorized
+                let attempt_result = tokio::time::timeout(
+                    remaining,
+                    self.complete_json_attempt(
+                        system_prompt,
+                        &user_content,
+                        input_chars,
+                        attempt,
+                        started,
+                    ),
+                )
+                .await
+                .map_err(|_| LlmClientError::Timeout)?;
+                match attempt_result {
+                    Err(LlmClientError::MissingContent)
+                        if attempt == 1
+                            && deadline.saturating_duration_since(tokio::time::Instant::now())
+                                >= Duration::from_millis(500) =>
+                    {
+                        tracing::debug!(
+                            retry_attempt = 2,
+                            "LLM JSON Output 正文为空，将在原请求期限内有界重试"
+                        );
                     }
-                    StatusCode::TOO_MANY_REQUESTS => LlmClientError::RateLimited,
-                    _ => LlmClientError::Rejected(status.as_u16()),
-                });
-            }
-            if response
-                .content_length()
-                .is_some_and(|length| length > self.max_response_bytes as u64)
-            {
-                return Err(LlmClientError::ResponseLimit);
-            }
-            let mut bytes = Vec::new();
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|error| LlmClientError::Transport(error.to_string()))?;
-                if bytes.len().saturating_add(chunk.len()) > self.max_response_bytes {
-                    return Err(LlmClientError::ResponseLimit);
+                    other => return other,
                 }
-                bytes.extend_from_slice(&chunk);
             }
-            let response: ChatCompletionResponse = serde_json::from_slice(&bytes)
-                .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
-            let choice = response
-                .choices
-                .into_iter()
-                .next()
-                .ok_or(LlmClientError::MissingChoice)?;
-            let content = content_as_text(choice.message.content)?;
-            let value = extract_json_object(&content)?;
-            let usage: LlmUsage = response.usage.unwrap_or_default().into();
-            tracing::debug!(
-                model = self.model,
-                endpoint_host = self.endpoint_host(),
-                input_chars,
-                response_bytes = bytes.len(),
-                prompt_tokens = ?usage.prompt_tokens,
-                completion_tokens = ?usage.completion_tokens,
-                total_tokens = ?usage.total_tokens,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "LLM 结构化补全成功"
-            );
-            Ok(StructuredLlmResponse { value, usage })
+            unreachable!("bounded LLM attempt loop must return")
         }
         .await;
         self.metrics.record(
@@ -317,6 +276,116 @@ impl StructuredLlmClientT for OpenAiCompatibleClient {
             started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         );
         result
+    }
+}
+
+impl OpenAiCompatibleClient {
+    async fn complete_json_attempt(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+        input_chars: usize,
+        attempt: u8,
+        started: Instant,
+    ) -> Result<StructuredLlmResponse, LlmClientError> {
+        let body = ChatCompletionRequest {
+            model: &self.model,
+            messages: [
+                ChatMessage {
+                    role: "system",
+                    content: system_prompt,
+                },
+                ChatMessage {
+                    role: "user",
+                    content: user_content,
+                },
+            ],
+            temperature: self.temperature,
+            max_tokens: self.max_output_tokens,
+            stream: false,
+            response_format: ResponseFormat {
+                kind: "json_object",
+            },
+            thinking: (self.provider == LlmProvider::DeepSeek)
+                .then_some(ThinkingConfig { kind: "disabled" }),
+            think: (self.reasoning_mode == LlmReasoningMode::QwenNoThink).then_some(false),
+        };
+        let mut request = self.http.post(self.endpoint.clone()).json(&body);
+        if let Some(api_key) = &self.api_key {
+            request = request.bearer_auth(api_key);
+        }
+        let response = request.send().await.map_err(|error| {
+            if error.is_timeout() {
+                LlmClientError::Timeout
+            } else {
+                LlmClientError::Transport(error.to_string())
+            }
+        })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(match status {
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => LlmClientError::Unauthorized,
+                StatusCode::TOO_MANY_REQUESTS => LlmClientError::RateLimited,
+                _ => LlmClientError::Rejected(status.as_u16()),
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > self.max_response_bytes as u64)
+        {
+            return Err(LlmClientError::ResponseLimit);
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| LlmClientError::Transport(error.to_string()))?;
+            if bytes.len().saturating_add(chunk.len()) > self.max_response_bytes {
+                return Err(LlmClientError::ResponseLimit);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let response: ChatCompletionResponse = serde_json::from_slice(&bytes)
+            .map_err(|error| LlmClientError::InvalidResponse(error.to_string()))?;
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
+            .ok_or(LlmClientError::MissingChoice)?;
+        let finish_reason = safe_finish_reason(choice.finish_reason.as_deref());
+        let reasoning_content_present = choice
+            .message
+            .reasoning_content
+            .as_ref()
+            .is_some_and(nonempty_response_content);
+        let content = match content_as_text(choice.message.content) {
+            Ok(content) => content,
+            Err(LlmClientError::MissingContent) => {
+                tracing::debug!(
+                    attempt,
+                    finish_reason,
+                    reasoning_content_present,
+                    "LLM 返回 choice 但最终正文为空"
+                );
+                return Err(LlmClientError::MissingContent);
+            }
+            Err(error) => return Err(error),
+        };
+        let value = extract_json_object(&content)?;
+        let usage: LlmUsage = response.usage.unwrap_or_default().into();
+        tracing::debug!(
+            model = self.model,
+            endpoint_host = self.endpoint_host(),
+            attempt,
+            finish_reason,
+            input_chars,
+            response_bytes = bytes.len(),
+            prompt_tokens = ?usage.prompt_tokens,
+            completion_tokens = ?usage.completion_tokens,
+            total_tokens = ?usage.total_tokens,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "LLM 结构化补全成功"
+        );
+        Ok(StructuredLlmResponse { value, usage })
     }
 }
 
@@ -329,6 +398,8 @@ struct ChatCompletionRequest<'a> {
     stream: bool,
     response_format: ResponseFormat<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
 }
 
@@ -340,6 +411,12 @@ struct ChatMessage<'a> {
 
 #[derive(Serialize)]
 struct ResponseFormat<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+}
+
+#[derive(Serialize)]
+struct ThinkingConfig<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
 }
@@ -363,11 +440,15 @@ struct ChatCompletionResponse {
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatResponseMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ChatResponseMessage {
     content: Value,
+    #[serde(default)]
+    reasoning_content: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -404,6 +485,27 @@ fn content_as_text(content: Value) -> Result<String, LlmClientError> {
             }
         }
         _ => Err(LlmClientError::MissingContent),
+    }
+}
+
+fn nonempty_response_content(content: &Value) -> bool {
+    match content {
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(values) => !values.is_empty(),
+        _ => false,
+    }
+}
+
+fn safe_finish_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("stop") => "stop",
+        Some("length") => "length",
+        Some("tool_calls") => "tool_calls",
+        Some("content_filter") => "content_filter",
+        Some("insufficient_system_resource") => "insufficient_system_resource",
+        Some(_) => "other",
+        None => "missing",
     }
 }
 
@@ -466,22 +568,61 @@ pub(crate) enum LlmClientError {
     InvalidResponse(String),
 }
 
+impl LlmClientError {
+    /// 仅将不会改变业务授权或动作语义的上游可用性故障标为可降级。
+    pub(crate) fn transient_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Timeout => Some("timeout"),
+            Self::Transport(_) => Some("transport"),
+            Self::RateLimited => Some("rate_limited"),
+            Self::Rejected(code) if matches!(*code, 408 | 425 | 429 | 500..=599) => {
+                Some("provider_unavailable")
+            }
+            Self::MissingChoice => Some("missing_choice"),
+            Self::MissingContent => Some("missing_content"),
+            Self::MissingJson => Some("missing_json"),
+            Self::InvalidResponse(_) => Some("invalid_response"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn safe_code(&self) -> &'static str {
+        self.transient_code().unwrap_or(match self {
+            Self::Configuration(_) => "configuration",
+            Self::InputLimit { .. } => "input_limit",
+            Self::Unauthorized => "unauthorized",
+            Self::Rejected(_) => "request_rejected",
+            Self::ResponseLimit => "response_limit",
+            Self::Timeout
+            | Self::Transport(_)
+            | Self::RateLimited
+            | Self::MissingChoice
+            | Self::MissingContent
+            | Self::MissingJson
+            | Self::InvalidResponse(_) => "llm_failure",
+        })
+    }
+}
+
 pub(crate) struct LlmThreadSemanticExtractor {
     client: Arc<dyn StructuredLlmClientT>,
     max_candidates_per_kind: usize,
+    fallback: ConservativeThreadSemanticExtractor,
 }
 
 impl LlmThreadSemanticExtractor {
     pub(crate) fn from_openai(
         client: Arc<OpenAiCompatibleClient>,
         max_candidates_per_kind: usize,
+        max_event_chars: usize,
     ) -> Result<Self, ThreadSemanticExtractorError> {
-        Self::new(client, max_candidates_per_kind)
+        Self::new(client, max_candidates_per_kind, max_event_chars)
     }
 
     fn new(
         client: Arc<dyn StructuredLlmClientT>,
         max_candidates_per_kind: usize,
+        max_event_chars: usize,
     ) -> Result<Self, ThreadSemanticExtractorError> {
         if !(1..=100).contains(&max_candidates_per_kind) {
             return Err(ThreadSemanticExtractorError::Failed(
@@ -491,6 +632,8 @@ impl LlmThreadSemanticExtractor {
         Ok(Self {
             client,
             max_candidates_per_kind,
+            fallback: ConservativeThreadSemanticExtractor::new(max_event_chars)
+                .map_err(|error| extractor_error(error.to_string()))?,
         })
     }
 
@@ -605,11 +748,21 @@ impl ThreadSemanticExtractorT for LlmThreadSemanticExtractor {
             events,
         })
         .map_err(|error| extractor_error(error.to_string()))?;
-        let response = self
+        let response = match self
             .client
             .complete_json(SEMANTIC_SYSTEM_PROMPT, &input)
             .await
-            .map_err(|error| extractor_error(error.to_string()))?;
+        {
+            Ok(response) => response,
+            Err(error) if error.transient_code().is_some() => {
+                tracing::warn!(
+                    error_code = error.safe_code(),
+                    "LLM 线程语义暂时不可用，使用保守提取器完成当前批次"
+                );
+                return self.fallback.extract(batch).await;
+            }
+            Err(error) => return Err(extractor_error(error.safe_code())),
+        };
         tracing::debug!(
             thread_id = batch.thread_id.as_str(),
             prompt_tokens = ?response.usage.prompt_tokens,
@@ -979,7 +1132,7 @@ impl MemoryCandidateExtractorT for LlmMemoryCandidateExtractor {
             .client
             .complete_json(CANDIDATE_SYSTEM_PROMPT, &input)
             .await
-            .map_err(|error| candidate_extractor_error(error.to_string()))?;
+            .map_err(|error| candidate_extractor_error(error.safe_code()))?;
         tracing::debug!(
             prompt_tokens = ?response.usage.prompt_tokens,
             completion_tokens = ?response.usage.completion_tokens,
@@ -1203,6 +1356,7 @@ mod tests {
     use std::io::Write;
     use std::sync::Mutex;
 
+    use axum::{Json, Router, extract::State, routing::post};
     use personal_secretary::{
         ConversationKind, ConversationRef, EventThreadId, MessageRole, MessageSource,
         SourceAccountRef, ThreadActorRef, ThreadSemanticCursor, ThreadSemanticEvent,
@@ -1211,9 +1365,160 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone)]
+    struct JsonOutputServerState {
+        calls: Arc<AtomicU64>,
+        requests: Arc<Mutex<Vec<Value>>>,
+        succeed_on_second: bool,
+    }
+
+    async fn json_output_handler(
+        State(state): State<JsonOutputServerState>,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
+        state.requests.lock().unwrap().push(request);
+        let call = state.calls.fetch_add(1, Ordering::AcqRel) + 1;
+        if call == 1 || !state.succeed_on_second {
+            return Json(serde_json::json!({
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {
+                        "content": null,
+                        "reasoning_content": "not logged"
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30
+                }
+            }));
+        }
+        Json(serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": "{\"claims\":[],\"decisions\":[],\"questions\":[]}",
+                    "reasoning_content": null
+                }
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }))
+    }
+
+    async fn spawn_json_output_server(
+        succeed_on_second: bool,
+    ) -> (Url, JsonOutputServerState, tokio::task::JoinHandle<()>) {
+        let state = JsonOutputServerState {
+            calls: Arc::new(AtomicU64::new(0)),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            succeed_on_second,
+        };
+        let app = Router::new()
+            .route("/chat/completions", post(json_output_handler))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (
+            Url::parse(&format!("http://{address}/chat/completions")).unwrap(),
+            state,
+            handle,
+        )
+    }
+
+    fn fake_deepseek_client(endpoint: Url) -> OpenAiCompatibleClient {
+        let request_timeout = Duration::from_secs(5);
+        OpenAiCompatibleClient {
+            http: Client::builder().timeout(request_timeout).build().unwrap(),
+            endpoint,
+            provider: LlmProvider::DeepSeek,
+            model: "deepseek-v4-flash".into(),
+            api_key: Some("test-key".into()),
+            temperature: 0.1,
+            max_input_chars: 60_000,
+            max_output_tokens: 2_000,
+            max_response_bytes: 1_048_576,
+            request_timeout,
+            reasoning_mode: LlmReasoningMode::ProviderDefault,
+            metrics: Arc::new(LlmMetrics::default()),
+        }
+    }
+
     struct FakeClient {
         value: Value,
         calls: Mutex<Vec<Value>>,
+    }
+
+    #[tokio::test]
+    async fn deepseek_json_output_disables_thinking_and_retries_empty_content_once() {
+        let (endpoint, state, server) = spawn_json_output_server(true).await;
+        let client = fake_deepseek_client(endpoint);
+
+        let response = client
+            .complete_json(SEMANTIC_SYSTEM_PROMPT, &serde_json::json!({"events": []}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.value,
+            serde_json::json!({"claims": [], "decisions": [], "questions": []})
+        );
+        assert_eq!(state.calls.load(Ordering::Acquire), 2);
+        {
+            let requests = state.requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests.iter().all(|request| {
+                request["thinking"]["type"] == "disabled" && request.get("think").is_none()
+            }));
+        }
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn deepseek_json_output_stops_after_one_empty_content_retry() {
+        let (endpoint, state, server) = spawn_json_output_server(false).await;
+        let client = fake_deepseek_client(endpoint);
+
+        let error = client
+            .complete_json(SEMANTIC_SYSTEM_PROMPT, &serde_json::json!({"events": []}))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, LlmClientError::MissingContent));
+        assert_eq!(state.calls.load(Ordering::Acquire), 2);
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[test]
+    fn finish_reason_is_bounded_before_logging() {
+        assert_eq!(safe_finish_reason(Some("stop")), "stop");
+        assert_eq!(safe_finish_reason(Some("length")), "length");
+        assert_eq!(safe_finish_reason(Some("sensitive-provider-text")), "other");
+        assert_eq!(safe_finish_reason(None), "missing");
+    }
+
+    struct FailingClient {
+        error: Mutex<Option<LlmClientError>>,
+    }
+
+    #[async_trait]
+    impl StructuredLlmClientT for FailingClient {
+        async fn complete_json(
+            &self,
+            _system_prompt: &str,
+            _input: &Value,
+        ) -> Result<StructuredLlmResponse, LlmClientError> {
+            Err(self.error.lock().unwrap().take().unwrap())
+        }
     }
 
     #[async_trait]
@@ -1302,7 +1607,7 @@ mod tests {
             }),
             calls: Mutex::new(Vec::new()),
         });
-        let extractor = LlmThreadSemanticExtractor::new(client.clone(), 10).unwrap();
+        let extractor = LlmThreadSemanticExtractor::new(client.clone(), 10, 10_000).unwrap();
         let batch = batch(false);
         let patch = extractor.extract(&batch).await.unwrap();
         assert_eq!(patch.claims.len(), 1);
@@ -1328,7 +1633,7 @@ mod tests {
             }),
             calls: Mutex::new(Vec::new()),
         });
-        let extractor = LlmThreadSemanticExtractor::new(client, 10).unwrap();
+        let extractor = LlmThreadSemanticExtractor::new(client, 10, 10_000).unwrap();
         let error = extractor.extract(&batch(false)).await.unwrap_err();
         assert!(error.to_string().contains("source_event_ids"));
     }
@@ -1339,12 +1644,38 @@ mod tests {
             value: serde_json::json!({"claims": [], "decisions": [], "questions": []}),
             calls: Mutex::new(Vec::new()),
         });
-        let extractor = LlmThreadSemanticExtractor::new(client.clone(), 10).unwrap();
+        let extractor = LlmThreadSemanticExtractor::new(client.clone(), 10, 10_000).unwrap();
         assert_eq!(
             extractor.extract(&batch(true)).await.unwrap(),
             ThreadSemanticPatch::default()
         );
         assert!(client.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn transient_semantic_llm_failure_uses_conservative_extractor() {
+        let client = Arc::new(FailingClient {
+            error: Mutex::new(Some(LlmClientError::MissingContent)),
+        });
+        let extractor = LlmThreadSemanticExtractor::new(client, 10, 10_000).unwrap();
+
+        let patch = extractor.extract(&batch(false)).await.unwrap();
+
+        assert_eq!(patch.claims.len(), 1);
+        assert_eq!(patch.claims[0].kind, ClaimKind::Request);
+        assert_eq!(patch.claims[0].statement, "明天发送报价单");
+    }
+
+    #[tokio::test]
+    async fn permanent_semantic_llm_failure_remains_fail_closed() {
+        let client = Arc::new(FailingClient {
+            error: Mutex::new(Some(LlmClientError::Unauthorized)),
+        });
+        let extractor = LlmThreadSemanticExtractor::new(client, 10, 10_000).unwrap();
+
+        let error = extractor.extract(&batch(false)).await.unwrap_err();
+
+        assert!(error.to_string().contains("unauthorized"));
     }
 
     #[tokio::test]
@@ -1354,7 +1685,7 @@ mod tests {
         assert!(config.enabled, "local llm configuration must be enabled");
         let client = Arc::new(OpenAiCompatibleClient::new(&config).unwrap());
         let extractor =
-            LlmThreadSemanticExtractor::from_openai(client, config.max_candidates_per_kind)
+            LlmThreadSemanticExtractor::from_openai(client, config.max_candidates_per_kind, 10_000)
                 .unwrap();
         let claimed = batch(false);
 
@@ -1384,7 +1715,7 @@ mod tests {
         assert!(config.enabled, "local llm configuration must be enabled");
         let client = Arc::new(OpenAiCompatibleClient::new(&config).unwrap());
         let extractor =
-            LlmThreadSemanticExtractor::from_openai(client, config.max_candidates_per_kind)
+            LlmThreadSemanticExtractor::from_openai(client, config.max_candidates_per_kind, 10_000)
                 .unwrap();
         let mut claimed = batch(false);
         claimed.events[0].normalized_text =

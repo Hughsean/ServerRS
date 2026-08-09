@@ -8,6 +8,8 @@
 mod action_planner;
 #[path = "application/action_planner_worker.rs"]
 mod action_planner_worker;
+#[path = "adapters/admin_web.rs"]
+mod admin_web;
 #[path = "application/agenda_notification_worker.rs"]
 mod agenda_notification_worker;
 #[path = "application/artifact_ttl_worker.rs"]
@@ -20,6 +22,8 @@ pub mod config;
 mod directory_sync;
 #[path = "application/follow_up_worker.rs"]
 mod follow_up_worker;
+#[path = "infrastructure/group_whitelist.rs"]
+mod group_whitelist;
 #[path = "infrastructure/health_runtime.rs"]
 mod health_runtime;
 #[path = "adapters/inbound.rs"]

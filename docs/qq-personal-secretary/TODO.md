@@ -36,19 +36,39 @@
   成功收到同一消息，免打扰、自身消息上报和完整派生链三项证据闭合，ENV-003 已完成。
 - 下一步：只继续上线所需外部事项；需要 QQ 开放平台新凭据、实际断网/休眠或远端管理权限的事项
   保留为 `EXTERNAL`。知识库、多模态理解和第三方自动回复已按产品决定停止，不属于当前目标。
-  LLM 已新增 DeepSeek 官方 Provider，本地忽略配置已切换为 `deepseek-chat`；后续需要真实模型的
+  LLM 已新增 DeepSeek 官方 Provider，本地忽略配置已切换为 `deepseek-v4-flash`；后续需要真实模型的
   测试只使用该 Provider，不再回退 Ollama。专用 API Key 未设置时客户端启动即 fail-closed。
   `OPS-001` 已把 WebSocket、Worker、Recall/Realtime Spool、入站和 Gap 的有界健康快照并入
   Owner 状态查询；`FUP-007` 本地送达回执、租约 fencing、重试和 `unknown_commit` 已完成；
   真实整机休眠、断网和退出 NapCat 仍留在 `EXTERNAL OPS-LIVE`。`EVT-007-NONMSG-FILE` 已由
   授权群真实上传/Reply 样本完成；`EVT-007-NONMSG-CARD` 也已由真实 Ark/JSON 卡片证明为普通
   消息 Reply 并完成历史解析收口，`EVT-009` 已按产品决策取消。
-- 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台控制消息可成为 `OwnerCommand`；
-  所有第三方自动回复已按产品决定停止；群管理员只是群角色，不构成系统 Owner。
-- 当前本地门禁：2026-08-06 22:03 独立重跑 `fmt`、`diff check`、workspace all-targets check、
-  QQBot 五个 crate 严格 Clippy、领域 293/293、NapCat 71/71、QQBot Server 198 passed/3 ignored、
-  workspace boundaries 24/24；Docker MySQL 保留的 19 个测试目标共 52/52 真实通过，所有随机
-  `qqbot_accept_evt007_*` schema 均已清理。
+- 当前安全边界：NapCat 只读；只有绑定 Owner 的 QQ 开放平台 C2C，或同一 Owner 在群内明确
+  @Bot 的消息可成为 `OwnerCommand`。完成的 `OwnerResponseDraft` 只通过同一权威 Gateway 消息
+  上下文被动回复 C2C Owner 或原群；普通群消息、外部成员和群管理员不会触发回复。
+- 当前模型容错：精确问候 `你好/您好/在吗` 由确定性 Planner 直接回复，不调用模型。LLM 的超时、
+  传输、限流及空/不完整响应只返回“暂时不可用”且不执行 Action；线程语义在同类故障下使用既有
+  保守提取器完成批次。认证、配置和输入上限错误继续 fail-closed。LLM 请求默认 20 秒、硬上限
+  25 秒，保证先于 30 秒 Action Graph 期限结束。DeepSeek 结构化请求显式关闭默认 Thinking；JSON
+  Output 空正文只在同一总期限内重试一次，解析的 `finish_reason` 先映射到固定 allowlist 后记录。
+  2026-08-07 13:23 新镜像部署后未再出现 `missing_content`、线程语义或 Action Planner 的 LLM 降级。
+- 当前主动通知边界：Follow-up、Agenda、待回复与策略提醒默认全部关闭；QQ 开放平台只有在 Owner
+  显式设置 `proactive_notifications=true` 时才启动主动通知 Outbox。Owner 被动对话回复和明确要求的
+  上线/下线通知不受影响。2026-08-07 已确认此前 23 条无关提醒来自历史 `response_expectation`
+  候选分别生成的策略通知，不是同一消息重发；发送记录保留审计，不删除数据库证据。回复解析现已
+  覆盖 NapCat `owner_observation`：私聊按同账号、同会话和严格时间顺序收敛，群聊额外要求同线程或
+  显式 Reply，避免 Owner 在群内的无关发言误消除期待。
+- 当前历史回补边界：真实 NapCat 的空页、完整分页覆盖与 PacketBackend 证据仍未闭合，因此
+  Backfill 默认和 Compose 均显式关闭。2026-08-07 实机事故确认此前自动回补累计生成 1130 次运行、
+  扫描约 61.9 万条事件，并反复触发 NapCat 引用消息兼容警告；关闭后跨扫描周期运行数不再增长。
+  现有 Gap、运行记录和消息均保留，只有完成 `EXTERNAL ENV-004` 后才允许显式重新开启。启用时必须
+  配置北京时间 `QQBOT_BACKFILL_EARLIEST_DATE=YYYY-MM-DD`；早于当天零点的消息不进入 ingestion，
+  命中下界后停止请求更早页面并把该 Gap 持久化挂起，防止自动重扫。当前本机 `.env` 已显式覆盖为
+  `enabled=true`、下界 `2026-06-01`；部署观察 40 秒内 run 数由 1275 增至 1281，会继续产生数据库写入。
+- 当前本地门禁：2026-08-07 13:23 重跑 `fmt`、`diff check`、workspace all-targets check、
+  三个受影响 crate 严格 Clippy、领域 296/296、QQBot Server 221 passed/3 ignored、workspace
+  boundaries 21/21；Owner observation 回复解析及 Backfill 截止日期隔离 MySQL 各 1/1，随机 schema
+  与临时账号残留为零；DeepSeek fake HTTP 3/3、官方 `deepseek-v4-flash` 真实结构化提取 1/1 通过。
 - 当前数据库基线门禁：2026-08-07 00:16 Baseline v2 聚焦测试 1/1、迁移重放相关 MySQL
   27/27、QQBot Server 203 passed/3 ignored、workspace boundaries 24/24、相关 crate 严格 Clippy、
   workspace 全目标编译和 OPS-007 均通过；OPS-007 源/恢复对象均为 85，随机 schema 无残留。
@@ -57,10 +77,34 @@
   Spool 一键启动，并用容器内 loopback 代理连接宿主 NapCat。Compose 解析、release 镜像构建、
   隔离 MySQL 83 表/2 View、QQBot 离线重连和 SIGTERM 零退出码烟测均已通过；测试卷已精确清理。
   7 个 workspace 成员均已平铺到仓库根目录，只有 `architecture-tests` 保留在 `tools/`。
+- 当前部署状态：2026-08-07 13:23 已用包含 DeepSeek 空正文有界重试的最终工作树重建并替换
+  `qqbot` 容器；MySQL 保持 healthy，未删除或重建任何卷。容器重启计数为 0，部署观察期未出现
+  `missing_content`、线程语义/Action Planner LLM 降级或 Graph deadline 错误。健康聚合仍为
+  `degraded`，实机明细确认原因为 13 个 uncertain Gap、5 个 backfilling Gap，原因码
+  `backfill_history_unprovable`，不是 LLM、MySQL 或 WebSocket。Compose 日志改用项目专用
+  `QQBOT_RUST_LOG`，稳定健康状态不再每 30 秒重复 WARN，周期明细保留为 INFO。
 
 ## 1. 立即执行顺序
 
 ### 1.1 收口当前切片
+
+- [x] `CMD-OWNER-REPLY-001` 补齐仅 Owner 的 QQ 开放平台对话闭环：Action Response 通过独立
+  MySQL Outbox 有界领取，领取时复验托管账号、开放平台 Bot、`OwnerCommand`、C2C/GroupAt raw
+  event 与 active OwnerBinding；使用原 Gateway `msg_id` 被动回复 C2C Owner 或权威原群。租约
+  token fencing、过期上下文拒绝、重试退避和 `unknown_commit` 禁止盲重发均已实现。
+- [x] `OPS-ADMIN-001` 新增仅回环暴露的管理员页面。密码只来自环境变量，Session Cookie 为
+  `HttpOnly`/`SameSite=Strict`，写操作要求 CSRF；NapCat 仍只读。群目录真实读取 123 条，白名单
+  加入/移除从 0→1→0 验收通过；空白名单拒绝全部群，私聊始终观察。
+- [x] `OPS-LIFECYCLE-001` 官方平台启动/优雅关闭分别向 Owner 发送上线/下线通知；Docker 使用
+  `SIGTERM` 与 60 秒宽限。实机通知均送达，停机 1.47 秒、exit=0、OOM=false，重启后 NapCat
+  WebSocket 与上线通知再次成功。
+- [x] `OPS-LLM-001` 修复 DeepSeek 慢响应导致 Action Graph 先超时及线程语义热重试：增加精确
+  问候本地路由、临时可用性故障安全回复、线程语义保守降级和 25 秒请求期限配置门禁；错误日志
+  只记录类型化代码。6 项聚焦测试与完整 Rust 门禁已通过；旧失败 Action 已收敛完成，但其被动
+  回复上下文在部署前过期并被正确拒绝，需由 Owner 发送一条新消息完成最终实机回复确认。
+- [x] `OPS-NOTIFY-002` 停止未经 Owner 明确启用的主动提醒：新增 QQ 开放平台投递总开关并默认
+  关闭，Follow-up/Agenda/Notification Policy 三个生产 Worker 同步改为默认关闭，Compose 显式
+  注入四个 false 门禁。被动 Owner 回复与生命周期通知保持启用；既有 23 条记录只保留审计。
 
 - [x] `TEST-CLEANUP-001` 删除 10,287 行、38 项全部 `#[ignore]` 的旧
   `mysql_ingestion.rs` 聚合测试，以及旧 `qqbot_acceptance_mysql` / `qqbot_acceptance_runtime`

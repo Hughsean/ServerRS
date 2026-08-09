@@ -9,11 +9,12 @@ use std::sync::Arc;
 use personal_secretary::{FollowUpUseCase, LegacyNotificationReconciliationConfig, PlannerUseCase};
 use personal_secretary_mysql::{
     build_mysql_follow_up_store, build_mysql_inbound_event_store, build_mysql_memory_store,
-    build_mysql_owner_binding_store,
+    build_mysql_owner_binding_store, build_mysql_owner_response_delivery_store,
 };
 use sea_orm::DatabaseConnection;
 
 use crate::action_planner_worker::ActionPlannerHandle;
+use crate::admin_web::AdminWebHandle;
 use crate::agenda_notification_worker::AgendaNotificationHandle;
 use crate::artifact_ttl_worker::ArtifactTtlHandle;
 use crate::backfill::BackfillHandle;
@@ -45,6 +46,7 @@ const WORKER_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_
 /// 回收已启动的任务，避免资源泄漏。正常运行结束时同样调用该方法。
 pub(crate) struct WorkerHandles {
     pub(crate) backfill: Option<BackfillHandle>,
+    pub(crate) admin_web: Option<AdminWebHandle>,
     pub(crate) reply_reconcile: Option<ReplyReconcileHandle>,
     pub(crate) thread_projection: Option<ThreadProjectionHandle>,
     pub(crate) thread_semantics: Option<ThreadSemanticsHandle>,
@@ -66,6 +68,7 @@ impl WorkerHandles {
     pub(crate) fn new() -> Self {
         Self {
             backfill: None,
+            admin_web: None,
             reply_reconcile: None,
             thread_projection: None,
             thread_semantics: None,
@@ -87,6 +90,9 @@ impl WorkerHandles {
     /// 取出所有句柄，发出停止信号并用单一全局 deadline 并发回收。
     pub(crate) async fn shutdown_all(self) {
         let mut workers = RuntimeWorkers::new();
+        if let Some(handle) = self.admin_web {
+            workers.push(handle.signal_and_detach());
+        }
         if let Some(handle) = self.backfill {
             workers.push(handle.signal_and_detach());
         }
@@ -194,9 +200,16 @@ pub(crate) async fn assemble_official_platform(
     let owner_bindings = build_mysql_owner_binding_store(db.clone());
     let session_store = Arc::new(MySqlGatewaySessionStore::new(db.clone()));
     let raw_events = Arc::new(MySqlRawEventStore::new(db.clone()));
+    let owner_responses = build_mysql_owner_response_delivery_store(db.clone());
     let official_handle = spawn_official_platform(
         config.qq_open_platform.clone(),
-        OfficialPlatformPorts::new(inbound, owner_bindings, session_store, raw_events),
+        OfficialPlatformPorts::new(
+            inbound,
+            owner_bindings,
+            session_store,
+            raw_events,
+            owner_responses,
+        ),
         Arc::clone(follow_up_use_case),
         account.clone(),
         action_planner_use_case.clone(),
@@ -204,9 +217,6 @@ pub(crate) async fn assemble_official_platform(
     .await
     .map_err(|error| RuntimeError::OfficialPlatform(error.to_string()))?;
     handles.official_platform = Some(official_handle);
-    tracing::info!(
-        app_id = config.qq_open_platform.app_id,
-        "QQ Open Platform Gateway 与 Owner-only Outbox 投递已启动"
-    );
+    tracing::info!("QQ Open Platform Gateway 与 Owner-only Outbox 投递已启动");
     Ok(())
 }
